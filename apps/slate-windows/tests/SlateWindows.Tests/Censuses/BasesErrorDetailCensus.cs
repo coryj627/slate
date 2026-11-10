@@ -64,6 +64,269 @@ public sealed class BasesErrorDetailCensus
         Assert.True(failures.Length == 0, string.Join("\n", failures));
     }
 
+    /// <summary>Codex round 4: an exception turned into text another way
+    /// (<c>ToString()</c>, interpolation, <c>+</c>, <c>string.Format</c>) is
+    /// the same field dump. In the Bases sources an exception, or any local
+    /// it is copied into, may only reach the helper, an
+    /// <see cref="ExceptionConsumers"/> method, a throw, a pattern or null
+    /// test, or another exception local.</summary>
+    [Fact]
+    public void NoBasesExceptionBecomesTextOutsideTheHelper()
+    {
+        (string File, SyntaxNode Root)[] sources = [.. BasesSources()
+            .Select(path => (Path.GetFileName(path), CSharpSource.LoadPath(path).Root))];
+        HashSet<string> censused = [.. sources.SelectMany(source => CensusedConsumers(source.Root))];
+        string[] failures = [.. sources.SelectMany(source => ExceptionTextUses(source.Root, source.File, censused))];
+        Assert.True(failures.Length == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>Methods the census reads that take an exception parameter
+    /// (BasePhrase.OpenFailed, ExecuteFailed, Message): handing them an
+    /// exception is safe because this same census checks what their body
+    /// does with it.</summary>
+    internal static IEnumerable<string> CensusedConsumers(SyntaxNode root) =>
+        root.DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Where(method => method.ParameterList.Parameters.Any(parameter => parameter.Type is { } type && IsException(type)))
+            .SelectMany(method => method.Parent is BaseTypeDeclarationSyntax owner
+                ? new[] { method.Identifier.ValueText, $"{owner.Identifier.ValueText}.{method.Identifier.ValueText}" }
+                : [method.Identifier.ValueText]);
+
+    /// <summary>How a call names its target for the censused set: bare or
+    /// through <c>this</c> by its name, through a type by
+    /// <c>Type.Method</c>; any other receiver matches nothing, so a
+    /// same-named method elsewhere is not taken for a censused one.</summary>
+    private static string ConsumerKey(ExpressionSyntax target) => target switch
+    {
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } access => access.Name.Identifier.ValueText,
+        MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner } access =>
+            $"{owner.Identifier.ValueText}.{access.Name.Identifier.ValueText}",
+        _ => "",
+    };
+
+    /// <summary>The exception rule's teeth: each round-4 form, through a
+    /// local, an alias, a field, a task's exception or a cast, is named;
+    /// the helper, a throw, a test and a copy are clean.</summary>
+    [Theory]
+    [InlineData("_announce(new A11yEvent.BasesViewExportFailed(thrown.ToString()));", "thrown.ToString")]
+    [InlineData("var text = $\"{thrown}\"; detail = text;", "{thrown}")]
+    [InlineData("detail = \"Failed: \" + thrown;", "\"Failed: \" + thrown")]
+    [InlineData("detail = string.Format(\"{0}\", thrown);", "string.Format")]
+    [InlineData("var error = thrown; detail = error?.ToString() ?? \"\";", "error?.ToString()")]
+    [InlineData("detail = $\"{work.Exception}\";", "{work.Exception}")]
+    [InlineData("detail = $\"{_last}\";", "{_last}")]
+    [InlineData("if (thrown is VaultException vault) { detail = vault + \"\"; }", "vault + \"\"")]
+    [InlineData("detail = $\"{(thrown as VaultException)}\";", "{(thrown as VaultException)}")]
+    [InlineData("detail = BasePhrase.ErrorDetail(thrown);", "")]
+    [InlineData("if (thrown is VaultException vault) { detail = SlateUniffiMethods.VaultErrorDetail(vault); }", "")]
+    [InlineData("var error = work.Exception?.GetBaseException(); if (error is not null) { detail = BasePhrase.ErrorDetail(error); }", "")]
+    [InlineData("if (thrown == null) { return \"\"; } _last = thrown; throw thrown;", "")]
+    [InlineData("detail = Describe(thrown);", "")]
+    [InlineData("detail = C.Describe(thrown);", "")]
+    [InlineData("detail = this.Describe(thrown);", "")]
+    [InlineData("detail = Elsewhere.Describe(thrown);", "Elsewhere.Describe(thrown)")]
+    [InlineData("detail = Render(thrown);", "Render(thrown)")]
+    public void TheCensusNamesAnExceptionTurnedIntoText(string body, string named)
+    {
+        SyntaxNode root = CSharpSyntaxTree.ParseText(
+            "class C { Exception? _last; string M(Exception thrown, Task work) { string detail = \"\"; " + body
+            + " return detail; } string Describe(VaultException failure) => BasePhrase.ErrorDetail(failure);"
+            + " string Render(object value) => value.ToString(); }").GetRoot();
+        AssertNamed([.. ExceptionTextUses(root, "planted.cs", new HashSet<string>(CensusedConsumers(root)))], named);
+    }
+
+    /// <summary>A censused consumer's own body is held to the rule: an
+    /// exception parameter it stringifies is named.</summary>
+    [Fact]
+    public void ACensusedConsumersBodyIsCheckedToo()
+    {
+        SyntaxNode root = CSharpSyntaxTree.ParseText(
+            "class C { string M(Exception thrown) => Describe(thrown);"
+            + " string Describe(VaultException failure) => $\"Open failed: {failure}\"; }").GetRoot();
+        AssertNamed([.. ExceptionTextUses(root, "planted.cs", new HashSet<string>(CensusedConsumers(root)))], "{failure}");
+    }
+
+    /// <summary>Methods an exception may be handed to: core's renderers, and
+    /// the consumers that never speak it.</summary>
+    private static readonly HashSet<string> ExceptionConsumers =
+    [
+        "ErrorDetail",
+        "VaultErrorDetail",
+        "SetException",
+        "TrySetException",
+    ];
+
+    /// <summary>Every use of an exception value outside the allowed shapes,
+    /// per member; <c>ErrorDetail</c> is exempt.</summary>
+    internal static IEnumerable<string> ExceptionTextUses(SyntaxNode root, string file, IReadOnlySet<string> censused)
+    {
+        HashSet<string> fields = [.. root.DescendantNodes().SelectMany(node => node switch
+        {
+            FieldDeclarationSyntax field when IsException(field.Declaration.Type) =>
+                field.Declaration.Variables.Select(variable => variable.Identifier.ValueText),
+            PropertyDeclarationSyntax property when IsException(property.Type) => [property.Identifier.ValueText],
+            _ => [],
+        })];
+        foreach (MemberDeclarationSyntax member in root.DescendantNodes().OfType<MemberDeclarationSyntax>()
+            .Where(candidate => candidate is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax))
+        {
+            if (member is MethodDeclarationSyntax { Identifier.ValueText: "ErrorDetail" })
+            {
+                continue;
+            }
+            HashSet<string> names = ExceptionLocals(member, fields);
+            foreach (ExpressionSyntax expression in member.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (!IsExceptional(expression, names)
+                    || (expression.Parent is ExpressionSyntax outer && IsExceptional(outer, names) && Wraps(outer, expression))
+                    || AllowedUse(expression, censused))
+                {
+                    continue;
+                }
+                yield return $"{file} line {expression.GetLocation().GetLineSpan().StartLinePosition.Line + 1}: "
+                    + $"{expression} reaches text through `{Snippet(expression)}`; use BasePhrase.ErrorDetail.";
+            }
+        }
+    }
+
+    /// <summary>The exception locals a member declares: catch variables,
+    /// typed patterns, typed parameters, locals and foreach variables, the
+    /// file's exception fields, and every local an exception is copied into
+    /// (to a fixed point).</summary>
+    private static HashSet<string> ExceptionLocals(MemberDeclarationSyntax member, HashSet<string> fields)
+    {
+        HashSet<string> names = [.. fields];
+        foreach (SyntaxNode node in member.DescendantNodesAndSelf())
+        {
+            switch (node)
+            {
+                case CatchDeclarationSyntax { Identifier.ValueText: { Length: > 0 } name }:
+                    names.Add(name);
+                    break;
+                case DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax designation } pattern
+                    when IsException(pattern.Type):
+                    names.Add(designation.Identifier.ValueText);
+                    break;
+                case RecursivePatternSyntax { Type: { } type, Designation: SingleVariableDesignationSyntax designation }
+                    when IsException(type):
+                    names.Add(designation.Identifier.ValueText);
+                    break;
+                case ParameterSyntax { Type: { } type } parameter when IsException(type):
+                    names.Add(parameter.Identifier.ValueText);
+                    break;
+                case VariableDeclarationSyntax declaration when IsException(declaration.Type):
+                    names.UnionWith(declaration.Variables.Select(variable => variable.Identifier.ValueText));
+                    break;
+                case ForEachStatementSyntax loop when IsException(loop.Type):
+                    names.Add(loop.Identifier.ValueText);
+                    break;
+            }
+        }
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            foreach (SyntaxNode node in member.DescendantNodes())
+            {
+                string? alias = node switch
+                {
+                    VariableDeclaratorSyntax { Initializer.Value: var value } declarator
+                        when IsExceptional(value, names) => declarator.Identifier.ValueText,
+                    AssignmentExpressionSyntax { Left: IdentifierNameSyntax left } assignment
+                        when IsExceptional(assignment.Right, names) => left.Identifier.ValueText,
+                    _ => null,
+                };
+                grew |= alias is not null && names.Add(alias);
+            }
+        }
+        return names;
+    }
+
+    /// <summary>Whether <paramref name="expression"/> evaluates to an
+    /// exception: a tracked name, a task's or exception's <c>Exception</c> /
+    /// <c>InnerException</c>, <c>GetBaseException()</c>, an exception cast or
+    /// <c>as</c>, and parentheses, <c>!</c>, <c>??</c>, <c>?:</c> and
+    /// conditional access over those.</summary>
+    private static bool IsExceptional(ExpressionSyntax expression, HashSet<string> names) => expression switch
+    {
+        IdentifierNameSyntax identifier =>
+            names.Contains(identifier.Identifier.ValueText)
+            && !(identifier.Parent is MemberAccessExpressionSyntax access && access.Name == identifier)
+            && identifier.Parent is not MemberBindingExpressionSyntax and not NameColonSyntax,
+        MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Exception" or "InnerException" } => true,
+        MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Exception" or "InnerException" } => true,
+        InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "GetBaseException" } } => true,
+        InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.ValueText: "GetBaseException" } } => true,
+        ConditionalAccessExpressionSyntax conditional => IsExceptional(conditional.WhenNotNull, names),
+        ParenthesizedExpressionSyntax parenthesized => IsExceptional(parenthesized.Expression, names),
+        PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppressed =>
+            IsExceptional(suppressed.Operand, names),
+        CastExpressionSyntax cast => IsException(cast.Type),
+        BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AsExpression, Right: TypeSyntax type } => IsException(type),
+        BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } coalesce =>
+            IsExceptional(coalesce.Left, names) || IsExceptional(coalesce.Right, names),
+        ConditionalExpressionSyntax choice => IsExceptional(choice.WhenTrue, names) || IsExceptional(choice.WhenFalse, names),
+        _ => false,
+    };
+
+    /// <summary>Whether <paramref name="outer"/> carries
+    /// <paramref name="inner"/>'s value on as the exception it evaluates to,
+    /// rather than consuming it.</summary>
+    private static bool Wraps(ExpressionSyntax outer, ExpressionSyntax inner) => outer switch
+    {
+        MemberAccessExpressionSyntax access => access.Expression == inner,
+        ConditionalAccessExpressionSyntax conditional => conditional.Expression == inner || conditional.WhenNotNull == inner,
+        InvocationExpressionSyntax invocation => invocation.Expression == inner,
+        BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AsExpression } cast => cast.Left == inner,
+        CastExpressionSyntax => true,
+        _ => true,
+    };
+
+    /// <summary>The uses that never make an exception text.</summary>
+    private static bool AllowedUse(ExpressionSyntax expression, IReadOnlySet<string> censused) => expression.Parent switch
+    {
+        ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } =>
+            ExceptionConsumers.Contains(InvokedName(invocation.Expression))
+            || censused.Contains(ConsumerKey(invocation.Expression)),
+        ArgumentSyntax { Parent.Parent: ObjectCreationExpressionSyntax creation } => IsException(creation.Type),
+        ThrowStatementSyntax or ThrowExpressionSyntax => true,
+        IsPatternExpressionSyntax test => test.Expression == expression,
+        SwitchExpressionSyntax switchExpression => switchExpression.GoverningExpression == expression,
+        SwitchStatementSyntax switchStatement => switchStatement.Expression == expression,
+        EqualsValueClauseSyntax => true,
+        AssignmentExpressionSyntax { Left: IdentifierNameSyntax } => true,
+        AssignmentExpressionSyntax assignment => assignment.Left == expression,
+        BinaryExpressionSyntax binary => binary.Kind() is SyntaxKind.EqualsExpression or SyntaxKind.NotEqualsExpression
+            or SyntaxKind.IsExpression,
+        // GetType names the type; GetBaseException, Exception and
+        // InnerException hand on an exception the census follows.
+        MemberAccessExpressionSyntax { Name.Identifier.ValueText: "GetType" or "GetBaseException" or "Exception" or "InnerException" } => true,
+        _ => false,
+    };
+
+    private static bool IsException(TypeSyntax type) =>
+        CSharpSource.Normalize(type).TrimEnd('?').EndsWith("Exception", StringComparison.Ordinal);
+
+    private static string InvokedName(ExpressionSyntax target) => target switch
+    {
+        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        GenericNameSyntax generic => generic.Identifier.ValueText,
+        _ => "",
+    };
+
+    /// <summary>The construct that consumes the exception, for the
+    /// census's message: the call an argument goes to, otherwise the
+    /// parent.</summary>
+    private static string Snippet(ExpressionSyntax expression)
+    {
+        SyntaxNode context = expression.Parent is ArgumentSyntax { Parent.Parent: { } call } ? call : expression.Parent!;
+        string text = context.WithoutTrivia().NormalizeWhitespace().ToString();
+        return text.Length <= 80 ? text : text[..80] + "…";
+    }
+
     /// <summary>The fail-closed rule's teeth: a caught, patterned, aliased,
     /// null-conditional or task exception's Message is named, as is an
     /// exception that borrows a model's name; a model's own Message and the
