@@ -481,6 +481,34 @@ public sealed class RecoveredCanvasTests : IDisposable
         Assert.Same(field, FocusManager.GetFocusedElement(shell.Body("CanvasCardEditorOverlay")));
     });
 
+    /// <summary>#1666: a card editor that opens beneath Settings (a new
+    /// card's editor arriving after Settings opened) leaves the keys to
+    /// Settings, and takes them on its field when Settings closes.</summary>
+    [Fact]
+    public void ACardEditorOpenedUnderSettingsTakesTheKeysWhenSettingsCloses() => RunSta(() =>
+    {
+        JsonNode source = JsonNode.Parse(_recovered)!;
+        source["edges"] = new JsonArray();
+        using var shell = new ShownShell(("board.canvas", source.ToJsonString()));
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        shell.Lifecycle.OpenSettings(null);
+        shell.Settle();
+        Assert.NotNull(shell.Lifecycle.SettingsSheet);
+
+        TextBox field = OpenTheTextCardsSheet(shell, document);
+        Assert.NotNull(shell.Workspace.CanvasCardEditorSheet);
+        Assert.Equal(ModalSurface.Settings, shell.Shell.OpenModalSurface);
+        FrameworkElement overlay = shell.Body("CanvasCardEditorOverlay");
+        Assert.NotSame(field, FocusManager.GetFocusedElement(overlay));
+        Assert.False(field.IsKeyboardFocused, "the editor under Settings took the keys");
+
+        shell.Lifecycle.CloseSettings();
+        shell.Settle();
+
+        Assert.Equal(ModalSurface.CanvasCardEditor, shell.Shell.OpenModalSurface);
+        Assert.Same(field, FocusManager.GetFocusedElement(overlay));
+    });
+
     private static CanvasDocumentViewModel OpenTheBoardInTheShell(ShownShell shell)
     {
         shell.Workspace.OpenPath("board.canvas");

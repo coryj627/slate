@@ -740,15 +740,45 @@ public partial class MainWindow : Window
                 () => _ = TryFocus(CanvasCardPickerFilterBox), DispatcherPriority.Input);
         }
         else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet)
-            && workspace.CanvasCardEditorSheet is not null)
+            && workspace.CanvasCardEditorSheet is { } cardEditor)
         {
             // #1666: the card editor's text, editing or inspecting. The sheet
             // opened with the keys left on the row behind it.
-            _ = Dispatcher.InvokeAsync(
-                () => _ = _viewModel.Workspace?.CanvasCardEditorSheet is not null
-                    && TryFocus(CanvasCardEditorTextBox),
-                DispatcherPriority.Input);
+            _cardEditorAwaitingKeys = cardEditor;
+            QueueCardEditorLanding();
         }
+    }
+
+    /// <summary>#1666: the card editor sheet that has not had the keys yet.
+    /// It takes them only as the topmost surface: one that opens beneath
+    /// another (a new card's editor arriving after Settings opened) waits,
+    /// and lands when the surface above it closes
+    /// (<see cref="ModalSource_PropertyChanged"/>).</summary>
+    private Canvas.CanvasCardEditorViewModel? _cardEditorAwaitingKeys;
+
+    private void QueueCardEditorLanding() =>
+        _ = Dispatcher.InvokeAsync(LandCardEditor, DispatcherPriority.Input);
+
+    private void LandCardEditor()
+    {
+        if (_cardEditorAwaitingKeys is not { } sheet)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(sheet, _viewModel.Workspace?.CanvasCardEditorSheet))
+        {
+            _cardEditorAwaitingKeys = null;
+            return;
+        }
+
+        if (OpenModalSurface is not ModalSurface.CanvasCardEditor)
+        {
+            return;
+        }
+
+        _cardEditorAwaitingKeys = null;
+        _ = TryFocus(CanvasCardEditorTextBox);
     }
 
     private void FocusCanvasPromptSheet()
