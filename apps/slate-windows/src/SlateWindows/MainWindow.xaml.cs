@@ -739,6 +739,54 @@ public partial class MainWindow : Window
             _ = Dispatcher.InvokeAsync(
                 () => _ = TryFocus(CanvasCardPickerFilterBox), DispatcherPriority.Input);
         }
+        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet)
+            && workspace.CanvasCardEditorSheet is { } cardEditor)
+        {
+            // #1666: the card editor's text, editing or inspecting. The sheet
+            // opened with the keys left on the row behind it.
+            _cardEditorAwaitingKeys = cardEditor;
+            QueueCardEditorLanding();
+        }
+        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet))
+        {
+            // Closed before it had the keys: nothing waits for it.
+            _cardEditorAwaitingKeys = null;
+        }
+    }
+
+    /// <summary>#1666: the card editor sheet that has not had the keys yet.
+    /// It takes them only as the topmost surface: one that opens beneath
+    /// another (a new card's editor arriving after Settings opened) waits,
+    /// and lands when the surface above it closes
+    /// (<see cref="ModalSource_PropertyChanged"/>).</summary>
+    private Canvas.CanvasCardEditorViewModel? _cardEditorAwaitingKeys;
+
+    /// <summary>Whether a card editor still waits to take the keys.</summary>
+    internal bool CardEditorAwaitingKeysForTests => _cardEditorAwaitingKeys is not null;
+
+    private void QueueCardEditorLanding() =>
+        _ = Dispatcher.InvokeAsync(LandCardEditor, DispatcherPriority.Input);
+
+    private void LandCardEditor()
+    {
+        if (_cardEditorAwaitingKeys is not { } sheet)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(sheet, _viewModel.Workspace?.CanvasCardEditorSheet))
+        {
+            _cardEditorAwaitingKeys = null;
+            return;
+        }
+
+        if (OpenModalSurface is not ModalSurface.CanvasCardEditor)
+        {
+            return;
+        }
+
+        _cardEditorAwaitingKeys = null;
+        _ = TryFocus(CanvasCardEditorTextBox);
     }
 
     private void FocusCanvasPromptSheet()
