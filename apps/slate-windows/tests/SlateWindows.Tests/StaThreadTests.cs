@@ -59,7 +59,8 @@ public sealed class StaThreadTests : IDisposable
             });
         }
 
-        uint kept = GdiHandles() - before;
+        // Signed: the count is process-wide, and can fall during the fact.
+        long kept = (long)GdiHandles() - before;
         Assert.True(kept < Windows * 2, $"{Windows} facts' threads kept {kept} GDI handles after they ended");
     }
 
