@@ -26,6 +26,11 @@ internal sealed class ShownShell : IDisposable
         typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.IsVaultOpen))
         ?? throw new InvalidOperationException("IsVaultOpen is gone");
 
+    /// <summary>The context the fact's thread had before the shell installed the
+    /// window's, restored at <see cref="Dispose"/>; null when the shell installed none.</summary>
+    private readonly SynchronizationContext? _contextBefore;
+    private readonly bool _installedContext;
+
     public ShownShell(params (string Path, string Text)[] notes)
         : this(null, notes)
     {
@@ -38,6 +43,18 @@ internal sealed class ShownShell : IDisposable
         params (string Path, string Text)[] notes)
     {
         Assert.Null(Application.Current);
+        // #1832: the app's window thread always has the dispatcher's context, and every
+        // panel the workspace makes captures it to publish on. A fact that installs none
+        // (StaThread.Run) left them publishing from their pool threads.
+        _contextBefore = SynchronizationContext.Current;
+        if (_contextBefore is not System.Windows.Threading.DispatcherSynchronizationContext)
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher));
+            _installedContext = true;
+        }
+
         foreach ((string path, string text) in notes)
         {
             string full = Path.Combine(_fixture.Root, path);
@@ -221,6 +238,10 @@ internal sealed class ShownShell : IDisposable
         {
             _session.Dispose();
             _fixture.Dispose();
+            if (_installedContext)
+            {
+                SynchronizationContext.SetSynchronizationContext(_contextBefore);
+            }
         }
     }
 }

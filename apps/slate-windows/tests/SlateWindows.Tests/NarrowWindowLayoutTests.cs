@@ -235,13 +235,55 @@ public sealed class NarrowWindowLayoutTests
         Assert.Equal(converter.Convert(pane.ActualHeight, typeof(double), null!, System.Globalization.CultureInfo.InvariantCulture), scroller.MaxHeight);
     });
 
+    /// <summary>#1832: a shell's properties header publishes its rows on the window's
+    /// thread, as the app's does, in a fact that installs no dispatcher context of its own
+    /// (<see cref="StaThread.Run(Action, TimeSpan?, string?, TimeSpan?)"/>). Without the
+    /// window's context the header published from its read's pool thread: a change to rows
+    /// already bound throws there, the error publish throws the same way, and the header
+    /// stays loading, which is what hosted CI found.</summary>
+    [Fact]
+    public void TheHeadersRowsArePublishedOnTheWindowsThread() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "---\nkey: value\n---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Panels.NotePropertiesViewModel? properties = null;
+        Assert.True(
+            System.Threading.SpinWait.SpinUntil(
+                () =>
+                {
+                    host.Settle();
+                    properties = host.Workspace.ActiveGroup.ActiveTab?.Properties;
+                    return properties is { IsLoading: false, Rows.Count: 1 };
+                },
+                TimeSpan.FromSeconds(30)),
+            "premise: the header never loaded");
+        int window = Environment.CurrentManagedThreadId;
+        var changedOn = new System.Collections.Concurrent.ConcurrentBag<int>();
+        properties!.Rows.CollectionChanged += (_, _) => changedOn.Add(Environment.CurrentManagedThreadId);
+
+        properties.RefreshProperties();
+        Assert.True(
+            System.Threading.SpinWait.SpinUntil(
+                () =>
+                {
+                    host.Settle();
+                    return !properties.IsLoading && !changedOn.IsEmpty;
+                },
+                TimeSpan.FromSeconds(30)),
+            "the refresh never published");
+
+        Assert.All(changedOn, thread => Assert.Equal(window, thread));
+    });
+
     /// <summary>What a fact that couldn't find the rows needs to say about why.</summary>
     private static string WhatTheShellShows(ShownShell host)
     {
         string tab = host.Workspace.ActiveGroup.ActiveTab switch
         {
             WorkspaceTabViewModel { Properties: { } properties } open =>
-                $"tab {open.Title}: {properties.Rows.Count} rows, loading {properties.IsLoading}, error '{properties.LoadError}', expanded {properties.IsExpanded}",
+                $"tab {open.Title}: {properties.Rows.Count} rows, loading {properties.IsLoading}, error '{properties.LoadError}', expanded {properties.IsExpanded}; "
+                + LoadState(properties),
             WorkspaceTabViewModel open => $"tab {open.Title} has no properties",
             null => "no active tab",
         };
@@ -250,6 +292,24 @@ public sealed class NarrowWindowLayoutTests
             + $"{tree.Length} elements, {tree.OfType<TabControl>().Count()} tab controls, "
             + $"{tree.OfType<Expander>().Count(expander => expander.IsVisible)} visible expanders, "
             + $"{tree.OfType<PropertyRowGrid>().Count()} rows drawn.";
+    }
+
+    /// <summary>#1832: where a header load that never ends is. Its read is a pool task the
+    /// header tracks, which publishes through the context the header captured: still
+    /// pending means the read hasn't returned (a blocked read, a starved pool); none
+    /// pending with the header loading means the publish was posted where nothing runs it,
+    /// or dropped as stale.</summary>
+    private static string LoadState(Panels.NotePropertiesViewModel properties)
+    {
+        object? context = typeof(Panels.PanelWorkScheduler)
+            .GetField("_uiContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
+            .GetValue(properties);
+        ThreadPool.GetAvailableThreads(out int workers, out int ports);
+        ThreadPool.GetMaxThreads(out int maxWorkers, out _);
+        return $"header work pending {properties.PendingWorkForTests}, faulted {properties.FaultedWorkForTests}, "
+            + $"publishes to {context?.GetType().Name ?? "no context"} (this thread's is {SynchronizationContext.Current?.GetType().Name ?? "none"}); "
+            + $"pool {ThreadPool.ThreadCount} threads, {ThreadPool.PendingWorkItemCount} items queued, "
+            + $"{ThreadPool.CompletedWorkItemCount} completed, {workers}/{maxWorkers} workers and {ports} ports free";
     }
 
     /// <summary>The key's fixed column and the buttons took the whole row, which left
