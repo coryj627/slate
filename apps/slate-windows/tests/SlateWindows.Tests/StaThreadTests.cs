@@ -36,6 +36,43 @@ public sealed class StaThreadTests : IDisposable
         StaThread.ResetDumpsForTests();
     }
 
+    /// <summary>#1855: a fact's thread ends without its dispatcher shutting
+    /// down, so WPF never freed the render context and text services it made
+    /// for that thread: about 7 GDI handles a window, kept for the rest of
+    /// the run, until the process met Windows' limit of 10,000 and every
+    /// later window failed. The runner now runs that teardown itself.</summary>
+    [Fact]
+    public void AFactsThreadKeepsNoGdiHandlesOnceItEnds()
+    {
+        const int Windows = 20;
+        uint before = GdiHandles();
+
+        for (int window = 0; window < Windows; window++)
+        {
+            StaThread.Run(() =>
+            {
+                var box = new TextBox();
+                var host = new Window { Content = box, Width = 240, Height = 120 };
+                host.Show();
+                _ = box.Focus();
+                PumpedDispatcher.Drain();
+            });
+        }
+
+        // Signed: the count is process-wide, and can fall during the fact.
+        long kept = (long)GdiHandles() - before;
+        Assert.True(kept < Windows * 2, $"{Windows} facts' threads kept {kept} GDI handles after they ended");
+    }
+
+    private static uint GdiHandles()
+    {
+        using System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();
+        return GetGuiResources(self.Handle, 0);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetGuiResources(IntPtr process, uint flags);
+
     /// <summary>#1603: a body that does not pump gives no stack, so with a
     /// dump folder named (CI's app job names its results folder) the timeout
     /// writes a dump of the process there and says where. #1641: the dump is
