@@ -121,6 +121,12 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; detail = failures.Any(failure => failure is VaultException) ? \"x\" : \"\";", "")]
     [InlineData("detail = thrown.HResult.ToString();", "")]
     [InlineData("_announce(new A11yEvent.BasesViewExportFailed(Format(thrown)));", "Format(thrown)")]
+    [InlineData("List<Exception> failures = [thrown]; System.Collections.IEnumerator cursor = failures.GetEnumerator(); while (cursor.MoveNext()) { detail += $\"{cursor.Current}\"; }", "failures.GetEnumerator()")]
+    [InlineData("List<Exception> failures = [thrown]; var cursor = failures.GetEnumerator(); while (cursor.MoveNext()) { detail += $\"{cursor.Current}\"; }", "{cursor.Current}")]
+    [InlineData("List<Exception> failures = [thrown]; var byCode = failures.ToDictionary(failure => failure.HResult); detail = string.Join(\", \", byCode);", "string.Join")]
+    [InlineData("List<Exception> failures = [thrown]; var byCode = failures.ToDictionary(failure => failure.HResult); detail = byCode.First().ToString();", "byCode.First().ToString")]
+    [InlineData("List<Exception> failures = [thrown]; var cursor = failures.GetEnumerator(); while (cursor.MoveNext()) { detail = BasePhrase.ErrorDetail(cursor.Current); }", "")]
+    [InlineData("List<Exception> failures = [thrown]; var byCode = failures.ToDictionary(failure => failure.HResult); detail = BasePhrase.ErrorDetail(byCode[0]);", "")]
     [InlineData("detail = thrown.Spell();", "thrown.Spell")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(Format));", "failures.Select")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => BasePhrase.ErrorDetail(failure)));", "")]
@@ -326,20 +332,41 @@ public sealed class BasesErrorDetailCensus
     /// <summary>An exception, or an array or sequence of them (codex round 6:
     /// <c>string.Join</c> and a typed foreach erase a collection's element
     /// type the way a capture erases a value's).</summary>
-    private static bool CarriesExceptions(ITypeSymbol type, INamedTypeSymbol exception) => type switch
-    {
-        _ when DerivesFrom(type, exception) => true,
-        IArrayTypeSymbol array => CarriesExceptions(array.ElementType, exception),
-        INamedTypeSymbol named => SequenceElement(named) is { } element && CarriesExceptions(element, exception),
-        _ => false,
-    };
+    /// <remarks>Codex round 11: any type built over an exception carries it,
+    /// not just a sequence: an enumerator (<c>List&lt;Exception&gt;.Enumerator</c>,
+    /// through its containing type), a <c>KeyValuePair</c>, a dictionary, a
+    /// grouping, a tuple. Widening one to a type that does not carry (the
+    /// non-generic <c>IEnumerator</c>, <c>object</c>) is then named like any
+    /// other erasure.
+    /// <para>Each type is examined once per question: <c>string</c> is
+    /// <c>IEquatable&lt;string&gt;</c>, so a walk without a visited set
+    /// revisits the same types without end.</para></remarks>
+    private static bool CarriesExceptions(ITypeSymbol type, INamedTypeSymbol exception) =>
+        CarriesExceptions(type, exception, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
 
-    private static ITypeSymbol? SequenceElement(INamedTypeSymbol type) =>
-        (type.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
-            ? type
-            : type.AllInterfaces.FirstOrDefault(candidate =>
-                candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T))
-        ?.TypeArguments[0];
+    private static bool CarriesExceptions(ITypeSymbol type, INamedTypeSymbol exception, HashSet<ITypeSymbol> visited)
+    {
+        if (!visited.Add(type))
+        {
+            return false;
+        }
+        if (DerivesFrom(type, exception))
+        {
+            return true;
+        }
+        return type switch
+        {
+            // A delegate's type arguments are its signature, not values it
+            // holds: an Action<VaultException?> callback carries no failure.
+            INamedTypeSymbol { TypeKind: TypeKind.Delegate } => false,
+            IArrayTypeSymbol array => CarriesExceptions(array.ElementType, exception, visited),
+            INamedTypeSymbol named => named.TypeArguments.Any(argument => CarriesExceptions(argument, exception, visited))
+                || (named.ContainingType is { } outer && CarriesExceptions(outer, exception, visited))
+                || named.AllInterfaces.Any(contract =>
+                    contract.TypeArguments.Any(argument => CarriesExceptions(argument, exception, visited))),
+            _ => false,
+        };
+    }
 
     /// <summary>A type a captured value can't speak the dump through: an
     /// exception or a collection of them (the census follows it), a value
@@ -435,11 +462,22 @@ public sealed class BasesErrorDetailCensus
         {
             IPropertySymbol property => HoldsNoText(property.Type, exception),
             IMethodSymbol method => KeepsItsElements(method, exception)
-                && (IsConsumer(method, exception, censused) || IsCollectionLibrary(method))
+                && (IsConsumer(method, exception, censused)
+                    || (IsCollectionLibrary(method) && (HoldsNoText(method.ReturnType, exception) || HasACallback(model, name))))
                 && CallbacksAreRead(model, name, exception, censused),
             _ => false,
         };
     }
+
+    /// <summary>Whether the call takes a delegate. A library call with none
+    /// (<c>KeyValuePair.ToString()</c>, which formats the exception inside
+    /// it) makes its result from the elements itself, so that result must
+    /// hold no text; text may only come out of a callback the census reads
+    /// (codex round 11).</summary>
+    private static bool HasACallback(SemanticModel model, SimpleNameSyntax name) =>
+        name.Parent?.Parent is InvocationExpressionSyntax invocation
+        && invocation.ArgumentList.Arguments.Any(argument =>
+            model.GetTypeInfo(argument.Expression).ConvertedType is { TypeKind: TypeKind.Delegate });
 
     /// <summary>LINQ and the collection types never make an element text
     /// themselves; whatever reaches text does it in a callback.</summary>
