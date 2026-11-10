@@ -102,18 +102,24 @@ internal sealed partial class VaultLifecycleViewModel
     /// alone.</summary>
     internal async Task CancelRunningRescanForTests()
     {
-        if (_rescanCancel is { } cancel)
+        try
         {
-            _ = await StartRescanCoreCall(
-                "cancel",
-                () =>
-                {
-                    cancel.Cancel();
-                    return true;
-                });
+            if (_rescanCancel is { } cancel)
+            {
+                _ = await StartRescanCoreCall(
+                    "cancel",
+                    () =>
+                    {
+                        cancel.Cancel();
+                        return true;
+                    });
+            }
         }
-
-        _rescanCancellation?.Cancel();
+        finally
+        {
+            // The managed twin is cancelled even when the native cancel fails.
+            _rescanCancellation?.Cancel();
+        }
     }
 
     /// <summary>
