@@ -608,7 +608,14 @@ jobs:
       # last fact with nothing to read. Full, as StaThread's timeout dumps
       # are (#1641): CI's runtime is installed unregistered, so a heap dump
       # can lack the JIT code a managed stack needs. It is written only when
-      # a process fails fast. TestHostCrashDumpCensus pins these.
+      # a process fails fast. The repository is public, so anyone can fetch
+      # the artifact: a dump is safe to publish only because this job holds
+      # no secret for the test process to have read. It references no
+      # `secrets.`, no GITHUB_TOKEN (a run step gets the token only when it
+      # is mapped in) and no id-token permission, and StaThread's timeout
+      # dumps of this same process have shipped in this folder since #1641.
+      # TestHostCrashDumpCensus pins these settings and fails if the job ever
+      # gains a secret, a token or an id-token grant.
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'

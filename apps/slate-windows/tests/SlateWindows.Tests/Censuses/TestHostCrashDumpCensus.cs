@@ -40,4 +40,49 @@ public sealed class TestHostCrashDumpCensus
         Assert.Contains("if: ${{ always() }}", upload, StringComparison.Ordinal);
         Assert.Contains($@"path: '{Results}\**\*'", upload, StringComparison.Ordinal);
     }
+
+    /// <summary>The repository is public, so anyone can fetch the job's
+    /// artifact, and a full dump holds everything the test process read. It
+    /// is safe to publish only while the job gives that process no secret:
+    /// no <c>secrets.</c> reference, no GITHUB_TOKEN (a run step gets it only
+    /// when it is mapped in) and no id-token grant (Codoki's review of
+    /// #1892). A change that adds one fails here, so it has to stop dumping
+    /// or stop publishing the dumps first.</summary>
+    [Fact]
+    public void TheJobThatPublishesTheTestProcessDumpHoldsNoSecret()
+    {
+        string workflow = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), ".github", "workflows", "windows.yml"));
+        string[] found = SecretReferences(DeviceStateCensus.Job(workflow, "windows"));
+        Assert.True(
+            found.Length == 0,
+            $"The windows job now references {string.Join(", ", found.Select(secret => $"`{secret}`"))}. Its test process "
+            + "is dumped in full into a public artifact when it fails fast (DOTNET_DbgEnableMiniDump) or a fact times out "
+            + "(StaThread), so a secret there would be published. Keep the secret out of this job, or stop uploading the dumps.");
+    }
+
+    /// <summary>The secret guard's teeth: each kind of reference it looks for
+    /// is found in a job that has one, and a comment that only names one is
+    /// not a reference.</summary>
+    [Theory]
+    [InlineData("        env:\n          TOKEN: ${{ secrets.SIGNING_KEY }}", true)]
+    [InlineData("        env:\n          GH_TOKEN: ${{ github.token }}", true)]
+    [InlineData("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", true)]
+    [InlineData("    permissions:\n      id-token: write", true)]
+    [InlineData("      # no secrets. here, no GITHUB_TOKEN, no id-token grant", false)]
+    public void TheSecretGuardSeesEachKindOfSecret(string planted, bool isSecret)
+    {
+        string workflow = "jobs:\n  windows:\n    runs-on: x\n" + planted + "\n  other:\n    runs-on: y\n";
+        Assert.Equal(isSecret, SecretReferences(DeviceStateCensus.Job(workflow, "windows")).Length > 0);
+    }
+
+    /// <summary>The secret references in a job's YAML, its comment lines
+    /// aside (the workflow's own comment explains the guard in these words).</summary>
+    private static string[] SecretReferences(string job)
+    {
+        string yaml = string.Join(
+            "\n",
+            job.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
+        return [.. ((string[])["secrets.", "GITHUB_TOKEN", "github.token", "id-token"])
+            .Where(secret => yaml.Contains(secret, StringComparison.OrdinalIgnoreCase))];
+    }
 }
