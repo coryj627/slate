@@ -379,6 +379,8 @@ internal sealed class BaseSurfaceView : UserControl
 
     internal Button FailedEditForTests => _failedEdit;
 
+    internal Button RefreshForTests => _refresh;
+
     /// <summary>The group's text and Edit follow the model's message and
     /// reason; the repair line and Edit exist only where repair is
     /// offered.</summary>
@@ -484,15 +486,10 @@ internal sealed class BaseSurfaceView : UserControl
             return;
         }
         // The mac shape: Refresh is a FULL reload (close, reopen,
-        // views, execute) and announces "Base refreshed."; Retry is
-        // the same reload from the failed posture, where the state
-        // banners speak for themselves.
-        bool wasFailed = model.State == BaseLoadState.Failed;
-        model.Load();
-        if (!wasFailed)
-        {
-            model.AnnounceRefreshed();
-        }
+        // views, execute) and announces "Base refreshed." once it has
+        // published a result (#1692); Retry is the same reload from the
+        // failed posture, where the state banners speak for themselves.
+        _ = model.RefreshByUserAsync();
     }
 
     private bool OnExternalSort(int columnIndex, bool ascending) =>

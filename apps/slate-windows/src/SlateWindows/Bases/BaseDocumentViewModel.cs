@@ -489,6 +489,55 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     public void AnnounceRefreshed() =>
         _announce(new A11yEvent.BaseRefreshed());
 
+    /// <summary>#1692: the explicit refresh, from the palette's Bases:
+    /// Refresh and the surface header's button. A full reload, and "Base
+    /// refreshed." only once that reload has published a result
+    /// (<see cref="LoadAsync"/> completes): a reload whose open or execute
+    /// fails says nothing of its own, since its failed state speaks for
+    /// itself, as Retry's does. From the Failed posture (a Retry) it is never
+    /// said, and a document shut down meanwhile says nothing. The sentence is
+    /// spoken on the dispatcher, after the result. The returned task
+    /// completes once it has been spoken or declined; the shell discards
+    /// it.</summary>
+    internal Task RefreshByUserAsync()
+    {
+        bool wasFailed = State == BaseLoadState.Failed;
+        Task reloaded = LoadAsync();
+        if (reloaded.IsCompleted)
+        {
+            SpeakRefreshed(reloaded, wasFailed);
+            return Task.CompletedTask;
+        }
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = reloaded.ContinueWith(
+            outcome => Post(() =>
+            {
+                try
+                {
+                    SpeakRefreshed(outcome, wasFailed);
+                }
+                finally
+                {
+                    _ = settled.TrySetResult();
+                }
+            }),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return settled.Task;
+    }
+
+    private void SpeakRefreshed(Task reloaded, bool wasFailed)
+    {
+        // Observed whatever it holds: a failed reload speaks through the
+        // state it published, never through an unobserved task.
+        _ = reloaded.Exception;
+        if (!wasFailed && reloaded.IsCompletedSuccessfully && !IsShutDown)
+        {
+            AnnounceRefreshed();
+        }
+    }
+
     /// <summary>slate.bases.saveSortToView (the mac twin verbatim):
     /// persist the published transient sort into the view's slate
     /// state, clear the engine sort, reload views, re-execute. The

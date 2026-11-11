@@ -372,15 +372,8 @@ internal sealed partial class WorkspaceViewModel
 
     public System.Windows.Input.ICommand BasesRefreshCommand =>
         _basesRefreshCommand ??= BasesCommand(
-            document =>
-            {
-                bool wasFailed = document.State == BaseLoadState.Failed;
-                document.Load();
-                if (!wasFailed)
-                {
-                    document.AnnounceRefreshed();
-                }
-            },
+            // #1692: "Base refreshed." once the reload has published a result.
+            document => _ = document.RefreshByUserAsync(),
             requireInteractive: false);
 
     public System.Windows.Input.ICommand BasesWhereAmICommand =>
