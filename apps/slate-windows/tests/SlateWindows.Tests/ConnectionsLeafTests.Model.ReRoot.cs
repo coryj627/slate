@@ -82,6 +82,23 @@ public sealed partial class ConnectionsLeafTests
 
         public int Asked { get; private set; }
 
+        /// <summary>#1893: when set, a dialog asked while the pin's load is in
+        /// flight first waits for that load to queue its result, so the
+        /// leaf's line lands inside the dialog, ahead of the open's own
+        /// sentences: the order a loaded runner can give, made certain.</summary>
+        public bool LetThePinsLoadLandFirst { get; set; }
+
+        private int _queued;
+        private int _queuedAtArm;
+
+        /// <summary>Counts every result the leaf queues (wired by
+        /// <see cref="ReRootHost"/>).</summary>
+        public void CountQueued() => Interlocked.Increment(ref _queued);
+
+        /// <summary>Marks the results queued so far, just before the drive,
+        /// so the dialog waits for one the drive's pin queues.</summary>
+        public void ArmPinsLoad() => Volatile.Write(ref _queuedAtArm, Volatile.Read(ref _queued));
+
         /// <summary>The leaf whose pool reads the dialog waits for (#1598).</summary>
         public ConnectionsLeafViewModel? Leaf { get; set; }
 
@@ -92,6 +109,12 @@ public sealed partial class ConnectionsLeafTests
         public WorkspaceDirtyNavigationDecision Decide(WorkspaceTabViewModel tab, WorkspaceItemState item)
         {
             Asked++;
+            if (LetThePinsLoadLandFirst && Leaf is { InFlight: true })
+            {
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref _queued) > Volatile.Read(ref _queuedAtArm), TimeSpan.FromSeconds(10)),
+                    "the pin's load never queued its result while the dialog waited");
+            }
             // The dialog is modal and pumps the dispatcher (IGK-20): a real
             // frame under the production scheduler, then whatever lands.
             PumpedDispatcher.Drain();
@@ -184,6 +207,12 @@ public sealed partial class ConnectionsLeafTests
     {
         var host = new Host(root, () => 1, gate.Decide);
         gate.Leaf = host.Leaf;
+        Action? queued = host.Leaf.ApplyQueuedForTests;
+        host.Leaf.ApplyQueuedForTests = () =>
+        {
+            queued?.Invoke();
+            gate.CountQueued();
+        };
         return host;
     }
 
@@ -413,11 +442,13 @@ public sealed partial class ConnectionsLeafTests
         RootMode pinned = new(target, noteInView, [.. stack], StableKey(target));
         // #1266 (WB-8): an attachment opens as a Markdown tab whose text read
         // fails, and the open speaks core's failure once, before the leaf's
-        // line — or in either order behind the dirty gate's dialog when this
-        // route showed the leaf (not active before): the dialog pumps the
-        // frames the leaf's load may speak in first, and either can win.
+        // line — or in either order behind the dirty gate's dialog: the pin's
+        // ONE load is issued before the open, and the dialog pumps the frames
+        // its line may land in first, so either can win. #1893: that holds
+        // whether or not the leaf was active before (the load is issued the
+        // same way); CI saw the line first with the leaf already active.
         string[] failed = !refused && cell.Target == Target.Attachment ? ["FileReopenFailed"] : [];
-        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed && !active;
+        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed;
         return new(
             [.. address, .. reveal, ReRooted(target), .. opened, .. failed, LinePlaceholder],
             1, target, pinned, "RightPane", Unordered: raced ? 2 : 0);
@@ -670,131 +701,198 @@ public sealed partial class ConnectionsLeafTests
             {
                 run.RunCase(modelCase, timing =>
                 {
-                    ReRootCell cell = modelCase.Value;
-                    int driven = modelCase.Ordinal;
-                    using GraphVault vault = GraphVault.Copy($"reroot-{driven - 1}");
-                    if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
+                    if (DriveReRootCase(
+                        modelCase.Value,
+                        $"reroot-{modelCase.Ordinal - 1}",
+                        () => fixture ??= FixtureOf(),
+                        timing.Phase,
+                        failures,
+                        pinsLoadFirst: false) is not null)
                     {
-                        // W6-2 PR C (C-10): the graph's fresh open re-applies the
-                        // vault's config filters, so the attachment is admitted by
-                        // graph.json BEFORE the host reads it — a view-state write
-                        // in the arrangement was overridden by the open (the T6
-                        // push's app-model failure, TGC-9).
-                        AdmitAttachments(vault.Root);
+                        timing.Complete();
                     }
-                    fixture ??= FixtureOf();
-                    var gate = new GateSeam();
-                    timing.Phase("sessionSetup");
-                    using Host host = ReRootHost(vault.Root, gate);
-                    ReRootDerivation expected = DeriveReRoot(cell, fixture);
-                    int before;
-                    try
-                    {
-                        timing.Phase("arrangement");
-                        ArrangeReRoot(host, cell, fixture, gate);
-                        host.Clear();
-                        before = host.Loads;
-                        timing.Phase("drive");
-                        DriveReRoot(host, cell);
-                        timing.Phase("settleAndVerify");
-                        SettleTheDocuments(host);
-                    }
-                    catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
-                    {
-                        // A state the model cannot arrange or drive is a divergence of
-                        // its own, reported with the rest (the fact still fails).
-                        timing.Phase("cleanup");
-                        failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
-                        return;
-                    }
-                    int loads = host.Loads - before;
-                    string[] timeline =
-                    [
-                        .. expected.Timeline.Select(entry => entry == LinePlaceholder
-                            ? expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"
-                            : entry),
-                    ];
-                    var mismatch = new List<string>();
-                    if (loads != expected.Loads)
-                    {
-                        mismatch.Add($"loads {loads}, derived {expected.Loads} (issued: {host.IssuedLoadsText})");
-                    }
-                    // The depth is the leaf's own and survives a root change (rule
-                    // C): derived, never read back from the leaf (IPC-15).
-                    if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
-                    {
-                        mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
-                    }
-                    if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
-                    {
-                        mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]{(expected.Unordered > 0 ? $" (the last {expected.Unordered} in either order)" : string.Empty)}");
-                    }
-                    if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
-                    }
-                    if (host.Leaf.Root is not null && host.Leaf.IsStale)
-                    {
-                        mismatch.Add("stale after the route");
-                    }
-                    if (host.Leaf.InFlight)
-                    {
-                        mismatch.Add("a load still in flight after the settle");
-                    }
-                    ConnectionsLoadState state = expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root);
-                    if (host.Leaf.Publication.State != state)
-                    {
-                        mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
-                    }
-                    if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
-                    }
-                    if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
-                    }
-                    if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
-                    {
-                        mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
-                    }
-                    string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
-                    if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
-                    }
-                    if (host.Workspace.ConnectionsMountPendingForTests)
-                    {
-                        mismatch.Add("a mount still pending after the settle");
-                    }
-                    string? focus = host.FocusRequests.LastOrDefault();
-                    if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
-                    }
-                    if (host.FocusRequests.Contains("editor"))
-                    {
-                        mismatch.Add("the editor's focus was requested (IGL-3)");
-                    }
-                    if (cell.Gate == Gate.Clean && gate.Asked > 0)
-                    {
-                        mismatch.Add("the dirty gate asked with nothing dirty");
-                    }
-                    if (cell.Gate != Gate.Clean && gate.Asked == 0 && cell.Route == ReRootRoute.ReRoot && cell.Target != Target.SameRoot && !(cell.Entrance == Entrance.Bases && cell.Root == RootState.Note))
-                    {
-                        mismatch.Add("the dirty gate never asked");
-                    }
-                    if (mismatch.Count > 0)
-                    {
-                        string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
-                        failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
-                    }
-                    timing.Phase("cleanup");
-                    timing.Complete();
                 });
             }
         });
         Assert.True(failures.Count == 0, $"{failures.Count} of {run.SelectedCases.Count} cells diverge from the model (unreachable {run.UnreachableCells}):\n{string.Join("\n", failures)}");
         run.Complete();
+    }
+
+    /// <summary>Arranges, drives and settles one re-root cell, comparing
+    /// what it did with what <see cref="DeriveReRoot"/> derives; a
+    /// divergence goes to <paramref name="failures"/>. Answers the timeline
+    /// the cell spoke, or null when it could not be arranged or driven.
+    /// <paramref name="pinsLoadFirst"/> forces the line-first order behind
+    /// a dirty gate (#1893).</summary>
+    private static string[]? DriveReRootCase(
+        ReRootCell cell,
+        string vaultName,
+        Func<Fixture> fixtureOf,
+        Action<string> phase,
+        List<string> failures,
+        bool pinsLoadFirst)
+    {
+        using GraphVault vault = GraphVault.Copy(vaultName);
+        if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
+        {
+            // W6-2 PR C (C-10): the graph's fresh open re-applies the
+            // vault's config filters, so the attachment is admitted by
+            // graph.json BEFORE the host reads it — a view-state write
+            // in the arrangement was overridden by the open (the T6
+            // push's app-model failure, TGC-9).
+            AdmitAttachments(vault.Root);
+        }
+        Fixture fixture = fixtureOf();
+        var gate = new GateSeam { LetThePinsLoadLandFirst = pinsLoadFirst };
+        phase("sessionSetup");
+        using Host host = ReRootHost(vault.Root, gate);
+        ReRootDerivation expected = DeriveReRoot(cell, fixture);
+        int before;
+        try
+        {
+            phase("arrangement");
+            ArrangeReRoot(host, cell, fixture, gate);
+            host.Clear();
+            gate.ArmPinsLoad();
+            before = host.Loads;
+            phase("drive");
+            DriveReRoot(host, cell);
+            phase("settleAndVerify");
+            SettleTheDocuments(host);
+        }
+        catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
+        {
+            // A state the model cannot arrange or drive is a divergence of
+            // its own, reported with the rest (the fact still fails).
+            phase("cleanup");
+            failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
+            return null;
+        }
+        int loads = host.Loads - before;
+        string[] timeline =
+        [
+            .. expected.Timeline.Select(entry => entry == LinePlaceholder
+                ? expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"
+                : entry),
+        ];
+        var mismatch = new List<string>();
+        if (loads != expected.Loads)
+        {
+            mismatch.Add($"loads {loads}, derived {expected.Loads} (issued: {host.IssuedLoadsText})");
+        }
+        // The depth is the leaf's own and survives a root change (rule
+        // C): derived, never read back from the leaf (IPC-15).
+        if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
+        {
+            mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
+        }
+        if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
+        {
+            mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]{(expected.Unordered > 0 ? $" (the last {expected.Unordered} in either order)" : string.Empty)}");
+        }
+        if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
+        {
+            mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
+        }
+        if (host.Leaf.Root is not null && host.Leaf.IsStale)
+        {
+            mismatch.Add("stale after the route");
+        }
+        if (host.Leaf.InFlight)
+        {
+            mismatch.Add("a load still in flight after the settle");
+        }
+        ConnectionsLoadState state = expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root);
+        if (host.Leaf.Publication.State != state)
+        {
+            mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
+        }
+        if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
+        {
+            mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
+        }
+        if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
+        {
+            mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
+        }
+        if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
+        {
+            mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
+        }
+        string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
+        if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
+        {
+            mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
+        }
+        if (host.Workspace.ConnectionsMountPendingForTests)
+        {
+            mismatch.Add("a mount still pending after the settle");
+        }
+        string? focus = host.FocusRequests.LastOrDefault();
+        if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
+        {
+            mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
+        }
+        if (host.FocusRequests.Contains("editor"))
+        {
+            mismatch.Add("the editor's focus was requested (IGL-3)");
+        }
+        if (cell.Gate == Gate.Clean && gate.Asked > 0)
+        {
+            mismatch.Add("the dirty gate asked with nothing dirty");
+        }
+        if (cell.Gate != Gate.Clean && gate.Asked == 0 && cell.Route == ReRootRoute.ReRoot && cell.Target != Target.SameRoot && !(cell.Entrance == Entrance.Bases && cell.Root == RootState.Note))
+        {
+            mismatch.Add("the dirty gate never asked");
+        }
+        if (mismatch.Count > 0)
+        {
+            string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
+            failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
+        }
+        phase("cleanup");
+        return [.. host.Timeline];
+    }
+
+    /// <summary>#1893: a re-root to an attachment behind the Allowed dirty
+    /// gate may speak the leaf's line before the open's FileReopenFailed:
+    /// the pin's load is issued before the open, and the dialog pumps the
+    /// frames its line lands in. CI saw that with the leaf already active;
+    /// here every such cell is driven with the pin's load made to land
+    /// first, and the model must accept each, which it did not for an
+    /// active leaf before.</summary>
+    [Fact]
+    public void AnAttachmentReRootBehindTheAllowedGateMayLandItsLineFirst()
+    {
+        ReRootCell[] cells =
+        [
+            .. ReRootCellsOf().Where(cell => cell.Route == ReRootRoute.ReRoot
+                && cell.Target == Target.Attachment
+                && cell.Gate == Gate.Allowed
+                && UnreachableReRoot(cell) is null),
+        ];
+        Assert.Contains(cells, cell => cell.Leaf == LeafState.Connections);
+        Assert.Contains(cells, cell => cell.Leaf != LeafState.Connections);
+        var failures = new List<string>();
+        PumpedDispatcher.Run(() =>
+        {
+            Fixture? fixture = null;
+            int ordinal = 0;
+            foreach (ReRootCell cell in cells)
+            {
+                string[]? timeline = DriveReRootCase(
+                    cell,
+                    $"reroot-line-first-{ordinal++}",
+                    () => fixture ??= FixtureOf(),
+                    _ => { },
+                    failures,
+                    pinsLoadFirst: true);
+                if (timeline is not null && timeline.LastOrDefault() != "FileReopenFailed")
+                {
+                    failures.Add($"{cell}: the line did not land first under the forced order: [{string.Join(" | ", timeline)}]");
+                }
+            }
+        });
+        Assert.True(failures.Count == 0, $"{failures.Count} of {cells.Length} cells:\n{string.Join("\n", failures)}");
     }
 }
