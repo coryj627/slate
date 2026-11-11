@@ -516,10 +516,38 @@ public sealed partial class RescanTests
             _ = other.RenameFile("a.md", "b.md");
         }
 
-        using (DenyAccess.To(Path.Combine(h.Root, "b.md"), FileSystemRights.ReadData))
+        // Only the rescan's own read of b.md fails, with a real sharing
+        // violation: the file is held exclusively across that one core call.
+        // CI on #1898: denying the file's read for the whole run also failed
+        // the sidebar's tree load, a second sentence this fact is not about.
+        string moved = Path.Combine(h.Root, "b.md");
+        FileStream? held = null;
+        h.BeforeCoreCall = operation =>
+        {
+            if (operation == "read")
+            {
+                held ??= new FileStream(moved, FileMode.Open, FileAccess.Read, FileShare.None);
+            }
+        };
+        h.AfterCoreCall = operation =>
+        {
+            if (operation == "read")
+            {
+                held?.Dispose();
+            }
+        };
+        try
         {
             h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         }
+        finally
+        {
+            h.BeforeCoreCall = null;
+            h.AfterCoreCall = null;
+            held?.Dispose();
+        }
+
+        Assert.NotNull(held);
 
         Assert.Equal("b.md", tab.Path);
         Assert.False(tab.IsMissingFromDisk);
