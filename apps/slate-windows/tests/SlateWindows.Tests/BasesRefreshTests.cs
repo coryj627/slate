@@ -134,6 +134,54 @@ public sealed class BasesRefreshTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>Codex round 1: two refreshes started before either has
+    /// published share the one surviving result, the second's, so
+    /// "Base refreshed." is spoken once, for it.</summary>
+    [Fact]
+    public async Task TwoOverlappingRefreshesSpeakOnceForTheSurvivingResult()
+    {
+        var pump = new PumpSynchronizationContext();
+        BaseDocumentViewModel document = NewAsyncDocument(pump);
+        _watched = document;
+        document.Load();
+        await Settle(document, pump, () => document.State != BaseLoadState.Loading);
+        Clear();
+
+        Task first = document.RefreshByUserAsync();
+        Task second = document.RefreshByUserAsync();
+        await Settle(document, pump, () => first.IsCompleted && second.IsCompleted);
+
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        (_, BaseLoadState? state) = Assert.Single(Refreshed());
+        Assert.Equal(BaseLoadState.Ready, state);
+        document.Shutdown();
+    }
+
+    /// <summary>Codex round 1: a refresh superseded by a load that is then
+    /// cancelled (a rescan's) published nothing, and neither did the load:
+    /// the base is still loading, so "Base refreshed." is not said.</summary>
+    [Fact]
+    public async Task ARefreshSupersededByACancelledLoadSaysNothing()
+    {
+        var pump = new PumpSynchronizationContext();
+        BaseDocumentViewModel document = NewAsyncDocument(pump);
+        _watched = document;
+        document.Load();
+        await Settle(document, pump, () => document.State != BaseLoadState.Loading);
+        Clear();
+
+        Task refresh = document.RefreshByUserAsync();
+        using var rescan = new CancellationTokenSource();
+        Task superseding = document.LoadAsync(rescan.Token);
+        rescan.Cancel();
+        await Settle(document, pump, () => refresh.IsCompleted && superseding.IsCompleted);
+
+        Assert.True(superseding.IsCanceled, "premise: the superseding load was cancelled");
+        Assert.Equal(BaseLoadState.Loading, document.State);
+        Assert.Empty(Refreshed());
+        document.Shutdown();
+    }
+
     /// <summary>A document closed while its refresh reloads speaks nothing
     /// for it.</summary>
     [Fact]
