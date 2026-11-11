@@ -5,9 +5,10 @@
 // three VaultEventListener methods deliver in one session — index phases
 // in exact choreography, file changes for saves, and on_error from a
 // genuinely failed background compaction. Ported from the W0-1 probe's
-// vault-events section (with its runner-race fix: the oplog is flagged
-// read-only within the same growth iteration that crosses the compaction
-// threshold, so the worker's rewrite deterministically fails).
+// vault-events section. #1896: the probe flagged the oplog read-only after
+// the save that crossed the compaction threshold, which raced the worker; the
+// log is now held open without delete sharing from before that save, so the
+// worker's rename-over fails whenever it runs.
 
 using System.Text;
 using SlateWindows.Tests.Support;
@@ -52,43 +53,41 @@ public class EventKindsCensus
         Assert.Contains(changes, c => c.Kind == FileChangeKind.Modified && c.Path == "created.md");
 
         // Kind 3: on_error from a real failed compaction. Grow one note's
-        // oplog with snapshot-heavy saves and flag it read-only within the
-        // same iteration that crosses the 5 MiB threshold: the background
-        // worker's rewrite (tmp + rename-over) hits Windows read-only
-        // semantics and dispatches CompactionFailed from its worker thread.
+        // oplog with snapshot-heavy saves past the 5 MiB threshold, which
+        // enqueues the background compaction (tmp + rename-over). #1896: the
+        // fact used to flag the log read-only only AFTER the crossing save,
+        // racing the worker: a worker that compacted first left a small log,
+        // and the round never saw the crossing. Now the log is held open
+        // from before the crossing save without FILE_SHARE_DELETE. Core's
+        // appends and reads share read and write with that handle, but
+        // Windows refuses to replace a file another handle holds without
+        // delete sharing, so the rename-over fails whenever the worker runs
+        // and dispatches CompactionFailed from its thread; and since nothing
+        // can shrink the log meanwhile, the crossing is always seen.
         const long compactionThresholdBytes = 5 * 1024 * 1024;
         string bigBody = new StringBuilder(270_000)
             .Insert(0, "compaction ballast paragraph without structure\n", 5_700)
             .ToString();
         var slateDir = new DirectoryInfo(Path.Combine(vault.Root, ".slate"));
-        bool sawError = false;
-        for (int round = 0; round < 4 && !sawError; round++)
+        session.SaveText("hot.md", bigBody + "tail first\n", null);
+        FileInfo log = Assert.IsType<FileInfo>(slateDir
+            .EnumerateFiles("*.oplog", SearchOption.AllDirectories)
+            .OrderByDescending(f => f.Length)
+            .FirstOrDefault());
+        Assert.True(log.Length < compactionThresholdBytes, $"premise: one save stays under the threshold ({log.Length} bytes)");
+        bool sawError;
+        // The held handle's own length is the file's: a directory entry's
+        // size can lag while another process appends.
+        using (FileStream held = HoldWithoutDeleteSharing(log))
         {
-            FileInfo? flagged = null;
-            for (int i = 0; i < 22 && flagged == null; i++)
+            for (int i = 0; i < 40 && held.Length <= compactionThresholdBytes; i++)
             {
-                session.SaveText("hot.md", bigBody + $"tail {round}/{i}\n", null);
-                var log = slateDir.Exists
-                    ? slateDir
-                        .EnumerateFiles("*.oplog", SearchOption.AllDirectories)
-                        .OrderByDescending(f => f.Length)
-                        .FirstOrDefault()
-                    : null;
-                if (log != null && log.Length > compactionThresholdBytes)
-                {
-                    File.SetAttributes(log.FullName, FileAttributes.ReadOnly);
-                    flagged = log;
-                }
+                session.SaveText("hot.md", bigBody + $"tail {i}\n", null);
             }
-            Assert.True(flagged != null, $"round {round}: oplog never crossed the compaction threshold");
-            try
-            {
-                sawError = Waiting.WaitFor(() => recorder.Locked(r => r.Errors.Count) > 0, 10_000);
-            }
-            finally
-            {
-                File.SetAttributes(flagged!.FullName, FileAttributes.Normal);
-            }
+            Assert.True(
+                held.Length > compactionThresholdBytes,
+                $"hot.md's oplog never crossed the compaction threshold ({held.Length} bytes)");
+            sawError = Waiting.WaitFor(() => recorder.Locked(r => r.Errors.Count) > 0, 10_000);
         }
         Assert.True(sawError, "failed compaction dispatched no on_error");
         var (code, path, message) = recorder.Locked(r => r.Errors[0]);
@@ -107,4 +106,10 @@ public class EventKindsCensus
         Assert.Equal(sealedCount, recorder.TotalCount);
         session.UnregisterEventListener(9_999_999);
     }
+
+    /// <summary>A read handle on <paramref name="file"/> that shares read and
+    /// write but not delete: another process's appends and reads go on,
+    /// and a rename over the file is refused while it is open.</summary>
+    internal static FileStream HoldWithoutDeleteSharing(FileInfo file) =>
+        new(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 }
