@@ -608,8 +608,11 @@ jobs:
       # variables, and main's run 43059953344 lost its test process that way.
       # Windows Error Reporting still sees such a crash, so its LocalDumps
       # write a full dump (type 2) of each test process into the same
-      # uploaded folder, under the same no-secrets guard. A runner that
-      # refuses the keys still runs the tests, with a warning.
+      # uploaded folder, under the same no-secrets guard. The keys need an
+      # administrator: Namespace's runner is one (probe: run 43070686612).
+      # A home VM's runner is a limited user, so there the step warns and
+      # the tests run without the capture until the golden image arms the
+      # keys itself (#1903).
       - name: Arm Windows Error Reporting dumps for the test processes (#1826)
         run: |
           $results = '${{ runner.temp }}\slate-app-results'
@@ -623,7 +626,7 @@ jobs:
               New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 4 -Force -ErrorAction Stop | Out-Null
               Write-Host "WER dumps armed for $exe"
             } catch {
-              Write-Host "::warning::WER dumps are not armed for ${exe}: $($_.Exception.Message)"
+              Write-Host "::warning::WER dumps are not armed for ${exe} (a limited runner cannot write HKLM, #1903): $($_.Exception.Message)"
             }
           }
 
