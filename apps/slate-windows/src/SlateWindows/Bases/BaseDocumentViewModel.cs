@@ -489,6 +489,70 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     public void AnnounceRefreshed() =>
         _announce(new A11yEvent.BaseRefreshed());
 
+    /// <summary>#1692: the explicit refresh, from the palette's Bases:
+    /// Refresh and the surface header's button. A full reload, and "Base
+    /// refreshed." only once that reload has published a result (its
+    /// <see cref="PublicationAsync"/> task, the one <see cref="LoadAsync"/>
+    /// returns, completes without an operation failure): a reload whose open
+    /// or execute fails says nothing of its own, since its failed state
+    /// speaks for itself, as Retry's does. From the Failed posture (a Retry)
+    /// it is never said, and a document shut down meanwhile says nothing. The
+    /// sentence is always posted to the dispatcher (<see cref="PanelWorkScheduler"/>'s
+    /// Post, inline in synchronous test mode), so it follows the result's own
+    /// publication there, whichever thread the reload finished on. The
+    /// returned task completes once it has been spoken or declined; the
+    /// shell discards it.</summary>
+    /// <remarks>Codex round 1: the publication task reports the document's
+    /// latest outcome, not this reload's, so a refresh superseded (by an
+    /// overlapping refresh, or a rescan's load cancelled before it published)
+    /// could have spoken for a result it never published. The sentence is
+    /// tied to this reload's own generation: on the dispatcher, after the
+    /// drain, that generation must still be the document's and the base must
+    /// show a result (Ready or Degraded). A later operation that supersedes
+    /// it (a quick filter, a view switch) leaves the sentence unsaid; the
+    /// later operation speaks for itself.</remarks>
+    internal Task RefreshByUserAsync()
+    {
+        bool wasFailed = State == BaseLoadState.Failed;
+        int generation = 0;
+        Task reloaded = PublicationAsync(() => generation = Load(CancellationToken.None), CancellationToken.None);
+        // One path whether or not the reload has already finished (Codoki):
+        // the continuation runs inline on a finished task, and Post queues to
+        // the dispatcher (or runs inline in synchronous test mode).
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = reloaded.ContinueWith(
+            outcome => Post(() =>
+            {
+                try
+                {
+                    SpeakRefreshed(outcome, wasFailed, generation);
+                }
+                finally
+                {
+                    _ = settled.TrySetResult();
+                }
+            }),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return settled.Task;
+    }
+
+    private void SpeakRefreshed(Task reloaded, bool wasFailed, int generation)
+    {
+        // Observed whatever it holds: a failed reload speaks through the
+        // state it published, never through an unobserved task.
+        _ = reloaded.Exception;
+        if (!wasFailed
+            && reloaded.IsCompletedSuccessfully
+            && !IsShutDown
+            && Volatile.Read(ref _generation) == generation
+            && State is BaseLoadState.Ready or BaseLoadState.Degraded)
+        {
+            AnnounceRefreshed();
+        }
+    }
+
     /// <summary>slate.bases.saveSortToView (the mac twin verbatim):
     /// persist the published transient sort into the view's slate
     /// state, clear the engine sort, reload views, re-execute. The
@@ -958,14 +1022,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// explicit-refresh caller announces BaseRefreshed.</summary>
     public void Load() => Load(CancellationToken.None);
 
-    private void Load(CancellationToken cancellation)
+    /// <returns>The generation this load runs as, or 0 when the document is
+    /// shut down and nothing started (#1692: a refresh speaks only for its
+    /// own generation's result).</returns>
+    private int Load(CancellationToken cancellation)
     {
         if (IsShutDown)
         {
             // A shut-down document must not even MUTATE state: the
             // scheduler would refuse the body, leaving a permanent
             // "Loading" lie on whatever UI still observes this VM.
-            return;
+            return 0;
         }
         int generation = Interlocked.Increment(ref _generation);
         State = BaseLoadState.Loading;
@@ -977,6 +1044,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // let SaveSortToView persist the fiction (red team round 1).
         SortState = null;
         StartWork(() => LoadBody(generation, cancellation));
+        return generation;
     }
 
     private void LoadBody(int generation, CancellationToken cancellation)
