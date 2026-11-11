@@ -627,32 +627,6 @@ jobs:
             }
           }
 
-      # PROBE for #1826, removed before merge: does a native fail-fast on this
-      # runner leave a WER dump? It always fails, so the job stops here.
-      - name: PROBE native fail-fast leaves a WER dump
-        run: |
-          $results = '${{ runner.temp }}\slate-app-results'
-          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\pwsh.exe'
-          New-Item -Path $key -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $results -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
-          Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -ErrorAction SilentlyContinue | Format-List | Out-String | Write-Host
-          Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting' -ErrorAction SilentlyContinue | Format-List | Out-String | Write-Host
-          Write-Host "WerSvc: $((Get-Service WerSvc).Status) / $((Get-Service WerSvc).StartType)"
-          $crash = @'
-          Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class FailFastProbe { [DllImport("kernel32.dll")] public static extern void RaiseFailFastException(IntPtr record, IntPtr context, uint flags); }'
-          [FailFastProbe]::RaiseFailFastException([IntPtr]::Zero, [IntPtr]::Zero, 0)
-          '@
-          pwsh -NoProfile -Command $crash
-          Write-Host ("child exit=0x{0:X8}" -f $LASTEXITCODE)
-          $deadline = (Get-Date).AddSeconds(60)
-          while ((Get-Date) -lt $deadline -and -not (Get-ChildItem $results -Filter 'pwsh.exe*.dmp' -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 2 }
-          Get-ChildItem $results | Format-Table Name, Length | Out-String | Write-Host
-          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -ErrorAction SilentlyContinue |
-            Where-Object { $_.Id -in 1000, 1001, 1026 } | Select-Object -First 4 TimeCreated, Id, ProviderName, Message | Format-List | Out-String -Width 300 | Write-Host
-          if (Get-ChildItem $results -Filter 'pwsh.exe*.dmp' -ErrorAction SilentlyContinue) { Write-Host '::notice::PROBE: WER wrote a dump' } else { Write-Host '::error::PROBE: no WER dump' }
-          exit 1
-
       # #1826: a test process that fails fast writes a full dump into the
       # uploaded results folder (the runtime's own createdump, in every .NET
       # process the step starts): main's run 42932655320 lost one after its
