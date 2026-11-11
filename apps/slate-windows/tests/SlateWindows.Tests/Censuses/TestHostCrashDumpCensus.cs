@@ -60,7 +60,7 @@ public sealed class TestHostCrashDumpCensus
         Assert.Contains(@"HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\", arm, StringComparison.Ordinal);
         // xunit v3 runs the suite as its own executable; VSTest's host and the
         // dotnet driver are the step's other .NET processes.
-        foreach (string executable in (string[])["SlateWindows.Tests.exe", "testhost.exe", "dotnet.exe"])
+        foreach (string executable in new[] { "SlateWindows.Tests.exe", "testhost.exe", "dotnet.exe" })
         {
             Assert.Contains($"'{executable}'", arm, StringComparison.Ordinal);
         }
