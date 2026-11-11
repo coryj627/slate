@@ -477,6 +477,92 @@ fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError
     Ok(())
 }
 
+/// Plan 44 WB-31 (#1484): one connection's page-cache counters, from
+/// `sqlite3_db_status`. `used` and `used_shared` are bytes the connection's
+/// cache holds now; `hit`, `miss`, `write` and `spill` count since the
+/// connection opened (never reset here). A counter SQLite refuses reads
+/// as -1.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DbCacheCounters {
+    pub used: i64,
+    pub used_shared: i64,
+    pub hit: i64,
+    pub miss: i64,
+    pub write: i64,
+    pub spill: i64,
+}
+
+/// This connection's [`DbCacheCounters`].
+pub(crate) fn connection_cache_counters(conn: &Connection) -> DbCacheCounters {
+    let read = |op: std::os::raw::c_int| -> i64 {
+        let mut current: std::os::raw::c_int = 0;
+        let mut highwater: std::os::raw::c_int = 0;
+        // SAFETY: the handle is the borrowed connection's own, valid for the
+        // call; the two out-pointers are live locals; reset is 0.
+        let rc = unsafe {
+            rusqlite::ffi::sqlite3_db_status(conn.handle(), op, &mut current, &mut highwater, 0)
+        };
+        if rc == rusqlite::ffi::SQLITE_OK {
+            i64::from(current)
+        } else {
+            -1
+        }
+    };
+    DbCacheCounters {
+        used: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_USED),
+        used_shared: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_USED_SHARED),
+        hit: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_HIT),
+        miss: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_MISS),
+        write: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_WRITE),
+        spill: read(rusqlite::ffi::SQLITE_DBSTATUS_CACHE_SPILL),
+    }
+}
+
+/// Plan 44 WB-31 (#1484): frees as much of this connection's page cache as
+/// SQLite can (`sqlite3_db_release_memory`). With
+/// `SQLITE_ENABLE_MEMORY_MANAGEMENT` every connection in the process draws
+/// pages from one shared pool, so an idle session's cache otherwise holds
+/// pages another session needs.
+pub(crate) fn release_connection_memory(conn: &Connection) {
+    // SAFETY: the handle is the borrowed connection's own, valid for the
+    // call, which the caller makes while holding the connection.
+    let _ = unsafe { rusqlite::ffi::sqlite3_db_release_memory(conn.handle()) };
+}
+
+/// Plan 44 WB-31 (#1484): the process's SQLite memory, from
+/// `sqlite3_status64`: `memory_used` is every byte SQLite holds in this
+/// process; `pagecache_overflow` the page-cache bytes that came from the
+/// general allocator (all of them here: the repository configures no
+/// `SQLITE_CONFIG_PAGECACHE` buffer, so `SQLITE_STATUS_PAGECACHE_USED`
+/// would read flat and prove nothing). A counter SQLite refuses reads as -1.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProcessCacheStatus {
+    pub memory_used: i64,
+    pub pagecache_overflow: i64,
+}
+
+/// The process's [`ProcessCacheStatus`].
+#[doc(hidden)]
+pub fn process_cache_status() -> ProcessCacheStatus {
+    let read = |op: std::os::raw::c_int| -> i64 {
+        let mut current: i64 = 0;
+        let mut highwater: i64 = 0;
+        // SAFETY: process-wide status read into two live locals; reset is 0.
+        let rc = unsafe { rusqlite::ffi::sqlite3_status64(op, &mut current, &mut highwater, 0) };
+        if rc == rusqlite::ffi::SQLITE_OK {
+            current
+        } else {
+            -1
+        }
+    };
+    ProcessCacheStatus {
+        memory_used: read(rusqlite::ffi::SQLITE_STATUS_MEMORY_USED),
+        pagecache_overflow: read(rusqlite::ffi::SQLITE_STATUS_PAGECACHE_OVERFLOW),
+    }
+}
+
 /// True when `e` is a `SQLITE_BUSY`/`SQLITE_LOCKED` failure — the
 /// "another connection holds the lock" family the WAL-conversion retry
 /// in [`apply_pragmas`] waits out.
