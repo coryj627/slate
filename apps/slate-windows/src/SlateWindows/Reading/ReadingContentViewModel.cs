@@ -1026,6 +1026,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var artifacts = new List<ReadingEmbedArtifact>(keys.Count);
         int attempts = 0;
         long imagePool = FetchedEmbedImageByteBudget;
+        long svgPixels = ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
         foreach (string key in keys)
         {
             ThrowIfCancelled(cancel);
@@ -1089,15 +1091,42 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // #1634: an SVG image decodes here, on the refresh's worker,
             // where its budget-long wait (#1581) blocks nothing the reader
             // is using; the builder places the result on the dispatcher.
+            // The projection's decoded-pixel pool bounds these decodes as it
+            // bounds the builder's: each reserves its raster's pixels before
+            // allocating it, and once the pool is spent a later SVG never
+            // enters the decoder (Codex on #1634).
             ReadingEmbedImageDecode? imageDecode = null;
             if (!imageRefused
                 && resolution?.Resolution is EmbedResolution.Image image
                 && EditorInteractionCoordinator.IsSvgImage(image.Bytes, image.Mime))
             {
-                EmbedSvgDecodeProbeForTests?.Invoke(key);
-                System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
-                    image.Bytes, image.Mime, out string? decodeFailure);
-                imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure);
+                if (svgPixels <= 0)
+                {
+                    imageDecode = new ReadingEmbedImageDecode(null, null, BudgetRefused: true);
+                }
+                else
+                {
+                    EmbedSvgDecodeProbeForTests?.Invoke(key);
+                    // The reservation runs on the decode thread while this
+                    // worker waits, never after it stops waiting.
+                    System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
+                        image.Bytes,
+                        image.Mime,
+                        cost =>
+                        {
+                            long pixels = cost / 4;
+                            if (pixels > svgPixels)
+                            {
+                                svgPixels = 0;
+                                return false;
+                            }
+                            svgPixels -= pixels;
+                            return true;
+                        },
+                        out bool budgetSpent,
+                        out string? decodeFailure);
+                    imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent);
+                }
                 ThrowIfCancelled(cancel);
             }
             artifacts.Add(new ReadingEmbedArtifact(
@@ -2317,6 +2346,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 null => "svg-none",
                 { Source: not null } => "svg-decoded",
+                { BudgetRefused: true } => "svg-budget-refused",
                 { FailureReason: { } reason } => "svg-failed:" + reason,
                 _ => "svg-failed",
             });

@@ -39,10 +39,14 @@ internal sealed record ReadingEmbedArtifact(
 /// dispatcher can place it; when it is null, <see cref="FailureReason"/> is
 /// core's sentence for a decode past its budget or refused at the cap, or
 /// null for an ordinary failure, whose sentence is the builder's.
+/// <see cref="BudgetRefused"/> marks a decode the projection's decoded-pixel
+/// pool refused, before its raster was allocated or before it began, which
+/// the builder states as the budget notice.
 /// </summary>
 internal sealed record ReadingEmbedImageDecode(
     System.Windows.Media.ImageSource? Source,
-    string? FailureReason);
+    string? FailureReason,
+    bool BudgetRefused = false);
 
 /// <summary>
 /// W4-6 (#738, contract C10): the layered `.base` embed card's data —

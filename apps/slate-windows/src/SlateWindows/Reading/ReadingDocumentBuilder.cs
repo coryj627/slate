@@ -1786,7 +1786,8 @@ internal static class ReadingDocumentBuilder
     {
         if (!context.DecodedEmbedImages.TryGetValue(key, out var outcome))
         {
-            if (context.RemainingEmbedDecodedPixels <= 0)
+            if (context.RemainingEmbedDecodedPixels <= 0
+                || decodedOffTheDispatcher is { BudgetRefused: true })
             {
                 outcome = (null, true, null);
             }

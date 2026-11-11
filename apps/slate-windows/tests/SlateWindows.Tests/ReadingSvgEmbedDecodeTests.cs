@@ -135,6 +135,58 @@ public sealed class ReadingSvgEmbedDecodeTests
         });
     }
 
+    /// <summary>The decoded-pixel pool bounds the worker's SVG decodes, as it
+    /// bounded the builder's (W3-5 round 5): each decode reserves its pixels
+    /// before its raster is allocated, and once the pool is spent a later
+    /// distinct SVG never enters the decoder and keeps its header with the
+    /// budget notice (Codex on #1634: decoding every SVG up front let a note
+    /// of many small SVGs hold ten times the pool).</summary>
+    [Fact]
+    public void DistinctSvgsPastThePixelPoolNeverEnterTheDecoder()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-pool");
+        foreach (string name in (string[])["a", "b", "c"])
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, $"{name}.svg"), Svg);
+        }
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.svg]]\n\n![[c.svg]]\n");
+        var decoded = new List<string>();
+        ReadingContentViewModel.EmbedSvgDecodeProbeForTests = decoded.Add;
+        // An 8x8 SVG rasterises to 64 pixels: the pool admits the first only.
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                FlowDocument document = reading.Document!;
+
+                Assert.Equal(["a.svg"], decoded);
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                Assert.Equal(
+                    2,
+                    System.Text.RegularExpressions.Regex.Matches(
+                        TextOf(document), "over this note's embedded-image budget").Count);
+            });
+        }
+        finally
+        {
+            ReadingContentViewModel.EmbedSvgDecodeProbeForTests = null;
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
     private static string TextOf(FlowDocument document) =>
         new TextRange(document.ContentStart, document.ContentEnd).Text;
 
