@@ -78,6 +78,25 @@ public sealed class BasesRefreshTests : IDisposable
         Assert.Empty(Refreshed());
     });
 
+    /// <summary>The open succeeds but the execute fails (Codex round 2's
+    /// coverage note): the base is published Degraded, an operation failure
+    /// (the rows it showed stay), so "Base refreshed." is not said.</summary>
+    [Theory]
+    [InlineData("palette")]
+    [InlineData("header")]
+    public void ARefreshWhoseExecuteFailsSaysNothingOfItsOwn(string from) => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        (WorkspaceTabViewModel tab, BaseDocumentViewModel document) = OpenNotes(workspace);
+        document.ExecuteFaultForTests = () => new VaultException.Db("database is locked");
+        Clear();
+
+        Refresh(from, workspace, tab, document);
+
+        Assert.Equal(BaseLoadState.Degraded, document.State);
+        Assert.Empty(Refreshed());
+    });
+
     /// <summary>A reload that publishes a result is spoken once, after the
     /// result: the sentence never reports a base still loading.</summary>
     [Theory]
