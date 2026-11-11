@@ -126,7 +126,7 @@ public sealed class DeviceStateCensus
     }
 
     /// <summary>One top-level job's text, from its key to the next job's.</summary>
-    private static string Job(string workflow, string job)
+    internal static string Job(string workflow, string job)
     {
         string[] lines = workflow.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         int start = Array.FindIndex(lines, line => line == $"  {job}:");
@@ -137,7 +137,7 @@ public sealed class DeviceStateCensus
 
     /// <summary>One step of a job, its white space collapsed, so a folded
     /// <c>run: &gt;-</c> command reads as the one line the shell gets.</summary>
-    private static string Step(string workflow, string job, string name)
+    internal static string Step(string workflow, string job, string name)
     {
         string[] steps = Job(workflow, job).Split("\n      - ");
         string step = Assert.Single(steps, candidate => candidate.StartsWith($"name: {name}\n", StringComparison.Ordinal));
