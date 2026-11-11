@@ -602,15 +602,18 @@ jobs:
             '-Out', "$results\foreground.log",
             '-StopFile', '${{ runner.temp }}\foreground.stop')
 
-      # #1826: a test process that fails fast writes a heap dump into the
+      # #1826: a test process that fails fast writes a full dump into the
       # uploaded results folder (the runtime's own createdump, in every .NET
       # process the step starts): main's run 42932655320 lost one after its
-      # last fact with nothing to read. TestHostCrashDumpCensus pins these.
+      # last fact with nothing to read. Full, as StaThread's timeout dumps
+      # are (#1641): CI's runtime is installed unregistered, so a heap dump
+      # can lack the JIT code a managed stack needs. It is written only when
+      # a process fails fast. TestHostCrashDumpCensus pins these.
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
           DOTNET_DbgEnableMiniDump: '1'
-          DOTNET_DbgMiniDumpType: '2'
+          DOTNET_DbgMiniDumpType: '4'
           DOTNET_DbgMiniDumpName: '${{ runner.temp }}\slate-app-results\crash-%e-%p.dmp'
           DOTNET_CreateDumpDiagnostics: '1'
         run: >-

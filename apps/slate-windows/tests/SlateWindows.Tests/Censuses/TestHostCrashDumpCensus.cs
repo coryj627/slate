@@ -25,9 +25,11 @@ public sealed class TestHostCrashDumpCensus
         string test = DeviceStateCensus.Step(workflow, "windows", "Test");
 
         Assert.Contains("DOTNET_DbgEnableMiniDump: '1'", test, StringComparison.Ordinal);
-        // A heap dump (2): the managed frames of every thread, which a mini
-        // dump lacks, at a fraction of a full dump's size.
-        Assert.Contains("DOTNET_DbgMiniDumpType: '2'", test, StringComparison.Ordinal);
+        // A full dump (4), as StaThread's timeout dumps are (#1641): CI's
+        // runtime is installed unregistered, so a heap dump (2) can lack the
+        // JIT code and module images a managed stack needs, and a mini dump
+        // (1) lacks the managed frames altogether (codex round 1).
+        Assert.Contains("DOTNET_DbgMiniDumpType: '4'", test, StringComparison.Ordinal);
         // createdump expands %e and %p to the process's name and id, so two
         // processes that fail in one step write two files.
         Assert.Contains($@"DOTNET_DbgMiniDumpName: '{Results}\crash-%e-%p.dmp'", test, StringComparison.Ordinal);
