@@ -159,6 +159,86 @@ public sealed class HeldVaultStoreFileTests
         Assert.Equal(SidebarSortMode.CreatedNewest, loaded.SortMode);
     }
 
+    /// <summary>A no-sharing hold that outlasts the wait fails that one
+    /// update, as any write failure does, but the file isn't unreadable: the
+    /// store stays writable, and the next update after the hold lands (Codex
+    /// on #1869: it used to latch read-only until Retry).</summary>
+    [Fact]
+    public void ASidebarUpdateThatStaysHeldFailsWithoutMakingTheSettingsReadOnly()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "held-sidebar-update");
+        var store = new SidebarHeldStore(fixture.Root);
+        Assert.Null(store.Save("before"));
+        Exception? failure;
+        using (Hold(store.FilePath, FileShare.None))
+        {
+            failure = store.Save("during");
+        }
+
+        Assert.IsAssignableFrom<IOException>(failure);
+        Assert.Null(store.ReadOnlyReason);
+        Assert.Null(store.Save("after"));
+        Assert.Equal("after", store.Read());
+    }
+
+    /// <summary>The opening read fails closed while the file stays held:
+    /// a session that couldn't read the pins must not write over them, so
+    /// the settings are read-only until they're read again (the sidebar's
+    /// Retry), which then succeeds.</summary>
+    [Fact]
+    public void TheSidebarsOpeningReadFailsClosedWhileTheFileStaysHeldAndRecoversOnTheNextRead()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "held-sidebar-load-stays");
+        new SidebarSettingsStore(fixture.Root).SetOrganization(SidebarSortMode.CreatedNewest, groupByDate: true);
+        string path = Path.Combine(fixture.Root, ".slate", "sidebar.json");
+        var store = new SidebarSettingsStore(fixture.Root);
+        SidebarSettingsSnapshot held;
+        using (Hold(path, FileShare.None))
+        {
+            held = store.Load();
+        }
+
+        Assert.NotNull(held.ReadOnlyReason);
+        SidebarSettingsSnapshot again = store.Load();
+        Assert.Null(again.ReadOnlyReason);
+        Assert.Equal(SidebarSortMode.CreatedNewest, again.SortMode);
+    }
+
+    /// <summary>One budget per operation (Codex on #1869): an update whose
+    /// lock and write both meet a hold waits the brief backoff once in all,
+    /// not once per step.</summary>
+    [Fact]
+    public void AnUpdateWhoseStepsEachMeetAHoldWaitsOneBudgetInAll()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "held-sidebar-budget");
+        var store = new SidebarSettingsStore(fixture.Root);
+        store.SetOrganization(SidebarSortMode.CreatedNewest, groupByDate: true);
+        string directory = Path.Combine(fixture.Root, ".slate");
+        // Another Slate holds the lock for the first two waits; a reader
+        // holds the settings without delete sharing throughout.
+        FileStream lockHold = Hold(Path.Combine(directory, "sidebar.json.lock"), FileShare.None);
+        using FileStream fileHold = Hold(Path.Combine(directory, "sidebar.json"), FileShare.Read);
+        var held = new List<int>();
+        store.HeldAttemptForTests = wait =>
+        {
+            held.Add(wait);
+            if (wait == 1)
+            {
+                lockHold.Dispose();
+            }
+        };
+        try
+        {
+            Assert.Throws<IOException>(() => store.SetOrganization(SidebarSortMode.NameDescending, groupByDate: false));
+        }
+        finally
+        {
+            lockHold.Dispose();
+        }
+
+        Assert.Equal(Enumerable.Range(0, AnchoredVaultStore.BriefHeldFileBackoff.Count), held);
+    }
+
     private static FileStream Hold(string path, FileShare share) =>
         new(path, FileMode.Open, FileAccess.Read, share);
 

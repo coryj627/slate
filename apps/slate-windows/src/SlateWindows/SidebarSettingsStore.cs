@@ -345,7 +345,16 @@ internal sealed class SidebarSettingsStore
         using FileStream gate = store.OpenExclusiveLock(LockFileName);
         JsonObject current = ReadRoot(
             () => store.ReadAllBytesBounded(SettingsFileName, MaxReadBytes),
-            out string? blocked);
+            out string? blocked,
+            out IOException? held);
+        if (held is not null)
+        {
+            // #1869: another process still holds the file after the brief
+            // wait. This write fails, but the file isn't unreadable, so the
+            // store stays writable and the next update reads it again.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(held);
+        }
+
         if (blocked is not null)
         {
             _readOnlyReason = blocked;
@@ -383,14 +392,24 @@ internal sealed class SidebarSettingsStore
                     heldAttempt: HeldAttemptForTests);
                 return store?.ReadAllBytesBounded(SettingsFileName, MaxReadBytes);
             },
-            out blocked);
+            out blocked,
+            out _);
     }
 
+    /// <summary>Reads and validates the file's root. A file that can't be
+    /// read safely answers a <paramref name="blocked"/> reason, which makes
+    /// the store read-only: a session that couldn't read the pins must not
+    /// write over them. <paramref name="held"/> is set as well when the read
+    /// failed because another process still held the file after the brief
+    /// wait (#1869), which a write under the lock treats as its own failure
+    /// rather than a standing one.</summary>
     private static JsonObject ReadRoot(
         Func<byte[]?> read,
-        out string? blocked)
+        out string? blocked,
+        out IOException? held)
     {
         blocked = null;
+        held = null;
         try
         {
             byte[]? input = read();
@@ -424,6 +443,11 @@ internal sealed class SidebarSettingsStore
             exception is IOException or UnauthorizedAccessException or JsonException
                 or InvalidOperationException)
         {
+            if (exception is IOException io && AnchoredVaultStore.IsHeld(io))
+            {
+                held = io;
+            }
+
             blocked = "Sidebar settings could not be safely read and are read-only.";
             return new JsonObject { ["version"] = SchemaVersion };
         }

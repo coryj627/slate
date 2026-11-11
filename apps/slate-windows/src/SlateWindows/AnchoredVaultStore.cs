@@ -54,6 +54,7 @@ internal sealed class AnchoredVaultStore : IDisposable
     private readonly Action? _afterRename;
     private readonly IReadOnlyList<TimeSpan>? _heldBackoff;
     private readonly Action<int>? _heldAttempt;
+    private int _heldWaits;
     private bool _disposed;
 
     private AnchoredVaultStore(
@@ -219,7 +220,7 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
-        for (int attempt = 0; ; attempt++)
+        while (true)
         {
             try
             {
@@ -230,7 +231,7 @@ internal sealed class AnchoredVaultStore : IDisposable
             {
                 // Waited here, not in a filter: the attempt's own finally
                 // has already removed its temporary file.
-                if (!WaitIfHeld(exception, attempt))
+                if (!WaitIfHeld(exception))
                 {
                     throw;
                 }
@@ -311,7 +312,7 @@ internal sealed class AnchoredVaultStore : IDisposable
 
     private T WhileHeld<T>(Func<T> operation)
     {
-        for (int attempt = 0; ; attempt++)
+        while (true)
         {
             try
             {
@@ -319,7 +320,7 @@ internal sealed class AnchoredVaultStore : IDisposable
             }
             catch (IOException exception)
             {
-                if (!WaitIfHeld(exception, attempt))
+                if (!WaitIfHeld(exception))
                 {
                     throw;
                 }
@@ -329,16 +330,20 @@ internal sealed class AnchoredVaultStore : IDisposable
 
     /// <summary>Waits out a held file's next interval and answers true, or
     /// answers false when the failure is not a hold, the store was opened
-    /// without a backoff, or the backoff is spent.</summary>
-    private bool WaitIfHeld(IOException exception, int attempt)
+    /// without a backoff, or the backoff is spent. The backoff is one budget
+    /// for the whole store operation (Codex on #1869): a sidebar update's
+    /// lock, read and write share it, so the operation waits at most the
+    /// backoff's sum however many of its steps meet the hold.</summary>
+    private bool WaitIfHeld(IOException exception)
     {
-        if (_heldBackoff is null || attempt >= _heldBackoff.Count || !IsHeld(exception))
+        if (_heldBackoff is null || _heldWaits >= _heldBackoff.Count || !IsHeld(exception))
         {
             return false;
         }
 
-        _heldAttempt?.Invoke(attempt);
-        Thread.Sleep(_heldBackoff[attempt]);
+        int wait = _heldWaits++;
+        _heldAttempt?.Invoke(wait);
+        Thread.Sleep(_heldBackoff[wait]);
         return true;
     }
 
