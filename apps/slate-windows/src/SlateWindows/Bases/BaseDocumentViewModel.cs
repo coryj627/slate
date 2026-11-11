@@ -491,15 +491,18 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     /// <summary>#1692: the explicit refresh, from the palette's Bases:
     /// Refresh and the surface header's button. A full reload, and "Base
-    /// refreshed." only once that reload has published a result
-    /// (<see cref="LoadAsync"/> completes): a reload whose open or execute
-    /// fails says nothing of its own, since its failed state speaks for
-    /// itself, as Retry's does. From the Failed posture (a Retry) it is never
-    /// said, and a document shut down meanwhile says nothing. The sentence is
-    /// spoken on the dispatcher, after the result. The returned task
-    /// completes once it has been spoken or declined; the shell discards
-    /// it.</summary>
-    /// <remarks>Codex round 1: <see cref="LoadAsync"/> reports the document's
+    /// refreshed." only once that reload has published a result (its
+    /// <see cref="PublicationAsync"/> task, the one <see cref="LoadAsync"/>
+    /// returns, completes without an operation failure): a reload whose open
+    /// or execute fails says nothing of its own, since its failed state
+    /// speaks for itself, as Retry's does. From the Failed posture (a Retry)
+    /// it is never said, and a document shut down meanwhile says nothing. The
+    /// sentence is always posted to the dispatcher (<see cref="PanelWorkScheduler"/>'s
+    /// Post, inline in synchronous test mode), so it follows the result's own
+    /// publication there, whichever thread the reload finished on. The
+    /// returned task completes once it has been spoken or declined; the
+    /// shell discards it.</summary>
+    /// <remarks>Codex round 1: the publication task reports the document's
     /// latest outcome, not this reload's, so a refresh superseded (by an
     /// overlapping refresh, or a rescan's load cancelled before it published)
     /// could have spoken for a result it never published. The sentence is
@@ -513,11 +516,9 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         bool wasFailed = State == BaseLoadState.Failed;
         int generation = 0;
         Task reloaded = PublicationAsync(() => generation = Load(CancellationToken.None), CancellationToken.None);
-        if (reloaded.IsCompleted)
-        {
-            SpeakRefreshed(reloaded, wasFailed, generation);
-            return Task.CompletedTask;
-        }
+        // One path whether or not the reload has already finished (Codoki):
+        // the continuation runs inline on a finished task, and Post queues to
+        // the dispatcher (or runs inline in synchronous test mode).
         var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = reloaded.ContinueWith(
             outcome => Post(() =>

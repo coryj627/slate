@@ -22,6 +22,12 @@ public sealed class BasesRefreshTests : IDisposable
     private readonly List<(A11yEvent Event, BaseLoadState? State)> _announced = [];
     private BaseDocumentViewModel? _watched;
 
+    // The asynchronous facts' dispatcher stand-in, and for each "Base
+    // refreshed." whether it was spoken while that pump ran its queue: the
+    // sentence reaches the reader through the dispatcher (Codoki's review).
+    private PumpSynchronizationContext? _pump;
+    private readonly List<bool> _refreshedOnThePump = [];
+
     public BasesRefreshTests()
     {
         _fixture = FixtureVault.Create(1, "bases-refresh");
@@ -48,6 +54,10 @@ public sealed class BasesRefreshTests : IDisposable
         lock (_announced)
         {
             _announced.Add((spoken, _watched?.State));
+            if (spoken is A11yEvent.BaseRefreshed)
+            {
+                _refreshedOnThePump.Add(_pump?.Draining == true);
+            }
         }
     }
 
@@ -149,6 +159,9 @@ public sealed class BasesRefreshTests : IDisposable
             Assert.Equal(BaseLoadState.Ready, document.State);
             (_, BaseLoadState? state) = Assert.Single(Refreshed());
             Assert.Equal(BaseLoadState.Ready, state);
+            // Spoken through the dispatcher, never from the worker that
+            // finished the reload.
+            Assert.Equal([true], _refreshedOnThePump);
         }
         document.Shutdown();
     }
@@ -225,6 +238,7 @@ public sealed class BasesRefreshTests : IDisposable
         lock (_announced)
         {
             _announced.Clear();
+            _refreshedOnThePump.Clear();
         }
     }
 
@@ -255,8 +269,9 @@ public sealed class BasesRefreshTests : IDisposable
         }
     }
 
-    private BaseDocumentViewModel NewAsyncDocument(SynchronizationContext context)
+    private BaseDocumentViewModel NewAsyncDocument(PumpSynchronizationContext context)
     {
+        _pump = context;
         SynchronizationContext? previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(context);
         try
@@ -297,11 +312,23 @@ public sealed class BasesRefreshTests : IDisposable
         public override void Post(SendOrPostCallback callback, object? state) =>
             _queue.Enqueue((callback, state));
 
+        /// <summary>Whether the pump is running its queue: what runs then
+        /// was posted to it, as the dispatcher's work is.</summary>
+        public bool Draining { get; private set; }
+
         public void Drain()
         {
-            while (_queue.TryDequeue(out var work))
+            Draining = true;
+            try
             {
-                work.Callback(work.State);
+                while (_queue.TryDequeue(out var work))
+                {
+                    work.Callback(work.State);
+                }
+            }
+            finally
+            {
+                Draining = false;
             }
         }
     }
