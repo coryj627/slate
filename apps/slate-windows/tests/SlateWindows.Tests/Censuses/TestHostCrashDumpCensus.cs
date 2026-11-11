@@ -68,6 +68,9 @@ public sealed class TestHostCrashDumpCensus
     [InlineData("        env:\n          GH_TOKEN: ${{ github.token }}", true)]
     [InlineData("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", true)]
     [InlineData("    permissions:\n      id-token: write", true)]
+    [InlineData("    uses: ./.github/workflows/build.yml\n    secrets: inherit", true)]
+    [InlineData("        env:\n          ACTIONS_RUNTIME_TOKEN: ${{ env.ACTIONS_RUNTIME_TOKEN }}", true)]
+    [InlineData("        env:\n          ACTIONS_ID_TOKEN_REQUEST_TOKEN: x", true)]
     [InlineData("      # no secrets. here, no GITHUB_TOKEN, no id-token grant", false)]
     public void TheSecretGuardSeesEachKindOfSecret(string planted, bool isSecret)
     {
@@ -82,7 +85,22 @@ public sealed class TestHostCrashDumpCensus
         string yaml = string.Join(
             "\n",
             job.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
-        return [.. ((string[])["secrets.", "GITHUB_TOKEN", "github.token", "id-token"])
-            .Where(secret => yaml.Contains(secret, StringComparison.OrdinalIgnoreCase))];
+        return [.. SecretVectors.Where(secret => yaml.Contains(secret, StringComparison.OrdinalIgnoreCase))];
     }
+
+    /// <summary>Every way a job can hand its steps a secret or token: a
+    /// secret reference, inherited secrets (<c>secrets: inherit</c> on a
+    /// reusable workflow), the workflow token by either name, an id-token
+    /// grant, and the runner's own tokens exported into a step (Codoki's
+    /// second review of #1892).</summary>
+    private static readonly string[] SecretVectors =
+    [
+        "secrets.",
+        "secrets:",
+        "GITHUB_TOKEN",
+        "github.token",
+        "id-token",
+        "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST",
+    ];
 }
