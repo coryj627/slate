@@ -162,7 +162,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                     return;
                 }
                 Sections.Clear();
-                var failedEvent = new A11yEvent.BasesDashboardLoadFailed(Name, failure.Message);
+                var failedEvent = new A11yEvent.BasesDashboardLoadFailed(Name, BasePhrase.ErrorDetail(failure));
                 var failed = new DashboardSectionViewModel(
                     new DashboardSectionStatus(string.Empty, null, null, null, false))
                 {
@@ -175,9 +175,9 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                 // failure re-published by the next refresh funnel is not news,
                 // so it speaks once at High until a live publication succeeds
                 // or the detail changes.
-                if (_announcedFailure != failure.Message)
+                if (_announcedFailure != BasePhrase.ErrorDetail(failure))
                 {
-                    _announcedFailure = failure.Message;
+                    _announcedFailure = BasePhrase.ErrorDetail(failure);
                     _announce(failedEvent);
                 }
                 HasPublished = true;
@@ -225,7 +225,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
             catch (VaultException failure)
             {
                 section.State = DashboardSectionState.Failed;
-                section.Message = failure.Message;
+                section.Message = BasePhrase.ErrorDetail(failure);
             }
             finally
             {

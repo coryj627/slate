@@ -199,7 +199,9 @@ public sealed class BasesExportTests : IDisposable
 
         Assert.Equal(invalid, File.ReadAllBytes(target));
         Assert.Empty(_confirmed);
-        Assert.Single(_announced, e => e is A11yEvent.BasesViewExportFailed);
+        A11yEvent failed = Assert.Single(_announced, e => e is A11yEvent.BasesViewExportFailed);
+        // #1697: core's words, never the binding's field dump.
+        Assert.DoesNotContain("@message", SlateUniffiMethods.A11yRender(failed).Text, StringComparison.Ordinal);
         Assert.DoesNotContain(_announced, e => e is A11yEvent.BasesViewExported);
     }
 
@@ -222,7 +224,8 @@ public sealed class BasesExportTests : IDisposable
         }
 
         Assert.Equal(old, File.ReadAllBytes(target));
-        Assert.Single(_announced, e => e is A11yEvent.BasesViewExportFailed);
+        A11yEvent failed = Assert.Single(_announced, e => e is A11yEvent.BasesViewExportFailed);
+        Assert.DoesNotContain("@message", SlateUniffiMethods.A11yRender(failed).Text, StringComparison.Ordinal);
         Assert.DoesNotContain(_announced, e => e is A11yEvent.BasesViewExported);
     }
 

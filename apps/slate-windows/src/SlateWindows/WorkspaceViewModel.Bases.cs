@@ -124,7 +124,7 @@ internal sealed partial class WorkspaceViewModel
                 {
                     // The core seed (OpenDql) refused — an unhandled
                     // dispatcher exception otherwise (red team round 1).
-                    _announce(new A11yEvent.BasesFiltersOpenFailed(failure.Message));
+                    _announce(new A11yEvent.BasesFiltersOpenFailed(BasePhrase.ErrorDetail(failure)));
                     return;
                 }
                 _announce(new A11yEvent.BasesNewQueryBuilder());
@@ -191,7 +191,7 @@ internal sealed partial class WorkspaceViewModel
                     or InvalidCastException or System.Text.Json.JsonException)
             {
                 _announce(new A11yEvent.BasesFiltersOpenFailed(
-                    openFailure.Message));
+                    BasePhrase.ErrorDetail(openFailure)));
                 return;
             }
             _announce(new A11yEvent.BasesEditingFilters(viewName));
@@ -213,7 +213,7 @@ internal sealed partial class WorkspaceViewModel
         {
             // The cast/parse arms: a corrupt stored QueryJson must
             // refuse, not crash the dispatcher (red team round 1).
-            _announce(new A11yEvent.BasesSavedQueryEditFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryEditFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         _announce(new A11yEvent.BasesSavedQueryEditing(SavedQuerySpokenName(id, savedQuery.Name)));
@@ -600,7 +600,7 @@ internal sealed partial class WorkspaceViewModel
                 catch (System.Runtime.InteropServices.ExternalException failure)
                 {
                     document.AnnounceEvent(
-                        new A11yEvent.BasesViewCopyFailed(failure.Message));
+                        new A11yEvent.BasesViewCopyFailed(BasePhrase.ErrorDetail(failure)));
                     return;
                 }
                 document.AnnounceEvent(new A11yEvent.BasesViewCopiedAsMarkdown());
@@ -870,7 +870,7 @@ internal sealed partial class WorkspaceViewModel
                 or UnauthorizedAccessException)
             {
                 document.AnnounceEvent(
-                    new A11yEvent.BasesViewExportFailed(failure.Message));
+                    new A11yEvent.BasesViewExportFailed(BasePhrase.ErrorDetail(failure)));
                 return;
             }
             document.AnnounceEvent(new A11yEvent.BasesViewExported());
@@ -929,7 +929,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            return (null, failure.Message);
+            return (null, BasePhrase.ErrorDetail(failure));
         }
         catch (ObjectDisposedException)
         {
@@ -968,7 +968,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            return failure.Message;
+            return BasePhrase.ErrorDetail(failure);
         }
         catch (ObjectDisposedException)
         {
@@ -1093,7 +1093,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesDashboardDeleteFailed(failure.Message));
+            _announce(new A11yEvent.BasesDashboardDeleteFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         foreach (WorkspaceGroupViewModel group in Groups)
@@ -1161,7 +1161,7 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException failure)
             {
-                _announce(new A11yEvent.BasesDashboardEditFailed(failure.Message));
+                _announce(new A11yEvent.BasesDashboardEditFailed(BasePhrase.ErrorDetail(failure)));
                 return;
             }
         }
@@ -1212,8 +1212,8 @@ internal sealed partial class WorkspaceViewModel
         catch (VaultException failure)
         {
             _announce(editor.DashboardId is null
-                ? new A11yEvent.BasesDashboardSaveFailed(failure.Message)
-                : new A11yEvent.BasesDashboardUpdateFailed(failure.Message));
+                ? new A11yEvent.BasesDashboardSaveFailed(BasePhrase.ErrorDetail(failure))
+                : new A11yEvent.BasesDashboardUpdateFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         DashboardEditorSheet = null;
@@ -1584,7 +1584,7 @@ internal sealed partial class WorkspaceViewModel
                     && string.Equals(ActiveLeaf.Id, "queries", StringComparison.Ordinal))
                 {
                     _announce(new A11yEvent.BasesQueriesRefreshFailed(
-                        vaultFailure.Message));
+                        BasePhrase.ErrorDetail(vaultFailure)));
                 }
             });
             return;
@@ -1676,7 +1676,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryRenameFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryRenameFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         // As the Saved queries list will name it (#1301, AR-56).
@@ -1720,7 +1720,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryDeleteFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryDeleteFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         _pinnedSavedQueryIds.Remove(id);
@@ -1768,7 +1768,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryExportFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryExportFailed(BasePhrase.ErrorDetail(failure)));
             return;
         }
         _announce(new A11yEvent.BasesSavedQueryExported(trimmed));
@@ -1984,7 +1984,7 @@ internal sealed partial class WorkspaceViewModel
                     {
                         if (failure is not null)
                         {
-                            _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                            _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure)));
                             return;
                         }
                         if (report is not null)
@@ -2036,7 +2036,7 @@ internal sealed partial class WorkspaceViewModel
                 _ = _propertyWritePaths.Remove(row.FilePath);
                 if (!_workspaceDisposed)
                 {
-                    _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                    _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure)));
                 }
             });
             return;

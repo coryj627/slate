@@ -632,7 +632,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                     return;
                 }
                 PreviewState = BuilderPreviewState.Failed;
-                PreviewMessage = failure.Message;
+                PreviewMessage = BasePhrase.ErrorDetail(failure);
                 PreviewResult = null;
                 AnnouncePreview();
                 PreviewPublished?.Invoke(this, EventArgs.Empty);
@@ -724,7 +724,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         {
             SaveError = failure is VaultException.DestinationExists
                 ? $"A file already exists at {trimmed}. Choose a different Base path."
-                : $"Base file could not be saved: {failure.Message}";
+                : $"Base file could not be saved: {BasePhrase.ErrorDetail(failure)}";
             return false;
         }
         SaveError = string.Empty;
@@ -752,7 +752,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryCreateFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryCreateFailed(BasePhrase.ErrorDetail(failure)));
             return false;
         }
         _announce(new A11yEvent.BasesSavedQueryCreated(SavedQuerySpokenName(created, trimmed)));
@@ -777,7 +777,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryUpdateFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryUpdateFailed(BasePhrase.ErrorDetail(failure)));
             return false;
         }
         // Its name now, not the one it had when the builder opened (WB-16
