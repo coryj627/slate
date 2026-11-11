@@ -43,6 +43,10 @@ internal sealed class SidebarSettingsStore
     /// its notice from either).</summary>
     public string? ReadOnlyReason => _readOnlyReason;
 
+    /// <summary>Test seam (#1869): runs at each attempt that found the file
+    /// held, with the attempt's index, before the wait.</summary>
+    internal Action<int>? HeldAttemptForTests { get; set; }
+
     /// <summary>
     /// The root this store reaches the vault through (plan 44 WB-28): the
     /// session's held root in production; a store built with no anchor
@@ -334,7 +338,9 @@ internal sealed class SidebarSettingsStore
         using AnchoredVaultStore store = AnchoredVaultStore.Open(
             Root,
             createDirectory: true,
-            _afterDirectoryAnchored)
+            _afterDirectoryAnchored,
+            heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+            heldAttempt: HeldAttemptForTests)
             ?? throw new IOException("Could not anchor the sidebar settings directory.");
         using FileStream gate = store.OpenExclusiveLock(LockFileName);
         JsonObject current = ReadRoot(
@@ -372,7 +378,9 @@ internal sealed class SidebarSettingsStore
                 using AnchoredVaultStore? store = AnchoredVaultStore.Open(
                     Root,
                     createDirectory: false,
-                    _afterDirectoryAnchored);
+                    _afterDirectoryAnchored,
+                    heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+                    heldAttempt: HeldAttemptForTests);
                 return store?.ReadAllBytesBounded(SettingsFileName, MaxReadBytes);
             },
             out blocked);
