@@ -1002,11 +1002,23 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     {
         var keys = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (ReadingBlockInlines blockInlines in inlines)
+        // #1634: the keys the publish will render, the first
+        // MaximumRenderedBlocks blocks'. Only those decode their SVG here, so
+        // an embed past the ceiling neither decodes nor spends the pixel pool
+        // a shown image needs (Codex round 3).
+        var rendered = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < inlines.Length; index++)
         {
-            if (blockInlines.BlockEmbedKey is { Length: > 0 } key && seen.Add(key))
+            if (inlines[index].BlockEmbedKey is { Length: > 0 } key)
             {
-                keys.Add(key);
+                if (seen.Add(key))
+                {
+                    keys.Add(key);
+                }
+                if (index < MaximumRenderedBlocks)
+                {
+                    rendered.Add(key);
+                }
             }
         }
         if (keys.Count == 0)
@@ -1097,6 +1109,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // enters the decoder (Codex on #1634).
             ReadingEmbedImageDecode? imageDecode = null;
             if (!imageRefused
+                && rendered.Contains(key)
                 && resolution?.Resolution is EmbedResolution.Image image
                 && EditorInteractionCoordinator.IsSvgImage(image.Bytes, image.Mime))
             {
@@ -2355,6 +2368,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 { FailureReason: { } reason } => "svg-failed:" + reason,
                 _ => "svg-failed",
             });
+            // What it reserved is identity too: the same outcome before or
+            // after its reservation leaves the rasters a different pool
+            // (Codex round 3).
+            DigestField(
+                hash,
+                (embed.ImageDecode?.ReservedPixels ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
             // The base card's projection is identity too (red team
             // round 1: omitting it meant a membership change with an
             // otherwise-identical note skipped the rebuild and the

@@ -231,6 +231,110 @@ public sealed class ReadingSvgEmbedDecodeTests
         }
     }
 
+    /// <summary>Only an SVG the publish will render decodes on the worker
+    /// (Codex round 3 on #1634): one past the block ceiling neither decodes
+    /// nor spends the pool, so a shown raster before it keeps its image.</summary>
+    [Fact]
+    public void AnSvgPastTheRenderCeilingNeitherDecodesNorSpendsThePool()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-ceiling");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), Svg);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "b.png"), TinyPng);
+        var note = new System.Text.StringBuilder("![[b.png]]\n\n");
+        for (int index = 0; index < ReadingContentViewModel.MaximumRenderedBlocks + 50; index++)
+        {
+            note.Append("Line ").Append(index).Append(".\n\n");
+        }
+        note.Append("![[a.svg]]\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), note.ToString());
+        var decoded = new List<string>();
+        ReadingContentViewModel.EmbedSvgDecodeProbeForTests = decoded.Add;
+        // The SVG would spend this whole pool; the 1x1 PNG needs one pixel.
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                Assert.Empty(decoded);
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+            });
+        }
+        finally
+        {
+            ReadingContentViewModel.EmbedSvgDecodeProbeForTests = null;
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
+    /// <summary>What an SVG decode reserved is part of the projection's
+    /// identity (Codex round 3 on #1634): the same failed decode, once after
+    /// its reservation and once before, leaves the rasters different pools,
+    /// so the refresh rebuilds and the raster the second pool admits shows.</summary>
+    [Fact]
+    public void ARefreshWhoseSvgReservedLessShowsTheRasterItNowAdmits()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-reserved");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), Svg);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "b.png"), TinyPng);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.png]]\n");
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+        bool reserveFirst = true;
+        StaThread.Run(() =>
+        {
+            // Both decodes fail; the first after reserving the whole pool.
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = new EditorInteractionCoordinator.SvgDecodeSlots();
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = (bytes, reserve) =>
+            {
+                if (reserveFirst)
+                {
+                    bool admitted = reserve(64 * 4);
+                    Assert.True(admitted, "the first decode's reservation was refused");
+                }
+                return null;
+            };
+            try
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                Assert.DoesNotContain(
+                    BlocksOf(reading.Document!.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+
+                reserveFirst = false;
+                reading.Refresh();
+
+                Assert.Single(
+                    BlocksOf(reading.Document!.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+            }
+        });
+    }
+
     private static readonly byte[] TinyPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
         + "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
