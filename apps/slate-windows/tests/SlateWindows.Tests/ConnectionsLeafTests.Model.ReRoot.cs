@@ -413,11 +413,13 @@ public sealed partial class ConnectionsLeafTests
         RootMode pinned = new(target, noteInView, [.. stack], StableKey(target));
         // #1266 (WB-8): an attachment opens as a Markdown tab whose text read
         // fails, and the open speaks core's failure once, before the leaf's
-        // line — or in either order behind the dirty gate's dialog when this
-        // route showed the leaf (not active before): the dialog pumps the
-        // frames the leaf's load may speak in first, and either can win.
+        // line — or in either order behind the dirty gate's dialog: the pin's
+        // ONE load is issued before the open, and the dialog pumps the frames
+        // its line may land in first, so either can win. #1893: that holds
+        // whether or not the leaf was active before (the load is issued the
+        // same way); CI saw the line first with the leaf already active.
         string[] failed = !refused && cell.Target == Target.Attachment ? ["FileReopenFailed"] : [];
-        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed && !active;
+        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed;
         return new(
             [.. address, .. reveal, ReRooted(target), .. opened, .. failed, LinePlaceholder],
             1, target, pinned, "RightPane", Unordered: raced ? 2 : 0);
