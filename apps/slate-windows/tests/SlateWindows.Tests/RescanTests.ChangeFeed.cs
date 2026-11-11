@@ -473,9 +473,76 @@ public sealed partial class RescanTests
 
         Assert.True(Operations(h).Count(operation => operation == "page") >= 3, "one record a page");
         Assert.Equal("b.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        // #1894: the comparison loads the moved tab only when its read of
+        // b.md is vouched for (the bytes read hash to the index's). A read
+        // the machine refuses (CI saw one, on a home VM the night its host
+        // was dropping runners) is, by design, an error the run reports: the
+        // tab is left stale for the next rescan, which the fact below drives
+        // on purpose. So a run that reports errors is followed by the next
+        // rescan, which must load it; a run that reports none must already
+        // have loaded it. An empty tab with no error reported is still a
+        // failure here.
+        if (tab.Text.Length == 0)
+        {
+            AssertTheRunReportedErrors(h);
+            h.Events.Clear();
+            h.Now += VaultLifecycleViewModel.ForegroundRescanCooldown;
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        }
+
+        Assert.Equal("a note\n", tab.Text);
+    });
+
+    /// <summary>#1894: the unloaded tab's first read at its new path fails
+    /// (the file denied to the reader while the rescan runs). The rename
+    /// still moves it, the run reports one error and leaves the tab
+    /// unloaded, and the next rescan, with the file readable, loads
+    /// it.</summary>
+    [Fact]
+    public void AnUnloadedTabWhoseReadFailsAfterItsMoveLoadsOnTheNextRescan() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unloaded-rename-read-fails", ("a.md", "a note\n"));
+        WorkspaceTabViewModel tab;
+        using (DenyAccess.To(Path.Combine(h.Root, "a.md"), FileSystemRights.ReadData))
+        {
+            tab = h.Open("a.md");
+        }
+
+        Assert.Null(tab.SavedContentHash);
+        h.Lifecycle.ChangeFeedPageLimitForTests = 1;
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        using (DenyAccess.To(Path.Combine(h.Root, "b.md"), FileSystemRights.ReadData))
+        {
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        }
+
+        Assert.Equal("b.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal(string.Empty, tab.Text);
+        AssertTheRunReportedErrors(h);
+
+        h.Events.Clear();
+        h.Now += VaultLifecycleViewModel.ForegroundRescanCooldown;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("b.md", tab.Path);
         Assert.Equal("a note\n", tab.Text);
         Assert.False(tab.IsMissingFromDisk);
     });
+
+    /// <summary>The run's one sentence says it finished with errors (a read
+    /// it could not vouch for counts one; the count can include the same
+    /// file's other reads, so it is not pinned).</summary>
+    private static void AssertTheRunReportedErrors(Harness h)
+    {
+        string spoken = Assert.Single(h.Spoken);
+        Assert.StartsWith("Files refreshed with errors.", spoken, StringComparison.Ordinal);
+    }
 
     // ---------------------------------------------------------------------
     // AR-31: passes
