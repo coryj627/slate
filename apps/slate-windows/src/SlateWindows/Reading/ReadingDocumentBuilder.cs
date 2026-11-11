@@ -1786,26 +1786,24 @@ internal static class ReadingDocumentBuilder
     {
         if (!context.DecodedEmbedImages.TryGetValue(key, out var outcome))
         {
-            if (context.RemainingEmbedDecodedPixels <= 0
-                || decodedOffTheDispatcher is { BudgetRefused: true })
+            if (decodedOffTheDispatcher is { } done)
+            {
+                // The worker admitted or refused it against the shared pool,
+                // whose spent pixels the build started with: never charged
+                // twice, never refused for its own reservation.
+                outcome = done.BudgetRefused
+                    ? (null, true, null)
+                    : (done.Source, false, done.Source is null ? done.FailureReason : null);
+            }
+            else if (context.RemainingEmbedDecodedPixels <= 0)
             {
                 outcome = (null, true, null);
             }
             else
             {
-                System.Windows.Media.ImageSource? decoded;
-                string? decodeFailure;
-                if (decodedOffTheDispatcher is { } done)
-                {
-                    decoded = done.Source;
-                    decodeFailure = done.FailureReason;
-                }
-                else
-                {
-                    EmbedImageDecodeProbeForTests?.Invoke(key);
-                    decoded = EditorInteractionCoordinator.DecodeImage(
-                        image.Bytes, image.Mime, out decodeFailure);
-                }
+                EmbedImageDecodeProbeForTests?.Invoke(key);
+                System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
+                    image.Bytes, image.Mime, out string? decodeFailure);
                 if (decoded is null)
                 {
                     outcome = (null, false, decodeFailure);

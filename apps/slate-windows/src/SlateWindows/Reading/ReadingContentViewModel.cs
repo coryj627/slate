@@ -1109,6 +1109,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     EmbedSvgDecodeProbeForTests?.Invoke(key);
                     // The reservation runs on the decode thread while this
                     // worker waits, never after it stops waiting.
+                    long reserved = 0;
                     System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
                         image.Bytes,
                         image.Mime,
@@ -1121,11 +1122,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                                 return false;
                             }
                             svgPixels -= pixels;
+                            reserved += pixels;
                             return true;
                         },
                         out bool budgetSpent,
                         out string? decodeFailure);
-                    imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent);
+                    imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent, reserved);
                 }
                 ThrowIfCancelled(cancel);
             }
@@ -1680,6 +1682,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         context.LandedDiagrams = _landedDiagrams;
         context.DiagramsPending = true;
         ReadingEmbedArtifact[] embeds = fetched.Embeds;
+        // One decoded-pixel budget for every image (Codex on #1634): what the
+        // worker's SVG decodes took is spent before the build places a raster.
+        context.RemainingEmbedDecodedPixels -= embeds.Sum(embed => embed.ImageDecode?.ReservedPixels ?? 0);
         OutgoingLink[] records = fetched.Records;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
             model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks,

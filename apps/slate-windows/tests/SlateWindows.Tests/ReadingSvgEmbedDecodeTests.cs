@@ -187,6 +187,54 @@ public sealed class ReadingSvgEmbedDecodeTests
         }
     }
 
+    /// <summary>SVGs and rasters share one decoded-pixel budget (Codex round
+    /// 2 on #1634): what the worker's SVG decodes reserved is spent before
+    /// the build decodes a raster, so a raster past the shared pool never
+    /// enters the decoder, where two pools let a mixed note hold twice the
+    /// budget.</summary>
+    [Fact]
+    public void SvgsAndRastersShareOneDecodedPixelPool()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-shared-pool");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), Svg);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "b.png"), TinyPng);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.png]]\n");
+        var rasters = new List<string>();
+        ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = rasters.Add;
+        // The 8x8 SVG spends the whole 64-pixel pool on the worker.
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                Assert.Empty(rasters);
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                Assert.Contains("over this note's embedded-image budget", TextOf(document), StringComparison.Ordinal);
+            });
+        }
+        finally
+        {
+            ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = null;
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
+    private static readonly byte[] TinyPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+        + "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+
     private static string TextOf(FlowDocument document) =>
         new TextRange(document.ContentStart, document.ContentEnd).Text;
 
