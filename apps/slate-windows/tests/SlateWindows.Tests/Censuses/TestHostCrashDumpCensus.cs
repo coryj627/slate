@@ -41,6 +41,43 @@ public sealed class TestHostCrashDumpCensus
         Assert.Contains($@"path: '{Results}\**\*'", upload, StringComparison.Ordinal);
     }
 
+    /// <summary>A fail-fast the runtime doesn't raise itself never reaches
+    /// createdump: a process that calls <c>RaiseFailFastException</c> exits
+    /// 0xC0000602 (the code #1826 records) and writes nothing under the
+    /// DOTNET_ variables, where <c>Environment.FailFast</c> under the same
+    /// variables writes a full dump (measured locally). main's run 43059953344
+    /// lost its test process that way with no dump. Windows Error Reporting
+    /// still sees such a crash, so the job arms its LocalDumps for each test
+    /// process before the Test step, writing full dumps (type 2) into the same
+    /// uploaded folder.</summary>
+    [Fact]
+    public void TheAppJobArmsWindowsErrorReportingToDumpATestProcessIntoItsUploadedResults()
+    {
+        string workflow = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), ".github", "workflows", "windows.yml"));
+        string job = DeviceStateCensus.Job(workflow, "windows");
+        string arm = DeviceStateCensus.Step(workflow, "windows", ArmStep);
+
+        Assert.Contains(@"HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\", arm, StringComparison.Ordinal);
+        // xunit v3 runs the suite as its own executable; VSTest's host and the
+        // dotnet driver are the step's other .NET processes.
+        foreach (string executable in (string[])["SlateWindows.Tests.exe", "testhost.exe", "dotnet.exe"])
+        {
+            Assert.Contains($"'{executable}'", arm, StringComparison.Ordinal);
+        }
+
+        Assert.Contains($"$results = '{Results}'", arm, StringComparison.Ordinal);
+        Assert.Contains("-Name DumpFolder -PropertyType ExpandString -Value $results", arm, StringComparison.Ordinal);
+        Assert.Contains("-Name DumpType -PropertyType DWord -Value 2", arm, StringComparison.Ordinal);
+        // A runner that refuses the keys still runs the tests, and says so.
+        Assert.Contains("::warning::", arm, StringComparison.Ordinal);
+
+        int armed = job.IndexOf($"- name: {ArmStep}\n", StringComparison.Ordinal);
+        int test = job.IndexOf("- name: Test\n", StringComparison.Ordinal);
+        Assert.True(armed >= 0 && test > armed, "WER's dumps are armed before the Test step starts its processes.");
+    }
+
+    private const string ArmStep = "Arm Windows Error Reporting dumps for the test processes (#1826)";
+
     /// <summary>The repository is public, so anyone can fetch the job's
     /// artifact, and a full dump holds everything the test process read. It
     /// is safe to publish only while the job gives that process no secret:
