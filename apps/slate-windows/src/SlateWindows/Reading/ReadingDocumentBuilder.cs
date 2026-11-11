@@ -1536,7 +1536,7 @@ internal static class ReadingDocumentBuilder
                     + "budget. Open the source note to view it."));
                 break;
             case EmbedResolution.Image image:
-                AppendEmbedImage(section, image, key, context);
+                AppendEmbedImage(section, image, key, context, artifact?.ImageDecode);
                 break;
             case EmbedResolution.Unresolved:
                 // The header name IS the mac unresolved string; the
@@ -1773,11 +1773,16 @@ internal static class ReadingDocumentBuilder
     /// drawing pixels from the projection pool — encoded-byte
     /// accounting alone let one small compressed image repeated
     /// across the block ceiling allocate gigabytes of surfaces.</summary>
+    /// <param name="decodedOffTheDispatcher">#1634: an SVG's decode, done
+    /// with its resolution on the refresh's worker; the build only places
+    /// it. Null where the build decodes itself: a raster, or a build with
+    /// no fetch behind it.</param>
     private static void AppendEmbedImage(
         Section section,
         EmbedResolution.Image image,
         string key,
-        ReadingListBuildContext context)
+        ReadingListBuildContext context,
+        ReadingEmbedImageDecode? decodedOffTheDispatcher)
     {
         if (!context.DecodedEmbedImages.TryGetValue(key, out var outcome))
         {
@@ -1787,10 +1792,19 @@ internal static class ReadingDocumentBuilder
             }
             else
             {
-                EmbedImageDecodeProbeForTests?.Invoke(key);
-                System.Windows.Media.ImageSource? decoded =
-                    EditorInteractionCoordinator.DecodeImage(
-                        image.Bytes, image.Mime, out string? decodeFailure);
+                System.Windows.Media.ImageSource? decoded;
+                string? decodeFailure;
+                if (decodedOffTheDispatcher is { } done)
+                {
+                    decoded = done.Source;
+                    decodeFailure = done.FailureReason;
+                }
+                else
+                {
+                    EmbedImageDecodeProbeForTests?.Invoke(key);
+                    decoded = EditorInteractionCoordinator.DecodeImage(
+                        image.Bytes, image.Mime, out decodeFailure);
+                }
                 if (decoded is null)
                 {
                     outcome = (null, false, decodeFailure);

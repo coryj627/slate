@@ -868,6 +868,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// other artifact seams. Fired once per resolved key.</summary>
     internal Func<Exception?>? EmbedFaultForTests { get; set; }
 
+    /// <summary>Test seam (#1634): fires with the embed key on the refresh's
+    /// worker as an SVG embed is decoded with its resolution, before the
+    /// document is built.</summary>
+    internal static Action<string>? EmbedSvgDecodeProbeForTests;
+
     /// <summary>Per-note embed-resolution budgets (W3-5): each
     /// preview call is already core-bounded (64 KiB text / 128 nodes
     /// / 8 MiB image, cumulative per key), but a note can hold
@@ -1081,8 +1086,22 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 baseProjection = ProjectBaseEmbed(
                     session, fullNote.TargetPath, path, cancel, BaseProjectionHookForTests);
             }
+            // #1634: an SVG image decodes here, on the refresh's worker,
+            // where its budget-long wait (#1581) blocks nothing the reader
+            // is using; the builder places the result on the dispatcher.
+            ReadingEmbedImageDecode? imageDecode = null;
+            if (!imageRefused
+                && resolution?.Resolution is EmbedResolution.Image image
+                && EditorInteractionCoordinator.IsSvgImage(image.Bytes, image.Mime))
+            {
+                EmbedSvgDecodeProbeForTests?.Invoke(key);
+                System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
+                    image.Bytes, image.Mime, out string? decodeFailure);
+                imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure);
+                ThrowIfCancelled(cancel);
+            }
             artifacts.Add(new ReadingEmbedArtifact(
-                key, alt, resolution, imageRefused, baseProjection));
+                key, alt, resolution, imageRefused, baseProjection, imageDecode));
         }
         return artifacts.ToArray();
     }
@@ -2291,6 +2310,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
             }
+            // #1634: the SVG decode's outcome is identity too. A decode past
+            // its budget or refused at the cap may succeed on the next
+            // refresh, and that refresh must rebuild to show the image.
+            DigestField(hash, embed.ImageDecode switch
+            {
+                null => "svg-none",
+                { Source: not null } => "svg-decoded",
+                { FailureReason: { } reason } => "svg-failed:" + reason,
+                _ => "svg-failed",
+            });
             // The base card's projection is identity too (red team
             // round 1: omitting it meant a membership change with an
             // otherwise-identical note skipped the rebuild and the
