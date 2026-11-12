@@ -149,7 +149,9 @@ fn refuse_a_trash_that_is_not_scratch(path: &Path) {
 /// volume `probe`'s own `$RECYCLE.BIN` (WB-24, #1480), or `None` when it
 /// would. Each volume is the one `GetVolumePathNameW` reports, so a probe
 /// folder on the system drive is the system drive's Recycle Bin, never a
-/// scratch one.
+/// scratch one. An item goes to the Recycle Bin of the folder that holds it,
+/// so that folder's volume is asked: `GetVolumePathNameW` reads a junction at
+/// the item itself as a mount point of its own.
 #[cfg(all(test, windows))]
 pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<String> {
     let volume_of = |at: &Path| {
@@ -157,7 +159,8 @@ pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<Strin
             .map_err(|error| format!("the volume of {} is unknown: {error}", at.display()))
     };
     let system = system_volume().map_err(|error| format!("the system drive is unknown: {error}"));
-    match (volume_of(path), volume_of(probe), system) {
+    let holder = path.parent().unwrap_or(path);
+    match (volume_of(holder), volume_of(probe), system) {
         (Ok(path), Ok(probe), Ok(system)) => scratch_volume_refusal(&path, &probe, &system),
         (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => Some(why),
     }

@@ -1357,3 +1357,147 @@ fn a_root_spelled_with_dots_or_relatively_opens_the_folder() {
     drop(session);
     drop(guard);
 }
+
+/// The reparse tag of the entry at `path` itself (0 when it is not a reparse
+/// point), and whether it is a folder.
+fn reparse_tag(path: &Path) -> std::io::Result<(u32, bool)> {
+    use std::os::windows::{fs::OpenOptionsExt as _, io::AsRawHandle as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FileAttributeTagInfo, GetFileInformationByHandleEx,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the buffer matches FileAttributeTagInfo and the handle is live.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((info.ReparseTag, file.metadata()?.is_dir()))
+}
+
+/// Plan 44 WB-24 (#1492): what undo and Move to Trash do in a OneDrive Files
+/// On-Demand vault, whose folders are Cloud Files placeholders (a reparse
+/// point whose tag is not a name surrogate). Runs only on the desktop of an
+/// owner who named a folder in their OneDrive (`SLATE_ONEDRIVE_PROBE_FOLDER`),
+/// through a real session's walks, and only into the scratch bin every test
+/// provider trashes into, so nothing reaches the Recycle Bin. Prints one row
+/// per step of #1492's three scenarios; fails only when the folder it made
+/// never became a placeholder, which would make the record meaningless.
+// The fact's output is its probe record; #507's no-stdout rule is for slate-core itself.
+#[allow(clippy::disallowed_macros)]
+#[test]
+#[ignore = "needs a OneDrive Files On-Demand folder in SLATE_ONEDRIVE_PROBE_FOLDER"]
+fn what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault() {
+    let folder =
+        std::path::PathBuf::from(std::env::var_os("SLATE_ONEDRIVE_PROBE_FOLDER").expect(
+            "set SLATE_ONEDRIVE_PROBE_FOLDER to a folder in a OneDrive with Files On-Demand",
+        ));
+    let root = folder.join(format!("vault-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/a.md"), b"# A\n").unwrap();
+    std::fs::write(root.join("sub/b.md"), b"# B\n").unwrap();
+    std::fs::write(root.join("top.md"), b"# Top\n").unwrap();
+    // OneDrive turns a new local folder into a placeholder once it syncs it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    loop {
+        let tags = [&root, &root.join("sub")].map(|path| reparse_tag(path).map(|(tag, _)| tag));
+        if tags
+            .iter()
+            .all(|tag| matches!(tag, Ok(tag) if *tag != 0 && tag & 0x2000_0000 == 0))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the probe vault never became Cloud Files placeholders: {tags:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    for item in ["", "sub", "sub/a.md", "sub/b.md", "top.md"] {
+        println!(
+            "WB-24 ONEDRIVE KIND | {item:<8} | {:?}",
+            reparse_tag(&root.join(item))
+                .map(|(tag, folder)| format!("tag {tag:#010x}, folder {folder}"))
+        );
+    }
+
+    let session = session_at(&root).unwrap();
+    scanned(&session);
+    let row = |step: &str, outcome: Result<String, VaultError>| {
+        println!(
+            "WB-24 ONEDRIVE | {step} | {}",
+            outcome.unwrap_or_else(|error| format!("refused: {error}"))
+        );
+    };
+    // 1. Undo after a move: the identity capture, then the identity-checked
+    //    rename undo and redo walk.
+    let captured = session.capture_structural_identity("sub/a.md", false);
+    row(
+        "undo: the host's capture of sub/a.md",
+        captured.map(|identity| format!("{identity:?}")),
+    );
+    let identity = session.provider.mutation_identity("sub/a.md");
+    row(
+        "undo: the walk's identity of sub/a.md",
+        identity
+            .as_ref()
+            .map(Clone::clone)
+            .map_err(|error| VaultError::InvalidArgument {
+                message: error.to_string(),
+            }),
+    );
+    if let Ok(identity) = &identity {
+        row(
+            "undo: the identity-checked rename sub/a.md -> moved.md",
+            session
+                .provider
+                .rename_if_identity("sub/a.md", "moved.md", identity)
+                .map(|()| "renamed".into()),
+        );
+    }
+    // 2. A staged Trash of a note in a subfolder: the inventory, then the handoff.
+    row(
+        "trash sub/b.md: the inventory",
+        session
+            .provider
+            .trash_snapshot("sub/b.md")
+            .map(|snapshot| format!("{snapshot:?}")),
+    );
+    row(
+        "trash sub/b.md: the handoff",
+        session
+            .provider
+            .delete("sub/b.md")
+            .map(|()| "handed to the scratch bin".into()),
+    );
+    // 3. A Trash of a top-level note.
+    row(
+        "trash top.md: the inventory",
+        session
+            .provider
+            .trash_snapshot("top.md")
+            .map(|snapshot| format!("{snapshot:?}")),
+    );
+    row(
+        "trash top.md: the handoff",
+        session
+            .provider
+            .delete("top.md")
+            .map(|()| "handed to the scratch bin".into()),
+    );
+    drop(session);
+    let _ = std::fs::remove_dir_all(&root);
+}
