@@ -45,9 +45,11 @@
 //! folder's attributes as `0x410`, directory plus reparse point). Refusing it
 //! would refuse every save beneath a OneDrive vault's folders, so forward
 //! moves, saves and creations admit it ([`Folders::NotLinks`]), the line
-//! Rust's own `FileType::is_symlink` draws (rust-lang/rust#47956). The Trash
-//! handoff keeps #1450's rule and refuses every reparse point
-//! ([`Folders::PlainOnly`]).
+//! Rust's own `FileType::is_symlink` draws (rust-lang/rust#47956). Since
+//! WB-24 (#1492) the undo and redo walk, the Trash inventory and the Trash
+//! handoff draw it too: in a OneDrive vault the Recycle Bin took a note
+//! beneath two placeholder folders and Restore put it back at its own path,
+//! so a placeholder redirects the Shell no more than it redirects a save.
 //!
 //! Every folder on the path stays open until the call ends, shared for
 //! reading and writing but not for deletion, so none of them can be renamed
@@ -559,26 +561,33 @@ pub(super) fn found(file: &fs::File) -> io::Result<Found> {
     })
 }
 
-/// Which folders on a path the walk lets through.
+/// Which folders on a path the walk lets through. One rule remains since
+/// WB-24 retired the Trash handoff's own (#1450's, every reparse point
+/// refused); each walk still names the rule it relies on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Folders {
     /// A folder that redirects nothing: a plain one, or a reparse point
     /// whose tag is not a name surrogate ([`Found::ReparseFolder`]). Forward
-    /// moves, saves and creations (#1451).
+    /// moves, saves and creations (#1451), and the Trash handoff (#1492).
     NotLinks,
-    /// A folder that is not a reparse point of any kind: the Trash handoff,
-    /// whose rule is #1450's.
-    PlainOnly,
 }
 
 impl Folders {
     fn admit(self, found: Found) -> bool {
-        match found {
-            Found::Folder => true,
-            Found::ReparseFolder => self == Self::NotLinks,
-            _ => false,
+        match self {
+            Self::NotLinks => matches!(found, Found::Folder | Found::ReparseFolder),
         }
     }
+}
+
+/// Whether `file`, opened as itself, is a link of any kind: a reparse point
+/// whose tag is a name surrogate (a junction, a symbolic link). A Cloud Files
+/// placeholder, a file or a folder whose storage a filter manages, is not.
+pub(super) fn is_name_surrogate(file: &fs::File) -> io::Result<bool> {
+    Ok(matches!(
+        found(file)?,
+        Found::Junction | Found::SymbolicLink | Found::Link
+    ))
 }
 
 /// The typed refusal for `found` at the vault-relative `prefix`, in
@@ -870,9 +879,11 @@ fn refused() -> VaultError {
     }
 }
 
+/// The undo and redo walk's folder rule: a folder that redirects nothing,
+/// plain or a Cloud Files placeholder (#1492, #1491's rule). A junction, a
+/// link or a file is refused.
 fn directory(file: &fs::File) -> Result<(), VaultError> {
-    let metadata = file.metadata()?;
-    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    if !Folders::NotLinks.admit(found(file)?) {
         return Err(refused());
     }
     Ok(())
@@ -893,17 +904,22 @@ pub(super) fn open_unheld_root(root: &Path) -> Result<fs::File, VaultError> {
     Ok(root)
 }
 
+/// The entry at `relative` for an undo or a redo. A leaf that is a Cloud
+/// Files placeholder is the note or folder it stands for (#1492); a leaf that
+/// is a link is refused.
 fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
-    open_leaf(root, relative, access)?.ok_or_else(refused)
+    open_leaf(root, relative, access, true)?.ok_or_else(refused)
 }
 
 /// [`open`], with a leaf that is itself a reparse point answered as `None`
-/// rather than refused. The ancestors are walked exactly as `open` walks
-/// them.
+/// rather than refused: every one when `placeholders` is false, and only a
+/// name surrogate (a link) when it is true. The ancestors are walked exactly
+/// as `open` walks them.
 fn open_leaf(
     root: &fs::File,
     relative: &Path,
     access: u32,
+    placeholders: bool,
 ) -> Result<Option<PinnedEntry>, VaultError> {
     let mut ancestors = vec![root.try_clone()?];
     let components = relative.components().collect::<Vec<_>>();
@@ -925,7 +941,9 @@ fn open_leaf(
             },
         )?;
         if last {
-            if child.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            if child.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                && (!placeholders || is_name_surrogate(&child)?)
+            {
                 return Ok(None);
             }
             return Ok(Some(PinnedEntry {
@@ -974,7 +992,7 @@ pub(super) fn note_identity(
     root: &fs::File,
     relative: &Path,
 ) -> Result<Option<String>, VaultError> {
-    open_leaf(root, relative, FILE_READ_ATTRIBUTES)?
+    open_leaf(root, relative, FILE_READ_ATTRIBUTES, false)?
         .map(|entry| identity(&entry.file))
         .transpose()
 }

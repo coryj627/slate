@@ -1574,3 +1574,37 @@ fn real_trash_on_windows_takes_each_dangling_link_kind_as_the_link() {
         "taken but not in the Recycle Bin as the same link, or refused yet gone: {wrong:?}"
     );
 }
+
+/// WB-24 (#1492): the Recycle Bin handoff passes through a Cloud Files
+/// placeholder folder. In a OneDrive vault a real Recycle Bin call beneath
+/// two of them landed at the note's own path, and Restore brought it back
+/// there, so the Shell is not redirected. A junction still refuses.
+/// `opaque_reparse_point` stands in for the placeholder; the handoff pins
+/// only the parent, so the note itself need not exist.
+#[cfg(windows)]
+#[test]
+fn a_cloud_placeholder_ancestor_is_admitted() {
+    use crate::vault::test_support::{junction, opaque_reparse_point};
+    use crate::vault::windows_entry::PinnedRoot;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(vault.path().join("cloud")).unwrap();
+    opaque_reparse_point(&vault.path().join("cloud"));
+    std::fs::create_dir(vault.path().join("j")).unwrap();
+    junction(&vault.path().join("j"), outside.path());
+    let root = PinnedRoot::open(vault.path()).unwrap();
+
+    let handed = pinned_path(&root, Path::new("cloud/note.md"), "cloud/note.md").unwrap();
+    assert_eq!(
+        handed,
+        std::fs::canonicalize(vault.path())
+            .unwrap()
+            .join("cloud")
+            .join("note.md")
+    );
+    let error = pinned_path(&root, Path::new("j/private.md"), "j/private.md").unwrap_err();
+    assert_refused(&error, "j/private.md", "\"j\" is a junction");
+    drop(root);
+    std::fs::remove_dir(vault.path().join("j")).unwrap();
+}

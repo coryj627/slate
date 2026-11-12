@@ -334,10 +334,11 @@ pub(super) fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
 /// relative to its parent's handle without following a reparse point. The
 /// handed path is the parent handle's final path joined with the leaf,
 /// refused unless it lies beneath the root handle's final path. A junction, a
-/// symbolic link, any other reparse point or a non-folder among the ancestors
-/// refuses naming that folder, as the Unix walk's refusal does; the Trash
-/// keeps #1450's rule of refusing every reparse point
-/// (`Folders::PlainOnly`).
+/// symbolic link, any other name surrogate or a non-folder among the ancestors
+/// refuses naming that folder, as the Unix walk's refusal does. A Cloud Files
+/// placeholder folder is a folder (`Folders::NotLinks`, #1492): a Recycle Bin
+/// call beneath two of them in a OneDrive vault landed at the note's own path
+/// and Restore brought it back there, so the Shell is not redirected.
 #[cfg(windows)]
 pub(super) fn pinned_path(
     root: &super::windows_entry::PinnedRoot,
@@ -355,7 +356,7 @@ pub(super) fn pinned_path(
         original,
         false,
         Mutation::Move,
-        Folders::PlainOnly,
+        Folders::NotLinks,
     )?;
     let root_now = final_path(root.handle())?;
     let parent_now = final_path(parent.handle())?;
