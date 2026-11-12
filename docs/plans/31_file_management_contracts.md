@@ -550,9 +550,11 @@ enforced by construction, not by review.
     folder and every note is a Cloud Files placeholder, a reparse point
     whose tag (`0x9000xxxx`) is not a name surrogate. A process sees one as
     a reparse point only when its placeholder compatibility mode exposes
-    them. A manifest-less test binary saw them disguised; the probe ran
-    exposed, as PowerShell and the app see them. On the owner's OneDrive the
-    three walks refused. The undo capture said "the files have changed". The
+    them. A process built with Slate's own `app.manifest` reports mode 1,
+    disguised, and sees a placeholder folder as a plain folder, so in the
+    shipping app today the walks never meet one and #1492's refusals do not
+    happen there. PowerShell opts in to exposed (mode 2). The probe ran
+    exposed. On the owner's OneDrive the three walks refused. The undo capture said "the files have changed". The
     staged Trash said "Cannot stage Trash through a symbolic link" and "for a
     symbolic link". The handoff said "\"sub\" is a reparse point, not a plain
     folder". A Recycle Bin call on a note beneath two placeholder folders
@@ -561,8 +563,9 @@ enforced by construction, not by review.
     the undo and redo walk, the inventory's three checks and the handoff now
     take #1491's rule: a placeholder is the folder or note it stands for, and
     a junction or link still refuses where it did. The host's import check
-    draws the same line for an import's source, so a file from a folder in
-    OneDrive imports.
+    draws the same line for an import's source. The owner kept this change
+    knowing the app sees placeholders disguised: the walks stay right if Slate
+    or anything in its process ever sees them exposed.
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.

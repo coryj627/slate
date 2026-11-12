@@ -40,9 +40,10 @@
 //! (`IO_REPARSE_TAG_MOUNT_POINT`) and a symbolic link are, and what redirects
 //! a path. A reparse point without that bit does not redirect anything: it is
 //! a folder whose storage a filter manages, such as a Cloud Files placeholder.
-//! Every folder of a OneDrive vault with Files On-Demand is one, and Windows
-//! shows it to applications by default (rust-lang/rust#46484 measured such a
-//! folder's attributes as `0x410`, directory plus reparse point). Refusing it
+//! Every folder of a OneDrive vault with Files On-Demand is one, and a
+//! process whose placeholder mode exposes them sees it as a reparse point
+//! (rust-lang/rust#46484 measured such a folder's attributes as `0x410`,
+//! directory plus reparse point; see below for Slate's own mode). Refusing it
 //! would refuse every save beneath a OneDrive vault's folders, so forward
 //! moves, saves and creations admit it ([`Folders::NotLinks`]), the line
 //! Rust's own `FileType::is_symlink` draws (rust-lang/rust#47956). Since
@@ -50,6 +51,10 @@
 //! handoff draw it too: in a OneDrive vault the Recycle Bin took a note
 //! beneath two placeholder folders and Restore put it back at its own path,
 //! so a placeholder redirects the Shell no more than it redirects a save.
+//! Whether a process sees a placeholder as a reparse point at all is its
+//! placeholder compatibility mode: a process built with Slate's own manifest
+//! sees them disguised as plain folders (mode 1), and one that opts in
+//! (PowerShell, mode 2) sees them exposed. The rule holds either way.
 //!
 //! Every folder on the path stays open until the call ends, shared for
 //! reading and writing but not for deletion, so none of them can be renamed
