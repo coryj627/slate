@@ -777,6 +777,11 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         return total;
     }
 
+    /// <summary>Test seam (#1904): runs on the worker before the outline's
+    /// read, where a fact holds the read so its count lands late, as a
+    /// loaded runner can make it.</summary>
+    internal Action? OutlineReadHookForTests { get; set; }
+
     private void LoadOutline(string path, int generation, bool announceCount)
     {
         // Save-refreshes reuse the note generation, so ordering among
@@ -787,6 +792,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         IsLoadingOutline = true;
         StartWork(() =>
         {
+            OutlineReadHookForTests?.Invoke();
             Heading[] headings = [];
             int total = 0;
             string? failure = null;
