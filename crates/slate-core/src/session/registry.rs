@@ -30,6 +30,7 @@
 //! before releasing it, so a closing session, which unregisters first,
 //! never has a connection outlive it on this thread.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -48,8 +49,16 @@ pub(crate) struct SessionCacheHandle {
 #[derive(Default)]
 struct Registry {
     sessions: Vec<Weak<SessionCacheHandle>>,
-    thread: Option<JoinHandle<()>>,
-    stop: bool,
+    thread: Option<ReleaseThread>,
+}
+
+/// The running release thread and its own stop flag. The flag is the
+/// thread's, never the registry's: a later registration that starts a new
+/// thread cannot reset it, so the thread the last session stopped always
+/// ends and that session's join returns (Codex on WB-31).
+struct ReleaseThread {
+    handle: JoinHandle<()>,
+    stop: Arc<AtomicBool>,
 }
 
 static REGISTRY: LazyLock<(Mutex<Registry>, Condvar)> =
@@ -68,13 +77,13 @@ pub(crate) fn register(handle: &Arc<SessionCacheHandle>) {
     registry.sessions.retain(|weak| weak.strong_count() > 0);
     registry.sessions.push(Arc::downgrade(handle));
     if registry.sessions.len() >= 2 && registry.thread.is_none() {
-        registry.stop = false;
-        registry.thread = Some(
-            std::thread::Builder::new()
-                .name("slate-cache-release".into())
-                .spawn(release_thread)
-                .expect("spawn the cache release thread"),
-        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("slate-cache-release".into())
+            .spawn(move || release_thread(&thread_stop))
+            .expect("spawn the cache release thread");
+        registry.thread = Some(ReleaseThread { handle, stop });
     }
     REGISTRY.1.notify_all();
 }
@@ -88,22 +97,98 @@ pub(crate) fn unregister(handle: &Arc<SessionCacheHandle>) {
             weak.strong_count() > 0 && !std::ptr::eq(weak.as_ptr(), Arc::as_ptr(handle))
         });
         if registry.sessions.is_empty() {
-            registry.stop = true;
+            let thread = registry.thread.take();
+            if let Some(thread) = &thread {
+                thread.stop.store(true, Ordering::SeqCst);
+                #[cfg(test)]
+                hold_if_armed(thread.handle.thread().id());
+            }
             REGISTRY.1.notify_all();
-            registry.thread.take()
+            thread
         } else {
             None
         }
     };
     if let Some(thread) = finished {
-        let _ = thread.join();
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_JOIN_FOR_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            hook();
+        }
+        let _ = thread.handle.join();
     }
 }
 
-fn release_thread() {
+/// Test seam: runs once, in the last session's unregister, after the
+/// registry lock is released and before the join, where a fact registers new
+/// sessions to race the restart.
+#[cfg(test)]
+pub(super) static BEFORE_JOIN_FOR_TESTS: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Test seam: when armed, the thread the last close stops waits, after it
+/// wakes and before it reads its stop flag, until the fact releases it, so
+/// the close's new registrations run first, deterministically.
+#[cfg(test)]
+pub(super) static HOLD_STOPPED_THREAD_FOR_TESTS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static HELD_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+#[cfg(test)]
+static HELD_THREAD_RELEASED: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+#[cfg(test)]
+fn hold_if_armed(thread: std::thread::ThreadId) {
+    if HOLD_STOPPED_THREAD_FOR_TESTS.swap(false, Ordering::SeqCst) {
+        *HELD_THREAD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread);
+        *HELD_THREAD_RELEASED
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+}
+
+#[cfg(test)]
+fn is_held(thread: std::thread::ThreadId) -> bool {
+    *HELD_THREAD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        == Some(thread)
+}
+
+#[cfg(test)]
+fn wait_until_released() {
+    let (released, signal) = &HELD_THREAD_RELEASED;
+    let mut released = released
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while !*released {
+        released = signal
+            .wait(released)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    *HELD_THREAD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// Releases the thread [`HOLD_STOPPED_THREAD_FOR_TESTS`] held.
+#[cfg(test)]
+pub(super) fn release_held_thread_for_tests() {
+    let (released, signal) = &HELD_THREAD_RELEASED;
+    *released
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+    signal.notify_all();
+}
+
+fn release_thread(stop: &AtomicBool) {
     let mut registry = registry();
     loop {
-        if registry.stop {
+        if stop.load(Ordering::SeqCst) {
             return;
         }
         let interval = registry
@@ -119,13 +204,18 @@ fn release_thread() {
             .wait_timeout(registry, Duration::from_millis(interval as u64))
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         registry = woken;
-        if registry.stop {
+        #[cfg(test)]
+        if is_held(std::thread::current().id()) {
+            drop(registry);
+            wait_until_released();
+            registry = self::registry();
+        }
+        if stop.load(Ordering::SeqCst) {
             return;
         }
         release_pass_locked(&registry);
     }
 }
-
 /// One pass over the registered sessions, as the thread runs it: the facts'
 /// door, with the clock pinned.
 #[cfg(test)]
@@ -282,6 +372,49 @@ mod tests {
         assert!(
             !thread_running_for_tests(),
             "the thread outlived the last session"
+        );
+    }
+
+    /// Codex on WB-31: new sessions registering while the last close joins
+    /// its stopped thread start a new thread, and must not keep the stopped
+    /// one alive (a shared stop flag they reset did: the close then waited on
+    /// it until they closed too).
+    #[test]
+    fn the_last_close_ends_its_thread_though_new_sessions_register_before_its_join() {
+        let _serial = serial();
+        let (_a_tmp, a) = opted_in(5, 60_000);
+        let (_b_tmp, b) = opted_in(5, 60_000);
+        assert!(thread_running_for_tests());
+        type Opened = Vec<(tempfile::TempDir, VaultSession)>;
+        let restarted: Arc<Mutex<Opened>> = Arc::default();
+        let into = Arc::clone(&restarted);
+        HOLD_STOPPED_THREAD_FOR_TESTS.store(true, Ordering::SeqCst);
+        *BEFORE_JOIN_FOR_TESTS.lock().unwrap() = Some(Box::new(move || {
+            let mut opened = into.lock().unwrap();
+            opened.push(opted_in(5, 60_000));
+            opened.push(opted_in(5, 60_000));
+            // Only now may the stopped thread read its flag.
+            release_held_thread_for_tests();
+        }));
+        drop(a);
+        let (closed, closing) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(b);
+            let _ = closed.send(());
+        });
+        assert!(
+            closing.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the last close hung joining its stopped thread"
+        );
+        assert!(
+            thread_running_for_tests(),
+            "the sessions that registered during the close have no thread"
+        );
+        let opened = std::mem::take(&mut *restarted.lock().unwrap());
+        drop(opened);
+        assert!(
+            !thread_running_for_tests(),
+            "the restarted thread outlived its sessions"
         );
     }
 
