@@ -60,6 +60,7 @@ jobs:
     env:
       ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
       UNRESOLVED_LINK_PERF_GUARD: session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
+      TWO_SESSIONS_PERF_GUARD: session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -142,7 +143,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD})"
 
       - name: cargo nextest run — non-census suite (real fs)
         # Durability/persistence contracts and the rest of the suite on
@@ -151,7 +152,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD})"
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD})"
 
       - name: cargo bench --no-run (full committed profile)
         # Thin-LTO bench compile — the rot class PR lanes skip.
