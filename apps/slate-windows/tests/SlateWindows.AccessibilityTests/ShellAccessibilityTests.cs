@@ -5493,8 +5493,11 @@ public sealed partial class ShellAccessibilityTests
 
             // --- invoke, and assert the command actually ran -----------
             // Selection is view-model-authoritative, so drive it the way a
-            // user does rather than by setting SelectedItem.
-            togglePaneRow!.Patterns.SelectionItem.Pattern.Select();
+            // user does rather than by setting SelectedItem. The row the
+            // poll found can be one the next rank's publication is about to
+            // replace (#1913), so the select re-finds it on a vanished-element
+            // fault and checks it stuck; P7 then keeps the selection by id.
+            SelectPaletteRow(results, automation, "Toggle Right Pane, Control Alt I", togglePaneRow!);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(VirtualKeyShort.ENTER);
 
@@ -7126,6 +7129,48 @@ public sealed partial class ShellAccessibilityTests
         }
 
         return item!;
+    }
+
+    /// <summary>#1913: select the command palette row named
+    /// <paramref name="name"/> through the SelectionItem pattern. The first
+    /// attempt acts on <paramref name="held"/>, the row the journey found;
+    /// after a transient UIA fault (a rank's publication replaced the row
+    /// between the find and the call, 0x80040201) each attempt RE-FINDS it in
+    /// <paramref name="results"/>. The selection is verified to stick.</summary>
+    private static void SelectPaletteRow(
+        AutomationElement results, UIA3Automation automation, string name, AutomationElement held)
+    {
+        AutomationElement? row = held;
+        if (!SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    row ??= results
+                        .FindAllDescendants(automation.ConditionFactory
+                            .ByControlType(ControlType.ListItem))
+                        .FirstOrDefault(item => string.Equals(
+                            item.Name, name, StringComparison.Ordinal));
+                    if (row is null)
+                    {
+                        return false;
+                    }
+
+                    row.Patterns.SelectionItem.Pattern.Select();
+                    Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(100));
+                    return row.Patterns.SelectionItem.Pattern.IsSelected;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    row = null;
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10)))
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"palette row '{name}' never appeared or would not stay selected.");
+        }
     }
 
     /// <summary>Every user-visible vault file with its content — the
