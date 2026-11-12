@@ -4893,9 +4893,9 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.True(File.Exists(large), $"the §K fixture is missing at {large}");
         File.Copy(large, Path.Combine(_fixture.Root, "large.canvas"), overwrite: true);
 
-        // #1901: the fastest of up to three opens, each a fresh document, so
-        // a loaded runner's spike passes and a regression still fails.
-        TimeSpan fastest = await WallClockBudget.FastestAsync(OpenBudget, async () =>
+        // #1901: one untimed open, then the median of five, each a fresh
+        // document (WallClockBudget says why warm and why the median).
+        TimeSpan median = await WallClockBudget.WarmMedianAsync(async () =>
         {
             CanvasDocumentViewModel document = NewDocument("large.canvas", synchronousForTests);
             var clock = Stopwatch.StartNew();
@@ -4932,9 +4932,9 @@ public sealed class CanvasDocumentTests : IDisposable
         // it is why the elapsed value is never recorded anywhere as a
         // benchmark.
         Assert.True(
-            fastest < OpenBudget,
-            $"opening a 2,000-node canvas took {fastest.TotalMilliseconds:F0} ms at best of "
-            + $"{WallClockBudget.Attempts} (synchronousForTests: {synchronousForTests})");
+            median < OpenBudget,
+            $"opening a 2,000-node canvas took {median.TotalMilliseconds:F0} ms, the median of "
+            + $"{WallClockBudget.Samples} warm opens (synchronousForTests: {synchronousForTests})");
     }
 
     /// <summary>The §K interactive budget for the 2,000-node fixture.</summary>
@@ -4951,9 +4951,9 @@ public sealed class CanvasDocumentTests : IDisposable
             overwrite: true);
         CanvasDocumentViewModel document = NewDocument("large.canvas");
         document.Load();
-        // #1901: the fastest of up to three projections, each a fresh view,
-        // so a loaded runner's spike passes and a regression still fails.
-        TimeSpan fastest = WallClockBudget.Fastest(OpenBudget, () =>
+        // #1901: one untimed projection, then the median of five, each a
+        // fresh view (WallClockBudget says why warm and why the median).
+        TimeSpan median = WallClockBudget.WarmMedian(() =>
         {
             var clock = Stopwatch.StartNew();
             var view = new CanvasOutlineView { Model = document };
@@ -4964,9 +4964,9 @@ public sealed class CanvasDocumentTests : IDisposable
         });
 
         Assert.True(
-            fastest < OpenBudget,
-            $"projecting 2,000 rows took {fastest.TotalMilliseconds:F0} ms at best of "
-            + $"{WallClockBudget.Attempts}");
+            median < OpenBudget,
+            $"projecting 2,000 rows took {median.TotalMilliseconds:F0} ms, the median of "
+            + $"{WallClockBudget.Samples} warm projections");
         document.Shutdown();
     });
 

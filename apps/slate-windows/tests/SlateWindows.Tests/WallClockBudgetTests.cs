@@ -4,84 +4,52 @@
 namespace SlateWindows.Tests;
 
 /// <summary>
-/// #1901: a wall-clock budget measured inside the full suite reads the
-/// runner's load as much as the code. <see cref="WallClockBudget"/> keeps the
-/// budget but takes the fastest of a few attempts, so a transient spike
-/// passes and a regression, which slows every attempt, still fails.
+/// #1901: <see cref="WallClockBudget"/> discards one untimed first reading and
+/// returns the median of the warm ones, so a slow first use or a few
+/// stretched readings do not decide a budget, and a cost in every reading
+/// does.
 /// </summary>
 public sealed class WallClockBudgetTests
 {
-    private static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(500);
+    private static TimeSpan Ms(double value) => TimeSpan.FromMilliseconds(value);
 
     [Fact]
-    public void AFirstAttemptUnderTheBudgetIsTheOnlyAttempt()
+    public void TheFirstReadingIsDiscardedAndTheWarmMedianReturned()
     {
+        var readings = new Queue<TimeSpan>([Ms(598), Ms(3), Ms(9), Ms(2), Ms(250), Ms(4)]);
         int calls = 0;
-        TimeSpan fastest = WallClockBudget.Fastest(Budget, () =>
-        {
-            calls++;
-            return TimeSpan.FromMilliseconds(120);
-        });
-
-        Assert.Equal(1, calls);
-        Assert.Equal(TimeSpan.FromMilliseconds(120), fastest);
-    }
-
-    [Fact]
-    public void ASpikeOnTheFirstAttemptPassesOnTheNext()
-    {
-        var readings = new Queue<TimeSpan>(
-            [TimeSpan.FromMilliseconds(598), TimeSpan.FromMilliseconds(140)]);
-        int calls = 0;
-        TimeSpan fastest = WallClockBudget.Fastest(Budget, () =>
+        TimeSpan median = WallClockBudget.WarmMedian(() =>
         {
             calls++;
             return readings.Dequeue();
         });
 
-        Assert.Equal(2, calls);
-        Assert.Equal(TimeSpan.FromMilliseconds(140), fastest);
+        Assert.Equal(1 + WallClockBudget.Samples, calls);
+        Assert.Equal(Ms(4), median);
     }
 
     [Fact]
-    public void ARegressionOverEveryAttemptReturnsItsFastestReading()
+    public void ACostInEveryWarmReadingIsTheMedian()
     {
-        var readings = new Queue<TimeSpan>(
-        [
-            TimeSpan.FromMilliseconds(900),
-            TimeSpan.FromMilliseconds(700),
-            TimeSpan.FromMilliseconds(800),
-        ]);
-        int calls = 0;
-        TimeSpan fastest = WallClockBudget.Fastest(Budget, () =>
-        {
-            calls++;
-            return readings.Dequeue();
-        });
+        var readings = new Queue<TimeSpan>([Ms(900), Ms(700), Ms(640), Ms(820), Ms(610), Ms(760)]);
+        TimeSpan median = WallClockBudget.WarmMedian(() => readings.Dequeue());
 
-        Assert.Equal(WallClockBudget.Attempts, calls);
-        Assert.Equal(TimeSpan.FromMilliseconds(700), fastest);
-        Assert.True(fastest >= Budget);
+        Assert.Equal(Ms(700), median);
     }
 
     [Fact]
-    public async Task TheAsynchronousFormStopsAtTheFirstAttemptUnderTheBudget()
+    public async Task TheAsynchronousFormDiscardsTheFirstReadingToo()
     {
-        var readings = new Queue<TimeSpan>(
-        [
-            TimeSpan.FromMilliseconds(650),
-            TimeSpan.FromMilliseconds(90),
-            TimeSpan.FromMilliseconds(10),
-        ]);
+        var readings = new Queue<TimeSpan>([Ms(650), Ms(40), Ms(48), Ms(46), Ms(300), Ms(47)]);
         int calls = 0;
-        TimeSpan fastest = await WallClockBudget.FastestAsync(Budget, async () =>
+        TimeSpan median = await WallClockBudget.WarmMedianAsync(async () =>
         {
             calls++;
             await Task.Yield();
             return readings.Dequeue();
         });
 
-        Assert.Equal(2, calls);
-        Assert.Equal(TimeSpan.FromMilliseconds(90), fastest);
+        Assert.Equal(1 + WallClockBudget.Samples, calls);
+        Assert.Equal(Ms(47), median);
     }
 }
