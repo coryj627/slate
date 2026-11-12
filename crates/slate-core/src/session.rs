@@ -22947,6 +22947,49 @@ mod tests {
 
     mod fault_guard;
     mod rename_planning;
+
+    mod two_sessions;
+}
+
+/// Plan 44 WB-31: the environment variable naming the one test a
+/// [`run_alone`] child process runs.
+#[cfg(test)]
+const ALONE_CHILD_VARIABLE: &str = "SLATE_WB31_CHILD";
+
+/// Plan 44 WB-31: runs the test `child` (its full path) alone in a fresh
+/// copy of this test binary, and asserts it succeeded. With
+/// `SQLITE_ENABLE_MEMORY_MANAGEMENT` every connection in a process draws on
+/// one page pool, so a fact asserting an exact cache or process reading is
+/// deterministic only where no other test opens a connection; the child
+/// runs its body only there ([`is_alone_child`]).
+#[cfg(test)]
+pub(crate) fn run_alone(child: &str) {
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([child, "--exact", "--nocapture", "--test-threads=1"])
+        .env(ALONE_CHILD_VARIABLE, child)
+        .output()
+        .expect("run the child test alone");
+    assert!(
+        output.status.success(),
+        "the alone child {child} failed ({}):\n--- stdout\n{}\n--- stderr\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // A filter that matched nothing would also exit 0.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the alone child {child} did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// Plan 44 WB-31: whether this process is the one [`run_alone`] started for
+/// `child`. Every child test returns at once unless it is, so the ordinary
+/// suite runs each child as a no-op.
+#[cfg(test)]
+pub(crate) fn is_alone_child(child: &str) -> bool {
+    std::env::var(ALONE_CHILD_VARIABLE).is_ok_and(|named| named == child)
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips
