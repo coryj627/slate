@@ -1516,8 +1516,8 @@ The 0.38.2 columns are libsqlite3-sys 0.38.2 (SQLite 3.53.x); the 0.39.1 columns
   flag its build script removed. Each session keeps its own 17 MiB cache,
   and A reads 1.01x to 1.03x with B or C open. No remedy ships (WD21).
 - **A different cost.** A alone is about 20% slower under 0.39.1, 929 to
-  933 ms against 737 to 783 ms, with the same misses: SQLite 3.54's or
-  rusqlite 0.41's own work, tracked as #1912.
+  933 ms against 737 to 783 ms, with the same misses. The section below
+  finds the cause in SQLite 3.54 and removes it (#1912).
 
 **The guards.** The bulk runs skip the timing guard, which runs alone in its
 own rust-lane step.
@@ -1528,3 +1528,52 @@ own rust-lane step.
   its cache as 10k notes fill 4,096 pages. A with B open must stay within
   1.25x of A alone, and A's cache must hold between rescans. Under 0.38.2's
   shared pool it read 1.44.
+
+## A no-change rescan under SQLite 3.54 (#1912)
+
+#1911 moved the bundled SQLite from 3.53.2 to 3.54.1, and a no-change rescan
+of 10k notes got about 20% slower. To separate SQLite from rusqlite, a
+scratch copy of libsqlite3-sys 0.39.1 carried 3.53.2's `sqlite3.c`, so both
+builds below run rusqlite 0.41.1 and differ only in SQLite.
+
+Recorded 2026-11-12 on the WB-31 desktop with `two_sessions_bench`'s "A
+alone" row (median of eight rescans), two runs each, alternating builds.
+
+| Code | SQLite 3.54.1 | SQLite 3.53.2 |
+|---|---:|---:|
+| `main` at 9bf4526c | 837.0, 829.5 ms | 702.7, 707.5 ms |
+| The fast path's UPDATE from the statement cache | 760.3, 758.5 ms | 639.6, 636.3 ms |
+| That, and the file_meta probe as a nested lookup (this change) | 643.8, 638.3 ms | 632.1, 637.4 ms |
+
+Misses per rescan stay at 31,236 to 31,240 throughout.
+
+- **The cause.** SQLite 3.54 marks a statement for re-preparation when a
+  newly bound value might change its plan. Under 3.54 that happens to every
+  join measured here with an equality on `files.path`, while the plain
+  single-table lookup on the same column is not re-prepared. The fast path's
+  file_meta
+  probe was a join on `files.path = ?1`, so each file's new path expired the
+  cached statement and the next step prepared it again: 9,999 re-prepares
+  per 10,000 calls (`SQLITE_STMTSTATUS_REPREPARE`), and about 16 µs a call
+  against 10 µs under 3.53.2. The plan itself did not change. With
+  `SQLITE_DBCONFIG_ENABLE_QPSG` on, the same statement re-prepared 0 times,
+  which places the cost in the bound-value check.
+- **How it was found.** Per-phase timers inside the rescan put the whole
+  gap in the stretch holding that probe: 99 ms per rescan under 3.54.1
+  against 13.5 ms under 3.53.2. SQLite's own per-statement profile showed
+  no change, because a re-prepare happens before the profiled run.
+- **The fix.** The probe names the file by a nested id lookup, `file_id =
+  (SELECT id FROM files WHERE path = ?1)`, which SQLite 3.54 does not
+  re-prepare. It costs the same as the old join did under 3.53.2. The fast
+  path's per-file UPDATE now comes from the statement cache as well, where
+  it was compiled afresh for every file; that saves about 70 ms per rescan
+  under either SQLite.
+- **The guard.**
+  `session::tests::scan::a_rescan_prepares_its_per_file_statements_once`
+  scans and rescans 40 notes and fails if any statement still prepared on
+  the session's connection was re-prepared more than twice. With the join
+  restored it fails, naming the join with 39 re-prepares.
+- **Not on the rescan path.** Other cached joins on `files.path = ?` are
+  re-prepared the same way under 3.54.1: the DQL tag lookup, the bases
+  temporal operators' `oplog_events` probes and the canvas title lookup.
+  They are tracked as #1917.
