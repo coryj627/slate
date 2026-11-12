@@ -21,12 +21,36 @@ namespace SlateWindows.Reading;
 /// absent, and the builder says exactly that (round 1 [medium]: a
 /// budget refusal must never claim decode failure or turn an image
 /// into a "note").</summary>
+/// <summary><see cref="ImageDecode"/> is an SVG image's decode, done on the
+/// same background task (#1634): the dispatcher only places it.</summary>
 internal sealed record ReadingEmbedArtifact(
     string Key,
     string? Alt,
     EmbedPreviewResolution? Resolution,
     bool ImageBudgetRefused = false,
-    BaseEmbedProjection? BaseProjection = null);
+    BaseEmbedProjection? BaseProjection = null,
+    ReadingEmbedImageDecode? ImageDecode = null);
+
+/// <summary>
+/// #1634: an SVG embed's decode, done off the dispatcher with its
+/// resolution. An SVG decode can wait out its whole 5 s budget (#1581), and
+/// a dispatcher blocked that long when the reading view takes focus leaves
+/// NVDA on its IAccessible fallback. <see cref="Source"/> is frozen, so the
+/// dispatcher can place it; when it is null, <see cref="FailureReason"/> is
+/// core's sentence for a decode past its budget or refused at the cap, or
+/// null for an ordinary failure, whose sentence is the builder's.
+/// <see cref="BudgetRefused"/> marks a decode the projection's decoded-pixel
+/// pool refused, before its raster was allocated or before it began, which
+/// the builder states as the budget notice. <see cref="ReservedPixels"/> is
+/// what the decode took from that pool: the build starts its own pool with
+/// them spent and doesn't charge the image again, so SVGs and rasters share
+/// one budget (Codex round 2).
+/// </summary>
+internal sealed record ReadingEmbedImageDecode(
+    System.Windows.Media.ImageSource? Source,
+    string? FailureReason,
+    bool BudgetRefused = false,
+    long ReservedPixels = 0);
 
 /// <summary>
 /// W4-6 (#738, contract C10): the layered `.base` embed card's data —
