@@ -11467,12 +11467,15 @@ fn index_file(
         // ctime — fall back to mtime+size only so the fast path still
         // works.
         let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
+        // The probe names the file by a nested id lookup, not a join on
+        // `files.path = ?1` (#1912): SQLite 3.54 re-prepares that join each
+        // time a new path is bound, which cost every unchanged file a fresh
+        // prepare. `a_rescan_prepares_its_per_file_statements_once` guards it.
         let has_file_meta = if mtime_size_match && ctime_match {
             tx.prepare_cached(
                 "SELECT EXISTS(
-                    SELECT 1 FROM file_meta fm
-                    JOIN files f ON f.id = fm.file_id
-                    WHERE f.path = ?1
+                    SELECT 1 FROM file_meta
+                    WHERE file_id = (SELECT id FROM files WHERE path = ?1)
                  )",
             )?
             .query_row(rusqlite::params![path], |row| row.get::<_, bool>(0))?
@@ -11498,14 +11501,19 @@ fn index_file(
             //      pre-upgrade file forever (adversarial review) —
             //      and a 0 sentinel from a platform that stops
             //      reporting birth must not clobber a known value.
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE files SET
                     indexed_at_ms = ?1,
                     ctime_ms = CASE WHEN ?2 != 0 THEN ?2 ELSE ctime_ms END,
                     birthtime_ms = CASE WHEN ?4 != 0 THEN ?4 ELSE birthtime_ms END
                  WHERE path = ?3",
-                rusqlite::params![now, stat.ctime_ms, path, stat.birthtime_ms],
-            )?;
+            )?
+            .execute(rusqlite::params![
+                now,
+                stat.ctime_ms,
+                path,
+                stat.birthtime_ms
+            ])?;
             report.files_skipped += 1;
             return Ok(());
         }

@@ -1520,6 +1520,66 @@ fn rescan_unchanged_files_skips_rehashing() {
     assert_eq!(second.bytes_processed, 0);
 }
 
+/// Every statement still prepared on `conn` that SQLite has re-prepared
+/// more than `limit` times, with its SQL.
+fn statements_reprepared_more_than(conn: &rusqlite::Connection, limit: i32) -> Vec<(String, i32)> {
+    let mut found = Vec::new();
+    // SAFETY: the handle is `conn`'s own and outlives the walk, which only
+    // reads each statement's SQL and counter and finalizes none of them.
+    unsafe {
+        let db = conn.handle();
+        let mut stmt = rusqlite::ffi::sqlite3_next_stmt(db, std::ptr::null_mut());
+        while !stmt.is_null() {
+            let reprepares = rusqlite::ffi::sqlite3_stmt_status(
+                stmt,
+                rusqlite::ffi::SQLITE_STMTSTATUS_REPREPARE,
+                0,
+            );
+            if reprepares > limit {
+                let sql = std::ffi::CStr::from_ptr(rusqlite::ffi::sqlite3_sql(stmt))
+                    .to_string_lossy()
+                    .into_owned();
+                found.push((sql, reprepares));
+            }
+            stmt = rusqlite::ffi::sqlite3_next_stmt(db, stmt);
+        }
+    }
+    found
+}
+
+#[test]
+fn a_rescan_prepares_its_per_file_statements_once() {
+    // #1912: SQLite 3.54 re-prepares a cached statement each time a newly
+    // bound value could change its plan. The fast path's file_meta probe,
+    // written as a join on `files.path = ?1`, was re-prepared for every
+    // file, which made a no-change rescan of 10k notes about 20% slower.
+    // A statement the scan runs once per file is prepared once, so none
+    // may be re-prepared more than a schema change or two would explain.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_vault(|p| {
+        for note in 0..NOTES {
+            let body = format!("note {note} links [[n{:02}]]", (note + 1) % NOTES);
+            p.write_file(&format!("n{note:02}.md"), body.as_bytes())
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let rescan = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(
+        rescan.files_skipped, NOTES as u64,
+        "every note takes the fast path"
+    );
+
+    let conn = session.conn.lock().unwrap();
+    let reprepared = statements_reprepared_more_than(&conn, 2);
+    assert!(
+        reprepared.is_empty(),
+        "statements re-prepared per file across a scan and a rescan of {NOTES} notes: {reprepared:#?}"
+    );
+}
+
 #[test]
 fn rescan_prunes_files_deleted_out_of_band() {
     // #641 (codex adversarial round 4): a note deleted outside Slate
