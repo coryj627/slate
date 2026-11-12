@@ -1858,6 +1858,25 @@ public sealed class FileManagementTests
         Assert.True(RefusedWith(0xA000_000Cu), "a symbolic link refuses");
         Assert.True(RefusedWith(null), "a tag that cannot be read refuses");
 
+        // Every entry inside an imported folder takes the same rule (a OneDrive
+        // folder's notes are placeholders too), not the bare attribute.
+        const FileAttributes reparseFolder = FileAttributes.Directory | FileAttributes.ReparsePoint;
+        Assert.False(FilesSidebarViewModel.IsLinkEntry(reparseFolder, 0x9000_601Au));
+        Assert.False(FilesSidebarViewModel.IsLinkEntry(FileAttributes.Normal, null));
+        Assert.True(FilesSidebarViewModel.IsLinkEntry(reparseFolder, 0xA000_0003u));
+        Assert.True(FilesSidebarViewModel.IsLinkEntry(reparseFolder, null));
+        string? repo = AppContext.BaseDirectory;
+        while (repo is not null && !Directory.Exists(Path.Combine(repo, "apps", "slate-windows")))
+        {
+            repo = Path.GetDirectoryName(repo);
+        }
+
+        Assert.NotNull(repo);
+        string import = File.ReadAllText(Path.Combine(
+            repo, "apps", "slate-windows", "src", "SlateWindows", "FilesSidebarViewModel.Import.cs"));
+        Assert.Contains("if (IsLinkEntry(childAttributes, childTag))", import, StringComparison.Ordinal);
+        Assert.DoesNotContain("(File.GetAttributes(child) & FileAttributes.ReparsePoint)", import, StringComparison.Ordinal);
+
         string temp = Directory.CreateTempSubdirectory("slate-import-junction-").FullName;
         try
         {

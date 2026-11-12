@@ -1431,10 +1431,19 @@ fn what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault() {
     std::fs::write(root.join("sub/a.md"), b"# A\n").unwrap();
     std::fs::write(root.join("sub/b.md"), b"# B\n").unwrap();
     std::fs::write(root.join("top.md"), b"# Top\n").unwrap();
+    std::fs::create_dir_all(root.join("deep/inner")).unwrap();
+    std::fs::write(root.join("deep/x.md"), b"# X\n").unwrap();
+    std::fs::write(root.join("deep/inner/y.md"), b"# Y\n").unwrap();
     // OneDrive turns a new local folder into a placeholder once it syncs it.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
     loop {
-        let tags = [&root, &root.join("sub")].map(|path| reparse_tag(path).map(|(tag, _)| tag));
+        let tags = [
+            &root,
+            &root.join("sub"),
+            &root.join("deep"),
+            &root.join("deep/inner"),
+        ]
+        .map(|path| reparse_tag(path).map(|(tag, _)| tag));
         if tags
             .iter()
             .all(|tag| matches!(tag, Ok(tag) if *tag != 0 && tag & 0x2000_0000 == 0))
@@ -1447,7 +1456,15 @@ fn what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault() {
         );
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    for item in ["", "sub", "sub/a.md", "sub/b.md", "top.md"] {
+    for item in [
+        "",
+        "sub",
+        "sub/a.md",
+        "sub/b.md",
+        "top.md",
+        "deep",
+        "deep/inner",
+    ] {
         println!(
             "WB-24 ONEDRIVE KIND | {item:<8} | {:?}",
             reparse_tag(&root.join(item))
@@ -1518,6 +1535,14 @@ fn what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault() {
             .provider
             .delete("top.md")
             .map(|()| "handed to the scratch bin".into()),
+    );
+    // 4. A staged Trash of a placeholder folder that holds notes and a folder.
+    row(
+        "trash deep: the inventory",
+        session
+            .provider
+            .trash_snapshot("deep")
+            .map(|snapshot| format!("{snapshot:?}")),
     );
     drop(session);
     let _ = std::fs::remove_dir_all(&root);

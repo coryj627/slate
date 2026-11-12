@@ -544,8 +544,10 @@ enforced by construction, not by review.
     Restore brought each back as the link it was, and no target changed.
     Windows therefore no longer unlinks a link whose target is absent:
     every item goes to the Recycle Bin, and a link goes as the link, as on
-    macOS and Linux. On every platform, every item a batch reports trashed
-    is in the Trash.
+    macOS and Linux, and a batch no longer counts a link Windows unlinked
+    among its trashed items. trash-rs still asks with
+    `FOF_WANTNUKEWARNING`, so on a volume with no Recycle Bin an item can be
+    deleted for good after the Shell's warning; WB-30 reports that outcome.
   - **OneDrive Files On-Demand (#1492).** In such a vault the root, every
     folder and every note is a Cloud Files placeholder, a reparse point
     whose tag (`0x9000xxxx`) is not a name surrogate. A process sees one as

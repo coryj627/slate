@@ -884,6 +884,16 @@ fn refused() -> VaultError {
     }
 }
 
+/// The hot-exit baseline's folder rule: a folder that is not a reparse point
+/// of any kind.
+fn plain_directory(file: &fs::File) -> Result<(), VaultError> {
+    let metadata = file.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(refused());
+    }
+    Ok(())
+}
+
 /// The undo and redo walk's folder rule: a folder that redirects nothing,
 /// plain or a Cloud Files placeholder (#1492, #1491's rule). A junction, a
 /// link or a file is refused.
@@ -918,8 +928,11 @@ fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, Va
 
 /// [`open`], with a leaf that is itself a reparse point answered as `None`
 /// rather than refused: every one when `placeholders` is false, and only a
-/// name surrogate (a link) when it is true. The ancestors are walked exactly
-/// as `open` walks them.
+/// name surrogate (a link) when it is true. With `placeholders` the folders
+/// on the way take [`directory`]'s rule (a placeholder passes); without it,
+/// [`plain_directory`]'s (the hot-exit baseline's rule before WB-24, kept so a
+/// note saved before OneDrive converts it to a placeholder never vouches for
+/// an identity its later placeholder cannot).
 fn open_leaf(
     root: &fs::File,
     relative: &Path,
@@ -956,7 +969,11 @@ fn open_leaf(
                 _ancestors: ancestors,
             }));
         }
-        directory(&child)?;
+        if placeholders {
+            directory(&child)?;
+        } else {
+            plain_directory(&child)?;
+        }
         ancestors.push(child);
     }
     Err(refused())

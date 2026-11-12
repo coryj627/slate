@@ -151,7 +151,9 @@ fn refuse_a_trash_that_is_not_scratch(path: &Path) {
 /// folder on the system drive is the system drive's Recycle Bin, never a
 /// scratch one. An item goes to the Recycle Bin of the folder that holds it,
 /// so that folder's volume is asked: `GetVolumePathNameW` reads a junction at
-/// the item itself as a mount point of its own.
+/// the item itself as a mount point of its own. The probe volume must also
+/// carry the label CI's `rust-real-trash` job formats it with, so a data drive
+/// named by mistake is refused rather than recycled into.
 #[cfg(all(test, windows))]
 pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<String> {
     let volume_of = |at: &Path| {
@@ -161,15 +163,28 @@ pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<Strin
     let system = system_volume().map_err(|error| format!("the system drive is unknown: {error}"));
     let holder = path.parent().unwrap_or(path);
     match (volume_of(holder), volume_of(probe), system) {
-        (Ok(path), Ok(probe), Ok(system)) => scratch_volume_refusal(&path, &probe, &system),
+        (Ok(path), Ok(probe), Ok(system)) => {
+            let label = volume_label(&probe).unwrap_or_default();
+            scratch_volume_refusal(&path, &probe, &system, &label)
+        }
         (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => Some(why),
     }
 }
 
-/// [`windows_scratch_refusal`]'s rule over volume names: the path's volume is
-/// the probe's, and the probe's is not the system drive.
+/// The label CI's `rust-real-trash` job formats the scratch volume with.
 #[cfg(all(test, windows))]
-pub(crate) fn scratch_volume_refusal(path: &str, probe: &str, system: &str) -> Option<String> {
+pub(crate) const SCRATCH_VOLUME_LABEL: &str = "SlateTrashProbe";
+
+/// [`windows_scratch_refusal`]'s rule over volume names: the path's volume is
+/// the probe's, the probe's is not the system drive, and the probe's carries
+/// [`SCRATCH_VOLUME_LABEL`].
+#[cfg(all(test, windows))]
+pub(crate) fn scratch_volume_refusal(
+    path: &str,
+    probe: &str,
+    system: &str,
+    label: &str,
+) -> Option<String> {
     let same = |a: &str, b: &str| comparable_volume(a) == comparable_volume(b);
     if same(probe, system) {
         return Some(format!(
@@ -181,7 +196,43 @@ pub(crate) fn scratch_volume_refusal(path: &str, probe: &str, system: &str) -> O
             "the path is on the volume {path}, not on the scratch volume {probe}"
         ));
     }
+    if label != SCRATCH_VOLUME_LABEL {
+        return Some(format!(
+            "the scratch volume {probe} is labelled {label:?}, not {SCRATCH_VOLUME_LABEL:?}, so it may be someone's own drive"
+        ));
+    }
     None
+}
+
+/// `GetVolumeInformationW`: the label of the volume mounted at `volume`.
+#[cfg(all(test, windows))]
+fn volume_label(volume: &str) -> std::io::Result<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    let root: Vec<u16> = volume.encode_utf16().chain([0]).collect();
+    let mut label = vec![0u16; 261];
+    // SAFETY: `root` is NUL-terminated, `label` holds its stated length, and
+    // every other output is optional and passed as null.
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            label.as_mut_ptr(),
+            label.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let length = label
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(label.len());
+    Ok(String::from_utf16_lossy(&label[..length]))
 }
 
 /// A volume name in one spelling: no verbatim prefix, upper case, one

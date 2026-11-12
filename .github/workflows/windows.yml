@@ -498,19 +498,29 @@ jobs:
         run: |
           $volume = $env:SLATE_TRASH_PROBE_VOLUME
           $bin = (New-Object -ComObject Shell.Application).Namespace(10)
+          $restored = @()
           foreach ($item in @($bin.Items())) {
             $from = $item.ExtendedProperty('System.Recycle.DeletedFrom')
             if (-not "$from".StartsWith($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { continue }
             $item.InvokeVerb('undelete')
+            $restored += Join-Path $from $item.Name
             "WB-24 RESTORE | asked to restore $($item.Name) from $from"
           }
           Start-Sleep -Seconds 2
+          # The two facts recycle three items and six links; each must be back.
+          $missing = @($restored | Where-Object { -not (Get-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue) })
+          $left = @($bin.Items() | Where-Object { "$($_.ExtendedProperty('System.Recycle.DeletedFrom'))".StartsWith($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) })
+          if ($restored.Count -lt 9 -or $missing.Count -gt 0 -or $left.Count -gt 0) {
+            Write-Host "::error::Restore: $($restored.Count) item(s) asked back (9 expected), missing at their paths: $($missing -join ', '); still in the Recycle Bin: $($left.Count)"
+            $failed = $true
+          }
           Get-ChildItem -LiteralPath $volume -Directory | Where-Object { $_.Name -match '^(vault|links)-' } | ForEach-Object {
             Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -ErrorAction Continue | ForEach-Object {
               "WB-24 BACK | $($_.FullName) | $($_.LinkType) | $($_.Target)"
             }
           }
-          "WB-24 STILL RECYCLED | $(@($bin.Items() | Where-Object { "$($_.ExtendedProperty('System.Recycle.DeletedFrom'))".StartsWith($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) }).Count) item(s)"
+          "WB-24 STILL RECYCLED | $($left.Count) item(s)"
+          if ($failed) { exit 1 }
 
       - name: Detach the scratch VHD
         if: ${{ always() }}

@@ -279,7 +279,8 @@ internal sealed partial class FilesSidebarViewModel
                                 break;
                             }
 
-                            if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                            var (childAttributes, childTag) = InspectEntry(child);
+                            if (IsLinkEntry(childAttributes, childTag))
                             {
                                 failed++;
                                 continue;
@@ -408,8 +409,7 @@ internal sealed partial class FilesSidebarViewModel
         while (true)
         {
             var (attributes, tag) = inspect(current);
-            if ((attributes & FileAttributes.ReparsePoint) != 0
-                && (tag is not { } reparseTag || (reparseTag & NameSurrogateBit) != 0))
+            if (IsLinkEntry(attributes, tag))
             {
                 return true;
             }
@@ -426,6 +426,18 @@ internal sealed partial class FilesSidebarViewModel
             current = parent;
         }
     }
+
+    /// <summary>
+    /// Whether an entry with <paramref name="attributes"/> and reparse
+    /// <paramref name="tag"/> is a link the import refuses: a reparse point
+    /// whose tag is a name surrogate or could not be read. A Cloud Files
+    /// placeholder (the bit clear) is the file or folder it stands for. The
+    /// source's ancestors and every entry inside an imported folder take this
+    /// rule (plan 44 WB-24, #1492).
+    /// </summary>
+    internal static bool IsLinkEntry(FileAttributes attributes, uint? tag) =>
+        (attributes & FileAttributes.ReparsePoint) != 0
+        && (tag is not { } reparseTag || (reparseTag & NameSurrogateBit) != 0);
 
     /// <summary>The name-surrogate bit of a reparse tag (MS-FSCC 2.1.2.1).</summary>
     private const uint NameSurrogateBit = 0x2000_0000;

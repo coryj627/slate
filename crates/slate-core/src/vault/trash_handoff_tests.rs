@@ -1211,17 +1211,30 @@ fn real_trash_on_linux_takes_each_unresolvable_link_as_the_link() {
 #[cfg(windows)]
 #[test]
 fn the_windows_guard_refuses_the_system_drive_and_any_other_volume() {
-    let system = scratch_volume_refusal(r"C:\", r"C:\", r"C:\")
+    let label = SCRATCH_VOLUME_LABEL;
+    let system = scratch_volume_refusal(r"C:\", r"C:\", r"C:\", label)
         .expect("a scratch volume that is the system drive is refused");
     assert!(system.contains("system drive"), "{system}");
-    let elsewhere = scratch_volume_refusal(r"D:\", r"T:\", r"C:\")
+    let elsewhere = scratch_volume_refusal(r"D:\", r"T:\", r"C:\", label)
         .expect("a path on another volume is refused");
     assert!(
         elsewhere.contains(r"D:\") && elsewhere.contains(r"T:\"),
         "the refusal names both volumes: {elsewhere}"
     );
-    assert_eq!(scratch_volume_refusal(r"\\?\T:\", r"T:\", r"C:\"), None);
-    assert_eq!(scratch_volume_refusal(r"t:", r"\\?\T:\", r"c:\"), None);
+    let unlabelled = scratch_volume_refusal(r"D:\", r"D:\", r"C:\", "Data")
+        .expect("a volume without the scratch label may be someone's own drive");
+    assert!(
+        unlabelled.contains("Data") && unlabelled.contains(label),
+        "{unlabelled}"
+    );
+    assert_eq!(
+        scratch_volume_refusal(r"\\?\T:\", r"T:\", r"C:\", label),
+        None
+    );
+    assert_eq!(
+        scratch_volume_refusal(r"t:", r"\\?\T:\", r"c:\", label),
+        None
+    );
 
     // This machine's own volumes: a probe folder on the system drive.
     let windows = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
@@ -1450,9 +1463,9 @@ fn real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records() {
 /// for dangling links, and the fact prints one row per kind: whether
 /// `DeleteItem` took it, the `$I` record's original path, and whether the
 /// `$R` entry is the same object, of the same kind, with the same text. It
-/// fails only when a taken link landed as anything else, a refused link left
-/// the vault, or a target changed. CI restores what it took afterwards and
-/// prints what came back.
+/// fails when any kind is refused or lands as anything else (`delete` hands
+/// every one to the Recycle Bin since this probe), or a target changed. CI
+/// restores what it took afterwards and checks that every item came back.
 #[cfg(windows)]
 #[test]
 #[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Recycle Bin"]
@@ -1533,10 +1546,11 @@ fn real_trash_on_windows_takes_each_dangling_link_kind_as_the_link() {
                 .as_ref()
                 .map_or("none", |item| item.original.as_str()),
         );
-        match (&taken, left) {
-            (Ok(()), true) if same_object && same_kind && same_text => {}
-            (Err(_), false) => {}
-            _ => wrong.push(kind),
+        // Every kind was taken as the link on the first probe (WB-24), and
+        // `delete` no longer unlinks one, so a refusal is now a failure: Slate's
+        // Move to Trash would fail for that kind.
+        if !(taken.is_ok() && left && same_object && same_kind && same_text) {
+            wrong.push(kind);
         }
     }
     drop(denied);
@@ -1571,7 +1585,7 @@ fn real_trash_on_windows_takes_each_dangling_link_kind_as_the_link() {
     );
     assert!(
         wrong.is_empty(),
-        "taken but not in the Recycle Bin as the same link, or refused yet gone: {wrong:?}"
+        "not taken into the Recycle Bin as the same link: {wrong:?}"
     );
 }
 
