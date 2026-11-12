@@ -529,6 +529,17 @@ jobs:
           $script = Join-Path $env:RUNNER_TEMP 'detach.txt'
           @("select vdisk file=`"$env:PROBE_VHD`"", 'detach vdisk') | Set-Content -Path $script -Encoding ascii
           diskpart /s $script
+          $code = $LASTEXITCODE
+          # diskpart can exit 1 after "successfully detached" (#1921). The
+          # facts and the restore have already decided this job; on a VM
+          # that is thrown away, the detach only reports.
+          $volume = $env:SLATE_TRASH_PROBE_VOLUME
+          if ($volume -and (Test-Path -LiteralPath $volume)) {
+            Write-Host "::warning::diskpart exited $code and $volume is still mounted; the runner VM is discarded with it"
+          } else {
+            "diskpart exited $code; the probe volume is gone"
+          }
+          exit 0
 
   windows:
     name: app build + test (windows x64)

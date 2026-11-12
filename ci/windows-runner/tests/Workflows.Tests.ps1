@@ -140,6 +140,10 @@ Describe 'windows.yml routing through the router' {
         $detach = @($steps | Where-Object { $_.Contains('detach vdisk') })
         $detach.Count | Should -Be 1
         $detach[0] | Should -Match '(?m)^        if: \$\{\{ always\(\) \}\}[ \t]*\r?$' -Because 'the VHD is detached even when a fact fails'
+        # #1921: diskpart can exit 1 after "successfully detached". The step
+        # reports whether the probe volume is gone and never fails the job.
+        $detach[0] | Should -Match 'Test-Path -LiteralPath \$volume' -Because 'the volume being gone is what the step checks'
+        $detach[0] | Should -Match '(?m)^          exit 0[ \t]*\r?$' -Because "diskpart's exit code never decides the job (#1921)"
     }
     It 'every routed lane prints its runner first, and the router''s attempt only through the environment' {
         $record = '    steps:', '      - name: Record the runner', '        env:', '          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}',
