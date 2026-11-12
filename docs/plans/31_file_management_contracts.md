@@ -526,6 +526,43 @@ enforced by construction, not by review.
   invalidated by replacement, including atomic saves. The remaining
   boundary is tracked on its own: verifying what arrived (T2) is #1468;
   the platform side findings are #1434 (exFAT) and #1470 (SMB, NFS, FAT32).
+  *Recorded 2026-11-12 (plan 44 WB-24; #1480, #1499, #1492):* the Windows
+  sentences above are superseded as follows.
+  - **The Recycle Bin back end is tested again (#1480).** Two gated facts run
+    trash-rs on every Windows lane run, against a scratch NTFS VHD that
+    `windows.yml`'s `rust-real-trash` job makes with `diskpart` on a
+    throwaway Namespace runner. A note, a folder and a link each land in that
+    volume's `$RECYCLE.BIN` as the same object (volume serial and 128-bit
+    file id), with a `$I` record naming the original path. In a test build
+    the Recycle Bin is reached only on that volume, and never when it is the
+    system drive.
+  - **Dangling links (#1499).** The probe handed each kind straight to the
+    Recycle Bin. A file link to a missing file, a folder link to a missing
+    folder, a link whose target runs through a file, a junction to a missing
+    folder, a link to a file no one may open, and a cycle were each taken as
+    the link: the same object, the same kind, the same text. The shell's
+    Restore brought each back as the link it was, and no target changed.
+    Windows therefore no longer unlinks a link whose target is absent:
+    every item goes to the Recycle Bin, and a link goes as the link, as on
+    macOS and Linux. On every platform, every item a batch reports trashed
+    is in the Trash.
+  - **OneDrive Files On-Demand (#1492).** In such a vault the root, every
+    folder and every note is a Cloud Files placeholder, a reparse point
+    whose tag (`0x9000xxxx`) is not a name surrogate. A process sees one as
+    a reparse point only when its placeholder compatibility mode exposes
+    them. A manifest-less test binary saw them disguised; the probe ran
+    exposed, as PowerShell and the app see them. On the owner's OneDrive the
+    three walks refused. The undo capture said "the files have changed". The
+    staged Trash said "Cannot stage Trash through a symbolic link" and "for a
+    symbolic link". The handoff said "\"sub\" is a reparse point, not a plain
+    folder". A Recycle Bin call on a note beneath two placeholder folders
+    landed at the note's own path, and Restore put it back there with the
+    same file id, so a placeholder does not redirect the Shell. Under WD15
+    the undo and redo walk, the inventory's three checks and the handoff now
+    take #1491's rule: a placeholder is the folder or note it stands for, and
+    a junction or link still refuses where it did. The host's import check
+    draws the same line for an import's source, so a file from a folder in
+    OneDrive imports.
 - **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
   The admitted picker opens immediately with Loading/Cancel, then receives
   bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
