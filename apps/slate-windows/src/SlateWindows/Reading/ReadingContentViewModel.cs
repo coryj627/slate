@@ -868,6 +868,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// other artifact seams. Fired once per resolved key.</summary>
     internal Func<Exception?>? EmbedFaultForTests { get; set; }
 
+    /// <summary>Test seam (#1634): fires with the embed key on the refresh's
+    /// worker as an SVG embed is decoded with its resolution, before the
+    /// document is built.</summary>
+    internal static Action<string>? EmbedSvgDecodeProbeForTests;
+
     /// <summary>Per-note embed-resolution budgets (W3-5): each
     /// preview call is already core-bounded (64 KiB text / 128 nodes
     /// / 8 MiB image, cumulative per key), but a note can hold
@@ -997,11 +1002,23 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     {
         var keys = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (ReadingBlockInlines blockInlines in inlines)
+        // #1634: the keys the publish will render, the first
+        // MaximumRenderedBlocks blocks'. Only those decode their SVG here, so
+        // an embed past the ceiling neither decodes nor spends the pixel pool
+        // a shown image needs (Codex round 3).
+        var rendered = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < inlines.Length; index++)
         {
-            if (blockInlines.BlockEmbedKey is { Length: > 0 } key && seen.Add(key))
+            if (inlines[index].BlockEmbedKey is { Length: > 0 } key)
             {
-                keys.Add(key);
+                if (seen.Add(key))
+                {
+                    keys.Add(key);
+                }
+                if (index < MaximumRenderedBlocks)
+                {
+                    rendered.Add(key);
+                }
             }
         }
         if (keys.Count == 0)
@@ -1021,6 +1038,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         var artifacts = new List<ReadingEmbedArtifact>(keys.Count);
         int attempts = 0;
         long imagePool = FetchedEmbedImageByteBudget;
+        long svgPixels = ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
         foreach (string key in keys)
         {
             ThrowIfCancelled(cancel);
@@ -1081,8 +1100,52 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 baseProjection = ProjectBaseEmbed(
                     session, fullNote.TargetPath, path, cancel, BaseProjectionHookForTests);
             }
+            // #1634: an SVG image decodes here, on the refresh's worker,
+            // where its budget-long wait (#1581) blocks nothing the reader
+            // is using; the builder places the result on the dispatcher.
+            // The projection's decoded-pixel pool bounds these decodes as it
+            // bounds the builder's: each reserves its raster's pixels before
+            // allocating it, and once the pool is spent a later SVG never
+            // enters the decoder (Codex on #1634).
+            ReadingEmbedImageDecode? imageDecode = null;
+            if (!imageRefused
+                && rendered.Contains(key)
+                && resolution?.Resolution is EmbedResolution.Image image
+                && EditorInteractionCoordinator.IsSvgImage(image.Bytes, image.Mime))
+            {
+                if (svgPixels <= 0)
+                {
+                    imageDecode = new ReadingEmbedImageDecode(null, null, BudgetRefused: true);
+                }
+                else
+                {
+                    EmbedSvgDecodeProbeForTests?.Invoke(key);
+                    // The reservation runs on the decode thread while this
+                    // worker waits, never after it stops waiting.
+                    long reserved = 0;
+                    System.Windows.Media.ImageSource? decoded = EditorInteractionCoordinator.DecodeImage(
+                        image.Bytes,
+                        image.Mime,
+                        cost =>
+                        {
+                            long pixels = cost / 4;
+                            if (pixels > svgPixels)
+                            {
+                                svgPixels = 0;
+                                return false;
+                            }
+                            svgPixels -= pixels;
+                            reserved += pixels;
+                            return true;
+                        },
+                        out bool budgetSpent,
+                        out string? decodeFailure);
+                    imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent, reserved);
+                }
+                ThrowIfCancelled(cancel);
+            }
             artifacts.Add(new ReadingEmbedArtifact(
-                key, alt, resolution, imageRefused, baseProjection));
+                key, alt, resolution, imageRefused, baseProjection, imageDecode));
         }
         return artifacts.ToArray();
     }
@@ -1632,6 +1695,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         context.LandedDiagrams = _landedDiagrams;
         context.DiagramsPending = true;
         ReadingEmbedArtifact[] embeds = fetched.Embeds;
+        // One decoded-pixel budget for every image (Codex on #1634): what the
+        // worker's SVG decodes took is spent before the build places a raster.
+        context.RemainingEmbedDecodedPixels -= embeds.Sum(embed => embed.ImageDecode?.ReservedPixels ?? 0);
         OutgoingLink[] records = fetched.Records;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
             model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks,
@@ -2291,6 +2357,23 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
             }
+            // #1634: the SVG decode's outcome is identity too. A decode past
+            // its budget or refused at the cap may succeed on the next
+            // refresh, and that refresh must rebuild to show the image.
+            DigestField(hash, embed.ImageDecode switch
+            {
+                null => "svg-none",
+                { Source: not null } => "svg-decoded",
+                { BudgetRefused: true } => "svg-budget-refused",
+                { FailureReason: { } reason } => "svg-failed:" + reason,
+                _ => "svg-failed",
+            });
+            // What it reserved is identity too: the same outcome before or
+            // after its reservation leaves the rasters a different pool
+            // (Codex round 3).
+            DigestField(
+                hash,
+                (embed.ImageDecode?.ReservedPixels ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
             // The base card's projection is identity too (red team
             // round 1: omitting it meant a membership change with an
             // otherwise-identical note skipped the rebuild and the
