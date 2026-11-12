@@ -62,3 +62,44 @@ Re-open this decision only if one of these becomes true (none are today):
 - A frontend needs a **genuinely independent release cadence** with its own version. → Prefer per-app release tags within the monorepo first; separate repo only if that proves insufficient.
 - A frontend needs **hard permission isolation** that `CODEOWNERS` cannot express.
 - Repo scale hits real tooling limits (checkout time, CI minutes). Implausible at the current ~85K LOC.
+
+## Addendum 2026-11-12: iOS and Android stay in this repository
+
+**Status:** Locked (2026-11-12). Reaffirms the decision above for the mobile frontends and replaces the fourth revisit trigger.
+
+### Question
+
+Before iOS and Android research begins: should the mobile frontends live in a separate mobile monorepo, or in one repository per platform, now that this repository has become hard to maintain and test?
+
+### Decision
+
+iOS and Android are added as `apps/slate-ios/` and `apps/slate-android/` in this repository, as the layout above already shows. There is no mobile monorepo and no per-platform repository. The maintenance cost comes from CI lanes that trigger on each other's files, and the preconditions below remove that inside this repository.
+
+### Evidence
+
+Measured on 2026-11-12 at `9bf4526`.
+
+- **Changes across the core boundary are routine.** Of the 626 commits since 2026-08-01, 97 change `crates/` and `apps/` together and 79 change `crates/slate-uniffi/`. Of the 77 FFI commits that touch a frontend, 48 update Mac and Windows in the same commit. Split into separate repositories, each of those becomes a core release followed by a pinned version bump and a pull request in every frontend repository.
+- **Mobile brings the largest FFI change yet.** The FFI constructs only `FsVaultProvider` (`crates/slate-uniffi/src/lib.rs`), which assumes POSIX paths that Rust owns. iOS security-scoped bookmarks and Android Storage Access Framework URIs need `VaultProvider` as a callback interface the host implements (locked decision 05), and the index location, change detection and app lifecycle change with it. Rationale 2 above applies to that work with more force than it did to Windows.
+- **iOS reuse needs a shared Swift library.** Locked decision 05 has iOS reusing most of the Mac Swift code, but `apps/slate-mac/Package.swift` declares one `executableTarget` and no library target. In one repository the extracted package is a path dependency. Across repositories it becomes a second published, versioned and still unstable boundary.
+- **iOS and Android share nothing but the core.** A mobile repository would group two codebases that have no coupling to each other, and separate both from the one codebase they are coupled to.
+- **A split moves testing; it does not remove it.** A core change still has to prove that every frontend binds. Across repositories that takes cross-repository dispatch, or the break is found at the next pinned bump.
+- **The scale trigger's premise no longer holds, but the cause of the cost is not scale.** The repository holds about 1.1 million tracked lines, about 930 thousand of them in `crates/`, `apps/`, `ci/` and `scripts/`, not the ~85K the trigger assumed. Checkout is not the constraint. CI minutes are, and they come from lanes that trigger on each other's files:
+  - `windows.yml` triggers on `apps/slate-mac/**`, all of `scripts/**`, `docs/help/**` and thirteen plan-document paths, so every Mac change runs the Windows lane. `scripts/generate-parity-matrix.py` proves Windows parity by reading Mac Swift sources (`SlateCommands.swift`, `SidebarActionCatalog.swift`, `SettingsView.swift`, `RightPaneView.swift`, `WorkspaceModel.swift`).
+  - Repeated for iOS and Android, that pattern has every lane watching every other frontend's files, and lane runs grow with the square of the number of frontends.
+  - 67 of the 626 commits are `test(windows)` or `ci(windows)` timing and flake work, which a repository boundary does not change.
+
+### Preconditions for the first mobile commit
+
+1. **Parity comes from one manifest.** Commands, chords, settings tabs, right-pane leaves, help docs and CLI verbs are declared once, in `slate-core` or a manifest beside it (`apps/slate-windows/chords.json` is a start). Each frontend's lane checks that frontend against the manifest. No lane reads another frontend's sources.
+2. **Each lane watches its own paths.** A frontend lane triggers on its own `apps/slate-<platform>/**`, on `crates/**`, on the workspace manifests and on its own scripts. `windows.yml` drops `apps/slate-mac/**` and the blanket `scripts/**`.
+3. **Core CI runs in tiers.** A pull request that changes `crates/` runs each frontend's binding build and a smoke subset of its tests. Full frontend suites run on `main` and nightly. The cost: under the one-merge-at-a-time rule in `AGENTS.md`, a defect the smoke subset misses surfaces on the merge commit's run, not on the pull request's.
+4. **The Apple frontends share a Swift package.** `SlateMac` splits into a library (FFI bridge, view models, state) and a thin Mac app target. iOS adds an Xcode project and an XCFramework built from the `staticlib` that `slate-uniffi` already declares, because a SwiftPM executable target cannot produce an iOS app. The SDK check for #1460 moves into that project's build.
+5. **The host-implemented `VaultProvider` lands on Mac first.** It is exposed across the FFI and Mac runs on it before iOS uses it. A sandboxed Mac App Store build needs security-scoped bookmarks either way.
+
+### Revisit triggers
+
+The first three triggers above stand. When the third holds for a mobile frontend, Android is extracted first, because it shares no code with the Apple frontends. The fourth trigger (repository scale) is replaced by:
+
+- The FFI is frozen and versioned, and the core ships as published artifacts (an XCFramework binary target and an Android AAR). Extracting a frontend then costs a version pin, not a coordinated release.
+- CI cost or duration is still a constraint after preconditions 1 to 3 have landed. Measure lane minutes per merged pull request before reopening this decision.
