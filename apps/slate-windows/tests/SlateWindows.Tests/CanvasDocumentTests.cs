@@ -4893,22 +4893,31 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.True(File.Exists(large), $"the §K fixture is missing at {large}");
         File.Copy(large, Path.Combine(_fixture.Root, "large.canvas"), overwrite: true);
 
-        CanvasDocumentViewModel document = NewDocument("large.canvas", synchronousForTests);
-        var clock = Stopwatch.StartNew();
-        document.Load();
-        if (!synchronousForTests)
+        // #1901: the fastest of up to three opens, each a fresh document, so
+        // a loaded runner's spike passes and a regression still fails.
+        TimeSpan fastest = await WallClockBudget.FastestAsync(OpenBudget, async () =>
         {
-            for (int round = 0; round < 20 && document.State == CanvasLoadState.Loading;
-                round++)
+            CanvasDocumentViewModel document = NewDocument("large.canvas", synchronousForTests);
+            var clock = Stopwatch.StartNew();
+            document.Load();
+            if (!synchronousForTests)
             {
-                await document.DrainForTests();
-                await Task.Delay(5);
+                for (int round = 0; round < 20 && document.State == CanvasLoadState.Loading;
+                    round++)
+                {
+                    await document.DrainForTests();
+                    await Task.Delay(5);
+                }
             }
-        }
-        clock.Stop();
+            clock.Stop();
 
-        Assert.Equal(CanvasLoadState.Ready, document.State);
-        Assert.Equal(2000, document.Outline.Count);
+            Assert.Equal(CanvasLoadState.Ready, document.State);
+            Assert.Equal(2000, document.Outline.Count);
+            document.Shutdown();
+            await document.WhenHandleClosed();
+            return clock.Elapsed;
+        });
+
         // 500 ms is the §K interactive budget the mac renderer suite
         // also asserts — a regression that makes opening a 2,000-node
         // canvas non-interactive fails here. The measured figures live
@@ -4923,12 +4932,13 @@ public sealed class CanvasDocumentTests : IDisposable
         // it is why the elapsed value is never recorded anywhere as a
         // benchmark.
         Assert.True(
-            clock.ElapsedMilliseconds < 500,
-            $"opening a 2,000-node canvas took {clock.ElapsedMilliseconds} ms "
-            + $"(synchronousForTests: {synchronousForTests})");
-        document.Shutdown();
-        await document.WhenHandleClosed();
+            fastest < OpenBudget,
+            $"opening a 2,000-node canvas took {fastest.TotalMilliseconds:F0} ms at best of "
+            + $"{WallClockBudget.Attempts} (synchronousForTests: {synchronousForTests})");
     }
+
+    /// <summary>The §K interactive budget for the 2,000-node fixture.</summary>
+    private static readonly TimeSpan OpenBudget = TimeSpan.FromMilliseconds(500);
 
     [Fact]
     public void TheOutlineTreeBuildsEveryRowOfTheLargeFixture() => RunSta(() =>
@@ -4941,14 +4951,22 @@ public sealed class CanvasDocumentTests : IDisposable
             overwrite: true);
         CanvasDocumentViewModel document = NewDocument("large.canvas");
         document.Load();
-        var clock = Stopwatch.StartNew();
-        var view = new CanvasOutlineView { Model = document };
-        clock.Stop();
+        // #1901: the fastest of up to three projections, each a fresh view,
+        // so a loaded runner's spike passes and a regression still fails.
+        TimeSpan fastest = WallClockBudget.Fastest(OpenBudget, () =>
+        {
+            var clock = Stopwatch.StartNew();
+            var view = new CanvasOutlineView { Model = document };
+            clock.Stop();
+            Assert.Equal(document.Outline.Count, CountLines(view.RootsForTests));
+            view.Model = null;
+            return clock.Elapsed;
+        });
 
-        Assert.Equal(document.Outline.Count, CountLines(view.RootsForTests));
         Assert.True(
-            clock.ElapsedMilliseconds < 500,
-            $"projecting 2,000 rows took {clock.ElapsedMilliseconds} ms");
+            fastest < OpenBudget,
+            $"projecting 2,000 rows took {fastest.TotalMilliseconds:F0} ms at best of "
+            + $"{WallClockBudget.Attempts}");
         document.Shutdown();
     });
 
