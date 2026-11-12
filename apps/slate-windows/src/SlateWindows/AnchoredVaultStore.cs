@@ -33,22 +33,44 @@ internal sealed class AnchoredVaultStore : IDisposable
     private const int ErrorFileNotFound = 2;
     private const int ErrorPathNotFound = 3;
 
+    /// <summary>#1869: the waits between attempts while another process
+    /// holds a store's file, for the stores whose saves run on the UI thread
+    /// (workspace, sidebar settings, search recents): 150 ms in all, spent
+    /// only while the file is held.</summary>
+    internal static IReadOnlyList<TimeSpan> BriefHeldFileBackoff { get; } =
+    [
+        TimeSpan.FromMilliseconds(10),
+        TimeSpan.FromMilliseconds(20),
+        TimeSpan.FromMilliseconds(40),
+        TimeSpan.FromMilliseconds(80),
+    ];
+
+    private const int ErrorAccessDenied = 5;
+    private const int ErrorSharingViolation = 32;
+
     private readonly SafeFileHandle _vaultHandle;
     private readonly SafeFileHandle _directoryHandle;
     private readonly Action? _beforeRename;
     private readonly Action? _afterRename;
+    private readonly IReadOnlyList<TimeSpan>? _heldBackoff;
+    private readonly Action<int>? _heldAttempt;
+    private int _heldWaits;
     private bool _disposed;
 
     private AnchoredVaultStore(
         SafeFileHandle vaultHandle,
         SafeFileHandle directoryHandle,
         Action? beforeRename,
-        Action? afterRename)
+        Action? afterRename,
+        IReadOnlyList<TimeSpan>? heldBackoff,
+        Action<int>? heldAttempt)
     {
         _vaultHandle = vaultHandle;
         _directoryHandle = directoryHandle;
         _beforeRename = beforeRename;
         _afterRename = afterRename;
+        _heldBackoff = heldBackoff;
+        _heldAttempt = heldAttempt;
     }
 
     /// <summary>
@@ -57,12 +79,22 @@ internal sealed class AnchoredVaultStore : IDisposable
     /// absent. A <c>.slate</c> that is a reparse point or not a folder is
     /// refused.
     /// </summary>
+    /// <param name="heldBackoff">#1869: when given, a read, lock or atomic
+    /// write that finds its file held by another process (see
+    /// <see cref="IsHeld"/>) waits each of these in turn and tries again;
+    /// after the last it fails as any other I/O failure does. Without it,
+    /// the first attempt's failure is the answer, as a caller with its own
+    /// retry wants (the graph config writer, #1865).</param>
+    /// <param name="heldAttempt">Test seam: runs at each held attempt, with
+    /// its index, before the wait.</param>
     public static AnchoredVaultStore? Open(
         VaultRootAnchor root,
         bool createDirectory,
         Action? afterDirectoryAnchored = null,
         Action? beforeRename = null,
-        Action? afterRename = null)
+        Action? afterRename = null,
+        IReadOnlyList<TimeSpan>? heldBackoff = null,
+        Action<int>? heldAttempt = null)
     {
         SafeFileHandle vaultHandle = root.OpenRoot();
         SafeFileHandle? directoryHandle = null;
@@ -98,7 +130,9 @@ internal sealed class AnchoredVaultStore : IDisposable
                 vaultHandle,
                 directoryHandle,
                 beforeRename,
-                afterRename);
+                afterRename,
+                heldBackoff,
+                heldAttempt);
             directoryHandle = null;
             try
             {
@@ -119,10 +153,23 @@ internal sealed class AnchoredVaultStore : IDisposable
         }
     }
 
+    /// <summary>A refused open or rename that another process's handle
+    /// explains: access denied (5) is the rename over a file open without
+    /// delete sharing, a sharing violation (32) the open of a file opened
+    /// with no sharing. The anchored store reports the Win32 code inside its
+    /// <see cref="IOException"/>; any other is not a hold.</summary>
+    internal static bool IsHeld(IOException exception) =>
+        exception.InnerException is Win32Exception { NativeErrorCode: ErrorAccessDenied or ErrorSharingViolation };
+
     public byte[]? ReadAllBytesBounded(string fileName, long maximumBytes)
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
+        return WhileHeld(() => ReadAllBytesBoundedOnce(fileName, maximumBytes));
+    }
+
+    private byte[]? ReadAllBytesBoundedOnce(string fileName, long maximumBytes)
+    {
         SafeFileHandle? handle = TryOpenChild(
             fileName,
             GenericRead | FileReadAttributes,
@@ -146,6 +193,11 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
+        return WhileHeld(() => OpenExclusiveLockOnce(fileName));
+    }
+
+    private FileStream OpenExclusiveLockOnce(string fileName)
+    {
         SafeFileHandle handle = OpenChild(
             fileName,
             GenericRead | GenericWrite | FileReadAttributes,
@@ -168,6 +220,27 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
+        while (true)
+        {
+            try
+            {
+                WriteAtomicallyOnce(fileName, contents);
+                return;
+            }
+            catch (IOException exception)
+            {
+                // Waited here, not in a filter: the attempt's own finally
+                // has already removed its temporary file.
+                if (!WaitIfHeld(exception))
+                {
+                    throw;
+                }
+            }
+        }
+    }
+
+    private void WriteAtomicallyOnce(string fileName, ReadOnlySpan<byte> contents)
+    {
         string temporaryName = $"{fileName}.tmp-{Guid.NewGuid():N}";
         SafeFileHandle handle = OpenChild(
             temporaryName,
@@ -235,6 +308,43 @@ internal sealed class AnchoredVaultStore : IDisposable
         _disposed = true;
         _directoryHandle.Dispose();
         _vaultHandle.Dispose();
+    }
+
+    private T WhileHeld<T>(Func<T> operation)
+    {
+        while (true)
+        {
+            try
+            {
+                return operation();
+            }
+            catch (IOException exception)
+            {
+                if (!WaitIfHeld(exception))
+                {
+                    throw;
+                }
+            }
+        }
+    }
+
+    /// <summary>Waits out a held file's next interval and answers true, or
+    /// answers false when the failure is not a hold, the store was opened
+    /// without a backoff, or the backoff is spent. The backoff is one budget
+    /// for the whole store operation (Codex on #1869): a sidebar update's
+    /// lock, read and write share it, so the operation waits at most the
+    /// backoff's sum however many of its steps meet the hold.</summary>
+    private bool WaitIfHeld(IOException exception)
+    {
+        if (_heldBackoff is null || _heldWaits >= _heldBackoff.Count || !IsHeld(exception))
+        {
+            return false;
+        }
+
+        int wait = _heldWaits++;
+        _heldAttempt?.Invoke(wait);
+        Thread.Sleep(_heldBackoff[wait]);
+        return true;
     }
 
     private SafeFileHandle OpenChild(

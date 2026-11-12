@@ -83,6 +83,14 @@ internal sealed class SearchRecentsStore
     /// Non-fatal, but not invisible.</summary>
     public Exception? LastSaveError { get; private set; }
 
+    /// <summary>Test seam (#1869): runs at each attempt that found the file
+    /// held, with the attempt's index, before the wait.</summary>
+    internal Action<int>? HeldAttemptForTests { get; set; }
+
+    /// <summary>Test seam (#1869): runs in <see cref="Add"/> after the read
+    /// and before the save, where a fact lets a held file go.</summary>
+    internal Action? BeforeSaveForTests { get; set; }
+
     /// <summary>
     /// The on-disk list (most-recent-first), or empty on a missing,
     /// malformed, oversized, or unreadable file. Dedupes on load and
@@ -94,13 +102,21 @@ internal sealed class SearchRecentsStore
     /// <c>JSONDecoder().decode([String].self)</c>, which rejects the
     /// entire file rather than skipping the entry.
     /// </remarks>
-    public IReadOnlyList<string> Load()
+    public IReadOnlyList<string> Load() => Read(out _);
+
+    /// <summary><see cref="Load"/>, also answering the hold when the file
+    /// stayed held by another process past the brief wait (#1869): an empty
+    /// list then means "unknown", not "none".</summary>
+    private IReadOnlyList<string> Read(out IOException? held)
     {
+        held = null;
         try
         {
             using AnchoredVaultStore? store = AnchoredVaultStore.Open(
                 Root,
-                createDirectory: false);
+                createDirectory: false,
+                heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+                heldAttempt: HeldAttemptForTests);
             byte[]? input = store?.ReadAllBytesBounded(FileName, MaxFileBytes);
             if (input is null)
             {
@@ -143,6 +159,11 @@ internal sealed class SearchRecentsStore
             // FileSizeLimitExceededException (oversized) and
             // DirectoryNotFoundException (no vault root) are IOExceptions
             // and land here too.
+            if (exception is IOException io && AnchoredVaultStore.IsHeld(io))
+            {
+                held = io;
+            }
+
             return [];
         }
     }
@@ -155,7 +176,16 @@ internal sealed class SearchRecentsStore
     public IReadOnlyList<string> Add(string query)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var entries = Load().ToList();
+        var entries = Read(out IOException? held).ToList();
+        if (held is not null)
+        {
+            // #1869: the list could not be read, so a save now would replace
+            // every remembered query with this one. The file keeps them.
+            LastSaveError = held;
+            return [query];
+        }
+
+        BeforeSaveForTests?.Invoke();
         entries.RemoveAll(entry => string.Equals(entry, query, StringComparison.Ordinal));
         entries.Insert(0, query);
         if (entries.Count > MaxEntries)
@@ -180,7 +210,9 @@ internal sealed class SearchRecentsStore
         {
             using AnchoredVaultStore store = AnchoredVaultStore.Open(
                 Root,
-                createDirectory: true)
+                createDirectory: true,
+                heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+                heldAttempt: HeldAttemptForTests)
                 ?? throw new IOException("Could not anchor the search-recents directory.");
             // Pretty-printed like mac's encoder; the schema either side
             // reads is simply "a JSON array of strings".

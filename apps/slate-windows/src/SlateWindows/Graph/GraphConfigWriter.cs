@@ -271,13 +271,9 @@ internal sealed class GraphConfigWriter
     /// <summary>The longest a write waits for a held file before it fails.</summary>
     internal static TimeSpan HeldFileWait { get; } = HeldFileBackoff.Aggregate(TimeSpan.Zero, (total, wait) => total + wait);
 
-    private const int ErrorAccessDenied = 5;
-    private const int ErrorSharingViolation = 32;
-
-    /// <summary>The anchored store reports a refused open or rename with the
-    /// Win32 code inside; any other <see cref="IOException"/> is not a hold.</summary>
-    private static bool IsHeld(IOException exception) =>
-        exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorAccessDenied or ErrorSharingViolation };
+    /// <summary>The anchored store's own reading of a hold (#1869 shares it
+    /// with the stores that retry inside the store).</summary>
+    private static bool IsHeld(IOException exception) => AnchoredVaultStore.IsHeld(exception);
 
     /// <summary>Test seam: runs on the queue's worker after an attempt found
     /// the file held, with the attempt's index, before the supersession

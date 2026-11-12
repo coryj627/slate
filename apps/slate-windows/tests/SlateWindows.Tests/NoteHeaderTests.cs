@@ -495,13 +495,26 @@ public sealed class NoteHeaderTests
     });
 
     /// <summary>An arrow moves the choice and leaves the keys on the switch, the mode
-    /// persists, and nothing is posted: the radio's own focus speech says what happened.</summary>
-    [Fact]
-    public void AnArrowKeepsFocusInTheSwitch() => StaThread.RunPumped(() =>
+    /// persists, and nothing is posted: the radio's own focus speech says what happened.
+    /// #1904: the note's outline loads on a worker and announces its count when it
+    /// lands, which a settle doesn't wait for, and a loaded runner landed it after the
+    /// clear. The fact waits for that count first; the late row holds the outline's
+    /// read past the settle, as that runner did.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnArrowKeepsFocusInTheSwitch(bool outlineLandsLate) => StaThread.RunPumped(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        using var outlineRead = new ManualResetEventSlim(initialState: !outlineLandsLate);
+        host.Workspace.Panels.OutlineReadHookForTests = () => outlineRead.Wait(TimeSpan.FromSeconds(10));
         host.Workspace.OpenPath("Lecture.md");
         host.Settle();
+        outlineRead.Set();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => host.Announced.OfType<A11yEvent.OutlineCount>().Any(), TimeSpan.FromSeconds(10)),
+            "the note's outline never announced its count.");
         NoteHeaderView header = HeaderOf(host, "Lecture.md");
         RadioButton source = Choice(header, "NoteHeaderSource");
         RadioButton reading = Choice(header, "NoteHeaderReading");
