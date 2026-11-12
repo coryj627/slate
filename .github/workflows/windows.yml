@@ -602,6 +602,34 @@ jobs:
             '-Out', "$results\foreground.log",
             '-StopFile', '${{ runner.temp }}\foreground.stop')
 
+      # #1826: a fail-fast the runtime doesn't raise itself never reaches
+      # createdump (below). A process that calls RaiseFailFastException exits
+      # 0xC0000602, the code the issue records, with no dump under the DOTNET_
+      # variables, and main's run 43059953344 lost its test process that way.
+      # Windows Error Reporting still sees such a crash, so its LocalDumps
+      # write a full dump (type 2) of each test process into the same
+      # uploaded folder, under the same no-secrets guard. The keys need an
+      # administrator: Namespace's runner is one (probe: run 43070686612).
+      # A home VM's runner is a limited user, so there the step warns and
+      # the tests run without the capture until the golden image arms the
+      # keys itself (#1903).
+      - name: Arm Windows Error Reporting dumps for the test processes (#1826)
+        run: |
+          $results = '${{ runner.temp }}\slate-app-results'
+          New-Item -ItemType Directory -Force $results | Out-Null
+          foreach ($exe in 'SlateWindows.Tests.exe', 'testhost.exe', 'dotnet.exe') {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
+            try {
+              New-Item -Path $key -Force -ErrorAction Stop | Out-Null
+              New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $results -Force -ErrorAction Stop | Out-Null
+              New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 2 -Force -ErrorAction Stop | Out-Null
+              New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 4 -Force -ErrorAction Stop | Out-Null
+              Write-Host "WER dumps armed for $exe"
+            } catch {
+              Write-Host "::warning::WER dumps are not armed for ${exe} (a limited runner cannot write HKLM, #1903): $($_.Exception.Message)"
+            }
+          }
+
       # #1826: a test process that fails fast writes a full dump into the
       # uploaded results folder (the runtime's own createdump, in every .NET
       # process the step starts): main's run 42932655320 lost one after its
