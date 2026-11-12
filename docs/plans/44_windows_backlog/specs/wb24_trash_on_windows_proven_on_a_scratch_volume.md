@@ -18,6 +18,17 @@ barrier in such vaults, and the PR body says so). Neither decision is
 answered on the plan; nothing below that depends on one starts before the
 owner records it.
 
+**Recorded since (plan §3.1).** WD14 and WD15 were adopted as recommended
+on 2026-10-26. WD14 was amended on 2026-11-12, and that amendment governs
+where this spec still says "throwaway VM" or "`home-only`":
+- **The scratch volume** is a 2 GB VHD made with `diskpart` on a throwaway
+  Namespace runner. The 2026-11-12 spike showed that runner elevated, as
+  SYSTEM, recycling into the VHD's own `$RECYCLE.BIN\S-1-5-18`.
+- **The lane job** runs there, not in `home-only` mode.
+- **The OneDrive probe** runs in `C:\Users\cory\OneDrive\SlateWB24Probe` on
+  the owner's desktop. The agent creates the folder and deletes it
+  afterwards.
+
 ## Goal
 
 Three things become true. A gated fact exercises core's real Windows Trash
@@ -138,6 +149,23 @@ Verified against the worktree; the plan's and reports' lines hold.
 ## Design
 
 ### The probe procedure (owner-run first; WD14)
+
+**Amended 2026-11-12 (WD14, plan §3.1).** Steps 1 to 4 run as the lane
+job on a throwaway Namespace runner. The job is already elevated, so
+`diskpart` stands in for `New-VHD`/`Mount-VHD`:
+```
+$vhd = Join-Path $env:RUNNER_TEMP 'scratch.vhdx'
+# diskpart /s: create vdisk file="$vhd" maximum=2048 type=expandable; select vdisk file="$vhd"; attach vdisk;
+#              create partition primary; format fs=ntfs quick label=SlateTrashProbe; assign letter=<free letter>
+# and in `if: always()`: select vdisk file="$vhd"; detach vdisk
+```
+The job runs as SYSTEM, so the fact's SID is `S-1-5-18`. The volume's
+Recycle Bin is `<letter>:\$RECYCLE.BIN\S-1-5-18` and needs no Explorer
+visit: the first recycle creates it.
+
+Step 5 runs on the owner's desktop in
+`C:\Users\cory\OneDrive\SlateWB24Probe`. The folders under OneDrive there
+carry the Cloud Files tag `0x9000601A`. The steps as first written follow.
 
 1. On the home host, from the pool's image, create a throwaway Hyper-V VM
    (not a pool VM). Inside it, in an elevated PowerShell:
@@ -339,7 +367,13 @@ poll the bin with a bounded, asserted deadline).
 - `corpus.json` + `A11yCorpusCensus.cs:57` + `A11yCorpusCensusTests.swift:50`
   (+ count `:666`) mirror entry, if the event ships (§4 rule 6); the 14
   Swift `BatchTrashReport` literals above, if the field ships.
-- `windows.yml`: a `home-only` job `rust-real-trash` (new) gated on
+- `windows.yml`, **as amended 2026-11-12**: a job `rust-real-trash` (new) on
+  the Namespace profile `namespace-profile-winx64-fast{-pr}`. It makes and
+  attaches the VHD with `diskpart` (the procedure's amended block), exports
+  `SLATE_TRASH_PROBE_VOLUME`, runs the two gated facts by name with
+  `--ignored --test-threads=1`, and detaches in `if: always()`. It runs
+  whenever the rust lane runs and joins `gate`'s `needs`. The text as
+  first written follows, superseded: a `home-only` job `rust-real-trash` (new) gated on
   `vars.WINDOWS_RUNNER_MODE == 'home-only'` that runs the four PowerShell
   lines above, exports `SLATE_TRASH_PROBE_VOLUME`, runs the two gated
   facts by name and dismounts in `if: always()`; it joins `gate`'s `needs`
@@ -515,8 +549,8 @@ Design; recorded in the PR body.
       PR body writes `Refs #N` for it — never `Closes` — the PR stays a
       draft, and the issue gets a comment naming the missing probe. The
       record per issue: #1480 — both gated Windows facts green on a
-      scratch volume (the throwaway-VM run, then the `home-only` job or,
-      under WD14's other answer, the owner-run record); #1499 — every
+      scratch volume (as amended 2026-11-12: the Namespace
+      `rust-real-trash` job's run on the PR's head); #1499 — every
       kind in #1499's list probed with its observations (the
       `DeleteItem` result, the `$R` reparse data, the `$I` original path,
       Restore, the target untouched) and the dangling-link branch built
