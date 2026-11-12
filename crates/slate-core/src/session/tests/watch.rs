@@ -67,7 +67,7 @@ impl VaultEventListener for Recorder {
     fn on_external_change(&self) {
         let thread = std::thread::current().name().unwrap_or_default().to_owned();
         let session_locks_free = self.session.get().and_then(Weak::upgrade).map(|session| {
-            session.conn.try_lock().is_ok()
+            !session.conn.is_held_for_tests()
                 && session.event_listeners.try_lock().is_ok()
                 && session.watch.try_lock().is_ok()
         });

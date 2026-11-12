@@ -35,6 +35,8 @@ use crate::db;
 use crate::vault::fs_root::{CacheDir, FileOptions, FsRoot, InteriorDir};
 use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
 
+mod conn_slot;
+mod registry;
 mod trash_cancellation;
 use trash_cancellation::{begin_fenced_cancellable, lock_cancellable};
 
@@ -252,6 +254,13 @@ pub struct SessionConfig {
     /// means "no bibliography configured" (the common case until
     /// a tester opts in).
     pub citations_prefs: crate::citations::prefs::CitationsPrefs,
+
+    /// Plan 44 WB-31 (#1484): how long a connection must sit idle, after
+    /// its last use ends, before its page cache is released while another
+    /// session is open in the process (every connection shares one page
+    /// pool). 0 never releases. Desktop and mobile default 30 000; 0 under
+    /// `cfg(test)`, so only the facts that opt in share the registry.
+    pub idle_cache_release_ms: u32,
 }
 
 impl SessionConfig {
@@ -274,6 +283,7 @@ impl SessionConfig {
             templates_dir: None,
             math_prefs: crate::math::MathPrefs::default(),
             citations_prefs: crate::citations::prefs::CitationsPrefs::default(),
+            idle_cache_release_ms: if cfg!(test) { 0 } else { 30_000 },
         }
     }
 
@@ -1290,12 +1300,17 @@ impl DiagramCompletedCache {
 
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
-    conn: Mutex<Connection>,
+    /// The session's connection, reached only through its [`ConnSlot`]
+    /// (plan 44 WB-31), which records when each use ends.
+    conn: Arc<conn_slot::ConnSlot>,
     /// Plan 44 WB-31 (#1484): the oplog compactor's connection, opened on
     /// its first need as before. It lives here rather than in the worker's
-    /// local so [`VaultSession::db_cache_status`] can read its page-cache
-    /// counters; the worker takes it once per job, never across its wait.
-    worker_conn: Arc<Mutex<Option<Connection>>>,
+    /// local so its cache can be read and released; the worker takes it
+    /// once per job, never across its wait.
+    worker_conn: Arc<conn_slot::ConnSlot<Option<Connection>>>,
+    /// Plan 44 WB-31: this session's entry in the idle-cache registry, when
+    /// its `idle_cache_release_ms` is nonzero.
+    cache_handle: Option<Arc<registry::SessionCacheHandle>>,
     /// Ephemeral process/session binding for opaque directory cursors and,
     /// since plan 43 PR 21a, for the change feed's writer id and window
     /// tokens.
@@ -1701,7 +1716,7 @@ fn compaction_worker_loop(
     queued: Arc<Mutex<std::collections::HashSet<String>>>,
     dirty: Arc<Mutex<std::collections::HashSet<String>>>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
-    worker_slot: Arc<Mutex<Option<Connection>>>,
+    worker_slot: Arc<conn_slot::ConnSlot<Option<Connection>>>,
 ) {
     // Lazily opened on the first pass that needs it, into the session's
     // shared slot (WB-31), which this loop locks once per job and never
@@ -1956,6 +1971,12 @@ fn compaction_worker_loop(
 
 impl Drop for VaultSession {
     fn drop(&mut self) {
+        // Plan 44 WB-31: leave the idle-cache registry first, waiting out a
+        // release pass in progress, so no pass holds this session's
+        // connections once it closes.
+        if let Some(handle) = self.cache_handle.take() {
+            registry::unregister(&handle);
+        }
         // Plan 43 PR 20a: stop the vault watch first — its platform watch,
         // then its coalescer, signalled and joined — so no
         // `on_external_change` runs once the session is gone.
@@ -2247,16 +2268,9 @@ impl VaultSession {
     /// two-session bench and its facts; no production caller.
     #[doc(hidden)]
     pub fn db_cache_status(&self) -> DbCacheStatus {
-        let main = {
-            let conn = self.conn.lock().expect("db connection mutex");
-            db::connection_cache_counters(&conn)
-        };
-        let worker = self
-            .worker_conn
-            .lock()
-            .expect("compaction worker connection mutex")
-            .as_ref()
-            .map(db::connection_cache_counters);
+        // Read without stamping: observing never makes a slot look busy.
+        let main = self.conn.cache_counters();
+        let worker = self.worker_conn.cache_counters();
         DbCacheStatus { main, worker }
     }
 
@@ -2267,14 +2281,7 @@ impl VaultSession {
     /// idle session's cache holds pages the working session then misses. A
     /// connection in use is skipped, never waited for.
     pub fn release_idle_cache(&self) {
-        if let Ok(conn) = self.conn.try_lock() {
-            db::release_connection_memory(&conn);
-        }
-        if let Ok(slot) = self.worker_conn.try_lock()
-            && let Some(conn) = slot.as_ref()
-        {
-            db::release_connection_memory(conn);
-        }
+        registry::release_now(&self.conn, &self.worker_conn);
     }
 
     /// Test seam (WB-31): opens the compactor's connection into its shared
@@ -2783,7 +2790,8 @@ impl VaultSession {
         let compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>> =
             Arc::new(Mutex::new(std::collections::HashSet::new()));
         let compaction_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_conn: Arc<Mutex<Option<Connection>>> = Arc::new(Mutex::new(None));
+        let worker_conn: Arc<conn_slot::ConnSlot<Option<Connection>>> =
+            Arc::new(conn_slot::ConnSlot::new(None));
         let (compaction_tx, compaction_rx) = std::sync::mpsc::channel::<CompactionJob>();
         let worker_tx = compaction_tx.clone();
         let compaction_join = {
@@ -2818,10 +2826,21 @@ impl VaultSession {
                 .expect("spawn compaction worker")
         };
 
+        let conn = Arc::new(conn_slot::ConnSlot::new(conn));
+        let cache_handle = (config.idle_cache_release_ms > 0).then(|| {
+            let handle = Arc::new(registry::SessionCacheHandle {
+                main: Arc::clone(&conn),
+                worker: Arc::clone(&worker_conn),
+                idle_ms: i64::from(config.idle_cache_release_ms),
+            });
+            registry::register(&handle);
+            handle
+        });
         let session = Self {
             provider,
-            conn: Mutex::new(conn),
+            conn,
             worker_conn,
+            cache_handle,
             directory_cursor_nonce,
             change_feed,
             config,
@@ -3608,10 +3627,10 @@ impl VaultSession {
         let writer = self.change_feed.writer().to_string();
         let conn = self
             .conn
-            .get_mut()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
-        let deleted = db::begin_fenced(conn)
+        let deleted = db::begin_fenced(&conn)
             .map_err(VaultError::from)
             .and_then(|tx| {
                 tx.execute(
@@ -3631,6 +3650,10 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
+        // Plan 44 WB-31: the scan is in progress for its whole run, between
+        // its connection uses too, so the idle-cache registry never
+        // releases its cache mid-scan; its idle interval starts as it ends.
+        let _activity = self.conn.activity();
         // #802: coarse lifecycle events bracket the scan. Started
         // fires before the session lock is taken; Finished after it
         // drops; the reconcile pair fires under the lock (the
@@ -7160,7 +7183,7 @@ impl VaultSession {
             // the connection returns Cancelled instead of queueing behind it.
             #[cfg(test)]
             embed_connection_requested();
-            let conn = lock_cancellable(&self.conn, cancel)?;
+            let conn = self.conn.lock_cancellable(cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",
@@ -7286,7 +7309,7 @@ impl VaultSession {
         );
         #[cfg(test)]
         embed_connection_requested();
-        let conn = lock_cancellable(&self.conn, cancel)?;
+        let conn = self.conn.lock_cancellable(cancel)?;
         let mut statement = conn.prepare_cached(&sql)?;
         let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
         loop {
@@ -7314,7 +7337,7 @@ impl VaultSession {
         let resolved = {
             #[cfg(test)]
             embed_connection_requested();
-            let conn = lock_cancellable(&self.conn, cancel)?;
+            let conn = self.conn.lock_cancellable(cancel)?;
             let file_id: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM files WHERE path = ?1",
@@ -13867,7 +13890,7 @@ impl VaultSession {
         if !normalized.failures.is_empty() {
             return Err(crate::trash_confirmation::stale());
         }
-        let conn = lock_cancellable(&self.conn, cancel)?;
+        let conn = self.conn.lock_cancellable(cancel)?;
         ensure_structural_batch_idle(&conn)?;
         let confirmation = crate::trash_confirmation::TrashConfirmation::capture(
             self.provider.as_ref(),
@@ -15627,7 +15650,7 @@ impl VaultSession {
                 BatchTrashState::Rejected,
             ));
         }
-        let mut conn = lock_cancellable(&self.conn, cancel)?;
+        let mut conn = self.conn.lock_cancellable(cancel)?;
         ensure_structural_batch_idle(&conn)?;
         let (envelope, plans) = self.plan_batch_trash_locked(&conn, request, cancel)?;
         if !envelope.preflight_failures.is_empty() {
@@ -16747,7 +16770,7 @@ impl VaultSession {
                 cancel,
             )?;
         }
-        let mut conn = lock_cancellable(&self.conn, cancel)?;
+        let mut conn = self.conn.lock_cancellable(cancel)?;
         ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
         // row is then the durable stem↔path association for a deleted
@@ -16899,7 +16922,7 @@ impl VaultSession {
                 cancel,
             )?;
         }
-        let mut conn = lock_cancellable(&self.conn, cancel)?;
+        let mut conn = self.conn.lock_cancellable(cancel)?;
         ensure_structural_batch_idle(&conn)?;
         // Membership-fenced trash (final-confirmation review): every
         // descendant — including one a racing save commits after any
@@ -17593,7 +17616,7 @@ impl VaultSession {
     // struct would only relocate the argument list
     fn finish_structural_move(
         &self,
-        mut conn: std::sync::MutexGuard<'_, Connection>,
+        mut conn: conn_slot::ConnGuard<'_>,
         kind: crate::structural::StructuralOpKind,
         from: &str,
         to: &str,

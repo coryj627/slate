@@ -16,11 +16,17 @@
 //! `cargo bench -p slate-core --bench two_sessions_bench` (release, the
 //! issue's profile). Prints one table; the numbers go to BENCHMARKS.md.
 
+// The bench prints its own measurement table to its own stdout: no vault path
+// or note name, which is what slate-core's macro ban (clippy.toml, #507)
+// keeps out of host logs.
+#![allow(clippy::disallowed_macros)]
+
 use std::time::Instant;
 
 use slate_core::db::{DbCacheCounters, process_cache_status};
 use slate_core::{CancelToken, VaultSession};
 
+#[allow(dead_code)] // shared with the other benches; this one uses generate_vault
 mod common;
 use common::generate_vault;
 
