@@ -443,7 +443,10 @@ jobs:
     # Includes Namespace candidates. No model dependency or desktop sharing.
     needs: [build-app]
     runs-on: ${{ inputs.runner == 'home' && 'slate-win-shell' || 'windows-latest' }}
-    timeout-minutes: 20
+    # windows.yml's twin of this gate: the journeys took 12-18 minutes on
+    # windows-latest by October 2026 (WB-22's two find journeys crossed the
+    # old 20). 35 is about twice a run: a hang still stops early.
+    timeout-minutes: 35
     defaults:
       run:
         shell: pwsh
