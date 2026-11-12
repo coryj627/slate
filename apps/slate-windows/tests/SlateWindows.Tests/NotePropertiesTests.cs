@@ -204,9 +204,16 @@ public sealed class NotePropertiesTests
 
     /// <summary>WB-2 (WD2's answer): a header holding the saved bytes answers
     /// at once; a publication of other bytes from a read that may predate
-    /// the save re-arms the wait and asks for a fresh read, which answers it.</summary>
-    [Fact]
-    public void WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain()
+    /// the save re-arms the wait and asks for a fresh read, which answers it.
+    ///
+    /// #1907: the H0 publish starts that fresh read on the pool. When the pool
+    /// finishes it before the drain looks at the queue again, its H1 publish
+    /// is already queued; <paramref name="poolFinishesFirst"/> forces that
+    /// order, which a fast or idle pool takes on its own.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain(bool poolFinishesFirst)
     {
         using FixtureVault fixture = MakeVault("props-when-published-floor");
         using VaultSession session = OpenScanned(fixture.Root);
@@ -235,7 +242,12 @@ public sealed class NotePropertiesTests
         Task<HeaderRefreshOutcome> wait = properties.WhenPublished("props.md", h1);
         Assert.False(wait.IsCompleted);
 
-        queue.Drain();
+        // Only the H0 publish, queued before this drain: the fresh read it
+        // asks for publishes on the next drain, however fast the pool is.
+        queue.DrainQueued(
+            poolFinishesFirst
+                ? () => properties.DrainForTests().GetAwaiter().GetResult()
+                : null);
         Assert.False(wait.IsCompleted, "a read that may predate the save answered the wait");
         Assert.True(properties.IsLoading, "the header did not ask for a fresh read");
 
@@ -378,11 +390,28 @@ public sealed class NotePropertiesTests
         public override void Post(SendOrPostCallback callback, object? state) =>
             _queue.Enqueue((callback, state));
 
+        /// <summary>Runs every queued callback, and any a callback's work
+        /// queues before the loop looks again.</summary>
         public void Drain()
         {
             while (_queue.TryDequeue(out var work))
             {
                 work.Callback(work.State);
+            }
+        }
+
+        /// <summary>#1907: runs only the callbacks queued when it is called. A
+        /// callback that starts pool work whose publish lands during this
+        /// drain leaves that publish for the next one, whatever the pool's
+        /// speed. <paramref name="afterEach"/> runs after each callback (the
+        /// fact's forced order).</summary>
+        public void DrainQueued(Action? afterEach = null)
+        {
+            int queued = _queue.Count;
+            for (int index = 0; index < queued && _queue.TryDequeue(out var work); index++)
+            {
+                work.Callback(work.State);
+                afterEach?.Invoke();
             }
         }
     }
