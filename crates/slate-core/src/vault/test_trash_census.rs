@@ -28,7 +28,7 @@ use crate::{CancelToken, VaultSession};
 
 /// The gated real-Trash set (`trash_handoff_tests.rs`): the only facts that
 /// hand their items to the real system Trash, each on a scratch volume.
-const GATED_REAL_TRASH_FACTS: [&str; 7] = [
+const GATED_REAL_TRASH_FACTS: [&str; 9] = [
     // macOS, ignored: need SLATE_TRASH_PROBE_VOLUME, an attached scratch
     // APFS image whose Trash is its own `.Trashes/<uid>`.
     "real_trash_on_a_scratch_volume_lands_in_its_trashes_with_put_back_records",
@@ -41,6 +41,10 @@ const GATED_REAL_TRASH_FACTS: [&str; 7] = [
     "real_trash_on_linux_lands_in_a_scratch_home_trash",
     "real_trash_on_linux_takes_each_unresolvable_link_as_the_link",
     "real_trash_linux_child",
+    // Windows, ignored: need SLATE_TRASH_PROBE_VOLUME, a scratch NTFS VHD
+    // whose Recycle Bin is its own `$RECYCLE.BIN` (CI's rust-real-trash job).
+    "real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records",
+    "real_trash_on_windows_takes_each_dangling_link_kind_as_the_link",
 ];
 
 /// The only helper that builds a provider on the real system Trash.

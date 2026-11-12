@@ -141,7 +141,8 @@ fn conditional_rename_destination_junction_conversion_refuses_without_escape() {
 /// junction and a file where a folder should be, naming each in
 /// `pinned_root`'s words, and lets through a folder that is a reparse point
 /// whose tag is not a name surrogate (what a OneDrive Files On-Demand folder
-/// is to it). The Trash handoff's walk keeps refusing that one too (#1450).
+/// is to it). Since WB-24 the Trash handoff's walk takes the same rule
+/// (#1492).
 #[test]
 fn the_walk_refuses_links_and_files_and_admits_a_reparse_point_that_redirects_nothing() {
     use crate::vault::fs::Mutation;
@@ -202,12 +203,6 @@ fn the_walk_refuses_links_and_files_and_admits_a_reparse_point_that_redirects_no
     assert_eq!(tag.ReparseTag, OPAQUE_REPARSE_TAG);
     drop(opaque);
     walk("opaque", Folders::NotLinks).expect("a reparse point that redirects nothing is a folder");
-    let trash = walk("opaque", Folders::PlainOnly).unwrap_err();
-    assert!(
-        matches!(&trash, VaultError::InvalidPath { reason, .. }
-            if reason == "\"opaque\" is a reparse point, not a plain folder, so nothing was saved"),
-        "{trash:?}"
-    );
 
     assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
     drop(pinned);
@@ -261,4 +256,84 @@ fn a_pinned_chain_holds_its_folders_and_names_one_converted_after_the_walk() {
     fs::remove_dir(root.path().join("a/b")).unwrap();
     fs::rename(root.path().join("a"), root.path().join("a-renamed"))
         .expect("released once the pinned value drops");
+}
+
+/// WB-24 (#1492): undo and redo walk through a Cloud Files placeholder as the
+/// folder or note it stands for, and still refuse a junction. In a OneDrive
+/// Files On-Demand vault the root, every folder and every note is one.
+/// `opaque_reparse_point` stands in for a placeholder, as for #1451's facts;
+/// with no filter behind its tag nothing can be made inside it, so the
+/// ancestor rule is checked on its handle, and a real placeholder ancestor
+/// is the gated OneDrive probe's
+/// (`what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault`).
+#[test]
+fn undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction() {
+    use crate::vault::test_support::opaque_reparse_point;
+
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("x.md"), b"outside").unwrap();
+    fs::create_dir(root.path().join("cloud")).unwrap();
+    opaque_reparse_point(&root.path().join("cloud"));
+    fs::write(root.path().join("placeholder.md"), b"a placeholder note").unwrap();
+    opaque_reparse_point(&root.path().join("placeholder.md"));
+    fs::create_dir(root.path().join("linked")).unwrap();
+    junction(&root.path().join("linked"), outside.path());
+    let held = unheld(root.path());
+
+    // The folder rule every ancestor meets.
+    let access = FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY;
+    let cloud = open_relative(&held, OsStr::new("cloud"), access).unwrap();
+    directory(&cloud).expect("a placeholder folder is a folder on the way");
+    let linked = open_relative(&held, OsStr::new("linked"), access).unwrap();
+    assert!(
+        directory(&linked).is_err(),
+        "a junction is not a folder on the way"
+    );
+    let note = open_relative(&held, OsStr::new("placeholder.md"), FILE_READ_ATTRIBUTES).unwrap();
+    assert!(
+        directory(&note).is_err(),
+        "a note is not a folder on the way"
+    );
+    drop((cloud, linked, note));
+
+    // A placeholder leaf is the note or folder it stands for.
+    for item in ["cloud", "placeholder.md"] {
+        capture(&held, Path::new(item)).unwrap_or_else(|error| {
+            panic!("{item}: a placeholder is what it stands for: {error:?}")
+        });
+    }
+    let id = capture(&held, Path::new("placeholder.md")).unwrap();
+    rename(
+        &held,
+        Path::new("placeholder.md"),
+        Path::new("renamed.md"),
+        &id,
+    )
+    .unwrap();
+    assert_eq!(
+        capture(&held, Path::new("renamed.md")).unwrap(),
+        id,
+        "the same note, renamed"
+    );
+
+    // A junction refuses, above a note or as the item itself.
+    for item in ["linked/x.md", "linked"] {
+        let error = capture(&held, Path::new(item)).unwrap_err();
+        assert!(
+            matches!(&error, VaultError::InvalidArgument { message } if message.contains("Cannot undo or redo")),
+            "{item}: {error:?}"
+        );
+    }
+    drop(held);
+
+    // A vault whose root is itself a placeholder opens for undo.
+    let cloud_root = tempfile::tempdir().unwrap();
+    let vault = cloud_root.path().join("vault");
+    fs::create_dir(&vault).unwrap();
+    opaque_reparse_point(&vault);
+    open_unheld_root(&vault).expect("a placeholder vault root is a folder");
+
+    assert_eq!(fs::read(outside.path().join("x.md")).unwrap(), b"outside");
+    fs::remove_dir(root.path().join("linked")).unwrap();
 }

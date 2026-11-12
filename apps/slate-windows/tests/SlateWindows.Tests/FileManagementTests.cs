@@ -1833,6 +1833,74 @@ public sealed class FileManagementTests
         return rig;
     }
 
+    /// <summary>
+    /// Plan 44 WB-24 (#1492): importing from a folder in OneDrive (a Files
+    /// On-Demand folder, a Desktop or Documents OneDrive backs up) is not
+    /// refused as importing through a link. A Cloud Files placeholder's tag
+    /// has the name-surrogate bit clear; a junction's, a symbolic link's, or a
+    /// tag that cannot be read still refuses. The default inspection reads a
+    /// real junction's tag.
+    /// </summary>
+    [Fact]
+    public void ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint()
+    {
+        string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "slate-import-placeholder"));
+        string ancestor = Path.Combine(root, "OneDrive");
+        string source = Path.Combine(ancestor, "Documents", "note.md");
+        bool RefusedWith(uint? tag) => FilesSidebarViewModel.HasReparsePointInPath(
+            source,
+            path => string.Equals(path, ancestor, StringComparison.OrdinalIgnoreCase)
+                ? (FileAttributes.Directory | FileAttributes.ReparsePoint, tag)
+                : (FileAttributes.Normal, null));
+
+        Assert.False(RefusedWith(0x9000_601Au), "a Cloud Files placeholder is a folder");
+        Assert.True(RefusedWith(0xA000_0003u), "a junction refuses");
+        Assert.True(RefusedWith(0xA000_000Cu), "a symbolic link refuses");
+        Assert.True(RefusedWith(null), "a tag that cannot be read refuses");
+
+        // Every entry inside an imported folder takes the same rule (a OneDrive
+        // folder's notes are placeholders too), not the bare attribute.
+        const FileAttributes reparseFolder = FileAttributes.Directory | FileAttributes.ReparsePoint;
+        Assert.False(FilesSidebarViewModel.IsLinkEntry(reparseFolder, 0x9000_601Au));
+        Assert.False(FilesSidebarViewModel.IsLinkEntry(FileAttributes.Normal, null));
+        Assert.True(FilesSidebarViewModel.IsLinkEntry(reparseFolder, 0xA000_0003u));
+        Assert.True(FilesSidebarViewModel.IsLinkEntry(reparseFolder, null));
+        string? repo = AppContext.BaseDirectory;
+        while (repo is not null && !Directory.Exists(Path.Combine(repo, "apps", "slate-windows")))
+        {
+            repo = Path.GetDirectoryName(repo);
+        }
+
+        Assert.NotNull(repo);
+        string import = File.ReadAllText(Path.Combine(
+            repo, "apps", "slate-windows", "src", "SlateWindows", "FilesSidebarViewModel.Import.cs"));
+        Assert.Contains("if (IsLinkEntry(childAttributes, childTag))", import, StringComparison.Ordinal);
+        Assert.DoesNotContain("(File.GetAttributes(child) & FileAttributes.ReparsePoint)", import, StringComparison.Ordinal);
+
+        string temp = Directory.CreateTempSubdirectory("slate-import-junction-").FullName;
+        try
+        {
+            string target = Directory.CreateDirectory(Path.Combine(temp, "target")).FullName;
+            File.WriteAllText(Path.Combine(target, "note.md"), "beyond a junction");
+            string linked = Path.Combine(temp, "linked");
+            using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "cmd", $"/C mklink /J \"{linked}\" \"{target}\"")
+            { CreateNoWindow = true, UseShellExecute = false })!)
+            {
+                Assert.True(mklink.WaitForExit(30_000), "mklink /J did not finish");
+                Assert.Equal(0, mklink.ExitCode);
+            }
+
+            Assert.True(FilesSidebarViewModel.HasReparsePointInPath(Path.Combine(linked, "note.md")));
+            Assert.False(FilesSidebarViewModel.HasReparsePointInPath(Path.Combine(target, "note.md")));
+            Directory.Delete(linked);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
     private static VaultSession OpenScanned(string root)
     {
         var session = VaultSession.OpenFilesystem(root);

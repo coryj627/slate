@@ -23,11 +23,11 @@
 //! a reason core writes, the shape the rename refusal uses, and happens
 //! before any filesystem mutation.
 //!
-//! On macOS and Linux every item reaches the Trash, and a symbolic link goes
-//! as the link itself, whether or not its target resolves: Move to Trash
-//! never deletes for good (#1477, #1495). Windows alone still unlinks a link
-//! whose target is truly absent instead, until the Recycle Bin is checked
-//! with one ([`link_target_is_absent`], #1499).
+//! Every item reaches the Trash, and a symbolic link goes as the link itself,
+//! whether or not its target resolves: Move to Trash never deletes for good
+//! (#1477, #1495). Windows did the same once the Recycle Bin was checked with
+//! every kind of dangling link on a scratch volume (#1499, WB-24): each went
+//! in as the link, and Restore brought it back.
 //!
 //! What remains is the race between this derivation and the Trash call's own
 //! resolution of the path. Only a handle-bound Trash API could close it, and
@@ -137,9 +137,137 @@ fn refuse_a_trash_that_is_not_scratch(path: &Path) {
             refusal(format!("XDG_DATA_HOME is not on {}", volume.display()));
         }
     }
-    // No real-Trash fact runs on Windows: the Recycle Bin is never a test's.
+    // An item goes to its own volume's `$RECYCLE.BIN`, so the path must be
+    // on the scratch volume itself, never on the system drive (WB-24, #1480).
     #[cfg(windows)]
-    refusal("Windows has no gated real-Trash fact".into());
+    if let Some(why) = windows_scratch_refusal(path, &volume) {
+        refusal(why);
+    }
+}
+
+/// Why a test build's Recycle Bin call for `path` would not reach the scratch
+/// volume `probe`'s own `$RECYCLE.BIN` (WB-24, #1480), or `None` when it
+/// would. Each volume is the one `GetVolumePathNameW` reports, so a probe
+/// folder on the system drive is the system drive's Recycle Bin, never a
+/// scratch one. An item goes to the Recycle Bin of the folder that holds it,
+/// so that folder's volume is asked: `GetVolumePathNameW` reads a junction at
+/// the item itself as a mount point of its own. The probe volume must also
+/// carry the label CI's `rust-real-trash` job formats it with, so a data drive
+/// named by mistake is refused rather than recycled into.
+#[cfg(all(test, windows))]
+pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<String> {
+    let volume_of = |at: &Path| {
+        volume_path_name(at)
+            .map_err(|error| format!("the volume of {} is unknown: {error}", at.display()))
+    };
+    let system = system_volume().map_err(|error| format!("the system drive is unknown: {error}"));
+    let holder = path.parent().unwrap_or(path);
+    match (volume_of(holder), volume_of(probe), system) {
+        (Ok(path), Ok(probe), Ok(system)) => {
+            let label = volume_label(&probe).unwrap_or_default();
+            scratch_volume_refusal(&path, &probe, &system, &label)
+        }
+        (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => Some(why),
+    }
+}
+
+/// The label CI's `rust-real-trash` job formats the scratch volume with.
+#[cfg(all(test, windows))]
+pub(crate) const SCRATCH_VOLUME_LABEL: &str = "SlateTrashProbe";
+
+/// [`windows_scratch_refusal`]'s rule over volume names: the path's volume is
+/// the probe's, the probe's is not the system drive, and the probe's carries
+/// [`SCRATCH_VOLUME_LABEL`].
+#[cfg(all(test, windows))]
+pub(crate) fn scratch_volume_refusal(
+    path: &str,
+    probe: &str,
+    system: &str,
+    label: &str,
+) -> Option<String> {
+    let same = |a: &str, b: &str| comparable_volume(a) == comparable_volume(b);
+    if same(probe, system) {
+        return Some(format!(
+            "the scratch volume {probe} is the system drive {system}, whose Recycle Bin is not a test's"
+        ));
+    }
+    if !same(path, probe) {
+        return Some(format!(
+            "the path is on the volume {path}, not on the scratch volume {probe}"
+        ));
+    }
+    if label != SCRATCH_VOLUME_LABEL {
+        return Some(format!(
+            "the scratch volume {probe} is labelled {label:?}, not {SCRATCH_VOLUME_LABEL:?}, so it may be someone's own drive"
+        ));
+    }
+    None
+}
+
+/// `GetVolumeInformationW`: the label of the volume mounted at `volume`.
+#[cfg(all(test, windows))]
+fn volume_label(volume: &str) -> std::io::Result<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    let root: Vec<u16> = volume.encode_utf16().chain([0]).collect();
+    let mut label = vec![0u16; 261];
+    // SAFETY: `root` is NUL-terminated, `label` holds its stated length, and
+    // every other output is optional and passed as null.
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            label.as_mut_ptr(),
+            label.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let length = label
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(label.len());
+    Ok(String::from_utf16_lossy(&label[..length]))
+}
+
+/// A volume name in one spelling: no verbatim prefix, upper case, one
+/// trailing separator.
+#[cfg(all(test, windows))]
+fn comparable_volume(volume: &str) -> String {
+    let bare = volume.strip_prefix(r"\\?\").unwrap_or(volume);
+    format!("{}\\", bare.trim_end_matches('\\').to_uppercase())
+}
+
+/// `GetVolumePathNameW`: the mount point of the volume `path` is on.
+#[cfg(all(test, windows))]
+fn volume_path_name(path: &Path) -> std::io::Result<String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut buffer = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated and `buffer` holds its stated length.
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let length = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..length]))
+}
+
+/// The volume Windows itself is on: `SystemRoot`'s.
+#[cfg(all(test, windows))]
+fn system_volume() -> std::io::Result<String> {
+    let root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| std::io::Error::other("SystemRoot is not set"))?;
+    volume_path_name(Path::new(&root))
 }
 
 /// The refusal: `original` is not handed to the Trash, for `reason`, which
@@ -158,39 +286,6 @@ fn moved(original: &str) -> VaultError {
         original,
         "a folder in this path moved after it was checked, so nothing was moved to the Trash",
     )
-}
-
-/// Windows only: whether following a symbolic link failed because its
-/// target is truly absent (#1477). Only then does `delete` unlink the link
-/// rather than hand it to the Recycle Bin, which may reject a dangling link;
-/// nobody has checked yet (#1499). Absent means the system reports nothing
-/// there: `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`, or `ERROR_DIRECTORY`
-/// (`ENOTDIR`'s counterpart; std maps both to `NotADirectory`).
-///
-/// Every other failure leaves the target unproven absent, so the link goes to
-/// the Recycle Bin as the link: a target Slate cannot open
-/// (`ERROR_ACCESS_DENIED`), a drive or share that is missing or unreachable
-/// now (`ERROR_INVALID_DRIVE`, `ERROR_BAD_NETPATH`, `ERROR_BAD_NET_NAME`,
-/// which std also calls `NotFound`), a loop (`ERROR_CANT_RESOLVE_FILENAME`),
-/// and any I/O or network failure. Before #1477 every failure counted as
-/// absent, so each such link was unlinked for good, with no error.
-///
-/// macOS and Linux no longer ask (#1495): every link goes to their Trash as
-/// the link. On a scratch APFS volume `NSFileManager` moved every kind, a
-/// dangling link and a link through a file included, into the Trash as the
-/// link with its Put Back records, and trash-rs renames the link itself into
-/// the freedesktop Trash.
-#[cfg(windows)]
-pub(super) fn link_target_is_absent(error: &std::io::Error) -> bool {
-    use windows_sys::Win32::Foundation::{
-        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
-    };
-    error.raw_os_error().is_some_and(|code| {
-        matches!(
-            u32::try_from(code),
-            Ok(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_DIRECTORY)
-        )
-    })
 }
 
 /// The path to hand the system Trash for `leaf` inside the pinned `parent`:
@@ -290,10 +385,11 @@ pub(super) fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
 /// relative to its parent's handle without following a reparse point. The
 /// handed path is the parent handle's final path joined with the leaf,
 /// refused unless it lies beneath the root handle's final path. A junction, a
-/// symbolic link, any other reparse point or a non-folder among the ancestors
-/// refuses naming that folder, as the Unix walk's refusal does; the Trash
-/// keeps #1450's rule of refusing every reparse point
-/// (`Folders::PlainOnly`).
+/// symbolic link, any other name surrogate or a non-folder among the ancestors
+/// refuses naming that folder, as the Unix walk's refusal does. A Cloud Files
+/// placeholder folder is a folder (`Folders::NotLinks`, #1492): a Recycle Bin
+/// call beneath two of them in a OneDrive vault landed at the note's own path
+/// and Restore brought it back there, so the Shell is not redirected.
 #[cfg(windows)]
 pub(super) fn pinned_path(
     root: &super::windows_entry::PinnedRoot,
@@ -311,7 +407,7 @@ pub(super) fn pinned_path(
         original,
         false,
         Mutation::Move,
-        Folders::PlainOnly,
+        Folders::NotLinks,
     )?;
     let root_now = final_path(root.handle())?;
     let parent_now = final_path(parent.handle())?;

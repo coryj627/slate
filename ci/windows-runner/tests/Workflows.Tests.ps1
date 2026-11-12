@@ -98,7 +98,7 @@ Describe 'windows.yml routing through the router' {
         $selector = "(needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home')))"
         $shards.Contains("runs-on: `${{ $selector && 'slate-win-model' || $($vendor.model) }}") | Should -BeTrue
         $shards | Should -Match (Get-CacheGate $selector) -Because 'the cache gate of windows-model-shard'
-        ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
+        ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 4 -Because 'the three routed lanes and rust-real-trash, which is always on Namespace'
     }
     It 'runs the shell gate on windows-latest in every mode but home-only, and for a fork pull request or a Dependabot run even then, and only after a green app build whatever happened to route' {
         $flaui = Get-JobBlock $windows 'flaui'
@@ -111,18 +111,35 @@ Describe 'windows.yml routing through the router' {
     }
     It 'the gate waits on route too, runs whatever route did, and names the pools, the routing job''s result and the router''s attempt, quoted, when it fails' {
         $gate = Get-JobBlock $windows 'gate'
-        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, windows, windows-model, flaui]')
+        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, rust-real-trash, windows, windows-model, flaui]')
         # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
         # skipped required check counts as passing. It is skipped, and so passes, only when changes decided that
         # the pull request touches none of the lane's paths (#1565); a failed decision runs it with the lanes.
         $gate | Should -Match (Get-JobLine "if: `${{ always() && needs.changes.outputs.run != 'false' }}")
         # GitHub reports a continue-on-error job's result as it sees fit; an empty router-attempt='' is the sign the
         # router produced nothing and the lanes took the vendor.
-        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
+        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
         foreach ($entry in 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
             'APP_POOL: ${{ needs.route.outputs.app-pool }}', 'MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}', 'MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}') {
             $gate | Should -Match ('(?m)^          ' + [regex]::Escape($entry) + '[ \t]*\r?$') -Because "the gate reads $entry through its step's environment"
         }
+    }
+    It 'runs the real Recycle Bin facts on a scratch VHD of their own, always on Namespace, and the gate requires them (plan 44 WB-24)' {
+        $job = Get-JobBlock $windows 'rust-real-trash'
+        $job | Should -Not -BeNullOrEmpty
+        $job | Should -Match (Get-JobLine 'needs: [changes]') -Because 'it is never routed: the home pool cannot be assumed to attach a VHD'
+        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' }}")
+        $job | Should -Match (Get-JobLine "runs-on: `${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-real-trash', github.ref != 'refs/heads/main' && '-pr' || '') }}") -Because 'a cache of its own, never rust-tests'' volume'
+        $job | Should -Not -Match 'needs\.route' -Because 'WD14 as amended runs it on the serving pool in every mode'
+        foreach ($text in 'create vdisk file=', 'attach vdisk', 'format fs=ntfs quick label=SlateTrashProbe', 'SLATE_TRASH_PROBE_VOLUME=',
+            'real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records', 'real_trash_on_windows_takes_each_dangling_link_kind_as_the_link',
+            '--ignored --test-threads=1', 'detach vdisk') {
+            $job.Contains($text) | Should -BeTrue -Because "the job needs $text"
+        }
+        $steps = Get-Steps $job
+        $detach = @($steps | Where-Object { $_.Contains('detach vdisk') })
+        $detach.Count | Should -Be 1
+        $detach[0] | Should -Match '(?m)^        if: \$\{\{ always\(\) \}\}[ \t]*\r?$' -Because 'the VHD is detached even when a fact fails'
     }
     It 'every routed lane prints its runner first, and the router''s attempt only through the environment' {
         $record = '    steps:', '      - name: Record the runner', '        env:', '          ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}',

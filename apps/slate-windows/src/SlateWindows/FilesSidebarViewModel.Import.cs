@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.IO;
+using System.Runtime.InteropServices;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -278,7 +279,8 @@ internal sealed partial class FilesSidebarViewModel
                                 break;
                             }
 
-                            if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                            var (childAttributes, childTag) = InspectEntry(child);
+                            if (IsLinkEntry(childAttributes, childTag))
                             {
                                 failed++;
                                 continue;
@@ -389,15 +391,25 @@ internal sealed partial class FilesSidebarViewModel
         return true;
     }
 
+    /// <summary>
+    /// Whether the import source <paramref name="absolutePath"/> or a folder
+    /// above it is a link: a reparse point whose tag is a name surrogate (a
+    /// junction, a symbolic link), or one whose tag cannot be read. A Cloud
+    /// Files placeholder (a OneDrive Files On-Demand file or folder, which
+    /// includes a Desktop or Documents that OneDrive backs up) redirects
+    /// nothing and is not one (plan 44 WB-24, #1492; core's walks draw the
+    /// same line, #1491).
+    /// </summary>
     internal static bool HasReparsePointInPath(
         string absolutePath,
-        Func<string, FileAttributes>? getAttributes = null)
+        Func<string, (FileAttributes Attributes, uint? ReparseTag)>? inspect = null)
     {
-        getAttributes ??= File.GetAttributes;
+        inspect ??= InspectEntry;
         string current = Path.GetFullPath(absolutePath);
         while (true)
         {
-            if ((getAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            var (attributes, tag) = inspect(current);
+            if (IsLinkEntry(attributes, tag))
             {
                 return true;
             }
@@ -414,6 +426,72 @@ internal sealed partial class FilesSidebarViewModel
             current = parent;
         }
     }
+
+    /// <summary>
+    /// Whether an entry with <paramref name="attributes"/> and reparse
+    /// <paramref name="tag"/> is a link the import refuses: a reparse point
+    /// whose tag is a name surrogate or could not be read. A Cloud Files
+    /// placeholder (the bit clear) is the file or folder it stands for. The
+    /// source's ancestors and every entry inside an imported folder take this
+    /// rule (plan 44 WB-24, #1492).
+    /// </summary>
+    internal static bool IsLinkEntry(FileAttributes attributes, uint? tag) =>
+        (attributes & FileAttributes.ReparsePoint) != 0
+        && (tag is not { } reparseTag || (reparseTag & NameSurrogateBit) != 0);
+
+    /// <summary>The name-surrogate bit of a reparse tag (MS-FSCC 2.1.2.1).</summary>
+    private const uint NameSurrogateBit = 0x2000_0000;
+
+    /// <summary>
+    /// The entry's attributes and, for a reparse point, its tag as
+    /// <c>FindFirstFileW</c> reports it in <c>dwReserved0</c> (the entry
+    /// itself, never what it points at); <c>null</c> when it cannot be read.
+    /// </summary>
+    private static (FileAttributes Attributes, uint? ReparseTag) InspectEntry(string path)
+    {
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.ReparsePoint) == 0)
+        {
+            return (attributes, null);
+        }
+
+        IntPtr find = FindFirstFileW(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), out FindData data);
+        if (find == InvalidHandle)
+        {
+            return (attributes, null);
+        }
+
+        FindClose(find);
+        return ((data.FileAttributes & (uint)FileAttributes.ReparsePoint) != 0
+            ? (attributes, data.Reserved0)
+            : (attributes, null));
+    }
+
+    private static readonly IntPtr InvalidHandle = new(-1);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct FindData
+    {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint Reserved0;
+        public uint Reserved1;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string FileName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+        public string AlternateFileName;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindFirstFileW(string fileName, out FindData data);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FindClose(IntPtr find);
 
     private static string CopyName(string name, int suffix)
     {

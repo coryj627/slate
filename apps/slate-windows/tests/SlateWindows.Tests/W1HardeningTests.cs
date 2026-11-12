@@ -1972,8 +1972,8 @@ public sealed class W1ImportSafeguardTests
             {
                 inspected.Add(path);
                 return string.Equals(path, reparseAncestor, StringComparison.OrdinalIgnoreCase)
-                    ? FileAttributes.Directory | FileAttributes.ReparsePoint
-                    : FileAttributes.Normal;
+                    ? (FileAttributes.Directory | FileAttributes.ReparsePoint, 0xA000_0003u)
+                    : (FileAttributes.Normal, null);
             });
 
         Assert.True(found);

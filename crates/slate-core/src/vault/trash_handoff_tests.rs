@@ -571,53 +571,6 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     std::fs::remove_dir(&root).unwrap();
 }
 
-/// Windows' rule (#1477), error by error: only the codes for an absent target
-/// make a link dangling, so Windows unlinks it until the Recycle Bin is
-/// checked with one (#1499). Every other failure to follow a link, including
-/// the I/O and network failures no fixture can provoke, leaves its target
-/// unproven absent, and the link goes to the Recycle Bin. macOS and Linux
-/// trash every link (#1495).
-#[cfg(windows)]
-#[test]
-fn only_a_target_windows_reports_absent_makes_a_link_dangling() {
-    use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_BAD_NET_NAME, ERROR_BAD_NETPATH, ERROR_CANT_RESOLVE_FILENAME,
-        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INVALID_DRIVE, ERROR_INVALID_NAME,
-        ERROR_NOT_READY, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
-        ERROR_SYMLINK_CLASS_DISABLED,
-    };
-    let absent = [
-        ERROR_FILE_NOT_FOUND as i32,
-        ERROR_PATH_NOT_FOUND as i32,
-        ERROR_DIRECTORY as i32,
-    ];
-    let unproven = [
-        ERROR_ACCESS_DENIED as i32,
-        ERROR_SHARING_VIOLATION as i32,
-        ERROR_CANT_RESOLVE_FILENAME as i32,
-        ERROR_INVALID_NAME as i32,
-        ERROR_INVALID_DRIVE as i32,
-        ERROR_BAD_NETPATH as i32,
-        ERROR_BAD_NET_NAME as i32,
-        ERROR_NOT_READY as i32,
-        ERROR_SYMLINK_CLASS_DISABLED as i32,
-    ];
-    for code in absent {
-        let error = std::io::Error::from_raw_os_error(code);
-        assert!(link_target_is_absent(&error), "{error}: an absent target");
-    }
-    for code in unproven {
-        let error = std::io::Error::from_raw_os_error(code);
-        assert!(
-            !link_target_is_absent(&error),
-            "{error}: not proof of absence"
-        );
-    }
-    assert!(!link_target_is_absent(&std::io::Error::other(
-        "a failure with no OS code"
-    )));
-}
-
 /// Denies everyone every right on `file` until this drops (`icacls`), so
 /// nothing can open it, and its owner can still lift the denial.
 #[cfg(windows)]
@@ -655,29 +608,46 @@ impl Drop for Denied {
     }
 }
 
-/// #1477 on Windows: a link whose target is missing is still unlinked, a
-/// file link with `DeleteFile` and a folder link with `RemoveDirectory`, and
-/// nothing reaches the Recycle Bin. macOS and Linux trash such a link (#1495);
-/// Windows keeps unlinking it until the Recycle Bin is checked with one on a
-/// scratch VM (#1499).
+/// #1499 on Windows: a link whose target is missing goes to the Recycle Bin
+/// as the link, a file link and a folder link alike, as on macOS and Linux
+/// (#1495). On a scratch volume the real Recycle Bin took every kind in
+/// #1499's list as the link, and Restore brought each one back
+/// (`real_trash_on_windows_takes_each_dangling_link_kind_as_the_link`). Until
+/// then Windows unlinked such a link for good, with nothing to restore.
 #[cfg(windows)]
 #[test]
-fn windows_a_link_whose_target_is_missing_is_still_unlinked() {
+fn windows_a_link_whose_target_is_missing_goes_to_the_recycle_bin_as_the_link() {
     let f = fixture();
     let vault = f.vault.path();
     std::os::windows::fs::symlink_file(vault.join("gone.md"), vault.join("sub/missing.md"))
         .unwrap();
     std::os::windows::fs::symlink_dir(vault.join("gone"), vault.join("missing-folder")).unwrap();
-    for link in ["sub/missing.md", "missing-folder"] {
-        let error = std::fs::metadata(vault.join(link)).unwrap_err();
-        assert!(link_target_is_absent(&error), "{link}: {error:?}");
+    for (link, leaf) in [
+        ("sub/missing.md", "missing.md"),
+        ("missing-folder", "missing-folder"),
+    ] {
+        let text = std::fs::read_link(vault.join(link)).unwrap();
+        assert!(
+            std::fs::metadata(vault.join(link)).is_err(),
+            "{link} dangles"
+        );
         f.provider.delete(link).unwrap();
         assert!(
             vault.join(link).symlink_metadata().is_err(),
-            "{link} is unlinked"
+            "{link} left the vault"
         );
+        assert_in_the_bin_as_the_link(&f.trash, leaf, &text);
     }
-    assert!(f.trash.handed().is_empty(), "{:?}", f.trash.handed());
+    let root = std::fs::canonicalize(vault).unwrap();
+    assert_eq!(
+        f.trash.handed(),
+        vec![
+            root.join("sub").join("missing.md"),
+            root.join("missing-folder")
+        ],
+        "both links are handed to the Recycle Bin, never unlinked"
+    );
+    assert!(!vault.join("gone.md").exists() && !vault.join("gone").exists());
 }
 
 /// #1477 on Windows: a link whose target exists but cannot be opened goes to
@@ -759,7 +729,7 @@ fn windows_a_link_cycle_goes_to_the_recycle_bin_as_the_link() {
 /// `FsVaultProvider::new` gives every provider in a test build. These facts
 /// run only on the scratch volume they name in `SLATE_TRASH_PROBE_VOLUME`,
 /// and in a test build the system Trash refuses any path off it.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn real_system_trash_provider(root: std::path::PathBuf) -> FsVaultProvider {
     FsVaultProvider::with_system_trash(root, Arc::new(PlatformTrash))
 }
@@ -1232,4 +1202,423 @@ fn real_trash_on_linux_takes_each_unresolvable_link_as_the_link() {
         std::fs::read(locked.join("target.md")).unwrap(),
         b"behind a locked folder"
     );
+}
+
+/// WB-24 (#1480): in a test build the Recycle Bin is reached only on the
+/// scratch volume itself. An item goes to its own volume's `$RECYCLE.BIN`, so
+/// a probe folder on the system drive would be the Recycle Bin of whoever
+/// runs the suite, and a path on any other volume would be that volume's.
+#[cfg(windows)]
+#[test]
+fn the_windows_guard_refuses_the_system_drive_and_any_other_volume() {
+    let label = SCRATCH_VOLUME_LABEL;
+    let system = scratch_volume_refusal(r"C:\", r"C:\", r"C:\", label)
+        .expect("a scratch volume that is the system drive is refused");
+    assert!(system.contains("system drive"), "{system}");
+    let elsewhere = scratch_volume_refusal(r"D:\", r"T:\", r"C:\", label)
+        .expect("a path on another volume is refused");
+    assert!(
+        elsewhere.contains(r"D:\") && elsewhere.contains(r"T:\"),
+        "the refusal names both volumes: {elsewhere}"
+    );
+    let unlabelled = scratch_volume_refusal(r"D:\", r"D:\", r"C:\", "Data")
+        .expect("a volume without the scratch label may be someone's own drive");
+    assert!(
+        unlabelled.contains("Data") && unlabelled.contains(label),
+        "{unlabelled}"
+    );
+    assert_eq!(
+        scratch_volume_refusal(r"\\?\T:\", r"T:\", r"C:\", label),
+        None
+    );
+    assert_eq!(
+        scratch_volume_refusal(r"t:", r"\\?\T:\", r"c:\", label),
+        None
+    );
+
+    // This machine's own volumes: a probe folder on the system drive.
+    let windows = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    let refused = windows_scratch_refusal(&windows, &windows)
+        .expect("a probe folder on the system drive is refused");
+    assert!(refused.contains("system drive"), "{refused}");
+}
+
+/// The scratch volume the gated Windows facts run on (`SLATE_TRASH_PROBE_VOLUME`),
+/// checked against the guard's own rule first so a misconfigured run stops
+/// before it trashes anything.
+#[cfg(windows)]
+fn probe_volume() -> PathBuf {
+    let volume = std::fs::canonicalize(
+        std::env::var_os("SLATE_TRASH_PROBE_VOLUME")
+            .expect("set SLATE_TRASH_PROBE_VOLUME to a scratch volume's root, such as T:\\"),
+    )
+    .unwrap();
+    if let Some(why) = windows_scratch_refusal(&volume, &volume) {
+        panic!("{} is not a scratch volume: {why}", volume.display());
+    }
+    volume
+}
+
+/// An entry's identity (volume serial and 128-bit file id), never following
+/// a link or a junction at the end.
+#[cfg(windows)]
+fn entry_identity(path: &Path) -> String {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .unwrap_or_else(|error| panic!("open {path:?} as itself: {error}"));
+    crate::vault::windows_entry::identity(&file).unwrap()
+}
+
+/// What the walk sees at `path` itself: a folder, a junction, a symbolic link…
+#[cfg(windows)]
+fn entry_kind(path: &Path) -> crate::vault::windows_entry::Found {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .unwrap_or_else(|error| panic!("open {path:?} as itself: {error}"));
+    crate::vault::windows_entry::found(&file).unwrap()
+}
+
+/// One item in a volume's Recycle Bin: the original path its `$I<id>` record
+/// names and the `$R<id>` entry that holds it.
+#[cfg(windows)]
+#[derive(Debug)]
+struct Recycled {
+    original: String,
+    entry: PathBuf,
+}
+
+/// Every item in `volume`'s `$RECYCLE.BIN`, for every user's folder in it.
+/// A version-2 `$I` record is the version (8 bytes), the size (8), the
+/// deletion time (8), the path's length in UTF-16 units with its terminator
+/// (4), then the path; a version-1 record holds the path at offset 24 in 260
+/// units.
+#[cfg(windows)]
+fn recycled_entries(volume: &Path) -> Vec<Recycled> {
+    let mut found = Vec::new();
+    let Ok(users) = std::fs::read_dir(volume.join("$RECYCLE.BIN")) else {
+        return found;
+    };
+    for user in users {
+        let user = user.unwrap().path();
+        let Ok(entries) = std::fs::read_dir(&user) else {
+            continue;
+        };
+        for record in entries {
+            let record = record.unwrap();
+            let name = record.file_name().to_string_lossy().into_owned();
+            let Some(id) = name.strip_prefix("$I") else {
+                continue;
+            };
+            let bytes = std::fs::read(record.path()).unwrap();
+            // A record too short for its header is not one this probe can read.
+            if bytes.len() < 28 {
+                continue;
+            }
+            let units = |from: usize, count: usize| -> String {
+                let wide: Vec<u16> = bytes[from..(from + count * 2).min(bytes.len())]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
+                    .take_while(|unit| *unit != 0)
+                    .collect();
+                String::from_utf16_lossy(&wide)
+            };
+            let version = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+            let original = if version >= 2 {
+                let count = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
+                units(28, count)
+            } else {
+                units(24, 260)
+            };
+            found.push(Recycled {
+                original,
+                entry: user.join(format!("$R{id}")),
+            });
+        }
+    }
+    found
+}
+
+/// `path` as the Recycle Bin records an original location: no verbatim
+/// prefix, compared without regard to case.
+#[cfg(windows)]
+fn as_recorded(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_lowercase()
+}
+
+/// The Recycle Bin item whose record names `original`, waiting up to ten
+/// seconds for it.
+#[cfg(windows)]
+fn await_recycled(volume: &Path, original: &Path) -> Option<Recycled> {
+    let wanted = as_recorded(original);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let found = recycled_entries(volume)
+            .into_iter()
+            .find(|item| item.original.to_lowercase() == wanted);
+        if found.is_some() || std::time::Instant::now() >= deadline {
+            return found;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// #1480 on the real Windows back end (trash-rs, `IFileOperation::DeleteItem`
+/// with `FOF_ALLOWUNDO`), on a scratch volume only: never the Recycle Bin of
+/// whoever runs it. CI's `rust-real-trash` job makes and attaches one:
+///
+/// ```text
+/// diskpart: create vdisk file=<vhd> maximum=2048 type=expandable; attach vdisk;
+///           create partition primary; format fs=ntfs quick; assign letter=T
+/// $env:SLATE_TRASH_PROBE_VOLUME = 'T:\'
+/// cargo test -p slate-core --lib real_trash_on_windows -- --ignored --test-threads=1
+/// ```
+///
+/// A note, a folder and a link trashed through `delete` each land in the
+/// volume's own `$RECYCLE.BIN` as the same object (`$R`), with a `$I` record
+/// naming its original path; the link's target stays.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Recycle Bin"]
+// The fact's output is its probe record (WB-24); #507's no-stdout rule is for slate-core itself.
+#[allow(clippy::disallowed_macros)]
+fn real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records() {
+    let volume = probe_volume();
+    let vault = volume.join(format!("vault-{}", std::process::id()));
+    std::fs::create_dir_all(vault.join("sub/folder")).unwrap();
+    std::fs::write(vault.join("sub/note.md"), b"note").unwrap();
+    std::fs::write(vault.join("sub/folder/inner.md"), b"inner").unwrap();
+    std::fs::write(vault.join("target.md"), b"target").unwrap();
+    std::os::windows::fs::symlink_file(vault.join("target.md"), vault.join("sub/link.md")).unwrap();
+    let items = ["sub/note.md", "sub/folder", "sub/link.md"];
+    let identities: Vec<String> = items
+        .iter()
+        .map(|item| entry_identity(&vault.join(item)))
+        .collect();
+    let link_text = std::fs::read_link(vault.join("sub/link.md")).unwrap();
+
+    let provider = real_system_trash_provider(vault.clone());
+    for item in items {
+        provider.delete(item).unwrap();
+        assert!(
+            vault.join(item).symlink_metadata().is_err(),
+            "{item} left the vault"
+        );
+    }
+    assert_eq!(std::fs::read(vault.join("target.md")).unwrap(), b"target");
+
+    for (item, identity) in items.iter().zip(&identities) {
+        let original = vault.join(item.replace('/', "\\"));
+        let recycled = await_recycled(&volume, &original).unwrap_or_else(|| {
+            panic!(
+                "no $I record names {original:?}: {:?}",
+                recycled_entries(&volume)
+            )
+        });
+        assert_eq!(
+            &entry_identity(&recycled.entry),
+            identity,
+            "{item} is in the Recycle Bin as the same object"
+        );
+        println!(
+            "WB-24 RECYCLED | {item} | $I {} | {}",
+            recycled.original,
+            recycled.entry.display()
+        );
+    }
+    let landed = await_recycled(&volume, &vault.join(r"sub\link.md")).unwrap();
+    assert_eq!(
+        std::fs::read_link(&landed.entry).unwrap(),
+        link_text,
+        "the link is in the Recycle Bin as the link"
+    );
+    assert_eq!(
+        entry_kind(&landed.entry),
+        crate::vault::windows_entry::Found::SymbolicLink
+    );
+}
+
+/// #1499's probe on the real Windows back end, on the scratch volume of
+/// `real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records`
+/// (run by the same filter). Each kind of link whose target cannot be
+/// followed is handed to the Recycle Bin directly, past `delete`'s own rule
+/// for dangling links, and the fact prints one row per kind: whether
+/// `DeleteItem` took it, the `$I` record's original path, and whether the
+/// `$R` entry is the same object, of the same kind, with the same text. It
+/// fails when any kind is refused or lands as anything else (`delete` hands
+/// every one to the Recycle Bin since this probe), or a target changed. CI
+/// restores what it took afterwards and checks that every item came back.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs a scratch volume in SLATE_TRASH_PROBE_VOLUME; never a real user's Recycle Bin"]
+// The fact's output is its probe record (WB-24); #507's no-stdout rule is for slate-core itself.
+#[allow(clippy::disallowed_macros)]
+fn real_trash_on_windows_takes_each_dangling_link_kind_as_the_link() {
+    let volume = probe_volume();
+    let vault = volume.join(format!("links-{}", std::process::id()));
+    let links = vault.join("links");
+    std::fs::create_dir_all(&links).unwrap();
+    std::fs::write(vault.join("end.md"), b"the file a path runs through").unwrap();
+    std::fs::create_dir(vault.join("denied")).unwrap();
+    std::fs::write(vault.join(r"denied\denied.md"), b"denied to everyone").unwrap();
+
+    // #1499's kinds.
+    std::os::windows::fs::symlink_file(vault.join("gone.md"), links.join("missing.md")).unwrap();
+    std::os::windows::fs::symlink_dir(vault.join("gone-folder"), links.join("missing-folder"))
+        .unwrap();
+    std::os::windows::fs::symlink_file(vault.join(r"end.md\x"), links.join("through-a-file.md"))
+        .unwrap();
+    std::fs::create_dir(vault.join("doomed")).unwrap();
+    std::fs::create_dir(links.join("junction")).unwrap();
+    crate::vault::test_support::junction(&links.join("junction"), &vault.join("doomed"));
+    std::fs::remove_dir(vault.join("doomed")).unwrap();
+    std::os::windows::fs::symlink_file(
+        vault.join(r"denied\denied.md"),
+        links.join("unreachable.md"),
+    )
+    .unwrap();
+    std::os::windows::fs::symlink_file("cycle-b.md", links.join("cycle-a.md")).unwrap();
+    std::os::windows::fs::symlink_file("cycle-a.md", links.join("cycle-b.md")).unwrap();
+    let denied = Denied::new(&vault.join(r"denied\denied.md"));
+
+    let kinds = [
+        ("a file link to a missing file", "missing.md"),
+        ("a folder link to a missing folder", "missing-folder"),
+        (
+            "a link whose target runs through a file",
+            "through-a-file.md",
+        ),
+        ("a junction to a missing folder", "junction"),
+        ("a link to a file no one may open", "unreachable.md"),
+        ("a link cycle", "cycle-a.md"),
+    ];
+    let provider = real_system_trash_provider(vault.clone());
+    println!(
+        "WB-24 PROBE | kind | following it fails with | DeleteItem | left the vault | $I original | same object | same kind | same text"
+    );
+    let mut wrong = Vec::new();
+    for (kind, name) in kinds {
+        let link = links.join(name);
+        let follow =
+            std::fs::metadata(&link).map_or_else(|error| format!("{error}"), |_| "nothing".into());
+        let identity = entry_identity(&link);
+        let found = entry_kind(&link);
+        let text = std::fs::read_link(&link).unwrap();
+        let taken = provider.system_trash().trash(&link);
+        let left = link.symlink_metadata().is_err();
+        let recycled = if left {
+            await_recycled(&volume, &link)
+        } else {
+            None
+        };
+        let (same_object, same_kind, same_text) =
+            recycled.as_ref().map_or((false, false, false), |item| {
+                (
+                    entry_identity(&item.entry) == identity,
+                    entry_kind(&item.entry) == found,
+                    std::fs::read_link(&item.entry).is_ok_and(|landed| landed == text),
+                )
+            });
+        println!(
+            "WB-24 PROBE | {kind} | {follow} | {} | {left} | {} | {same_object} | {same_kind} | {same_text}",
+            taken
+                .as_ref()
+                .map_or_else(|error| format!("refused: {error}"), |()| "taken".into()),
+            recycled
+                .as_ref()
+                .map_or("none", |item| item.original.as_str()),
+        );
+        // Every kind was taken as the link on the first probe (WB-24), and
+        // `delete` no longer unlinks one, so a refusal is now a failure: Slate's
+        // Move to Trash would fail for that kind.
+        if !(taken.is_ok() && left && same_object && same_kind && same_text) {
+            wrong.push(kind);
+        }
+    }
+    drop(denied);
+    assert!(
+        !vault.join("gone.md").exists(),
+        "a missing target stays missing"
+    );
+    assert!(
+        !vault.join("gone-folder").exists(),
+        "a missing folder stays missing"
+    );
+    assert!(
+        !vault.join("doomed").exists(),
+        "a junction's missing folder stays missing"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("end.md")).unwrap(),
+        b"the file a path runs through"
+    );
+    assert_eq!(
+        std::fs::read(vault.join(r"denied\denied.md")).unwrap(),
+        b"denied to everyone"
+    );
+    assert!(
+        links
+            .join("cycle-b.md")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the cycle's other link stays"
+    );
+    assert!(
+        wrong.is_empty(),
+        "not taken into the Recycle Bin as the same link: {wrong:?}"
+    );
+}
+
+/// WB-24 (#1492): the Recycle Bin handoff passes through a Cloud Files
+/// placeholder folder. In a OneDrive vault a real Recycle Bin call beneath
+/// two of them landed at the note's own path, and Restore brought it back
+/// there, so the Shell is not redirected. A junction still refuses.
+/// `opaque_reparse_point` stands in for the placeholder; the handoff pins
+/// only the parent, so the note itself need not exist.
+#[cfg(windows)]
+#[test]
+fn a_cloud_placeholder_ancestor_is_admitted() {
+    use crate::vault::test_support::{junction, opaque_reparse_point};
+    use crate::vault::windows_entry::PinnedRoot;
+
+    let vault = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(vault.path().join("cloud")).unwrap();
+    opaque_reparse_point(&vault.path().join("cloud"));
+    std::fs::create_dir(vault.path().join("j")).unwrap();
+    junction(&vault.path().join("j"), outside.path());
+    let root = PinnedRoot::open(vault.path()).unwrap();
+
+    let handed = pinned_path(&root, Path::new("cloud/note.md"), "cloud/note.md").unwrap();
+    assert_eq!(
+        handed,
+        std::fs::canonicalize(vault.path())
+            .unwrap()
+            .join("cloud")
+            .join("note.md")
+    );
+    let error = pinned_path(&root, Path::new("j/private.md"), "j/private.md").unwrap_err();
+    assert_refused(&error, "j/private.md", "\"j\" is a junction");
+    drop(root);
+    std::fs::remove_dir(vault.path().join("j")).unwrap();
 }

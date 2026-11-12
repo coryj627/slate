@@ -6,6 +6,7 @@
 
 use super::{MAX_DEPTH, MAX_ENTRIES, TrashSnapshot, field, refused};
 use crate::VaultError;
+use crate::vault::windows_entry::{Found, found, is_name_surrogate};
 use std::os::windows::{
     ffi::OsStringExt,
     fs::{MetadataExt, OpenOptionsExt},
@@ -69,7 +70,9 @@ pub(in crate::vault) fn snapshot_beneath(
     }
     let file = guards.last().unwrap();
     let metadata = file.metadata()?;
-    if is_link(&metadata) {
+    // A Cloud Files placeholder is the note or folder it stands for (#1492);
+    // a junction or a link is refused.
+    if is_link(&metadata) && is_name_surrogate(file)? {
         return Err(refused("Cannot stage Trash for a symbolic link"));
     }
     let mut hasher = blake3::Hasher::new();
@@ -87,9 +90,11 @@ fn is_link(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+/// A folder the inventory may pass through: a plain one, or a Cloud Files
+/// placeholder (#1492, #1491's rule): in a OneDrive Files On-Demand vault the
+/// root and every folder is one. A junction, a link or a file refuses.
 fn check_directory(file: &fs::File) -> Result<(), VaultError> {
-    let metadata = file.metadata()?;
-    if !metadata.is_dir() || is_link(&metadata) {
+    if !matches!(found(file)?, Found::Folder | Found::ReparseFolder) {
         return Err(refused("Cannot stage Trash through a symbolic link"));
     }
     Ok(())
@@ -121,12 +126,16 @@ fn visit(
     let metadata = file.metadata()?;
     hasher.update(&[0]);
     field(hasher, &before);
-    if is_link(&metadata) && !known_link(file)? {
+    // A placeholder is hashed and walked as what it stands for (#1492). A link
+    // is a leaf: a junction or a symbolic link is counted once, by its stamp,
+    // and never followed; any other name surrogate is refused.
+    let link = is_link(&metadata) && is_name_surrogate(file)?;
+    if link && !known_link(file)? {
         return Err(refused(
             "Cannot verify Trash contents for this reparse entry",
         ));
     }
-    if metadata.is_dir() && !is_link(&metadata) {
+    if metadata.is_dir() && !link {
         for name in children(file, entries, cancel)? {
             cancel.check()?;
             hasher.update(&[1]);
