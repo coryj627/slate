@@ -1295,8 +1295,8 @@ check), it read 5.40 s against 97 ms and failed. It opens one session at a
 time. With a second session open in the process, the older one's rescans
 lose their SQLite page cache and run about 1.8× slower (#1484), so a
 comparison of two open vaults would read 0.67 or 1.89 depending on which
-opened first. WB-31 below measures the cause on Windows and releases an idle
-session's cache.
+opened first. WB-31 below found the cause in the bundled SQLite build, which
+libsqlite3-sys 0.39 (#1911) no longer has.
 
 ## Plan 44 WB-18 — every link resolution reads its own candidate rows (#1427, #1485, #1486)
 
@@ -1481,60 +1481,50 @@ the CI VMs.
 ("Diagram not drawn: rendering took longer than 5 seconds. The source
 follows."), and both hosts show its source in range.
 
-## Plan 44 WB-31 — two sessions in one process share one page pool (#1484)
+## Plan 44 WB-31 — two sessions in one process shared one page pool (#1484)
 
 `benches/two_sessions_bench.rs` opens two identical 10k-note vaults in one
-process and times the older session's no-change rescan alone, with a newer
-session open, after it closed and with a third open, reading SQLite's
+process and times the older session's no-change rescan: alone, with a newer
+session open, after it closed, and with a third open. It reads SQLite's
 per-connection counters (`sqlite3_db_status`) and the process's
-(`sqlite3_status64`) around every phase. The bundled libsqlite3-sys 0.38.2
-builds with `-DSQLITE_ENABLE_MEMORY_MANAGEMENT` (its `build.rs:162`), so
-every connection in the process draws pages from one pool.
+(`sqlite3_status64`) around every phase.
 
-Recorded 2026-11-11 on a Windows 11 Pro desktop (AMD Ryzen 7 9800X3D,
-16 threads, 62 GB) with rustc 1.99.1, `cargo bench` (release, LTO off).
-Each row is the median of eight no-change rescans; A's cache sizes are its
-`CACHE_USED` before the phase's first rescan and after its last.
+Recorded 2026-11-11 and 2026-11-12 on a Windows 11 Pro desktop (AMD Ryzen 7
+9800X3D, 16 threads, 62 GB) with rustc 1.99.1, `cargo bench` (release, LTO
+off). Each value is the median of eight no-change rescans of the older
+session A; "A's cache" is its `CACHE_USED` before the phase's first rescan.
 
-| Phase | Median | Misses per rescan | Hits per rescan | A's cache before | A's cache after | Process SQLite memory |
+| Phase | 0.38.2: median | 0.38.2: misses per rescan | 0.38.2: A's cache | 0.39.1: median | 0.39.1: misses per rescan | 0.39.1: A's cache |
 |---|---:|---:|---:|---:|---:|---:|
-| A alone | 737.5 ms | 31,238 | 231,760 | 17,408 KiB | 17,408 KiB | 17.4 MiB |
-| A with B open | 1,113.7 ms | 225,364 | 37,633 | 4 KiB | 13 KiB | 34.9 MiB |
-| B, the newer session | 725.2 ms | 28,118 | 234,880 | 34,812 KiB ¹ | 34,820 KiB ¹ | 34.9 MiB |
-| A with B open, B released | 740.0 ms | 31,239 | 231,759 | 4 KiB | 17,408 KiB | 17.9 MiB |
-| A after B closed | 728.7 ms | 31,032 | 231,966 | 17,408 KiB | 17,408 KiB | 17.4 MiB |
-| A with C open | 1,107.1 ms | 225,331 | 37,666 | 4 KiB | 13 KiB | 34.7 MiB |
+| A alone | 737.5 ms | 31,238 | 17,408 KiB | 932.7 ms | 31,236 | 17,408 KiB |
+| A with B open | 1,113.7 ms (1.51x) | 225,364 | 4 KiB | 962.3 ms (1.03x) | 31,030 | 17,408 KiB |
+| A after B closed | 728.7 ms | 31,032 | 17,408 KiB | 945.4 ms | 31,030 | 17,408 KiB |
+| A with C open | 1,107.1 ms (1.50x) | 225,331 | 4 KiB | 946.9 ms (1.02x) | 31,030 | 17,408 KiB |
 
-¹ B's own cache, past its 4,096-page `cache_size`: the pool is shared.
+The 0.38.2 columns are libsqlite3-sys 0.38.2 (SQLite 3.53.x); the 0.39.1 columns are libsqlite3-sys 0.39.1 (SQLite 3.54.1, #1911).
 
-- **The mechanism is proven.** While B scanned, A's cache fell from
-  17,408 KiB to 4 KiB without A running, and A's misses per rescan rose
-  sevenfold: another connection evicted A's pages. The older session ran
-  1.51x slower with a newer one open (macOS reported 1.8x). The process
-  total sat near two caches rather than one, with B holding nearly all of
-  it.
-- **The remedy.** Releasing B's cache while it sat idle
-  (`sqlite3_db_release_memory`) brought A back to 1.00x, its cache rebuilt
-  to 17,408 KiB. Every session's connections now go through a `ConnSlot`
-  that records when each use ends. A process-wide registry's
-  `slate-cache-release` thread releases a connection idle a full
-  `SessionConfig::idle_cache_release_ms` (30 s) after its last use, while
-  two or more sessions are open, once per idle period.
-  `VaultSession::release_idle_cache` (and the binding's) asks for it at once.
-- **Release once per idle period.** SQLite's shrink empties the whole
-  shared pool, not only the released connection's pages: releasing A also
-  emptied B's unused pages (527 KiB to 5 KiB in the fact that found it). So
-  a release costs the working session one cold pass, and a slot is never
-  released again until it has been used again.
+- **The cause, under 0.38.2.** That build set
+  `-DSQLITE_ENABLE_MEMORY_MANAGEMENT` (`build.rs:162`), and every connection
+  in the process drew pages from one pool. While B scanned, A's cache fell
+  from 17,408 KiB to 4 KiB without A running, and its misses per rescan rose
+  sevenfold. B's own cache reached 34,812 KiB, past its 4,096-page
+  `cache_size`. A ran 1.51x slower with B open; macOS reported 1.8x. A
+  measured remedy, `sqlite3_db_release_memory` on idle B, brought A back to
+  1.00x. It also emptied every other connection's unused pages, since that
+  release shrinks the whole pool.
+- **Gone under 0.39.1.** libsqlite3-sys 0.39 dropped that flag; it is the only
+  flag its build script removed. Each session keeps its own 17 MiB cache,
+  and A reads 1.01x to 1.03x with B or C open. No remedy ships (WD21).
+- **A different cost.** A alone is about 20% slower under 0.39.1, 929 to
+  933 ms against 737 to 783 ms, with the same misses: SQLite 3.54's or
+  rusqlite 0.41's own work, tracked as #1912.
 
-**The guards.** Both run in their own rust-lane step, alone, and every bulk
-run skips them.
+**The guards.** The bulk runs skip the timing guard, which runs alone in its
+own rust-lane step.
+- `session::tests::two_sessions::a_newer_sessions_scan_leaves_the_older_sessions_cache`:
+  run alone; B's scan must leave A's `CACHE_USED` exactly unchanged.
 - `session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache`:
-  2,500 notes in a 256-page cache, scaled so that one session's working set
-  fills its cache, as 10k notes fill 4,096 pages. It requires A with an idle
-  B open to stay within 1.25x of A alone, and A's cache to hold between
-  rescans. It read 0.92 to 0.96; with the release off it read 1.44 and
-  failed. At 512 pages it could not fail (A fits beside B).
-- `session::registry::tests::perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`:
-  a lone registered session within 1.10x of an unregistered one. It read
-  1.02.
+  2,500 notes in a 256-page cache, scaled so one session's working set fills
+  its cache as 10k notes fill 4,096 pages. A with B open must stay within
+  1.25x of A alone, and A's cache must hold between rescans. Under 0.38.2's
+  shared pool it read 1.44.

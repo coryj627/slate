@@ -6,19 +6,22 @@
 //! Opens two identical 10k-note vaults and times the older session's
 //! no-change rescan alone, with the newer one open, with it closed, and
 //! with a third open, reading SQLite's per-connection page-cache counters
-//! around every rescan. The mechanism #1484 suspects is one process-wide
-//! page-cache LRU (`SQLITE_ENABLE_MEMORY_MANAGEMENT`, which the bundled
-//! libsqlite3-sys build sets). It is proven when, after B opens and scans,
-//! A's cache shrank between its rescans without A running and A's misses
-//! per rescan rose; it is refuted when A's cache holds and its misses stay
-//! flat while any slowdown persists.
+//! around every rescan. The mechanism #1484 suspected is one process-wide
+//! page-cache pool (`SQLITE_ENABLE_MEMORY_MANAGEMENT`). It is shown when,
+//! after B opens and scans, A's cache shrank between its rescans without A
+//! running and A's misses per rescan rose.
+//!
+//! libsqlite3-sys 0.38 built SQLite with that flag, and this bench proved
+//! the pool there: A rescanned 1.51x slower with B open. libsqlite3-sys 0.39
+//! (#1911) builds without it, each connection keeps its own cache, and A
+//! reads 1.01x to 1.03x. The bench now shows whether a later build brings
+//! the shared pool back.
 //!
 //! `cargo bench -p slate-core --bench two_sessions_bench` (release, the
 //! issue's profile). Prints one table; the numbers go to BENCHMARKS.md.
 
-// The bench prints its own measurement table to its own stdout: no vault path
-// or note name, which is what slate-core's macro ban (clippy.toml, #507)
-// keeps out of host logs.
+// A bench binary's table is its output; the library's no-stdout rule (#507)
+// is for slate-core itself.
 #![allow(clippy::disallowed_macros)]
 
 use std::time::Instant;
@@ -26,7 +29,7 @@ use std::time::Instant;
 use slate_core::db::{DbCacheCounters, process_cache_status};
 use slate_core::{CancelToken, VaultSession};
 
-#[allow(dead_code)] // shared with the other benches; this one uses generate_vault
+#[allow(dead_code)]
 mod common;
 use common::generate_vault;
 
@@ -104,10 +107,6 @@ fn main() {
     phases.push(with_b);
     let (b_self, _) = measure("B (newer)", &b, None);
     phases.push(b_self);
-    // The remedy's test: B idle and released, A rescans.
-    b.release_idle_cache();
-    let (b_released, a_end) = measure("A with B open, B released", &a, Some(a_end));
-    phases.push(b_released);
 
     drop(b);
     let (b_closed, a_end) = measure("A after B closed", &a, Some(a_end));
@@ -147,9 +146,8 @@ fn main() {
             .map_or(f64::NAN, |phase| phase.median_ms / alone_ms)
     };
     println!(
-        "ratio to A alone: with B open {:.2}; with B open and released {:.2}; with C open {:.2}",
+        "ratio to A alone: with B open {:.2}; with C open {:.2}",
         ratio("A with B open"),
-        ratio("A with B open, B released"),
         ratio("A with C open")
     );
 }

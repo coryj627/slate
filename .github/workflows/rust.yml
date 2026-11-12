@@ -173,7 +173,6 @@ jobs:
       ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
       UNRESOLVED_LINK_PERF_GUARD: session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
       TWO_SESSIONS_PERF_GUARD: session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache
-      ONLY_SESSION_RELEASE_PERF_GUARD: session::registry::tests::perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -270,7 +269,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD}) and not test(${ONLY_SESSION_RELEASE_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD})"
 
       - name: cargo nextest run — non-census suite (ci profile, real fs)
         # Everything that isn't a census (and isn't the isolated guard):
@@ -281,7 +280,7 @@ jobs:
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD}) and not test(${ONLY_SESSION_RELEASE_PERF_GUARD})"
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD}) and not test(${UNRESOLVED_LINK_PERF_GUARD}) and not test(${TWO_SESSIONS_PERF_GUARD})"
 
       - name: root-listing performance guard (isolated)
         # Same workspace-level package selection as the sweep above, so
@@ -307,22 +306,15 @@ jobs:
 
       - name: two-session cache performance guard (isolated)
         # Plan 44 WB-31 (#1484): an older session's no-change rescan with a
-        # newer one open and idle (its cache released) stays within 1.25x of
-        # its rescan alone. Every SQLite connection in the process shares one
-        # page pool, so this runs alone, like the guards above.
+        # newer one open stays within 1.25x of its rescan alone, so a SQLite
+        # build that shares one page pool across connections again (as
+        # libsqlite3-sys 0.38's SQLITE_ENABLE_MEMORY_MANAGEMENT did) fails
+        # here. Isolated like the guards above.
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-tests=fail --test-threads 1
           -E "test(=${TWO_SESSIONS_PERF_GUARD})"
 
-      - name: lone-session release performance guard (isolated)
-        # Plan 44 WB-31: a lone session registered for idle-cache release is
-        # never released, so the registry costs the one-session case nothing
-        # (within 1.10x).
-        run: >-
-          cargo nextest run --workspace --cargo-profile ci --locked
-          --no-tests=fail --test-threads 1
-          -E "test(=${ONLY_SESSION_RELEASE_PERF_GUARD})"
       - name: Doc-tests
         # nextest doesn't run doctests; keep them via libtest. Edition
         # 2024 merges doctests into one binary, so this is cheap.

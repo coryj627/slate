@@ -1635,18 +1635,6 @@ impl VaultSession {
         self.inner.stop_watching();
     }
 
-    /// Plan 44 WB-31 (#1484): release this session's SQLite page cache, for
-    /// a host that leaves this vault idle while another session works.
-    /// Every connection in the process shares one page pool, so an idle
-    /// session's cache otherwise holds pages the working session misses
-    /// (1.5x on a 10k-note rescan). Core also releases an idle session's
-    /// cache by itself while two or more are open; this asks for it now. A
-    /// connection in use is skipped, never waited for. Additive: a host may
-    /// never call it.
-    pub fn release_idle_cache(&self) {
-        self.inner.release_idle_cache();
-    }
-
     /// Plan 43 PR 21a (#1293): register this session's change-feed cursor
     /// at the feed's head and return the head. Call it on the open worker
     /// right after the open scan and before the initial reads, so the open
@@ -19801,22 +19789,6 @@ mod canvas_mirror_tests {
     /// it can be defeated by indirection this file does not contain,
     /// and it cannot go quietly green, because it asserts it found
     /// every case arm and that both sides are non-empty.
-    /// Plan 44 WB-31: the release is on the binding, and a host that calls it
-    /// on an open session gets its session back working.
-    #[test]
-    fn release_idle_cache_is_additive() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
-        let session =
-            VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned()).unwrap();
-        session.scan_initial(CancelToken::new()).unwrap();
-
-        session.release_idle_cache();
-
-        let report = session.scan_initial(CancelToken::new()).unwrap();
-        assert_eq!(report.files_seen, 1);
-    }
-
     #[test]
     fn the_snapshot_visibility_predicate_matches_the_container_switch() {
         use std::collections::{BTreeMap, BTreeSet};

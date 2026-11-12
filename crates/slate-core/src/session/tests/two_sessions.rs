@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Plan 44 WB-31 (#1484): two sessions in one process. The counter seams
-//! that tell one session's page cache from the process's, read always.
+//! that tell one session's page cache from the process's, and the guards
+//! that the sessions keep their caches apart.
 //!
-//! With `SQLITE_ENABLE_MEMORY_MANAGEMENT` (the bundled libsqlite3-sys sets
-//! it) every connection in the process draws pages from one pool, so a
-//! parallel test's connection can recycle a page another session holds. A
-//! fact that compares two connections' `used` exactly therefore runs its
-//! body alone in a child process ([`run_alone`]); the rest compare nothing
-//! across connections.
+//! libsqlite3-sys 0.38 built SQLite with `SQLITE_ENABLE_MEMORY_MANAGEMENT`,
+//! under which every connection in the process drew pages from one pool:
+//! WB-31's bench proved the older session's cache emptied while a newer one
+//! scanned (1.51x on a 10k-note rescan). libsqlite3-sys 0.39 (#1911) builds
+//! without it. A fact that reads an exact cache or process value runs its
+//! body alone in a child process ([`run_alone`]), so no other test's
+//! connection moves it, under either build.
 
 use super::common::make_vault;
 use super::*;
@@ -134,13 +136,11 @@ fn process_cache_status_child() {
     );
 }
 
-/// A vault of `notes` notes opened with `idle_cache_release_ms` set (0 keeps
-/// it out of the registry, as the test build's default does), scanned.
-pub(super) fn opted_in_vault(
-    notes: usize,
-    idle_ms: u32,
-    cache_pages: u32,
-) -> (tempfile::TempDir, VaultSession) {
+/// A vault of `notes` notes with a `cache_pages` page cache, scanned. A
+/// small cache that one session's working set fills is where a shared pool
+/// shows: 2,500 of these notes in 256 pages, as the bench's 10k notes fill
+/// 4,096.
+fn vault_with_cache(notes: usize, cache_pages: u32) -> (tempfile::TempDir, VaultSession) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let writer = FsVaultProvider::new(root.clone());
@@ -157,99 +157,53 @@ pub(super) fn opted_in_vault(
             .unwrap();
     }
     let mut config = SessionConfig::new(root.join(".slate"));
-    config.idle_cache_release_ms = idle_ms;
     config.max_db_cache_pages = cache_pages;
     let session = VaultSession::open(Arc::new(FsVaultProvider::new(root)), config).unwrap();
     session.scan_initial(&CancelToken::new()).unwrap();
     (tmp, session)
 }
 
-/// `release_idle_cache` frees this session's cache and records the release.
-/// SQLite's shrink empties the whole shared pool, so B's unused pages go
-/// too (measured here first: B fell from 527 KiB to 5 KiB): the registry
-/// therefore releases a slot once per idle period, never at every pass. Run
-/// alone, where nothing else moves A's reading.
+/// #1484's mechanism, held shut: a newer session's scan leaves the older
+/// session's cache exactly where it was. Under libsqlite3-sys 0.38's shared
+/// pool B's scan evicted A's pages; a build that brings that pool back fails
+/// here. Run alone, where no other test's connection is open.
 #[test]
-fn release_idle_cache_drops_this_connections_cache() {
+fn a_newer_sessions_scan_leaves_the_older_sessions_cache() {
     run_alone(
-        "session::tests::two_sessions::release_idle_cache_drops_this_connections_cache_child",
+        "session::tests::two_sessions::a_newer_sessions_scan_leaves_the_older_sessions_cache_child",
     );
 }
 
 #[test]
-fn release_idle_cache_drops_this_connections_cache_child() {
+fn a_newer_sessions_scan_leaves_the_older_sessions_cache_child() {
     if !is_alone_child(
-        "session::tests::two_sessions::release_idle_cache_drops_this_connections_cache_child",
+        "session::tests::two_sessions::a_newer_sessions_scan_leaves_the_older_sessions_cache_child",
     ) {
         return;
     }
-    let (_a_tmp, a) = scanned_vault(200);
-    let (_b_tmp, _b) = scanned_vault(200);
-    let a0 = a.db_cache_status().main;
-    assert!(a0.used > 0, "{a0:?}");
+    let (_a_tmp, a) = vault_with_cache(2_500, 256);
+    let before = a.db_cache_status().main;
+    assert!(before.used > 0, "{before:?}");
 
-    a.release_idle_cache();
+    let (_b_tmp, _b) = vault_with_cache(2_500, 256);
 
-    let a1 = a.db_cache_status().main;
-    assert!(
-        a1.used * 10 <= a0.used,
-        "A's cache {} -> {}",
-        a0.used,
-        a1.used
-    );
+    let after = a.db_cache_status().main;
     assert_eq!(
-        a.conn.releases_for_tests(),
-        1,
-        "the release was not recorded"
+        after.used, before.used,
+        "a newer session's scan evicted the older session's pages: the page pool is shared again"
     );
 }
-/// A released session rescans exactly as before: the release frees pages,
-/// never the connection's functions or state.
-#[test]
-fn an_idle_session_releases_its_cache_and_rescans_correctly() {
-    let (_tmp, session) = scanned_vault(40);
-    let count = |session: &VaultSession| -> i64 {
-        let conn = session.conn.lock().unwrap();
-        conn.query_row("SELECT count(*) FROM files", [], |row| row.get(0))
-            .unwrap()
-    };
-    let before_count = count(&session);
-    let before = session
-        .rescan_with_progress(&CancelToken::new(), None)
-        .unwrap();
 
-    session.release_idle_cache();
-
-    let after = session
-        .rescan_with_progress(&CancelToken::new(), None)
-        .unwrap();
-    assert_eq!(count(&session), before_count);
-    let summary = |report: &ScanReport| {
-        (
-            report.files_seen,
-            report.files_indexed,
-            report.files_skipped,
-            report.error_count,
-        )
-    };
-    assert_eq!(summary(&after), summary(&before), "{before:?} -> {after:?}");
-}
-
-/// The remedy's timing guard: the older session's rescan with a newer one
-/// open and idle (and so released) stays within 1.25x of its rescan alone,
-/// and its cache holds between rescans. Runs only alone (`--release`, by
-/// name): every bulk run skips `perf_guard_`. WB-31's bench measured 1.51x
-/// before the remedy and 1.00x with the idle session released.
+/// The timing half: the older session's no-change rescan with a newer one
+/// open stays within 1.25x of its rescan alone, and its cache holds between
+/// rescans. Under libsqlite3-sys 0.38's shared pool this read 1.44 here (the
+/// bench: 1.51x at 10k notes); under 0.39, about 1.0. Runs only alone
+/// (`--release`, by name): every bulk run skips `perf_guard_`.
 #[test]
 fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
-    // A cache one session's working set fills (A alone holds about 1 MiB in
-    // 256 pages), as the bench's 10k notes fill 4,096: with B open and the
-    // release off, A rescanned 1.44x slower; with it, 0.94x. At 512 pages A
-    // fits beside B and the guard could not fail.
     const NOTES: usize = 2_500;
     const PAGES: u32 = 256;
     const RESCANS: usize = 6;
-    const IDLE_MS: u32 = 200;
     let median = |session: &VaultSession| -> f64 {
         let mut times: Vec<f64> = (0..RESCANS)
             .map(|_| {
@@ -263,18 +217,14 @@ fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
         times.sort_by(|x, y| x.partial_cmp(y).unwrap());
         (times[RESCANS / 2 - 1] + times[RESCANS / 2]) / 2.0
     };
-    let (_a_tmp, a) = opted_in_vault(NOTES, IDLE_MS, PAGES);
+    let (_a_tmp, a) = vault_with_cache(NOTES, PAGES);
     let alone = median(&a);
 
-    let (_b_tmp, b) = opted_in_vault(NOTES, IDLE_MS, PAGES);
-    // B goes idle; the release thread frees its cache a full interval after.
-    std::thread::sleep(std::time::Duration::from_millis(u64::from(IDLE_MS) * 4));
-    let warm_up = a.rescan_with_progress(&CancelToken::new(), None).unwrap();
+    let (_b_tmp, b) = vault_with_cache(NOTES, PAGES);
     let used_before = a.db_cache_status().main.used;
     let with_b = median(&a);
     let used_after = a.db_cache_status().main.used;
     drop(b);
-    drop(warm_up);
 
     let ratio = with_b / alone;
     assert!(

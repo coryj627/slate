@@ -519,17 +519,6 @@ pub(crate) fn connection_cache_counters(conn: &Connection) -> DbCacheCounters {
     }
 }
 
-/// Plan 44 WB-31 (#1484): frees as much of this connection's page cache as
-/// SQLite can (`sqlite3_db_release_memory`). With
-/// `SQLITE_ENABLE_MEMORY_MANAGEMENT` every connection in the process draws
-/// pages from one shared pool, so an idle session's cache otherwise holds
-/// pages another session needs.
-pub(crate) fn release_connection_memory(conn: &Connection) {
-    // SAFETY: the handle is the borrowed connection's own, valid for the
-    // call, which the caller makes while holding the connection.
-    let _ = unsafe { rusqlite::ffi::sqlite3_db_release_memory(conn.handle()) };
-}
-
 /// Plan 44 WB-31 (#1484): the process's SQLite memory, from
 /// `sqlite3_status64`: `memory_used` is every byte SQLite holds in this
 /// process; `pagecache_overflow` the page-cache bytes that came from the
