@@ -1237,10 +1237,12 @@ public sealed class GraphNavigatorCensus
             ShellCompilation.Compilation, ShellCompilation.Sources.Select(file => file.Source.Root.SyntaxTree));
         Assert.True(report.Violations.Count == 0, string.Join("\n", report.Violations));
         // WB-12 (#1475): the store's Write publishes through the anchored
-        // store, so the class's only mutations are WriteAtomically's write and
-        // flush of the staged file, reached with the graph file's name from
-        // the store's Write alone (its caller is pinned above).
-        Assert.All(report.Mutations, mutation => Assert.StartsWith("AnchoredVaultStore.cs:WriteAtomically:", mutation, StringComparison.Ordinal));
+        // store, so the class's only mutations are the atomic write's write
+        // and flush of the staged file, reached with the graph file's name
+        // from the store's Write alone (its caller is pinned above). #1869:
+        // they sit in WriteAtomicallyOnce, the one attempt WriteAtomically
+        // repeats while a file is held.
+        Assert.All(report.Mutations, mutation => Assert.StartsWith("AnchoredVaultStore.cs:WriteAtomicallyOnce:", mutation, StringComparison.Ordinal));
         Assert.Contains(report.Mutations, mutation => mutation.EndsWith(": RandomAccess.Write", StringComparison.Ordinal));
         Assert.Contains(report.Mutations, mutation => mutation.EndsWith(": RandomAccess.FlushToDisk", StringComparison.Ordinal));
     }

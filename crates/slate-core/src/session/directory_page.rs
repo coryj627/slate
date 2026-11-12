@@ -268,22 +268,60 @@ fn check_cancel(cancel: &CancelToken) -> Result<(), VaultError> {
 /// a cancellation observed at any point reports `Cancelled` — never a
 /// partial result. Shared by the directory pages and `list_files` (W7-7
 /// PR 7).
+///
+/// The handler is registered through SQLite itself (#1910): rusqlite 0.41's
+/// `progress_handler` takes `&mut Connection`, and callers here hold the
+/// connection shared, some through a transaction borrowed from it. The
+/// callback reads `cancel` through a pointer that outlives the
+/// registration, since the guard below clears it on every way out.
 pub(super) fn with_sqlite_cancellation<T>(
     conn: &Connection,
     cancel: &CancelToken,
     operation: impl FnOnce() -> Result<T, VaultError>,
 ) -> Result<T, VaultError> {
-    let progress_cancel = cancel.clone();
-    conn.progress_handler(
-        SQLITE_PROGRESS_OPS,
-        Some(move || {
+    extern "C" fn poll(token: *mut std::os::raw::c_void) -> std::os::raw::c_int {
+        // A panic must not unwind across the FFI boundary: it interrupts the
+        // statement instead, as rusqlite's own wrapper did.
+        std::panic::catch_unwind(|| {
             #[cfg(test)]
             progress_test_hook::fire();
-            progress_cancel.is_cancelled()
-        }),
-    )?;
+            // SAFETY: `token` is the `&CancelToken` registered below, alive
+            // until `ClearHandler` unregisters it before that borrow ends.
+            let cancel = unsafe { &*(token as *const CancelToken) };
+            std::os::raw::c_int::from(cancel.is_cancelled())
+        })
+        .unwrap_or(1)
+    }
+
+    struct ClearHandler<'a>(&'a Connection);
+
+    impl Drop for ClearHandler<'_> {
+        fn drop(&mut self) {
+            // SAFETY: the connection's own handle; a null callback clears it.
+            unsafe {
+                rusqlite::ffi::sqlite3_progress_handler(
+                    self.0.handle(),
+                    0,
+                    None,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+
+    // SAFETY: the connection's own handle; the context pointer is `cancel`,
+    // which outlives `_clear`, the guard that unregisters the callback.
+    unsafe {
+        rusqlite::ffi::sqlite3_progress_handler(
+            conn.handle(),
+            SQLITE_PROGRESS_OPS,
+            Some(poll),
+            std::ptr::from_ref(cancel).cast_mut().cast(),
+        );
+    }
+    let _clear = ClearHandler(conn);
     let result = operation();
-    conn.progress_handler(0, None::<fn() -> bool>)?;
+    drop(_clear);
     if cancel.is_cancelled() {
         Err(VaultError::Cancelled)
     } else {

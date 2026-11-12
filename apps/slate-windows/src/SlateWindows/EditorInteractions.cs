@@ -3181,13 +3181,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return null;
         }
 
-        bool isSvg = string.Equals(mime, "image/svg+xml", StringComparison.OrdinalIgnoreCase)
-            || bytes.AsSpan(0, Math.Min(bytes.Length, 1024))
-                .IndexOf("<svg"u8) >= 0;
-        return isSvg
+        return IsSvgImage(bytes, mime)
             ? DecodeSvgImage(bytes, reserveDecodedBytes, ref budgetSpent, out failureReason)
             : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
     }
+
+    /// <summary>Whether <see cref="DecodeImage(byte[], string?, Func{long, bool}?, out bool, out string?)"/>
+    /// takes these bytes down its SVG path: the only decode that can wait
+    /// out its whole budget (#1581), so the reading view decodes it on its
+    /// refresh's worker, not the dispatcher (#1634).</summary>
+    internal static bool IsSvgImage(byte[] bytes, string? mime) =>
+        string.Equals(mime, "image/svg+xml", StringComparison.OrdinalIgnoreCase)
+            || bytes.AsSpan(0, Math.Min(bytes.Length, 1024)).IndexOf("<svg"u8) >= 0;
 
     /// <summary>Stack for the SVG decode's own thread. Rendering recurses
     /// through a document's nesting and references; <see

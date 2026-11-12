@@ -21,10 +21,10 @@ rust-version = "1.99"
 pulldown-cmark = { version = "0.13", default-features = false }
 thiserror = "2"
 uniffi = { version = "0.31", features = ["cli"] }
-# 0.40 pulls libsqlite3-sys 0.38.1 (bundled SQLite 3.53.x). Its build
-# script uses `cfg_select!`, which the pinned stable toolchain now
-# provides — the earlier hold at 0.39 was lifted once that landed.
-rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
+# 0.41 pulls libsqlite3-sys 0.39 (#1910: RUSTSEC-2026-0459, a C SQLite
+# CVE fixed in libsqlite3-sys 0.39.0). Its build script uses `cfg_select!`,
+# which the pinned stable toolchain provides.
+rusqlite = { version = "0.41", features = ["bundled", "functions", "hooks"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
