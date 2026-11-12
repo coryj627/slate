@@ -293,6 +293,14 @@ impl FsVaultProvider {
         }
     }
 
+    /// The Trash this provider hands its deletions to. The Windows link
+    /// probe (WB-24, #1499) hands each link kind to the gated provider's
+    /// Recycle Bin directly, past `delete`'s own rule for dangling links.
+    #[cfg(test)]
+    pub(crate) fn system_trash(&self) -> &dyn SystemTrash {
+        &*self.trash
+    }
+
     /// Read the file at `relative` and return its canonical content
     /// hash (see [`content_hash`] for the contract). Convenience for
     /// the indexer; not part of the `VaultProvider` trait so it can

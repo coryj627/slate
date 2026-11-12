@@ -426,6 +426,100 @@ jobs:
             }
           }
 
+  # Plan 44 WB-24 (#1480, #1499; WD14 as amended 2026-11-12): the gated
+  # Recycle Bin facts on a scratch NTFS VHD of their own. A Namespace runner
+  # is a throwaway VM whose jobs run elevated, as SYSTEM, so diskpart makes
+  # and attaches the VHD here, and the facts' Recycle Bin is that volume's
+  # own $RECYCLE.BIN: never a developer's, and never this runner's system
+  # drive (core's #1455 guard refuses any other volume in a test build).
+  # Always on Namespace, whatever WINDOWS_RUNNER_MODE says, with a cache of
+  # its own so it never shares a volume with rust-tests.
+  rust-real-trash:
+    name: real recycle bin facts (windows x64)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: ${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-real-trash', github.ref != 'refs/heads/main' && '-pr' || '') }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Cache Rust build (Namespace NVMe cache)
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1.7.0
+        with:
+          cache: rust
+
+      - name: Make and attach a scratch NTFS VHD
+        id: vhd
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'diskpart needs an elevated job' }
+          $used = (Get-PSDrive -PSProvider FileSystem).Name
+          $letter = @('T', 'S', 'R', 'Q', 'P') | Where-Object { $used -notcontains $_ } | Select-Object -First 1
+          if (-not $letter) { throw 'no free drive letter for the scratch volume' }
+          $vhd = Join-Path $env:RUNNER_TEMP 'slate-trash-probe.vhdx'
+          $script = Join-Path $env:RUNNER_TEMP 'attach.txt'
+          @(
+            "create vdisk file=`"$vhd`" maximum=2048 type=expandable"
+            "select vdisk file=`"$vhd`""
+            'attach vdisk'
+            'create partition primary'
+            'format fs=ntfs quick label=SlateTrashProbe'
+            "assign letter=$letter"
+          ) | Set-Content -Path $script -Encoding ascii
+          diskpart /s $script
+          if ($LASTEXITCODE -ne 0) { throw "diskpart exit $LASTEXITCODE" }
+          $volume = Get-Volume -DriveLetter $letter
+          if ($volume.FileSystemType -ne 'NTFS') { throw "the scratch volume is $($volume.FileSystemType), not NTFS" }
+          "the scratch volume is $letter`: ($($volume.FileSystemType), $($volume.Size) bytes), run as $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+          "SLATE_TRASH_PROBE_VOLUME=$letter`:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PROBE_VHD=$vhd" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: The gated Recycle Bin facts on the scratch volume
+        run: |
+          $facts = @(
+            'real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records'
+            'real_trash_on_windows_takes_each_dangling_link_kind_as_the_link'
+          )
+          $listed = cargo test -p slate-core --profile ci --locked --lib real_trash_on_windows -- --ignored --list
+          if ($LASTEXITCODE -ne 0) { throw "listing the gated facts failed ($LASTEXITCODE)" }
+          foreach ($fact in $facts) {
+            if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
+          }
+          foreach ($fact in $facts) {
+            cargo test -p slate-core --profile ci --locked --lib $fact -- --ignored --test-threads=1 --nocapture
+            if ($LASTEXITCODE -ne 0) { throw "$fact failed ($LASTEXITCODE)" }
+          }
+
+      # #1499's Restore column: put back everything the facts recycled from
+      # the scratch volume, then show what is there again.
+      - name: Restore from the Recycle Bin, and show what came back
+        if: ${{ always() && steps.vhd.outcome == 'success' }}
+        run: |
+          $volume = $env:SLATE_TRASH_PROBE_VOLUME
+          $bin = (New-Object -ComObject Shell.Application).Namespace(10)
+          foreach ($item in @($bin.Items())) {
+            $from = $item.ExtendedProperty('System.Recycle.DeletedFrom')
+            if (-not "$from".StartsWith($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $item.InvokeVerb('undelete')
+            "WB-24 RESTORE | asked to restore $($item.Name) from $from"
+          }
+          Start-Sleep -Seconds 2
+          Get-ChildItem -LiteralPath $volume -Directory | Where-Object { $_.Name -match '^(vault|links)-' } | ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -ErrorAction Continue | ForEach-Object {
+              "WB-24 BACK | $($_.FullName) | $($_.LinkType) | $($_.Target)"
+            }
+          }
+          "WB-24 STILL RECYCLED | $(@($bin.Items() | Where-Object { "$($_.ExtendedProperty('System.Recycle.DeletedFrom'))".StartsWith($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) }).Count) item(s)"
+
+      - name: Detach the scratch VHD
+        if: ${{ always() }}
+        run: |
+          if (-not $env:PROBE_VHD) { 'no VHD was attached'; exit 0 }
+          $script = Join-Path $env:RUNNER_TEMP 'detach.txt'
+          @("select vdisk file=`"$env:PROBE_VHD`"", 'detach vdisk') | Set-Content -Path $script -Encoding ascii
+          diskpart /s $script
+
   windows:
     name: app build + test (windows x64)
     needs: [changes, route]
@@ -1097,7 +1191,7 @@ jobs:
 
   gate:
     name: build + test (windows x64)
-    needs: [changes, route, rust-tests, windows, windows-model, flaui]
+    needs: [changes, route, rust-tests, rust-real-trash, windows, windows-model, flaui]
     # Skipped, and so passed, only when changes decided that the pull request
     # touches none of the lane's paths (#1565).
     if: ${{ always() && needs.changes.outputs.run != 'false' }}
@@ -1115,7 +1209,7 @@ jobs:
           MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}
           MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}
         run: |
-          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.rust-real-trash.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
             exit 1
           fi

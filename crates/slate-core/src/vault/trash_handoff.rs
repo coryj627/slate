@@ -137,9 +137,83 @@ fn refuse_a_trash_that_is_not_scratch(path: &Path) {
             refusal(format!("XDG_DATA_HOME is not on {}", volume.display()));
         }
     }
-    // No real-Trash fact runs on Windows: the Recycle Bin is never a test's.
+    // An item goes to its own volume's `$RECYCLE.BIN`, so the path must be
+    // on the scratch volume itself, never on the system drive (WB-24, #1480).
     #[cfg(windows)]
-    refusal("Windows has no gated real-Trash fact".into());
+    if let Some(why) = windows_scratch_refusal(path, &volume) {
+        refusal(why);
+    }
+}
+
+/// Why a test build's Recycle Bin call for `path` would not reach the scratch
+/// volume `probe`'s own `$RECYCLE.BIN` (WB-24, #1480), or `None` when it
+/// would. Each volume is the one `GetVolumePathNameW` reports, so a probe
+/// folder on the system drive is the system drive's Recycle Bin, never a
+/// scratch one.
+#[cfg(all(test, windows))]
+pub(crate) fn windows_scratch_refusal(path: &Path, probe: &Path) -> Option<String> {
+    let volume_of = |at: &Path| {
+        volume_path_name(at)
+            .map_err(|error| format!("the volume of {} is unknown: {error}", at.display()))
+    };
+    let system = system_volume().map_err(|error| format!("the system drive is unknown: {error}"));
+    match (volume_of(path), volume_of(probe), system) {
+        (Ok(path), Ok(probe), Ok(system)) => scratch_volume_refusal(&path, &probe, &system),
+        (Err(why), _, _) | (_, Err(why), _) | (_, _, Err(why)) => Some(why),
+    }
+}
+
+/// [`windows_scratch_refusal`]'s rule over volume names: the path's volume is
+/// the probe's, and the probe's is not the system drive.
+#[cfg(all(test, windows))]
+pub(crate) fn scratch_volume_refusal(path: &str, probe: &str, system: &str) -> Option<String> {
+    let same = |a: &str, b: &str| comparable_volume(a) == comparable_volume(b);
+    if same(probe, system) {
+        return Some(format!(
+            "the scratch volume {probe} is the system drive {system}, whose Recycle Bin is not a test's"
+        ));
+    }
+    if !same(path, probe) {
+        return Some(format!(
+            "the path is on the volume {path}, not on the scratch volume {probe}"
+        ));
+    }
+    None
+}
+
+/// A volume name in one spelling: no verbatim prefix, upper case, one
+/// trailing separator.
+#[cfg(all(test, windows))]
+fn comparable_volume(volume: &str) -> String {
+    let bare = volume.strip_prefix(r"\\?\").unwrap_or(volume);
+    format!("{}\\", bare.trim_end_matches('\\').to_uppercase())
+}
+
+/// `GetVolumePathNameW`: the mount point of the volume `path` is on.
+#[cfg(all(test, windows))]
+fn volume_path_name(path: &Path) -> std::io::Result<String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut buffer = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated and `buffer` holds its stated length.
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let length = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..length]))
+}
+
+/// The volume Windows itself is on: `SystemRoot`'s.
+#[cfg(all(test, windows))]
+fn system_volume() -> std::io::Result<String> {
+    let root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| std::io::Error::other("SystemRoot is not set"))?;
+    volume_path_name(Path::new(&root))
 }
 
 /// The refusal: `original` is not handed to the Trash, for `reason`, which
