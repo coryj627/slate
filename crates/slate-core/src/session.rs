@@ -1291,6 +1291,11 @@ impl DiagramCompletedCache {
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
+    /// Plan 44 WB-31 (#1484): the oplog compactor's connection, opened on
+    /// its first need as before. It lives here rather than in the worker's
+    /// local so [`VaultSession::db_cache_status`] can read its page-cache
+    /// counters; the worker takes it once per job, never across its wait.
+    worker_conn: Arc<Mutex<Option<Connection>>>,
     /// Ephemeral process/session binding for opaque directory cursors and,
     /// since plan 43 PR 21a, for the change feed's writer id and window
     /// tokens.
@@ -1461,6 +1466,15 @@ pub struct VaultSession {
     /// drops after `conn` (fields drop in declaration order): closing the
     /// connection still resolves its WAL through the held directory.
     interior: CacheDir,
+}
+
+/// Plan 44 WB-31 (#1484): a session's page-cache counters, the main
+/// connection's and, once it has opened, the oplog compactor's.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DbCacheStatus {
+    pub main: db::DbCacheCounters,
+    pub worker: Option<db::DbCacheCounters>,
 }
 
 /// One annotation on a version row (O-3 #541): `kind` is the stable
@@ -1687,10 +1701,11 @@ fn compaction_worker_loop(
     queued: Arc<Mutex<std::collections::HashSet<String>>>,
     dirty: Arc<Mutex<std::collections::HashSet<String>>>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
+    worker_slot: Arc<Mutex<Option<Connection>>>,
 ) {
-    // Lazily opened on the first pass that needs it; owned by the
-    // worker thread for its lifetime.
-    let mut worker_conn: Option<Connection> = None;
+    // Lazily opened on the first pass that needs it, into the session's
+    // shared slot (WB-31), which this loop locks once per job and never
+    // across `recv`.
     while let Ok(job) = rx.recv() {
         #[cfg(test)]
         let job = match job {
@@ -1719,6 +1734,9 @@ fn compaction_worker_loop(
         if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
             break;
         }
+        let mut worker_conn = worker_slot
+            .lock()
+            .expect("compaction worker connection mutex");
         // Single-flight THROUGH completion (adversarial review): the
         // log stays claimed in `queued` for the whole drain below, so
         // triggers landing at ANY point — first run, follow-up runs,
@@ -1757,7 +1775,7 @@ fn compaction_worker_loop(
             // existing log and derived index remain mutually consistent,
             // then retry on a later trigger.
             if worker_conn.is_none() {
-                worker_conn = open_worker_connection(&cache_dir)
+                *worker_conn = open_worker_connection(&cache_dir)
                     .map_err(|e| {
                         log::warn!("compaction worker db connection failed");
                         log::debug!("compaction worker db failure detail: {e}");
@@ -2220,6 +2238,42 @@ impl VaultSession {
     pub fn graph_drop_for_bench(&self) {
         let mut guard = self.graph.lock().expect("graph index mutex");
         self.graph_drop_locked(&mut guard);
+    }
+
+    /// Plan 44 WB-31 (#1484): the page-cache counters of this session's
+    /// main connection and, once it has opened, the oplog compactor's. Each
+    /// connection is locked only for its own read, the main one released
+    /// before the worker's is taken, so a reading never holds both. For the
+    /// two-session bench and its facts; no production caller.
+    #[doc(hidden)]
+    pub fn db_cache_status(&self) -> DbCacheStatus {
+        let main = {
+            let conn = self.conn.lock().expect("db connection mutex");
+            db::connection_cache_counters(&conn)
+        };
+        let worker = self
+            .worker_conn
+            .lock()
+            .expect("compaction worker connection mutex")
+            .as_ref()
+            .map(db::connection_cache_counters);
+        DbCacheStatus { main, worker }
+    }
+
+    /// Test seam (WB-31): opens the compactor's connection into its shared
+    /// slot as the compactor does on its first pass, so a fact can read it
+    /// without provoking a compaction.
+    #[cfg(test)]
+    pub(crate) fn open_worker_connection_for_tests(&self) {
+        let mut slot = self
+            .worker_conn
+            .lock()
+            .expect("compaction worker connection mutex");
+        if slot.is_none() {
+            *slot = Some(
+                open_worker_connection(&self.interior).expect("open the compactor's connection"),
+            );
+        }
     }
 
     /// Bench-only seam (#553): drop the metrics cache so the next
@@ -2712,6 +2766,7 @@ impl VaultSession {
         let compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>> =
             Arc::new(Mutex::new(std::collections::HashSet::new()));
         let compaction_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_conn: Arc<Mutex<Option<Connection>>> = Arc::new(Mutex::new(None));
         let (compaction_tx, compaction_rx) = std::sync::mpsc::channel::<CompactionJob>();
         let worker_tx = compaction_tx.clone();
         let compaction_join = {
@@ -2724,6 +2779,7 @@ impl VaultSession {
             let queued = Arc::clone(&compaction_queued);
             let dirty = Arc::clone(&compaction_dirty);
             let shutdown = Arc::clone(&compaction_shutdown);
+            let slot = Arc::clone(&worker_conn);
             std::thread::Builder::new()
                 .name("slate-oplog-compactor".into())
                 .spawn(move || {
@@ -2739,6 +2795,7 @@ impl VaultSession {
                         queued,
                         dirty,
                         shutdown,
+                        slot,
                     );
                 })
                 .expect("spawn compaction worker")
@@ -2747,6 +2804,7 @@ impl VaultSession {
         let session = Self {
             provider,
             conn: Mutex::new(conn),
+            worker_conn,
             directory_cursor_nonce,
             change_feed,
             config,
@@ -22872,6 +22930,49 @@ mod tests {
 
     mod fault_guard;
     mod rename_planning;
+
+    mod two_sessions;
+}
+
+/// Plan 44 WB-31: the environment variable naming the one test a
+/// [`run_alone`] child process runs.
+#[cfg(test)]
+const ALONE_CHILD_VARIABLE: &str = "SLATE_WB31_CHILD";
+
+/// Plan 44 WB-31: runs the test `child` (its full path) alone in a fresh
+/// copy of this test binary, and asserts it succeeded. With
+/// `SQLITE_ENABLE_MEMORY_MANAGEMENT` every connection in a process draws on
+/// one page pool, so a fact asserting an exact cache or process reading is
+/// deterministic only where no other test opens a connection; the child
+/// runs its body only there ([`is_alone_child`]).
+#[cfg(test)]
+pub(crate) fn run_alone(child: &str) {
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([child, "--exact", "--nocapture", "--test-threads=1"])
+        .env(ALONE_CHILD_VARIABLE, child)
+        .output()
+        .expect("run the child test alone");
+    assert!(
+        output.status.success(),
+        "the alone child {child} failed ({}):\n--- stdout\n{}\n--- stderr\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // A filter that matched nothing would also exit 0.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the alone child {child} did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// Plan 44 WB-31: whether this process is the one [`run_alone`] started for
+/// `child`. Every child test returns at once unless it is, so the ordinary
+/// suite runs each child as a no-op.
+#[cfg(test)]
+pub(crate) fn is_alone_child(child: &str) -> bool {
+    std::env::var(ALONE_CHILD_VARIABLE).is_ok_and(|named| named == child)
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

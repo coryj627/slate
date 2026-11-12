@@ -133,6 +133,7 @@ jobs:
           -- --skip census_
           --skip perf_guard_root_listing_under_100ms_on_10k_files
           --skip perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
+          --skip perf_guard_two_sessions_do_not_evict_each_others_cache
       - name: Windows CLI witnesses
         run: cargo test -p slate-cli --profile ci --locked
       - name: Model verifier and parity contracts
@@ -442,7 +443,10 @@ jobs:
     # Includes Namespace candidates. No model dependency or desktop sharing.
     needs: [build-app]
     runs-on: ${{ inputs.runner == 'home' && 'slate-win-shell' || 'windows-latest' }}
-    timeout-minutes: 20
+    # windows.yml's twin of this gate: the journeys took 12-18 minutes on
+    # windows-latest by October 2026 (WB-22's two find journeys crossed the
+    # old 20). 35 is about twice a run: a hang still stops early.
+    timeout-minutes: 35
     defaults:
       run:
         shell: pwsh

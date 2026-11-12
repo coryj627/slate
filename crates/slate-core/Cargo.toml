@@ -121,6 +121,10 @@ name = "scan_bench"
 harness = false
 
 [[bench]]
+name = "two_sessions_bench"
+harness = false
+
+[[bench]]
 name = "directory_page_bench"
 harness = false
 

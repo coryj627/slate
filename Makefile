@@ -33,8 +33,13 @@ help:
 check:
 	cargo check --workspace
 
+# Plan 44 WB-31: the two-session guard times rescans, so the bulk run skips
+# it and it runs alone, in an optimised build, as rust.yml's isolated step
+# does.
+TWO_SESSIONS_PERF_GUARD := session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache
 test:
-	cargo test --workspace
+	cargo test --workspace -- --skip perf_guard_two_sessions_do_not_evict_each_others_cache
+	cargo test -p slate-core --release --locked $(TWO_SESSIONS_PERF_GUARD) -- --exact --test-threads=1
 
 # Fast local sweep mirroring the CI test lane: cargo-nextest + the `ci`
 # cargo profile (opt-level 2, debug-assertions/overflow-checks still on —
@@ -49,11 +54,13 @@ ROOT_LISTING_PERF_GUARD := session::tests::dir_tree::perf_guard_root_listing_und
 UNRESOLVED_LINK_PERF_GUARD := session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
 test-fast:
 	cargo nextest run --workspace --cargo-profile ci --locked --no-fail-fast \
-		-E "not test($(ROOT_LISTING_PERF_GUARD)) and not test($(UNRESOLVED_LINK_PERF_GUARD))"
+		-E "not test($(ROOT_LISTING_PERF_GUARD)) and not test($(UNRESOLVED_LINK_PERF_GUARD)) and not test($(TWO_SESSIONS_PERF_GUARD))"
 	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
 		-E "test(=$(ROOT_LISTING_PERF_GUARD))"
 	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
 		-E "test(=$(UNRESOLVED_LINK_PERF_GUARD))"
+	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
+		-E "test(=$(TWO_SESSIONS_PERF_GUARD))"
 	cargo test --workspace --doc --profile ci --locked
 
 fmt:
