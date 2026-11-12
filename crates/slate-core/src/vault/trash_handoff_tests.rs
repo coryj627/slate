@@ -571,53 +571,6 @@ fn a_junction_vault_root_still_trashes_beneath_its_target() {
     std::fs::remove_dir(&root).unwrap();
 }
 
-/// Windows' rule (#1477), error by error: only the codes for an absent target
-/// make a link dangling, so Windows unlinks it until the Recycle Bin is
-/// checked with one (#1499). Every other failure to follow a link, including
-/// the I/O and network failures no fixture can provoke, leaves its target
-/// unproven absent, and the link goes to the Recycle Bin. macOS and Linux
-/// trash every link (#1495).
-#[cfg(windows)]
-#[test]
-fn only_a_target_windows_reports_absent_makes_a_link_dangling() {
-    use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_BAD_NET_NAME, ERROR_BAD_NETPATH, ERROR_CANT_RESOLVE_FILENAME,
-        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INVALID_DRIVE, ERROR_INVALID_NAME,
-        ERROR_NOT_READY, ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION,
-        ERROR_SYMLINK_CLASS_DISABLED,
-    };
-    let absent = [
-        ERROR_FILE_NOT_FOUND as i32,
-        ERROR_PATH_NOT_FOUND as i32,
-        ERROR_DIRECTORY as i32,
-    ];
-    let unproven = [
-        ERROR_ACCESS_DENIED as i32,
-        ERROR_SHARING_VIOLATION as i32,
-        ERROR_CANT_RESOLVE_FILENAME as i32,
-        ERROR_INVALID_NAME as i32,
-        ERROR_INVALID_DRIVE as i32,
-        ERROR_BAD_NETPATH as i32,
-        ERROR_BAD_NET_NAME as i32,
-        ERROR_NOT_READY as i32,
-        ERROR_SYMLINK_CLASS_DISABLED as i32,
-    ];
-    for code in absent {
-        let error = std::io::Error::from_raw_os_error(code);
-        assert!(link_target_is_absent(&error), "{error}: an absent target");
-    }
-    for code in unproven {
-        let error = std::io::Error::from_raw_os_error(code);
-        assert!(
-            !link_target_is_absent(&error),
-            "{error}: not proof of absence"
-        );
-    }
-    assert!(!link_target_is_absent(&std::io::Error::other(
-        "a failure with no OS code"
-    )));
-}
-
 /// Denies everyone every right on `file` until this drops (`icacls`), so
 /// nothing can open it, and its owner can still lift the denial.
 #[cfg(windows)]
@@ -655,29 +608,46 @@ impl Drop for Denied {
     }
 }
 
-/// #1477 on Windows: a link whose target is missing is still unlinked, a
-/// file link with `DeleteFile` and a folder link with `RemoveDirectory`, and
-/// nothing reaches the Recycle Bin. macOS and Linux trash such a link (#1495);
-/// Windows keeps unlinking it until the Recycle Bin is checked with one on a
-/// scratch VM (#1499).
+/// #1499 on Windows: a link whose target is missing goes to the Recycle Bin
+/// as the link, a file link and a folder link alike, as on macOS and Linux
+/// (#1495). On a scratch volume the real Recycle Bin took every kind in
+/// #1499's list as the link, and Restore brought each one back
+/// (`real_trash_on_windows_takes_each_dangling_link_kind_as_the_link`). Until
+/// then Windows unlinked such a link for good, with nothing to restore.
 #[cfg(windows)]
 #[test]
-fn windows_a_link_whose_target_is_missing_is_still_unlinked() {
+fn windows_a_link_whose_target_is_missing_goes_to_the_recycle_bin_as_the_link() {
     let f = fixture();
     let vault = f.vault.path();
     std::os::windows::fs::symlink_file(vault.join("gone.md"), vault.join("sub/missing.md"))
         .unwrap();
     std::os::windows::fs::symlink_dir(vault.join("gone"), vault.join("missing-folder")).unwrap();
-    for link in ["sub/missing.md", "missing-folder"] {
-        let error = std::fs::metadata(vault.join(link)).unwrap_err();
-        assert!(link_target_is_absent(&error), "{link}: {error:?}");
+    for (link, leaf) in [
+        ("sub/missing.md", "missing.md"),
+        ("missing-folder", "missing-folder"),
+    ] {
+        let text = std::fs::read_link(vault.join(link)).unwrap();
+        assert!(
+            std::fs::metadata(vault.join(link)).is_err(),
+            "{link} dangles"
+        );
         f.provider.delete(link).unwrap();
         assert!(
             vault.join(link).symlink_metadata().is_err(),
-            "{link} is unlinked"
+            "{link} left the vault"
         );
+        assert_in_the_bin_as_the_link(&f.trash, leaf, &text);
     }
-    assert!(f.trash.handed().is_empty(), "{:?}", f.trash.handed());
+    let root = std::fs::canonicalize(vault).unwrap();
+    assert_eq!(
+        f.trash.handed(),
+        vec![
+            root.join("sub").join("missing.md"),
+            root.join("missing-folder")
+        ],
+        "both links are handed to the Recycle Bin, never unlinked"
+    );
+    assert!(!vault.join("gone.md").exists() && !vault.join("gone").exists());
 }
 
 /// #1477 on Windows: a link whose target exists but cannot be opened goes to

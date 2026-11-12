@@ -2708,18 +2708,12 @@ impl FsVaultProvider {
                 super::trash_handoff::pinned_path(&self.pinned_root()?, vault_relative, relative)?;
             // `symlink_metadata` does not follow the leaf, so a broken symlink
             // still passes; the raw io::Error keeps its kind.
-            let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
-            // Windows alone still unlinks a link whose target the system
-            // reports absent: the Recycle Bin may reject one, and nobody has
-            // checked (#1499; macOS and Linux trash it, #1495). A link whose
-            // target Slate cannot open, a loop, or any other failure goes to
-            // the Recycle Bin as the link (#1477).
-            if meta.file_type().is_symlink()
-                && fs::metadata(&handed)
-                    .is_err_and(|error| super::trash_handoff::link_target_is_absent(&error))
-            {
-                return unlink_dangling_symlink(&handed, &meta).map_err(VaultError::Io);
-            }
+            handed.symlink_metadata().map_err(VaultError::Io)?;
+            // Every entry goes to the Recycle Bin, and a link goes as the link
+            // whether or not its target resolves, as on macOS and Linux
+            // (#1495): on a scratch volume the Recycle Bin took every kind of
+            // dangling link in #1499's list as the link, and Restore brought
+            // each one back (WB-24).
             self.trash.trash(&handed)
         }
 
@@ -2824,24 +2818,6 @@ fn open_nofollow(path: &Path) -> io::Result<fs::File> {
 #[cfg(not(unix))]
 fn open_nofollow(path: &Path) -> io::Result<fs::File> {
     fs::File::open(path)
-}
-
-/// Remove a dangling symlink entry on Windows. (Unix unlinks it relative to
-/// its pinned parent: `pinned_root::RenameEnd::unlink`.)
-///
-/// Symlinks carry a type flag at creation time. A symlink declared as a
-/// directory symlink must be removed with `RemoveDirectory`
-/// (`fs::remove_dir`); calling `DeleteFile` (`fs::remove_file`) on it
-/// fails with `ERROR_ACCESS_DENIED`. The flag is exposed via
-/// `FileTypeExt::is_symlink_dir`.
-#[cfg(windows)]
-fn unlink_dangling_symlink(path: &Path, meta: &fs::Metadata) -> io::Result<()> {
-    use std::os::windows::fs::FileTypeExt;
-    if meta.file_type().is_symlink_dir() {
-        fs::remove_dir(path)
-    } else {
-        fs::remove_file(path)
-    }
 }
 
 /// The vault-relative folder that holds `relative`'s final component (`""`

@@ -1405,6 +1405,27 @@ fn what_undo_and_the_trash_do_in_a_onedrive_placeholder_vault() {
         std::path::PathBuf::from(std::env::var_os("SLATE_ONEDRIVE_PROBE_FOLDER").expect(
             "set SLATE_ONEDRIVE_PROBE_FOLDER to a folder in a OneDrive with Files On-Demand",
         ));
+    // Whether a process sees a placeholder as a reparse point is its own
+    // setting (`RtlSetProcessPlaceholderCompatibilityMode`): a test binary
+    // with no manifest sees them disguised as plain folders. The probe runs
+    // the walks as a process that sees them exposed, and says which it was.
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlQueryProcessPlaceholderCompatibilityMode() -> i8;
+        fn RtlSetProcessPlaceholderCompatibilityMode(mode: i8) -> i8;
+    }
+    // SAFETY: both read or set this process's own mode and take no pointers.
+    let (before, _) = unsafe {
+        (
+            RtlQueryProcessPlaceholderCompatibilityMode(),
+            RtlSetProcessPlaceholderCompatibilityMode(2),
+        )
+    };
+    // SAFETY: as above.
+    let now = unsafe { RtlQueryProcessPlaceholderCompatibilityMode() };
+    println!(
+        "WB-24 ONEDRIVE MODE | placeholder compatibility mode {before} before, {now} now (1 disguised, 2 exposed)"
+    );
     let root = folder.join(format!("vault-{}", std::process::id()));
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/a.md"), b"# A\n").unwrap();

@@ -23,11 +23,11 @@
 //! a reason core writes, the shape the rename refusal uses, and happens
 //! before any filesystem mutation.
 //!
-//! On macOS and Linux every item reaches the Trash, and a symbolic link goes
-//! as the link itself, whether or not its target resolves: Move to Trash
-//! never deletes for good (#1477, #1495). Windows alone still unlinks a link
-//! whose target is truly absent instead, until the Recycle Bin is checked
-//! with one ([`link_target_is_absent`], #1499).
+//! Every item reaches the Trash, and a symbolic link goes as the link itself,
+//! whether or not its target resolves: Move to Trash never deletes for good
+//! (#1477, #1495). Windows did the same once the Recycle Bin was checked with
+//! every kind of dangling link on a scratch volume (#1499, WB-24): each went
+//! in as the link, and Restore brought it back.
 //!
 //! What remains is the race between this derivation and the Trash call's own
 //! resolution of the path. Only a handle-bound Trash API could close it, and
@@ -235,39 +235,6 @@ fn moved(original: &str) -> VaultError {
         original,
         "a folder in this path moved after it was checked, so nothing was moved to the Trash",
     )
-}
-
-/// Windows only: whether following a symbolic link failed because its
-/// target is truly absent (#1477). Only then does `delete` unlink the link
-/// rather than hand it to the Recycle Bin, which may reject a dangling link;
-/// nobody has checked yet (#1499). Absent means the system reports nothing
-/// there: `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`, or `ERROR_DIRECTORY`
-/// (`ENOTDIR`'s counterpart; std maps both to `NotADirectory`).
-///
-/// Every other failure leaves the target unproven absent, so the link goes to
-/// the Recycle Bin as the link: a target Slate cannot open
-/// (`ERROR_ACCESS_DENIED`), a drive or share that is missing or unreachable
-/// now (`ERROR_INVALID_DRIVE`, `ERROR_BAD_NETPATH`, `ERROR_BAD_NET_NAME`,
-/// which std also calls `NotFound`), a loop (`ERROR_CANT_RESOLVE_FILENAME`),
-/// and any I/O or network failure. Before #1477 every failure counted as
-/// absent, so each such link was unlinked for good, with no error.
-///
-/// macOS and Linux no longer ask (#1495): every link goes to their Trash as
-/// the link. On a scratch APFS volume `NSFileManager` moved every kind, a
-/// dangling link and a link through a file included, into the Trash as the
-/// link with its Put Back records, and trash-rs renames the link itself into
-/// the freedesktop Trash.
-#[cfg(windows)]
-pub(super) fn link_target_is_absent(error: &std::io::Error) -> bool {
-    use windows_sys::Win32::Foundation::{
-        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
-    };
-    error.raw_os_error().is_some_and(|code| {
-        matches!(
-            u32::try_from(code),
-            Ok(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_DIRECTORY)
-        )
-    })
 }
 
 /// The path to hand the system Trash for `leaf` inside the pinned `parent`:
