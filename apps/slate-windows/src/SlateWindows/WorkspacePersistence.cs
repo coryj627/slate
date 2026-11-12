@@ -97,6 +97,10 @@ internal sealed class WorkspacePersistence
     /// </summary>
     private VaultRootAnchor Root => _root ?? VaultRootAnchor.ByPathForTests(_vaultRoot);
 
+    /// <summary>Test seam (#1869): runs at each attempt that found the file
+    /// held, with the attempt's index, before the wait.</summary>
+    internal Action<int>? HeldAttemptForTests { get; set; }
+
     public WorkspacePersistence(
         string vaultRoot,
         Action? afterDirectoryAnchored = null,
@@ -114,7 +118,9 @@ internal sealed class WorkspacePersistence
             using AnchoredVaultStore? store = AnchoredVaultStore.Open(
                 Root,
                 createDirectory: false,
-                _afterDirectoryAnchored);
+                _afterDirectoryAnchored,
+                heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+                heldAttempt: HeldAttemptForTests);
             byte[]? input = store?.ReadAllBytesBounded(WorkspaceFileName, MaxFileBytes);
             if (input is null)
             {
@@ -183,7 +189,9 @@ internal sealed class WorkspacePersistence
         using AnchoredVaultStore store = AnchoredVaultStore.Open(
             Root,
             createDirectory: true,
-            _afterDirectoryAnchored)
+            _afterDirectoryAnchored,
+            heldBackoff: AnchoredVaultStore.BriefHeldFileBackoff,
+            heldAttempt: HeldAttemptForTests)
             ?? throw new IOException("Could not anchor the workspace store directory.");
         using var output = new BoundedMemoryStream(MaxFileBytes);
         using (var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true }))
