@@ -1343,6 +1343,10 @@ fn recycled_entries(volume: &Path) -> Vec<Recycled> {
                 continue;
             };
             let bytes = std::fs::read(record.path()).unwrap();
+            // A record too short for its header is not one this probe can read.
+            if bytes.len() < 28 {
+                continue;
+            }
             let units = |from: usize, count: usize| -> String {
                 let wide: Vec<u16> = bytes[from..(from + count * 2).min(bytes.len())]
                     .as_chunks::<2>()
