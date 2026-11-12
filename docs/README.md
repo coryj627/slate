@@ -13,7 +13,7 @@ source of truth.
 - [`plans/05_locked_architecture_decisions.md`](plans/05_locked_architecture_decisions.md) — **the canonical reference.** The locked decisions every milestone inherits (native-UI-per-platform, accessibility owned by the Rust core, content pipelines, editor model, queries/Bases, FFI tooling, platform order).
 - [`plans/06_v1_milestones.md`](plans/06_v1_milestones.md) — the V1 milestone decomposition (A–R) and the rule that a program doc supersedes this file where they differ.
 - [`plans/07_portability_review.md`](plans/07_portability_review.md) — the accessibility + Windows-reuse review that shapes the FFI boundary and the editor/spans work.
-- [`plans/13_repo_structure.md`](plans/13_repo_structure.md) — ADR: single monorepo, one native app per `apps/slate-<platform>/`.
+- [`plans/13_repo_structure.md`](plans/13_repo_structure.md) — ADR: single monorepo, one native app per `apps/slate-<platform>/`; the 2026-11-12 addendum keeps iOS and Android in it and sets the preconditions for mobile work.
 - [`plans/14_l10n.md`](plans/14_l10n.md) — localization strategy (umbrella, not a milestone).
 
 ## Origin documents
