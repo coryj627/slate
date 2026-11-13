@@ -1529,6 +1529,43 @@ own rust-lane step.
   1.25x of A alone, and A's cache must hold between rescans. Under 0.38.2's
   shared pool it read 1.44.
 
+**The timing guard's reading (#1923).** The guard compared medians of six
+rescans, with "alone" read only before B opened. Once #1918 made the rescan
+about 46 ms on the Linux runner, one CI run read 1.25 under 0.39.1, with no
+shared pool. Now:
+- each phase reads the **median** of 12 rescans;
+- "alone" is read before B opens and again after B closes, and the median of
+  both counts, so a runner slowing steadily through a reading cancels out;
+- a reading over 1.25 is taken once more from fresh sessions, and the guard
+  fails only when both are over.
+
+Synthetic-sample facts pin each rule:
+- a slowdown of 7 rescans in 12 fails;
+- a steady drift reads 1.00;
+- a second reading is taken only after one over the limit.
+
+Taking each phase's fastest rescan was considered and dropped: one fast
+rescan among eleven slow ones would hide a partial regression.
+
+Ratios measured on CDESK, `ci` profile, three rounds per row, 15 rescans per
+phase, "alone" read only before B:
+
+| Vault | 0.39.1, median | 0.38.2, median |
+|---|---:|---:|
+| 2,500 notes, 256 pages | 0.98–1.00 | 1.55–1.56 |
+| 5,000 notes, 512 pages | 0.78–1.01 | 1.26–1.37 |
+| 10,000 notes, 1,024 pages | 0.98–1.01 | 1.09–1.10 |
+
+- **Vault size:** a larger vault narrows the gap, so the guard stays at 2,500
+  notes.
+- **The 0.78:** a round whose "alone" phase ran slow, the drift the bracket
+  now cancels.
+- **The new reading on 0.39.1:** 8 readings, 0.99–1.03. The guard passed 8
+  runs of 8.
+- **The new reading on 0.38.2:** it failed 3 runs of 3, every reading 1.55 to
+  1.62. Its "alone" median stayed at 0.078–0.079 s, so A recovers once B
+  closes, and the bracket hides nothing.
+
 ## A no-change rescan under SQLite 3.54 (#1912)
 
 #1911 moved the bundled SQLite from 3.53.2 to 3.54.1, and a no-change rescan
