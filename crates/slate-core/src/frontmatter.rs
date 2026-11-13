@@ -303,6 +303,40 @@ pub fn split_note(source: &str) -> NoteParts {
     }
 }
 
+/// A note split at its frontmatter boundary, with the body's place in the
+/// whole text: what a host's body-only buffer is built from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteSplit {
+    pub fm_source: String,
+    pub body: String,
+    /// Body start in the whole text, UTF-8 bytes.
+    pub body_byte_offset: u64,
+    /// Newlines before the body start (whole-text line → body line).
+    pub body_line_offset: u32,
+}
+
+/// [`split_note`] with the body's offsets, computed exactly as
+/// `VaultSession::read_note_parts` computes them for a file's bytes (it
+/// calls this), so a buffer built from kept text (plan 43 PR 29 §5) and
+/// one loaded from disk agree. The body is a suffix of `source`
+/// (`split_note` never rewrites bytes), so the prefix length is the
+/// difference.
+#[must_use]
+pub fn split_note_with_offsets(source: &str) -> NoteSplit {
+    let parts = split_note(source);
+    let body_byte_offset = source.len() - parts.body.len();
+    let body_line_offset = source[..body_byte_offset]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count() as u32;
+    NoteSplit {
+        fm_source: parts.fm_source,
+        body: parts.body,
+        body_byte_offset: body_byte_offset as u64,
+        body_line_offset,
+    }
+}
+
 /// Compose a frontmatter source and a body back into a note, applying
 /// the **canonical** delimiter shape.
 ///

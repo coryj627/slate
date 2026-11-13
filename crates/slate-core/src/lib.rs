@@ -138,9 +138,9 @@ pub use embeds::{
     MAX_EMBED_PREVIEW_TEXT_BYTES, NestedEmbed,
 };
 pub use frontmatter::{
-    NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
-    frontmatter_range, frontmatter_top_level_keys, set_property_in_source, split_note,
-    validate_frontmatter_source,
+    NoteParts, NoteSplit, Property, PropertyParseWarning, PropertyValue, compose_note,
+    extract_frontmatter, frontmatter_range, frontmatter_top_level_keys, set_property_in_source,
+    split_note, split_note_with_offsets, validate_frontmatter_source,
 };
 pub use history_prefs::HistoryPrefs;
 pub use link_resolver::{

@@ -163,6 +163,20 @@ pub enum HotExitRefusal {
     TooManyVaults,
 }
 
+impl HotExitRestore {
+    /// The vault-relative path the decision opens.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Restore { path }
+            | Self::RestoreStale { path }
+            | Self::ExistsNow { path }
+            | Self::Gone { path }
+            | Self::Recovered { path } => path,
+        }
+    }
+}
+
 impl HotExitRefusal {
     /// Core's reason sentence fragment (§4), for `UnsavedNotesNotKept`.
     pub fn reason(self) -> &'static str {
@@ -200,6 +214,52 @@ pub enum HotExitRestore {
     /// The path no longer validates: a new note at `path`, a free
     /// `Recovered note.md` name at the vault root.
     Recovered { path: String },
+}
+
+/// One tab a restore installs a kept buffer into (plan 43 PR 29 §7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotExitPlannedTab {
+    /// For [`HotExitRestorePlan::layout`] and [`HotExitRestorePlan::displaced`]
+    /// the layout tab's own id; for [`HotExitRestorePlan::new_tabs`] the
+    /// entry's id, which the host keeps as the tab's recovery id.
+    pub entry_id: String,
+    /// The kept entry the tab is restored from (for a displaced tab, the
+    /// entry whose text it shows).
+    pub entry: HotExitEntry,
+    pub decision: HotExitRestore,
+    /// Where the tab opens: the decision's path.
+    pub path: String,
+    /// The buffer the tab holds.
+    pub text: String,
+    /// The snapshot's current claim on `entry_id`, when one names it: the
+    /// incarnation the tab's first claim expects (WB-29 §2, §5).
+    pub observed_claim: Option<String>,
+}
+
+/// A peer's entry whose text another peer's recovered note already
+/// carries: retired once the workspace is built, never a second note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotExitRedundantEntry {
+    pub entry_id: String,
+    /// The entry's payload incarnation, and its observed claim's when that
+    /// differs.
+    pub incarnations: Vec<String>,
+}
+
+/// How a snapshot's entries come back into a workspace (plan 43 PR 29
+/// §7; the rules of WB-29 §5, which both hosts share).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HotExitRestorePlan {
+    /// Entries restored into the layout tab that holds their id.
+    pub layout: Vec<HotExitPlannedTab>,
+    /// Layout tabs whose id a recovered peer took: the host gives each a
+    /// fresh id; it shows the latest text of its note.
+    pub displaced: Vec<HotExitPlannedTab>,
+    /// Entries no layout tab holds, in `written_at` order.
+    pub new_tabs: Vec<HotExitPlannedTab>,
+    /// Current claims with no payload.
+    pub orphan_claims: Vec<HotExitCurrentClaim>,
+    pub redundant: Vec<HotExitRedundantEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

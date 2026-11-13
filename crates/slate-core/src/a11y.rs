@@ -3568,6 +3568,11 @@ pub const HOT_EXIT_REASON_HELD_ELSEWHERE: &str =
     "another Slate window is still using this vault's kept copies";
 pub const HOT_EXIT_REASON_EARLIER_WORK_PENDING: &str =
     "Slate is still finishing earlier work on this vault's kept copies";
+/// Plan 43 PR 29 §4: a quit or switch with a draft that is not a tab
+/// buffer (a property draft, a note recovered from the Trash) keeps the
+/// prompt, since only tab buffers are kept.
+pub const HOT_EXIT_REASON_DRAFTS_NOT_KEPT: &str =
+    "unsaved property changes and notes recovered from the Trash are not kept";
 
 /// The discard-pending prompt's choices (plan 44 WB-29 §4, §7; owner call
 /// D-1): its message is [`A11yEvent::UnsavedNotesNotDiscarded`].
@@ -7145,6 +7150,11 @@ mod tests {
                 HOT_EXIT_REASON_TIMED_OUT,
                 "Your unsaved notes cannot be kept for next time: saving them took longer than \
                  4 seconds.",
+            ),
+            (
+                HOT_EXIT_REASON_DRAFTS_NOT_KEPT,
+                "Your unsaved notes cannot be kept for next time: unsaved property changes and \
+                 notes recovered from the Trash are not kept.",
             ),
         ] {
             let event = A11yEvent::UnsavedNotesNotKept {
