@@ -648,10 +648,13 @@ jobs:
           foreach ($fact in $facts) {
             if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
           }
+          # Each fact runs whatever the other did, so one run reports both.
+          $failed = @()
           foreach ($fact in $facts) {
             cargo test -p slate-core --profile ci --locked --lib $fact -- --ignored --test-threads=1 --nocapture
-            if ($LASTEXITCODE -ne 0) { throw "$fact failed ($LASTEXITCODE)" }
+            if ($LASTEXITCODE -ne 0) { $failed += "$fact ($LASTEXITCODE)" }
           }
+          if ($failed.Count -gt 0) { throw "failed: $($failed -join ', ')" }
 
       - name: Detach the VHDs
         if: ${{ always() }}
