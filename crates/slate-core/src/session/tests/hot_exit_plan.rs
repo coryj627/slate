@@ -279,6 +279,9 @@ struct SpellingProvider {
     inner: FsVaultProvider,
     physical: HashMap<String, String>,
     canonical: HashMap<String, Result<Option<String>, ()>>,
+    /// `stat` of any path containing this fails with an error that is not
+    /// "no such file": a volume that does not answer.
+    refuse_stat_containing: Option<&'static str>,
 }
 
 impl SpellingProvider {
@@ -310,6 +313,14 @@ impl crate::VaultProvider for SpellingProvider {
         self.inner.create_dir(self.map(relative))
     }
     fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        if self
+            .refuse_stat_containing
+            .is_some_and(|needle| relative.contains(needle))
+        {
+            return Err(VaultError::Io(std::io::Error::other(
+                "the volume did not answer",
+            )));
+        }
         self.inner.stat(self.map(relative))
     }
     fn canonical_path(&self, relative: &str) -> Result<Option<String>, VaultError> {
@@ -336,7 +347,17 @@ fn spelling_session(
     physical: &[(&str, &str)],
     canonical: &[(&str, Result<Option<&str>, ()>)],
 ) -> VaultSession {
+    spelling_session_refusing(root, physical, canonical, None)
+}
+
+fn spelling_session_refusing(
+    root: &Path,
+    physical: &[(&str, &str)],
+    canonical: &[(&str, Result<Option<&str>, ()>)],
+    refuse_stat_containing: Option<&'static str>,
+) -> VaultSession {
     let provider = SpellingProvider {
+        refuse_stat_containing,
         inner: FsVaultProvider::new(root.to_path_buf()),
         physical: physical
             .iter()
@@ -492,4 +513,81 @@ fn split_note_offsets_are_read_note_parts_offsets() {
             "{text:?}"
         );
     }
+}
+
+/// Peers whose texts are all the latest are one buffer: every tab keeps
+/// its own place with that text; none is redundant or recovered.
+#[test]
+fn peers_sharing_the_latest_text_each_keep_their_tab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = session_at(root);
+    let baseline = Some(hash_of(root, "a.md"));
+    let snap = snapshot(
+        vec![
+            entry("p1", "a.md", "same", baseline.clone(), 1),
+            entry("p2", "a.md", "same", baseline, 2),
+        ],
+        vec![],
+    );
+
+    let plan = session.plan_hot_exit_restore(&snap, &ids(&["p1"]));
+
+    assert_eq!(planned(&plan.layout, "p1").text, "same");
+    assert_eq!(planned(&plan.new_tabs, "p2").text, "same");
+    assert_eq!(plan.new_tabs.len(), 1);
+    assert!(plan.displaced.is_empty() && plan.redundant.is_empty());
+}
+
+/// Entries of one instant keep the snapshot's order among the new tabs,
+/// whichever pass (a peer group or the rest) planned them.
+#[test]
+fn new_tabs_of_one_instant_keep_the_snapshots_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = session_at(root);
+    let baseline = Some(hash_of(root, "a.md"));
+    let snap = snapshot(
+        vec![
+            entry("g", "gone.md", "gone", Some("h".into()), 5),
+            entry("p1", "a.md", "same", baseline.clone(), 5),
+            entry("p2", "a.md", "same", baseline, 5),
+            entry("n", "new.md", "new", None, 5),
+        ],
+        vec![],
+    );
+
+    let plan = session.plan_hot_exit_restore(&snap, &ids(&["p1"]));
+
+    let order: Vec<&str> = plan.new_tabs.iter().map(|t| t.entry_id.as_str()).collect();
+    assert_eq!(order, ["g", "p2", "n"]);
+}
+
+/// A vault that never answers for a recovered name gets one made unique by
+/// the entry's id, reduced to the store's id alphabet and 64 characters.
+#[test]
+fn a_vault_that_never_answers_names_the_recovered_note_by_its_entry_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = spelling_session_refusing(root, &[], &[], Some("(recovered"));
+    let baseline = Some(hash_of(root, "a.md"));
+    let odd_id = format!("p1-\u{2713}/..\u{e9}_{}", "x".repeat(80));
+    let snap = snapshot(
+        vec![
+            entry(&odd_id, "a.md", "older", baseline.clone(), 1),
+            entry("p2", "a.md", "newer", baseline, 2),
+        ],
+        vec![],
+    );
+
+    let plan = session.plan_hot_exit_restore(&snap, &ids(&[]));
+
+    let id: String = format!("p1-_{}", "x".repeat(80)).chars().take(64).collect();
+    assert_eq!(
+        planned(&plan.new_tabs, &odd_id).path,
+        format!("a (recovered {id}).md")
+    );
 }

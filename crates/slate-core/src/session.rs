@@ -4484,6 +4484,10 @@ impl VaultSession {
     ///   peer with the same text is redundant; a layout tab whose id a
     ///   recovered or redundant peer held is displaced onto the latest
     ///   text;
+    /// - peers whose texts are all the latest are one buffer: each keeps
+    ///   its own tab (layout or new) with that text, and none is redundant;
+    /// - a displaced tab opens at its own entry's path (the spelling it
+    ///   held), showing the latest entry's text;
     /// - current claims with no payload are orphans.
     ///
     /// The host keeps its own id format: it maps a displaced tab to a
@@ -4500,7 +4504,7 @@ impl VaultSession {
         };
         use std::collections::{HashMap, HashSet};
 
-        #[derive(PartialEq, Eq)]
+        #[derive(PartialEq, Eq, Hash)]
         enum PeerKey {
             /// The filesystem's stored spelling of the file.
             Stored(String),
@@ -4545,9 +4549,13 @@ impl VaultSession {
             .iter()
             .map(|(_, decision)| decision.path().to_lowercase())
             .collect();
-        let mut new_tabs: Vec<HotExitPlannedTab> = Vec::new();
+        // Each new tab with its entry's place in the snapshot, the tie-break
+        // for one instant.
+        let mut new_tabs: Vec<(usize, HotExitPlannedTab)> = Vec::new();
 
-        let mut groups: Vec<(PeerKey, Vec<usize>)> = Vec::new();
+        // Groups in order of first appearance, found by key in O(1).
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut group_of: HashMap<PeerKey, usize> = HashMap::new();
         for (index, (_, decision)) in kept.iter().enumerate() {
             if !matches!(
                 decision,
@@ -4559,13 +4567,16 @@ impl VaultSession {
                 Ok(Some(stored)) => PeerKey::Stored(stored),
                 _ => PeerKey::Own(index),
             };
-            match groups.iter_mut().find(|(existing, _)| *existing == key) {
-                Some((_, members)) => members.push(index),
-                None => groups.push((key, vec![index])),
+            match group_of.get(&key) {
+                Some(&group) => groups[group].push(index),
+                None => {
+                    group_of.insert(key, groups.len());
+                    groups.push(vec![index]);
+                }
             }
         }
 
-        for (_, members) in &groups {
+        for members in &groups {
             // The last of the latest `written_at` (a stable sort's last).
             let latest_index = members
                 .iter()
@@ -4587,7 +4598,7 @@ impl VaultSession {
                     if layout_tabs.contains(entry.entry_id.as_str()) {
                         plan.layout.push(tab);
                     } else {
-                        new_tabs.push(tab);
+                        new_tabs.push((index, tab));
                     }
                     continue;
                 }
@@ -4623,18 +4634,21 @@ impl VaultSession {
                 if redundant {
                     continue;
                 }
-                new_tabs.push(HotExitPlannedTab {
-                    entry_id: entry.entry_id.clone(),
-                    entry: (*entry).clone(),
-                    decision: HotExitRestore::Recovered { path: name.clone() },
-                    path: name,
-                    text: entry.text.clone(),
-                    observed_claim: observed(entry),
-                });
+                new_tabs.push((
+                    index,
+                    HotExitPlannedTab {
+                        entry_id: entry.entry_id.clone(),
+                        entry: (*entry).clone(),
+                        decision: HotExitRestore::Recovered { path: name.clone() },
+                        path: name,
+                        text: entry.text.clone(),
+                        observed_claim: observed(entry),
+                    },
+                ));
             }
         }
 
-        for (entry, decision) in &kept {
+        for (index, (entry, decision)) in kept.iter().enumerate() {
             if matches!(
                 decision,
                 HotExitRestore::Restore { .. } | HotExitRestore::RestoreStale { .. }
@@ -4645,12 +4659,18 @@ impl VaultSession {
             if layout_tabs.contains(entry.entry_id.as_str()) {
                 plan.layout.push(tab);
             } else {
-                new_tabs.push(tab);
+                new_tabs.push((index, tab));
             }
         }
-        // Stable: entries of one instant keep the snapshot's order.
-        new_tabs.sort_by(|a, b| a.entry.written_at.cmp(&b.entry.written_at));
-        plan.new_tabs = new_tabs;
+        // `written_at`, then the snapshot's order: entries of one instant
+        // keep it whichever pass planned them.
+        new_tabs.sort_by(|(a_index, a), (b_index, b)| {
+            a.entry
+                .written_at
+                .cmp(&b.entry.written_at)
+                .then(a_index.cmp(b_index))
+        });
+        plan.new_tabs = new_tabs.into_iter().map(|(_, tab)| tab).collect();
         plan
     }
 

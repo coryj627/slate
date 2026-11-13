@@ -603,8 +603,8 @@ repair), otherwise none. A crash keeps nothing, as on `main`.
   tab's id for `layout` and `displaced` and the entry's id for
   `new_tabs`. A displaced layout tab's planned tab carries the latest
   entry and text; the host maps its id to a fresh one. `new_tabs` is
-  sorted by `written_at` (stable), where the C# lists peer groups
-  first. The host's id format stays the host's.
+  sorted by `written_at`, then the snapshot's order, where the C# lists
+  peer groups first. The host's id format stays the host's.
 - **`split_note(text) -> NoteSplit { fm_source, body, body_byte_offset,
   body_line_offset }`** over the FFI (`#[uniffi::export]`, beside
   `compose_note`), through core's `split_note_with_offsets`, which
