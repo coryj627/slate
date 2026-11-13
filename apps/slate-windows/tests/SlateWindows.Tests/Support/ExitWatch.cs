@@ -87,6 +87,10 @@ public sealed class ExitWatch : IDisposable
     private readonly object _gate = new();
     private int _handlerCount;
     private volatile bool _wrapped;
+
+    /// <summary>Each kind's handlers run so far, and their summed stopwatch
+    /// ticks.</summary>
+    private readonly Dictionary<string, (int Count, long Ticks)> _kinds = new(StringComparer.Ordinal);
     private long _exitBegan;
     private string? _running;
     private long _runningSince;
@@ -193,12 +197,27 @@ public sealed class ExitWatch : IDisposable
         Note("the process exit began: the watch's first exit handler ran");
     }
 
-    private void ExitHandlersRan(object? sender, EventArgs e) =>
-        Note(Invariant($"the exit handlers ran: {_handlerCount} in {Stopwatch.GetElapsedTime(Volatile.Read(ref _exitBegan)).TotalSeconds:0.000} s"));
+    /// <summary>The closing line totals each kind's time, slowest kind first:
+    /// a CI run spent 5.56 s in 4,674 handlers, nearly all of them under
+    /// <see cref="SlowHandler"/> (#1826).</summary>
+    private void ExitHandlersRan(object? sender, EventArgs e)
+    {
+        string kinds;
+        lock (_kinds)
+        {
+            kinds = string.Join(
+                ", ",
+                _kinds.OrderByDescending(kind => kind.Value.Ticks)
+                    .ThenBy(kind => kind.Key, StringComparer.Ordinal)
+                    .Select(kind => Invariant($"{kind.Value.Count} x {kind.Key} {Stopwatch.GetElapsedTime(0, kind.Value.Ticks).TotalSeconds:0.000} s")));
+        }
+        Note(Invariant($"the exit handlers ran: {_handlerCount} in {Stopwatch.GetElapsedTime(Volatile.Read(ref _exitBegan)).TotalSeconds:0.000} s; by kind: {kinds}"));
+    }
 
     private EventHandler Timed(EventHandler handler, int position)
     {
-        string name = Invariant($"exit handler {position} of {_handlerCount} ({NameOf(handler)})");
+        string kind = NameOf(handler);
+        string name = Invariant($"exit handler {position} of {_handlerCount} ({kind})");
         return (sender, e) =>
         {
             long started = Stopwatch.GetTimestamp();
@@ -211,7 +230,14 @@ public sealed class ExitWatch : IDisposable
             finally
             {
                 Volatile.Write(ref _running, null);
-                TimeSpan took = Stopwatch.GetElapsedTime(started);
+                long ended = Stopwatch.GetTimestamp();
+                lock (_kinds)
+                {
+                    _kinds[kind] = _kinds.TryGetValue(kind, out (int Count, long Ticks) sum)
+                        ? (sum.Count + 1, sum.Ticks + (ended - started))
+                        : (1, ended - started);
+                }
+                TimeSpan took = Stopwatch.GetElapsedTime(started, ended);
                 if (took >= SlowHandler)
                 {
                     Note(Invariant($"{name} took {took.TotalSeconds:0.000} s"));

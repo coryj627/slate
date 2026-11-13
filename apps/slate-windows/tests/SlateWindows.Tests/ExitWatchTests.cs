@@ -81,7 +81,7 @@ public sealed class ExitWatchTests : IDisposable
         Assert.EndsWith(" the last test finished", log[1], StringComparison.Ordinal);
         Assert.Contains(" 1 exit handlers are registered: ", log[2], StringComparison.Ordinal);
         Assert.EndsWith(" the process exit began: the watch's first exit handler ran", log[3], StringComparison.Ordinal);
-        Assert.Matches(@" the exit handlers ran: 1 in \d+\.\d{3} s$", log[^1]);
+        Assert.Matches(@" the exit handlers ran: 1 in \d+\.\d{3} s; by kind: 1 x \S+ \d+\.\d{3} s$", log[^1]);
         // Each line opens with the UTC time, to set beside the CI log.
         Assert.All(log, line => Assert.True(
             DateTimeOffset.TryParse(line[..line.IndexOf(' ', StringComparison.Ordinal)], out _),
@@ -102,6 +102,30 @@ public sealed class ExitWatchTests : IDisposable
         string slow = Assert.Single(Log(), line => line.Contains(" took ", StringComparison.Ordinal));
         Assert.Matches(@" exit handler 2 of 2 \(SlateWindows\.Tests\.ExitWatchTests\.SlowCleanUp\) took \d+\.\d{3} s$", slow);
     });
+
+    /// <summary>The closing line totals each kind's time, slowest kind first:
+    /// a CI run spent 5.56 s in 4,674 handlers, nearly all of them under
+    /// <see cref="ExitWatch.SlowHandler"/>, so only totals show which kind
+    /// costs the exit.</summary>
+    [Fact]
+    public void TheClosingLineTotalsEachKindsTimeSlowestFirst() => InGerman(() =>
+    {
+        _exitHandlers += QuickCleanUp;
+        _exitHandlers += QuickCleanUp;
+        _exitHandlers += SlowCleanUp;
+        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan);
+
+        watch.Dispose();
+        Exit();
+
+        Assert.Matches(
+            @" the exit handlers ran: 3 in \d+\.\d{3} s; by kind: 1 x SlateWindows\.Tests\.ExitWatchTests\.SlowCleanUp \d+\.\d{3} s, 2 x SlateWindows\.Tests\.ExitWatchTests\.QuickCleanUp \d+\.\d{3} s$",
+            Log()[^1]);
+    });
+
+    private static void QuickCleanUp(object? sender, EventArgs e)
+    {
+    }
 
     private static void SlowCleanUp(object? sender, EventArgs e) =>
         Thread.Sleep(ExitWatch.SlowHandler + TimeSpan.FromMilliseconds(50));
