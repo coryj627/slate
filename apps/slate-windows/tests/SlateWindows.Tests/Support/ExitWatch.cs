@@ -121,6 +121,10 @@ public sealed class ExitWatch : IDisposable
     /// last test finished, with no folder, and with no late note asked for.</summary>
     internal Thread? Watcher { get; private set; }
 
+    /// <summary>Whether <see cref="Watcher"/> was a background thread when it
+    /// started; a thread that has ended can no longer be asked.</summary>
+    internal bool WatcherWasBackground { get; private set; }
+
     internal static EventHandler? ReadProcessExit() =>
         ProcessExitHandlersReadable ? Volatile.Read(ref ProcessExitOf(AppDomain.CurrentDomain)) : null;
 
@@ -163,6 +167,7 @@ public sealed class ExitWatch : IDisposable
             IsBackground = true,
             Name = "Slate exit watch",
         };
+        WatcherWasBackground = Watcher.IsBackground;
         Watcher.Start();
     }
 

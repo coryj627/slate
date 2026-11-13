@@ -43,7 +43,9 @@ public sealed class ExitWatchTests : IDisposable
     private static Thread Watcher(ExitWatch watch)
     {
         Thread watcher = Assert.IsType<Thread>(watch.Watcher);
-        Assert.True(watcher.IsBackground, "the watch would hold the exit it watches");
+        // As started: a thread that has already ended cannot be asked
+        // (ThreadStateException, seen on CI with a zero wait).
+        Assert.True(watch.WatcherWasBackground, "the watch would hold the exit it watches");
         return watcher;
     }
 
