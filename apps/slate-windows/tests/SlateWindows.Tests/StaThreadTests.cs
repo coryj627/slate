@@ -112,6 +112,7 @@ public sealed class StaThreadTests : IDisposable
         const int Threads = 5;
         int before = TargetedExitHandlers();
         int handled = 0;
+        Volatile.Write(ref s_sendsStarted, 0);
         Volatile.Write(ref s_sendsEnded, 0);
         Volatile.Write(ref s_sendsTimedOut, 0);
 
@@ -141,8 +142,12 @@ public sealed class StaThreadTests : IDisposable
                 // Codoki: the message is waiting on this thread before the
                 // body ends, so the teardown runs with it pending. The queue's
                 // status is read without dispatching, and the wait sleeps.
+                // This finalizer's send has started first (Codex round 4): the
+                // queue's status counts a message from any thread.
                 Assert.True(
-                    SpinWait.SpinUntil(() => ((GetQueueStatus(QsSendMessage) >> 16) & QsSendMessage) != 0, TimeSpan.FromSeconds(10)),
+                    SpinWait.SpinUntil(
+                        () => Volatile.Read(ref s_sendsStarted) >= ended && ((GetQueueStatus(QsSendMessage) >> 16) & QsSendMessage) != 0,
+                        TimeSpan.FromSeconds(10)),
                     "the finalizer's message was waiting on the thread before it ended");
             });
             // The send outlives the teardown (Codex round 3): it ends when the
@@ -174,6 +179,7 @@ public sealed class StaThreadTests : IDisposable
         /// teardown, and ends early only when its thread ends.</summary>
         ~SendsWhenFinalized()
         {
+            _ = Interlocked.Increment(ref s_sendsStarted);
             if (SendMessageTimeout(window, SentWhileEnding, IntPtr.Zero, IntPtr.Zero, 0, (uint)StaThread.DefaultTimeout.TotalMilliseconds, out _) == IntPtr.Zero
                 && Marshal.GetLastPInvokeError() == ErrorTimeout)
             {
@@ -184,6 +190,8 @@ public sealed class StaThreadTests : IDisposable
     }
 
     private const int ErrorTimeout = 1460;
+
+    private static int s_sendsStarted;
 
     private static int s_sendsEnded;
 
