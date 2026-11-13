@@ -135,14 +135,26 @@ public sealed class StaThreadTests : IDisposable
                 });
                 LeaveAFinalizerThatSends(window);
                 GC.Collect();
+                // Codoki: the message is waiting on this thread before the
+                // body ends, so the teardown runs with it pending. The queue's
+                // status is read without dispatching, and the wait sleeps.
+                Assert.True(
+                    SpinWait.SpinUntil(() => ((GetQueueStatus(QsSendMessage) >> 16) & QsSendMessage) != 0, TimeSpan.FromSeconds(10)),
+                    "the finalizer's message was waiting on the thread before it ended");
             });
         }
 
         int kept = TargetedExitHandlers() - before;
-        Assert.True(kept == 0, $"{Threads} facts' threads left {kept} WPF shut-down listeners on the exit ({handled} sent messages ran as they ended): {Kinds()}");
+        Assert.True(kept == 0, $"{Threads} facts' threads left {kept} WPF shut-down listeners on the exit ({handled} of {Threads} pending messages ran as they ended): {Kinds()}");
     }
 
     private const int SentWhileEnding = 0x8000 + 0x1826;
+
+    /// <summary>A message sent from another thread is waiting.</summary>
+    private const uint QsSendMessage = 0x0040;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetQueueStatus(uint flags);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void LeaveAFinalizerThatSends(IntPtr window) => _ = new SendsWhenFinalized(window);
