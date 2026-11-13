@@ -42,6 +42,22 @@ public sealed class PumpedDispatcherTests
         Assert.True(answer);
     }
 
+    /// <summary>#1924: the answer is the read that ended the wait, never a
+    /// second read. A moving condition, such as a store between a late write
+    /// and its retirement, must not fail a wait it was seen to meet.</summary>
+    [Fact]
+    public void PumpUntilAnswersWithTheReadThatEndedItsWait()
+    {
+        bool answer = false;
+        int reads = 0;
+        StaThread.RunPumped(() =>
+        {
+            answer = PumpedDispatcher.PumpUntil(() => ++reads == 1, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(30), "the pump did not return");
+        Assert.True(answer);
+        Assert.Equal(1, reads);
+    }
+
     /// <summary>A drain whose frame the dispatcher never runs FAILS, within
     /// its bound. Here a Normal-priority operation that re-posts itself
     /// starves the drain's Background-priority frame while the dispatcher

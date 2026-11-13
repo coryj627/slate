@@ -30,18 +30,21 @@ internal static class PumpedDispatcher
         }
     }
 
-    /// <summary>Pump until the condition holds or ten seconds pass; the
-    /// return value is the condition's final answer.</summary>
+    /// <summary>Pump until the condition holds or ten seconds pass. The
+    /// return value is the read that ended the wait, never a second one
+    /// (#1924): a moving condition must not pass or fail on a read made
+    /// after the one that held.</summary>
     public static bool PumpUntil(Func<bool> condition, TimeSpan? budget = null)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         TimeSpan limit = budget ?? TimeSpan.FromSeconds(10);
-        while (!condition() && clock.Elapsed < limit)
+        bool held;
+        while (!(held = condition()) && clock.Elapsed < limit)
         {
             Drain();
             Thread.Yield();
         }
-        return condition();
+        return held;
     }
 
     /// <summary>How long one <see cref="Drain()"/> may wait for its frame.</summary>

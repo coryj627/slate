@@ -2238,13 +2238,82 @@ public sealed class HotExitTests
         {
             Assert.True(left.Save());
             host.PumpUntil(() => !left.HasPendingSaves && !right.IsDirty, "the peer never turned clean");
-            host.PumpUntil(() => host.Snapshot().Entries.Length == 0, "a clean peer kept its entry");
+            // #1924: no entry counts only once no call is in flight. The
+            // left tab's own write can still land after the peer's entry is
+            // retired, and its retirement follows it.
+            host.PumpUntil(
+                () => host.NothingInFlight() && host.Snapshot().Entries.Length == 0,
+                "a clean peer kept its entry");
         }
         else
         {
             left.Text += "more";
             string final = right.Text;
             host.PumpUntil(() => host.StoredText(right) == final, "the peer's mirrored edit was never kept");
+        }
+    }
+
+    /// <summary>#1924: a write issued while its tab was dirty can land after
+    /// the tab turned clean and after its peer's entry was retired. The store
+    /// then holds that entry until the tab's own retirement removes it, so
+    /// "no entry" is the end state only once no call is in flight.</summary>
+    [Fact]
+    public void AWriteThatLandsAfterItsTabTurnedCleanIsRetiredAfterIt()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel left = host.OpenNote("a.md");
+        host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel right = host.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(left, right);
+        using var releaseWrite = new ManualResetEventSlim(false);
+        using var releaseRetirement = new ManualResetEventSlim(false);
+        int heldWrites = 0;
+        int heldRetirements = 0;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.EntryId == left.RecoveryEntryId && call.Kind == HotExitCallKind.Write)
+            {
+                Interlocked.Increment(ref heldWrites);
+                Assert.True(releaseWrite.Wait(Patience), "the held write was never released");
+            }
+            else if (call.EntryId == left.RecoveryEntryId && call.Kind == HotExitCallKind.Retire)
+            {
+                Interlocked.Increment(ref heldRetirements);
+                Assert.True(releaseRetirement.Wait(Patience), "the held retirement was never released");
+            }
+            return null;
+        };
+        try
+        {
+            left.Text += "typed";
+            host.PumpUntil(
+                () => Volatile.Read(ref heldWrites) == 1 && host.StoredText(right) == right.Text,
+                "the left write was never issued, or the peer never kept");
+            Assert.True(left.Save());
+            host.PumpUntil(
+                () => !left.HasPendingSaves && !left.IsDirty && !right.IsDirty && Volatile.Read(ref heldRetirements) == 1,
+                "the tabs never turned clean, or the left retirement was never issued");
+            host.PumpUntil(() => host.Snapshot().Entries.Length == 0, "the peer's entry was never retired");
+            // The store reads no entry here, and this is not the end state.
+            Assert.False(host.NothingInFlight());
+
+            releaseWrite.Set();
+            host.PumpUntil(
+                () => host.Snapshot().Entries.Any(entry => entry.EntryId == left.RecoveryEntryId),
+                "the held write never landed");
+
+            releaseRetirement.Set();
+            host.PumpUntil(
+                () => host.NothingInFlight() && host.Snapshot().Entries.Length == 0,
+                "the clean tab's retirement left its late write's entry");
+        }
+        finally
+        {
+            releaseWrite.Set();
+            releaseRetirement.Set();
+            host.Store.BeforeCallForTests = null;
         }
     }
 
@@ -2835,6 +2904,10 @@ public sealed class HotExitTests
             using HotExitStore store = HotExitStore.Open(DeviceRoot);
             return store.ReadBuffers(Key);
         }
+
+        /// <summary>#1924: no call of the vault's key is unresolved, so what
+        /// <see cref="Snapshot"/> reads is no longer moving.</summary>
+        internal bool NothingInFlight() => !Store.HasUnresolved(Key);
 
         internal HotExitEntry? StoredEntry(WorkspaceTabViewModel tab) =>
             Snapshot().Entries.FirstOrDefault(entry => entry.EntryId == tab.RecoveryEntryId);
