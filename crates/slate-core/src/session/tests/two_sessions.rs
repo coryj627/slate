@@ -196,16 +196,71 @@ fn a_newer_sessions_scan_leaves_the_older_sessions_cache_child() {
 
 /// The timing half: the older session's no-change rescan with a newer one
 /// open stays within 1.25x of its rescan alone, and its cache holds between
-/// rescans. Under libsqlite3-sys 0.38's shared pool this read 1.44 here (the
-/// bench: 1.51x at 10k notes); under 0.39, about 1.0. Runs only alone
-/// (`--release`, by name): every bulk run skips `perf_guard_`.
+/// rescans. Runs only alone (`--release`, by name): every bulk run skips
+/// `perf_guard_`.
+///
+/// Each phase reads its fastest of [`RESCANS`] rescans: noise on a shared
+/// runner only adds time, while the shared pool slowed every rescan, the
+/// fastest included. A reading over the limit is taken once more from fresh
+/// sessions, and the guard fails only when both are over, so a runner slow
+/// for one whole phase is not read as B's cost (#1923: the median of six
+/// read 1.25 on a 46 ms rescan under 0.39).
+///
+/// Measured on CDESK (#1923), fastest-rescan ratios at this size: 1.54 to
+/// 1.56 under libsqlite3-sys 0.38's shared pool, 0.98 to 1.01 under 0.39. A
+/// larger vault narrows the gap (1.09 to 1.11 at 10k notes in 1,024 pages),
+/// so the guard stays at 2,500 notes in 256 pages.
 #[test]
 fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
+    const LIMIT: f64 = 1.25;
+    let first = two_sessions_reading();
+    let reading = if first.ratio() <= LIMIT {
+        first
+    } else {
+        let second = two_sessions_reading();
+        assert!(
+            second.ratio() <= LIMIT,
+            "A rescanned {:.2}x then {:.2}x slower with B open ({:.4}s / {:.4}s, then {:.4}s / {:.4}s)",
+            first.ratio(),
+            second.ratio(),
+            first.with_b,
+            first.alone,
+            second.with_b,
+            second.alone,
+        );
+        second
+    };
+    assert!(
+        reading.used_after * 10 >= reading.used_before * 9,
+        "A's cache fell between its rescans: {} -> {}",
+        reading.used_before,
+        reading.used_after
+    );
+}
+
+/// Rescans per phase of [`two_sessions_reading`].
+const RESCANS: usize = 12;
+
+/// One reading of [`perf_guard_two_sessions_do_not_evict_each_others_cache`],
+/// from fresh sessions: A's fastest rescan alone, then with B open.
+struct TwoSessionsReading {
+    alone: f64,
+    with_b: f64,
+    used_before: i64,
+    used_after: i64,
+}
+
+impl TwoSessionsReading {
+    fn ratio(&self) -> f64 {
+        self.with_b / self.alone
+    }
+}
+
+fn two_sessions_reading() -> TwoSessionsReading {
     const NOTES: usize = 2_500;
     const PAGES: u32 = 256;
-    const RESCANS: usize = 6;
-    let median = |session: &VaultSession| -> f64 {
-        let mut times: Vec<f64> = (0..RESCANS)
+    let fastest = |session: &VaultSession| -> f64 {
+        (0..RESCANS)
             .map(|_| {
                 let started = std::time::Instant::now();
                 session
@@ -213,26 +268,20 @@ fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
                     .unwrap();
                 started.elapsed().as_secs_f64()
             })
-            .collect();
-        times.sort_by(|x, y| x.partial_cmp(y).unwrap());
-        (times[RESCANS / 2 - 1] + times[RESCANS / 2]) / 2.0
+            .fold(f64::INFINITY, f64::min)
     };
     let (_a_tmp, a) = vault_with_cache(NOTES, PAGES);
-    let alone = median(&a);
+    let alone = fastest(&a);
 
     let (_b_tmp, b) = vault_with_cache(NOTES, PAGES);
     let used_before = a.db_cache_status().main.used;
-    let with_b = median(&a);
+    let with_b = fastest(&a);
     let used_after = a.db_cache_status().main.used;
     drop(b);
-
-    let ratio = with_b / alone;
-    assert!(
-        ratio <= 1.25,
-        "A rescanned {ratio:.2}x slower with B open ({with_b:.3}s / {alone:.3}s)"
-    );
-    assert!(
-        used_after * 10 >= used_before * 9,
-        "A's cache fell between its rescans: {used_before} -> {used_after}"
-    );
+    TwoSessionsReading {
+        alone,
+        with_b,
+        used_before,
+        used_after,
+    }
 }

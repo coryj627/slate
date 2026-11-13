@@ -1529,6 +1529,29 @@ own rust-lane step.
   1.25x of A alone, and A's cache must hold between rescans. Under 0.38.2's
   shared pool it read 1.44.
 
+**The timing guard's reading (#1923).** The guard compared medians of six
+rescans. Once #1918 made the rescan about 46 ms on the Linux runner, one CI
+run read 1.25 under 0.39.1, with no shared pool. Now:
+- each phase reads its **fastest** of 12 rescans. Noise only adds time, and
+  the shared pool slowed every rescan, the fastest included.
+- a reading over the limit is taken once more from fresh sessions, and the
+  guard fails only when both readings are over.
+
+Ratios measured on CDESK, `ci` profile, three rounds per row, 15 rescans per
+phase:
+
+| Vault | 0.39.1, fastest | 0.38.2, fastest | 0.38.2, median |
+|---|---:|---:|---:|
+| 2,500 notes, 256 pages | 0.98–1.01 | 1.54–1.56 | 1.55–1.56 |
+| 5,000 notes, 512 pages | 0.91–1.01 | 1.31–1.38 | 1.26–1.37 |
+| 10,000 notes, 1,024 pages | 0.99–1.00 | 1.09–1.11 | 1.09–1.10 |
+
+A larger vault narrows the gap, so the guard stays at 2,500 notes.
+- Under 0.39.1, one round's median read 0.78, because the "alone" phase ran
+  slow. No fastest reading went above 1.01.
+- The new guard on 0.38.2 failed with both readings over: 1.56x, then 1.51x.
+- On 0.39.1 it passed 8 runs of 8.
+
 ## A no-change rescan under SQLite 3.54 (#1912)
 
 #1911 moved the bundled SQLite from 3.53.2 to 3.54.1, and a no-change rescan
