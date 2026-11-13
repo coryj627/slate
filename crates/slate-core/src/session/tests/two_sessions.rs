@@ -195,41 +195,25 @@ fn a_newer_sessions_scan_leaves_the_older_sessions_cache_child() {
 }
 
 /// The timing half: the older session's no-change rescan with a newer one
-/// open stays within 1.25x of its rescan alone, and its cache holds between
-/// rescans. Runs only alone (`--release`, by name): every bulk run skips
-/// `perf_guard_`.
+/// open stays within [`LIMIT`] of its rescan alone, and its cache holds
+/// between rescans. Runs only alone (`--release`, by name): every bulk run
+/// skips `perf_guard_`.
 ///
-/// Each phase reads its fastest of [`RESCANS`] rescans: noise on a shared
-/// runner only adds time, while the shared pool slowed every rescan, the
-/// fastest included. A reading over the limit is taken once more from fresh
-/// sessions, and the guard fails only when both are over, so a runner slow
-/// for one whole phase is not read as B's cost (#1923: the median of six
-/// read 1.25 on a 46 ms rescan under 0.39).
+/// How a reading is judged is pinned on synthetic samples by the facts
+/// below it:
+/// - A **median**, so most rescans slowed fails.
+/// - "Alone" is read before B opens and again after B closes, so a runner
+///   slowing steadily through the reading is not read as B's cost.
+/// - A reading over the limit is taken once more from fresh sessions, and
+///   the guard fails only when both are over.
 ///
-/// Measured on CDESK (#1923), fastest-rescan ratios at this size: 1.54 to
-/// 1.56 under libsqlite3-sys 0.38's shared pool, 0.98 to 1.01 under 0.39. A
-/// larger vault narrows the gap (1.09 to 1.11 at 10k notes in 1,024 pages),
-/// so the guard stays at 2,500 notes in 256 pages.
+/// #1923: the median of six, with "alone" read only before B, once read
+/// 1.25 on a 46 ms rescan under libsqlite3-sys 0.39, with no shared pool.
+/// The measurements are in BENCHMARKS.md.
 #[test]
 fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
-    const LIMIT: f64 = 1.25;
-    let first = two_sessions_reading();
-    let reading = if first.ratio() <= LIMIT {
-        first
-    } else {
-        let second = two_sessions_reading();
-        assert!(
-            second.ratio() <= LIMIT,
-            "A rescanned {:.2}x then {:.2}x slower with B open ({:.4}s / {:.4}s, then {:.4}s / {:.4}s)",
-            first.ratio(),
-            second.ratio(),
-            first.with_b,
-            first.alone,
-            second.with_b,
-            second.alone,
-        );
-        second
-    };
+    let reading =
+        within_limit_on_a_fresh_reading(two_sessions_reading).unwrap_or_else(|why| panic!("{why}"));
     assert!(
         reading.used_after * 10 >= reading.used_before * 9,
         "A's cache fell between its rescans: {} -> {}",
@@ -238,28 +222,74 @@ fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
     );
 }
 
+/// The most A's median rescan with B open may take, against its median
+/// alone.
+const LIMIT: f64 = 1.25;
+
 /// Rescans per phase of [`two_sessions_reading`].
 const RESCANS: usize = 12;
 
 /// One reading of [`perf_guard_two_sessions_do_not_evict_each_others_cache`],
-/// from fresh sessions: A's fastest rescan alone, then with B open.
+/// from fresh sessions.
 struct TwoSessionsReading {
-    alone: f64,
-    with_b: f64,
+    /// A's rescans before B opened, then after B closed.
+    alone: Vec<f64>,
+    /// A's rescans with B open.
+    with_b: Vec<f64>,
     used_before: i64,
     used_after: i64,
 }
 
 impl TwoSessionsReading {
     fn ratio(&self) -> f64 {
-        self.with_b / self.alone
+        median(&self.with_b) / median(&self.alone)
     }
+
+    fn describe(&self) -> String {
+        format!(
+            "{:.2}x (median {:.4}s with B, {:.4}s alone)",
+            self.ratio(),
+            median(&self.with_b),
+            median(&self.alone)
+        )
+    }
+}
+
+fn median(samples: &[f64]) -> f64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[middle - 1] + sorted[middle]) / 2.0
+    } else {
+        sorted[middle]
+    }
+}
+
+/// Takes a reading. One over [`LIMIT`] is taken again, and the guard fails
+/// only when both are over.
+fn within_limit_on_a_fresh_reading(
+    mut take: impl FnMut() -> TwoSessionsReading,
+) -> Result<TwoSessionsReading, String> {
+    let first = take();
+    if first.ratio() <= LIMIT {
+        return Ok(first);
+    }
+    let second = take();
+    if second.ratio() <= LIMIT {
+        return Ok(second);
+    }
+    Err(format!(
+        "A rescanned slower with B open in two readings from fresh sessions: {}, then {}",
+        first.describe(),
+        second.describe()
+    ))
 }
 
 fn two_sessions_reading() -> TwoSessionsReading {
     const NOTES: usize = 2_500;
     const PAGES: u32 = 256;
-    let fastest = |session: &VaultSession| -> f64 {
+    let rescans = |session: &VaultSession| -> Vec<f64> {
         (0..RESCANS)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -268,20 +298,98 @@ fn two_sessions_reading() -> TwoSessionsReading {
                     .unwrap();
                 started.elapsed().as_secs_f64()
             })
-            .fold(f64::INFINITY, f64::min)
+            .collect()
     };
     let (_a_tmp, a) = vault_with_cache(NOTES, PAGES);
-    let alone = fastest(&a);
+    let mut alone = rescans(&a);
 
     let (_b_tmp, b) = vault_with_cache(NOTES, PAGES);
     let used_before = a.db_cache_status().main.used;
-    let with_b = fastest(&a);
+    let with_b = rescans(&a);
     let used_after = a.db_cache_status().main.used;
     drop(b);
+
+    alone.extend(rescans(&a));
     TwoSessionsReading {
         alone,
         with_b,
         used_before,
         used_after,
     }
+}
+
+/// A reading of `alone` and `with_b` rescan times, in milliseconds.
+fn synthetic(alone: &[f64], with_b: &[f64]) -> TwoSessionsReading {
+    TwoSessionsReading {
+        alone: alone.iter().map(|ms| ms / 1000.0).collect(),
+        with_b: with_b.iter().map(|ms| ms / 1000.0).collect(),
+        used_before: 0,
+        used_after: 0,
+    }
+}
+
+/// #1923 (Codex): a slowdown of most rescans fails, not only of every one.
+#[test]
+fn the_two_sessions_ratio_fails_when_most_rescans_slow_down() {
+    let alone = [46.0; 24];
+    let every = [69.0; 12];
+    let mut most = [69.0; 12];
+    most[..5].fill(46.0);
+    let mut one = [46.0; 12];
+    one[0] = 69.0;
+    assert!(synthetic(&alone, &every).ratio() > LIMIT);
+    assert!(synthetic(&alone, &most).ratio() > LIMIT);
+    assert!(synthetic(&alone, &one).ratio() <= LIMIT);
+}
+
+/// A runner slowing steadily through a reading is not read as B's cost:
+/// "alone" brackets the rescans with B open.
+#[test]
+fn the_two_sessions_ratio_reads_alone_on_both_sides_of_b() {
+    let before = [46.0; 12];
+    let with_b = [53.0; 12];
+    let after = [60.0; 12];
+    let alone: Vec<f64> = before.iter().chain(&after).copied().collect();
+    let reading = synthetic(&alone, &with_b);
+    assert!(
+        (reading.ratio() - 1.0).abs() < 0.01,
+        "{}",
+        reading.describe()
+    );
+    assert!(synthetic(&before, &with_b).ratio() > 1.1);
+}
+
+/// One reading over the limit is taken again from fresh sessions; the guard
+/// fails only when both are over, and takes no second reading after a pass.
+#[test]
+fn a_two_sessions_reading_over_the_limit_fails_only_when_a_fresh_one_agrees() {
+    let over = || synthetic(&[46.0; 24], &[69.0; 12]);
+    let under = || synthetic(&[46.0; 24], &[46.0; 12]);
+
+    let mut taken = 0;
+    assert!(
+        within_limit_on_a_fresh_reading(|| {
+            taken += 1;
+            under()
+        })
+        .is_ok()
+    );
+    assert_eq!(taken, 1);
+
+    let mut taken = 0;
+    let passed = within_limit_on_a_fresh_reading(|| {
+        taken += 1;
+        if taken == 1 { over() } else { under() }
+    });
+    assert!(passed.is_ok());
+    assert_eq!(taken, 2);
+
+    let mut taken = 0;
+    let failed = within_limit_on_a_fresh_reading(|| {
+        taken += 1;
+        over()
+    });
+    assert_eq!(taken, 2);
+    let why = failed.err().expect("two readings over the limit fail");
+    assert!(why.contains("1.50x"), "{why}");
 }
