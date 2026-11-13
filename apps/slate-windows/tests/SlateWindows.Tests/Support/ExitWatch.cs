@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using static System.FormattableString;
 
 namespace SlateWindows.Tests;
 
@@ -166,8 +167,8 @@ public sealed class ExitWatch : IDisposable
             handlers.GroupBy(NameOf)
                 .OrderByDescending(kind => kind.Count())
                 .ThenBy(kind => kind.Key, StringComparer.Ordinal)
-                .Select(kind => $"{kind.Count()} x {kind.Key}"));
-        Note($"{handlers.Length} exit handlers are registered: {(kinds.Length > 0 ? kinds : "none")}");
+                .Select(kind => Invariant($"{kind.Count()} x {kind.Key}")));
+        Note(Invariant($"{handlers.Length} exit handlers are registered: {(kinds.Length > 0 ? kinds : "none")}"));
         EventHandler wrapped = ExitBegan;
         for (int index = 0; index < handlers.Length; index++)
         {
@@ -188,11 +189,11 @@ public sealed class ExitWatch : IDisposable
     }
 
     private void ExitHandlersRan(object? sender, EventArgs e) =>
-        Note($"the exit handlers ran: {_handlerCount} in {Stopwatch.GetElapsedTime(Volatile.Read(ref _exitBegan)).TotalSeconds:0.000} s");
+        Note(Invariant($"the exit handlers ran: {_handlerCount} in {Stopwatch.GetElapsedTime(Volatile.Read(ref _exitBegan)).TotalSeconds:0.000} s"));
 
     private EventHandler Timed(EventHandler handler, int position)
     {
-        string name = $"exit handler {position} of {_handlerCount} ({NameOf(handler)})";
+        string name = Invariant($"exit handler {position} of {_handlerCount} ({NameOf(handler)})");
         return (sender, e) =>
         {
             long started = Stopwatch.GetTimestamp();
@@ -208,7 +209,7 @@ public sealed class ExitWatch : IDisposable
                 TimeSpan took = Stopwatch.GetElapsedTime(started);
                 if (took >= SlowHandler)
                 {
-                    Note($"{name} took {took.TotalSeconds:0.000} s");
+                    Note(Invariant($"{name} took {took.TotalSeconds:0.000} s"));
                 }
             }
         };
@@ -217,7 +218,7 @@ public sealed class ExitWatch : IDisposable
     private void WatchTheExit()
     {
         Thread.Sleep(_noteAfter);
-        string alive = $"still alive {_noteAfter.TotalSeconds:0} s after the last test";
+        string alive = Invariant($"still alive {_noteAfter.TotalSeconds:0} s after the last test");
         int threads;
         using (Process self = Process.GetCurrentProcess())
         {
@@ -226,20 +227,20 @@ public sealed class ExitWatch : IDisposable
         if (!_wrapped)
         {
             // No mark is in place: the exit's phase cannot be seen.
-            Note($"{alive}, and the exit handlers were not wrapped, so where the exit stands is unknown ({threads} threads)");
+            Note(Invariant($"{alive}, and the exit handlers were not wrapped, so where the exit stands is unknown ({threads} threads)"));
         }
         else if (Volatile.Read(ref _exitBegan) == 0)
         {
-            Note($"{alive}, and no exit handler has started: a foreground thread or the runner holds the exit ({threads} threads)");
+            Note(Invariant($"{alive}, and no exit handler has started: a foreground thread or the runner holds the exit ({threads} threads)"));
         }
         else if (Volatile.Read(ref _running) is { } running)
         {
             TimeSpan since = Stopwatch.GetElapsedTime(Volatile.Read(ref _runningSince));
-            Note($"{alive}, inside {running}, for {since.TotalSeconds:0.000} s ({threads} threads)");
+            Note(Invariant($"{alive}, inside {running}, for {since.TotalSeconds:0.000} s ({threads} threads)"));
         }
         else
         {
-            Note($"{alive}, between exit handlers ({threads} threads)");
+            Note(Invariant($"{alive}, between exit handlers ({threads} threads)"));
         }
     }
 

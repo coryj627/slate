@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Reflection;
 
 namespace SlateWindows.Tests;
@@ -46,11 +47,26 @@ public sealed class ExitWatchTests : IDisposable
         return watcher;
     }
 
+    /// <summary>Codex round 4: the log reads the same in every culture, so
+    /// the duration facts run where a decimal separator is a comma.</summary>
+    private static void InGerman(Action body)
+    {
+        CultureInfo culture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            body();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+        }
+    }
     /// <summary>Codex: handlers registered before the watch (the module
     /// initializers' clean-ups) run after its first mark, so a stall in one
     /// reads as a stall in the exit handlers, not before them.</summary>
     [Fact]
-    public void TheWatchsMarksSurroundEveryExitHandlerAlreadyRegistered()
+    public void TheWatchsMarksSurroundEveryExitHandlerAlreadyRegistered() => InGerman(() =>
     {
         bool beganFirst = false;
         _exitHandlers += (_, _) => beganFirst = File.ReadAllText(LogPath).Contains(" the process exit began", StringComparison.Ordinal);
@@ -70,11 +86,11 @@ public sealed class ExitWatchTests : IDisposable
         Assert.All(log, line => Assert.True(
             DateTimeOffset.TryParse(line[..line.IndexOf(' ', StringComparison.Ordinal)], out _),
             line));
-    }
+    });
 
     /// <summary>A slow exit handler is named, with how long it took.</summary>
     [Fact]
-    public void ASlowExitHandlerIsNamedWithHowLongItTook()
+    public void ASlowExitHandlerIsNamedWithHowLongItTook() => InGerman(() =>
     {
         _exitHandlers += (_, _) => { };
         _exitHandlers += SlowCleanUp;
@@ -85,7 +101,7 @@ public sealed class ExitWatchTests : IDisposable
 
         string slow = Assert.Single(Log(), line => line.Contains(" took ", StringComparison.Ordinal));
         Assert.Matches(@" exit handler 2 of 2 \(SlateWindows\.Tests\.ExitWatchTests\.SlowCleanUp\) took \d+\.\d{3} s$", slow);
-    }
+    });
 
     private static void SlowCleanUp(object? sender, EventArgs e) =>
         Thread.Sleep(ExitWatch.SlowHandler + TimeSpan.FromMilliseconds(50));
