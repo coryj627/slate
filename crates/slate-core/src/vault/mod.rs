@@ -119,7 +119,10 @@ pub(crate) fn final_path_guid_for_tests(
 pub(crate) fn final_path_dos_for_tests(
     file: &std::fs::File,
 ) -> std::io::Result<std::path::PathBuf> {
-    trash_handoff::final_path(file)
+    trash_handoff::final_path_as(
+        file,
+        windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_DOS,
+    )
 }
 
 /// An open of an absolute path with exactly `access` (no `SYNCHRONIZE`),
