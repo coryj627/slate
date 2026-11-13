@@ -99,6 +99,67 @@ public sealed class StaThreadTests : IDisposable
         Assert.True(kept < Threads, $"{Threads} facts' threads left {kept} exit handlers after they ended: {Kinds()}");
     }
 
+    /// <summary>#1826 (Codex round 1): the runner takes the listeners off
+    /// the exit without tearing the thread's services down. A teardown
+    /// pumped: <c>PtsCache</c>'s waits for pending finalizers, so a window
+    /// message sent from another thread ran while the services were half
+    /// shut down. Here a finalizer sends one, and its handler starts a weak
+    /// event; no listener is left on the exit either way.</summary>
+    [Fact]
+    public void AMessageSentWhileTheThreadEndsLeavesNoExitHandler()
+    {
+        Assert.True(ExitWatch.ProcessExitHandlersReadable, "this runtime keeps its exit handlers where the fact reads them");
+        const int Threads = 5;
+        int before = TargetedExitHandlers();
+        int handled = 0;
+
+        for (int thread = 0; thread < Threads; thread++)
+        {
+            StaThread.Run(() =>
+            {
+                var rich = new RichTextBox();
+                rich.Document.Blocks.Add(new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("laid out by PTS")));
+                var host = new Window { Content = rich, Width = 240, Height = 160 };
+                host.Show();
+                PumpedDispatcher.Drain();
+                IntPtr window = new System.Windows.Interop.WindowInteropHelper(host).Handle;
+                System.Windows.Interop.HwndSource.FromHwnd(window).AddHook((IntPtr _, int message, IntPtr _, IntPtr _, ref bool _) =>
+                {
+                    if (message == SentWhileEnding)
+                    {
+                        System.Windows.WeakEventManager<System.Collections.ObjectModel.ObservableCollection<int>, System.Collections.Specialized.NotifyCollectionChangedEventArgs>
+                            .AddHandler([], nameof(System.Collections.ObjectModel.ObservableCollection<int>.CollectionChanged), (_, _) => { });
+                        _ = Interlocked.Increment(ref handled);
+                    }
+                    return IntPtr.Zero;
+                });
+                LeaveAFinalizerThatSends(window);
+                GC.Collect();
+            });
+        }
+
+        int kept = TargetedExitHandlers() - before;
+        Assert.True(kept == 0, $"{Threads} facts' threads left {kept} WPF shut-down listeners on the exit ({handled} sent messages ran as they ended): {Kinds()}");
+    }
+
+    private const int SentWhileEnding = 0x8000 + 0x1826;
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void LeaveAFinalizerThatSends(IntPtr window) => _ = new SendsWhenFinalized(window);
+
+    private sealed class SendsWhenFinalized(IntPtr window)
+    {
+        ~SendsWhenFinalized() => _ = SendMessageTimeout(window, SentWhileEnding, IntPtr.Zero, IntPtr.Zero, 0, 2000, out _);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
+    private static int TargetedExitHandlers() =>
+        (ExitWatch.ReadProcessExit()?.GetInvocationList() ?? [])
+            .Count(handler => ExitWatch.NameOf(handler).Contains("ShutDownListener", StringComparison.Ordinal)
+                && !ExitWatch.NameOf(handler).Contains("ManagedWndProcTracker", StringComparison.Ordinal));
+
     private static int ExitHandlers() => ExitWatch.ReadProcessExit()?.GetInvocationList().Length ?? 0;
 
     private static string Kinds() =>
