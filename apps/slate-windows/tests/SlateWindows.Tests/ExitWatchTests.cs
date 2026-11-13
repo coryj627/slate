@@ -8,13 +8,16 @@ namespace SlateWindows.Tests;
 /// <summary>#1826: the watch over the test process's own exit. xUnit ends a
 /// run whose process is still alive 11 s after its entry point returns,
 /// which the VSTest adapter reports as a bare
-/// <c>[FATAL ERROR] Xunit.Sdk.TestPipelineException</c>. The watch records
-/// when the run ended and when its exit handlers ran, and dumps a process
-/// that is still alive near that limit.</summary>
+/// <c>[FATAL ERROR] Xunit.Sdk.TestPipelineException</c>. The watch logs
+/// when the run ended, times every exit handler, and says what the process
+/// is doing if it is still alive near that limit. It never suspends the
+/// process or changes how the exit ends.</summary>
 public sealed class ExitWatchTests : IDisposable
 {
     private readonly string _folder = Path.Combine(Path.GetTempPath(), $"exit-watch-{Guid.NewGuid():N}");
-    private readonly List<EventHandler> _exitHandlers = [];
+
+    /// <summary>The fake's exit handlers, standing in for the runtime's.</summary>
+    private EventHandler? _exitHandlers;
 
     public void Dispose()
     {
@@ -24,140 +27,185 @@ public sealed class ExitWatchTests : IDisposable
         }
     }
 
-    private ExitWatch Watch(TimeSpan dumpAfter, Func<string, string> dump) =>
-        new(_folder, dumpAfter, dump, _exitHandlers.Add);
+    private ExitWatch Watch(TimeSpan noteAfter, string? folder = null) =>
+        new(folder ?? _folder, noteAfter, () => _exitHandlers, Replace);
 
-    private string[] Log() => File.ReadAllLines(Path.Combine(_folder, ExitWatch.LogName));
-
-    private void RunExitHandlers()
+    private bool Replace(EventHandler? expected, EventHandler replacement)
     {
-        foreach (EventHandler handler in _exitHandlers)
+        if (!ReferenceEquals(_exitHandlers, expected))
         {
-            handler(null, EventArgs.Empty);
+            return false;
         }
+        _exitHandlers = replacement;
+        return true;
     }
 
-    /// <summary>A foreground thread holds the exit before any exit handler
-    /// runs; slow exit handlers sit between the first one and those
-    /// registered during the run. The log tells the two apart.</summary>
-    [Fact]
-    public void TheLogRecordsTheRunsEndAndBothEndsOfItsExitHandlers()
+    private string LogPath => Path.Combine(_folder, ExitWatch.LogName);
+
+    private string[] Log() => File.ReadAllLines(LogPath);
+
+    private void Exit() => _exitHandlers?.Invoke(null, EventArgs.Empty);
+
+    private static Thread Watcher(ExitWatch watch)
     {
-        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan, _ => string.Empty);
-        Assert.Single(_exitHandlers);
+        Thread watcher = Assert.IsType<Thread>(watch.Watcher);
+        Assert.True(watcher.IsBackground, "the watch would hold the exit it watches");
+        return watcher;
+    }
+
+    /// <summary>Codex: handlers registered before the watch (the module
+    /// initializers' clean-ups) run after its first mark, so a stall in one
+    /// reads as a stall in the exit handlers, not before them.</summary>
+    [Fact]
+    public void TheWatchsMarksSurroundEveryExitHandlerAlreadyRegistered()
+    {
+        bool beganFirst = false;
+        _exitHandlers += (_, _) => beganFirst = File.ReadAllText(LogPath).Contains(" the process exit began", StringComparison.Ordinal);
+        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan);
 
         watch.Dispose();
-        Assert.Equal(2, _exitHandlers.Count);
-        RunExitHandlers();
+        Exit();
 
+        Assert.True(beganFirst, "an earlier exit handler ran before the watch's first mark");
         string[] log = Log();
-        Assert.Collection(
-            log,
-            line => Assert.EndsWith(" the run started", line, StringComparison.Ordinal),
-            line => Assert.EndsWith(" the last test finished", line, StringComparison.Ordinal),
-            line => Assert.EndsWith(" the process exit began: its first exit handler ran", line, StringComparison.Ordinal),
-            line => Assert.EndsWith(" the exit handlers registered during the run have run", line, StringComparison.Ordinal));
+        Assert.EndsWith(" the run started", log[0], StringComparison.Ordinal);
+        Assert.EndsWith(" the last test finished", log[1], StringComparison.Ordinal);
+        Assert.Contains(" 1 exit handlers are registered: ", log[2], StringComparison.Ordinal);
+        Assert.EndsWith(" the process exit began: the watch's first exit handler ran", log[3], StringComparison.Ordinal);
+        Assert.Matches(@" the exit handlers ran: 1 in \d+\.\d{3} s$", log[^1]);
         // Each line opens with the UTC time, to set beside the CI log.
         Assert.All(log, line => Assert.True(
             DateTimeOffset.TryParse(line[..line.IndexOf(' ', StringComparison.Ordinal)], out _),
             line));
     }
 
-    /// <summary>A process still alive after the wait is dumped from a
-    /// background thread, which can never hold the exit itself.</summary>
+    /// <summary>A slow exit handler is named, with how long it took.</summary>
     [Fact]
-    public void AProcessStillAliveAfterTheWaitIsDumpedFromABackgroundThread()
+    public void ASlowExitHandlerIsNamedWithHowLongItTook()
     {
-        using var dumped = new ManualResetEventSlim(false);
-        string? name = null;
-        ExitWatch watch = Watch(TimeSpan.FromMilliseconds(50), dumpName =>
+        _exitHandlers += (_, _) => { };
+        _exitHandlers += SlowCleanUp;
+        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan);
+
+        watch.Dispose();
+        Exit();
+
+        string slow = Assert.Single(Log(), line => line.Contains(" took ", StringComparison.Ordinal));
+        Assert.Matches(@" exit handler 2 of 2 \(SlateWindows\.Tests\.ExitWatchTests\.SlowCleanUp\) took \d+\.\d{3} s$", slow);
+    }
+
+    private static void SlowCleanUp(object? sender, EventArgs e) =>
+        Thread.Sleep(ExitWatch.SlowHandler + TimeSpan.FromMilliseconds(50));
+
+    /// <summary>The wrapping changes nothing an exit handler does: what it
+    /// throws reaches the runtime unchanged.</summary>
+    [Fact]
+    public void AnExitHandlersExceptionIsUnchanged()
+    {
+        var thrown = new InvalidOperationException("clean-up failed");
+        _exitHandlers += (_, _) => throw thrown;
+        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan);
+
+        watch.Dispose();
+
+        Assert.Same(thrown, Assert.Throws<InvalidOperationException>(Exit));
+    }
+
+    /// <summary>A process still alive with no exit handler started is held
+    /// before its exit handlers: a foreground thread, or the runner.</summary>
+    [Fact]
+    public void StillAliveBeforeAnyExitHandlerSaysSo()
+    {
+        ExitWatch watch = Watch(TimeSpan.Zero);
+
+        watch.Dispose();
+
+        Assert.True(Watcher(watch).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
+        Assert.Contains(" still alive 0 s after the last test, and no exit handler has started", Log()[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>A process still alive inside an exit handler names it.</summary>
+    [Fact]
+    public void StillAliveInsideAnExitHandlerNamesIt()
+    {
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        _exitHandlers += (_, _) => { };
+        _exitHandlers += (_, _) =>
         {
-            name = dumpName;
-            dumped.Set();
-            return " A full dump of the test process is at X.dmp (1 bytes).";
-        });
-
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+        };
+        ExitWatch watch = Watch(TimeSpan.FromMilliseconds(300));
         watch.Dispose();
+        var exiting = new Thread(Exit) { IsBackground = true };
+        exiting.Start();
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the exit handler never ran");
+            Assert.True(Watcher(watch).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
+        }
+        finally
+        {
+            release.Set();
+            Assert.True(exiting.Join(TimeSpan.FromSeconds(10)), "the exit never ended");
+        }
 
-        Thread watcher = Assert.IsType<Thread>(watch.Watcher);
-        Assert.True(watcher.IsBackground, "the watch would hold the exit it watches");
-        Assert.True(dumped.Wait(TimeSpan.FromSeconds(10)), "the watch never dumped");
-        Assert.True(watcher.Join(TimeSpan.FromSeconds(10)), "the watch never ended");
-        Assert.Equal("exit-watch", name);
-        string[] log = Log();
-        Assert.Contains(log, line => line.EndsWith(" still alive 0 s after the last test; writing a dump", StringComparison.Ordinal));
-        Assert.EndsWith(" A full dump of the test process is at X.dmp (1 bytes).", log[^1], StringComparison.Ordinal);
+        Assert.Single(Log(), line => line.Contains(" still alive 0 s after the last test, inside exit handler 2 of 2 (", StringComparison.Ordinal));
     }
 
-    /// <summary>A dump that was not written says so in the log.</summary>
+    /// <summary>With no results folder named, the watch changes nothing.</summary>
     [Fact]
-    public void ADumpNotWrittenIsRecordedAsNotWritten()
+    public void WithoutAFolderTheWatchChangesNothing()
     {
-        ExitWatch watch = Watch(TimeSpan.Zero, _ => string.Empty);
+        EventHandler original = (_, _) => { };
+        _exitHandlers = original;
+        var watch = new ExitWatch(null, TimeSpan.Zero, () => _exitHandlers, Replace);
 
         watch.Dispose();
 
-        Assert.True(Assert.IsType<Thread>(watch.Watcher).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
-        Assert.EndsWith(" no dump was written", Log()[^1], StringComparison.Ordinal);
-    }
-
-    /// <summary>With no results folder named, the watch writes nothing.</summary>
-    [Fact]
-    public void WithoutAFolderTheWatchWritesNothing()
-    {
-        var watch = new ExitWatch(null, TimeSpan.Zero, _ => string.Empty, _exitHandlers.Add);
-
-        watch.Dispose();
-        Assert.True(Assert.IsType<Thread>(watch.Watcher).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
-        RunExitHandlers();
-
+        Assert.Same(original, _exitHandlers);
+        Assert.Null(watch.Watcher);
         Assert.False(Directory.Exists(_folder));
     }
 
+    /// <summary>Exit handlers that changed while being read are left as they
+    /// are, and the log says so.</summary>
+    [Fact]
+    public void ExitHandlersThatChangedWhileBeingReadAreLeftAsTheyAre()
+    {
+        EventHandler original = (_, _) => { };
+        _exitHandlers = original;
+        var watch = new ExitWatch(_folder, Timeout.InfiniteTimeSpan, () => _exitHandlers, (_, _) => false);
+
+        watch.Dispose();
+
+        Assert.Same(original, _exitHandlers);
+        Assert.EndsWith(" the exit handlers changed while the watch read them, and were left as they were", Log()[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>This runtime's exit handlers are readable where the watch
+    /// reads them, and the module initializers' clean-ups are among them.
+    /// Read only: no fact replaces the real handlers.</summary>
+    [Fact]
+    public void TheRuntimesExitHandlersAreReadable()
+    {
+        Assert.True(ExitWatch.ProcessExitHandlersReadable, "AppDomain's ProcessExit backing field moved");
+        EventHandler handlers = Assert.IsType<EventHandler>(ExitWatch.ReadProcessExit(), exactMatch: false);
+        Assert.Contains(
+            handlers.GetInvocationList(),
+            handler => ExitWatch.NameOf(handler).Contains(nameof(DeviceStateForTests), StringComparison.Ordinal));
+    }
+
     /// <summary>The suite runs the watch as its assembly fixture, writing to
-    /// the folder CI uploads (<c>SLATE_STA_DUMP_DIR</c>), and it waits less
-    /// than xUnit's 11 s: a process alive at 9 s fails the run anyway, so the
-    /// dump never costs a run that would have passed.</summary>
+    /// the folder CI uploads (<c>SLATE_STA_DUMP_DIR</c>), with its late note
+    /// before xUnit forces the exit 11 s after its entry point returns.</summary>
     [Fact]
     public void TheSuiteRunsTheWatchAsItsAssemblyFixtureBeforeXunitsLimit()
     {
         Assert.Contains(
             typeof(ExitWatch).Assembly.GetCustomAttributes<AssemblyFixtureAttribute>(),
             fixture => fixture.AssemblyFixtureType == typeof(ExitWatch));
-        Assert.Equal(TimeSpan.FromSeconds(9), ExitWatch.DumpAfter);
-        Assert.True(ExitWatch.DumpAfter < TimeSpan.FromSeconds(11));
-    }
-
-    /// <summary>The dump is StaThread's: the runtime's createdump, a full
-    /// dump, in StaThread's folder and under its cap.</summary>
-    [Fact]
-    public void TheWatchsDumpIsStaThreadsCreatedumpDump()
-    {
-        string? folder = StaThread.DumpDirectory;
-        Directory.CreateDirectory(_folder);
-        StaThread.DumpDirectory = _folder;
-        StaThread.ResetDumpsForTests();
-        System.Diagnostics.ProcessStartInfo? started = null;
-        StaThread.RunDumperForTests = start =>
-        {
-            started = start;
-            File.WriteAllBytes(start.ArgumentList[2], "MDMP"u8.ToArray());
-            return (0, string.Empty);
-        };
-        try
-        {
-            string said = StaThread.DumpForExitWatch("exit-watch");
-
-            Assert.NotNull(started);
-            string dump = Assert.Single(Directory.GetFiles(_folder, "exit-watch-*.dmp"));
-            Assert.Equal(new[] { "--full", "--name", dump }, started.ArgumentList);
-            Assert.Contains($"A full dump of the test process is at {dump} (", said, StringComparison.Ordinal);
-        }
-        finally
-        {
-            StaThread.RunDumperForTests = null;
-            StaThread.DumpDirectory = folder;
-            StaThread.ResetDumpsForTests();
-        }
+        Assert.Equal(TimeSpan.FromSeconds(9), ExitWatch.NoteAfter);
     }
 }

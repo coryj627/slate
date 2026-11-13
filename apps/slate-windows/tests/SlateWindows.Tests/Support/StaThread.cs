@@ -368,11 +368,6 @@ internal static class StaThread
     /// to include JIT code and on matching binaries for the modules, and
     /// CI's runtime is installed unregistered by dotnet-install. A full dump
     /// carries both, and writes faster.</remarks>
-    /// <summary>#1826: <see cref="ExitWatch"/>'s dump of a process still
-    /// alive after its last test, written as a timed-out body's is: same
-    /// folder, cap and createdump.</summary>
-    internal static string DumpForExitWatch(string name) => DumpOnTimeout(name);
-
     private static string DumpOnTimeout(string name)
     {
         if (DumpDirectory is not { Length: > 0 } folder || Interlocked.Increment(ref s_dumps) > MaxDumps)

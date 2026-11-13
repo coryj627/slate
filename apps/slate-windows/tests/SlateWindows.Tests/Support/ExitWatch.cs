@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
+using System.Reflection;
+
 namespace SlateWindows.Tests;
 
 /// <summary>
@@ -16,23 +19,32 @@ namespace SlateWindows.Tests;
 /// Through the VSTest adapter, CI's log shows only
 /// <c>[FATAL ERROR] Xunit.Sdk.TestPipelineException</c>, since the adapter
 /// writes the message at informational level. Every test has passed by
-/// then. A live foreground thread holds the exit there, and so do slow
-/// <c>ProcessExit</c> handlers (#1555: WPF's weak-event tables).
+/// then. Two things hold an exit that long:
+/// <list type="bullet">
+/// <item>a live foreground thread, which runs before any exit handler;</item>
+/// <item>slow <c>ProcessExit</c> handlers, such as #1555's WPF weak-event
+/// tables.</item>
+/// </list>
 /// </para>
 /// <para>
-/// The watch tells those apart. Into the folder CI uploads
-/// (<see cref="StaThread.DumpDirectory"/>, <c>SLATE_STA_DUMP_DIR</c>), it
-/// logs:
+/// The watch tells them apart, and logs into the folder CI uploads
+/// (<see cref="StaThread.DumpDirectory"/>, <c>SLATE_STA_DUMP_DIR</c>).
+/// After the last test, it rewrites the process's exit handlers in their
+/// order:
 /// <list type="bullet">
-/// <item>the end of the last test;</item>
-/// <item>the first <c>ProcessExit</c> handler (registered when the run
-/// starts);</item>
-/// <item>the handler it registers after the last test, which runs after
-/// every handler registered during the run.</item>
+/// <item>its own mark first, before the handlers the module initializers
+/// registered;</item>
+/// <item>each existing handler, timed, so a slow one is named;</item>
+/// <item>its own mark last.</item>
 /// </list>
-/// A process still alive <see cref="DumpAfter"/> after the last test is
-/// dumped through <see cref="StaThread"/>'s createdump. It is close enough
-/// to xUnit's limit that only a run already failing is dumped.
+/// It also counts the handlers by kind. <see cref="NoteAfter"/> after the
+/// last test, a background thread notes whether the process is still alive,
+/// and in which handler, if any.
+/// </para>
+/// <para>
+/// The watch never suspends the process (a dump did, for 12.5 s on CI, which
+/// could push a passing exit past xUnit's limit). A wrapped handler runs and
+/// throws exactly as before.
 /// </para>
 /// </remarks>
 public sealed class ExitWatch : IDisposable
@@ -40,57 +52,93 @@ public sealed class ExitWatch : IDisposable
     /// <summary>The log's name in the results folder.</summary>
     internal const string LogName = "exit-watch.log";
 
-    /// <summary>How long after the last test the watch waits before it
-    /// dumps a process still alive. xUnit forces the exit 11 s after its
-    /// entry point returns, which is after the last test.</summary>
-    internal static readonly TimeSpan DumpAfter = TimeSpan.FromSeconds(9);
+    /// <summary>How long after the last test the watch notes a process still
+    /// alive. xUnit forces the exit 11 s after its entry point returns, which
+    /// is after the last test.</summary>
+    internal static readonly TimeSpan NoteAfter = TimeSpan.FromSeconds(9);
+
+    /// <summary>An exit handler at least this slow is named in the log.</summary>
+    internal static readonly TimeSpan SlowHandler = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>The backing field of <see cref="AppDomain.ProcessExit"/>,
+    /// which every <c>ProcessExit +=</c> in the process adds to.</summary>
+    private static readonly FieldInfo? ProcessExitField =
+        typeof(AppDomain).GetField(nameof(AppDomain.ProcessExit), BindingFlags.NonPublic | BindingFlags.Instance);
 
     private readonly string? _folder;
-    private readonly TimeSpan _dumpAfter;
-    private readonly Func<string, string> _dump;
-    private readonly Action<EventHandler> _onProcessExit;
+    private readonly TimeSpan _noteAfter;
+    private readonly Func<EventHandler?> _read;
+    private readonly Func<EventHandler?, EventHandler, bool> _replace;
     private readonly object _gate = new();
+    private int _handlerCount;
+    private long _exitBegan;
+    private string? _running;
+    private long _runningSince;
 
     public ExitWatch()
-        : this(
-            StaThread.DumpDirectory,
-            DumpAfter,
-            StaThread.DumpForExitWatch,
-            handler => AppDomain.CurrentDomain.ProcessExit += handler)
+        : this(StaThread.DumpDirectory, NoteAfter, ReadProcessExit, ReplaceProcessExit)
     {
     }
 
     internal ExitWatch(
         string? folder,
-        TimeSpan dumpAfter,
-        Func<string, string> dump,
-        Action<EventHandler> onProcessExit)
+        TimeSpan noteAfter,
+        Func<EventHandler?> read,
+        Func<EventHandler?, EventHandler, bool> replace)
     {
-        _folder = folder;
-        _dumpAfter = dumpAfter;
-        _dump = dump;
-        _onProcessExit = onProcessExit;
+        _folder = folder is { Length: > 0 } ? folder : null;
+        _noteAfter = noteAfter;
+        _read = read;
+        _replace = replace;
         Note("the run started");
-        _onProcessExit((_, _) => Note("the process exit began: its first exit handler ran"));
     }
 
-    /// <summary>The thread that dumps a process still alive; null until the
-    /// last test finished.</summary>
+    /// <summary>Whether this runtime keeps its exit handlers where the watch
+    /// reads them.</summary>
+    internal static bool ProcessExitHandlersReadable => ProcessExitField?.FieldType == typeof(EventHandler);
+
+    /// <summary>The thread that notes a process still alive; null until the
+    /// last test finished, and with no folder.</summary>
     internal Thread? Watcher { get; private set; }
+
+    internal static EventHandler? ReadProcessExit() =>
+        ProcessExitHandlersReadable ? ProcessExitField!.GetValue(AppDomain.CurrentDomain) as EventHandler : null;
+
+    /// <summary>Replaces the exit handlers, unless they changed since
+    /// <paramref name="expected"/> was read.</summary>
+    private static bool ReplaceProcessExit(EventHandler? expected, EventHandler replacement)
+    {
+        if (!ProcessExitHandlersReadable)
+        {
+            return false;
+        }
+        lock (ProcessExitField!)
+        {
+            if (!ReferenceEquals(ProcessExitField.GetValue(AppDomain.CurrentDomain), expected))
+            {
+                return false;
+            }
+            ProcessExitField.SetValue(AppDomain.CurrentDomain, replacement);
+            return true;
+        }
+    }
+
+    /// <summary>A handler's name: the type of the object it runs on (WPF's
+    /// shut-down listeners differ only there), else its method's type, and
+    /// its method.</summary>
+    internal static string NameOf(Delegate handler) =>
+        $"{(handler.Target?.GetType() ?? handler.Method.DeclaringType)?.FullName}.{handler.Method.Name}";
 
     /// <summary>The run's last test has finished.</summary>
     public void Dispose()
     {
-        Note("the last test finished");
-        _onProcessExit((_, _) => Note("the exit handlers registered during the run have run"));
-        Watcher = new Thread(() =>
+        if (_folder is null)
         {
-            Thread.Sleep(_dumpAfter);
-            // Written before the dump: xUnit's exit can follow it at once.
-            Note($"still alive {_dumpAfter.TotalSeconds:0} s after the last test; writing a dump");
-            string said = _dump("exit-watch").Trim();
-            Note(said.Length > 0 ? said : "no dump was written");
-        })
+            return;
+        }
+        Note("the last test finished");
+        WrapExitHandlers();
+        Watcher = new Thread(WatchTheExit)
         {
             // A foreground watch would hold the very exit it watches.
             IsBackground = true,
@@ -99,9 +147,92 @@ public sealed class ExitWatch : IDisposable
         Watcher.Start();
     }
 
+    private void WrapExitHandlers()
+    {
+        EventHandler? current = _read();
+        Delegate[] handlers = current?.GetInvocationList() ?? [];
+        _handlerCount = handlers.Length;
+        string kinds = string.Join(
+            ", ",
+            handlers.GroupBy(NameOf)
+                .OrderByDescending(kind => kind.Count())
+                .ThenBy(kind => kind.Key, StringComparer.Ordinal)
+                .Select(kind => $"{kind.Count()} x {kind.Key}"));
+        Note($"{handlers.Length} exit handlers are registered: {(kinds.Length > 0 ? kinds : "none")}");
+        EventHandler wrapped = ExitBegan;
+        for (int index = 0; index < handlers.Length; index++)
+        {
+            wrapped += Timed((EventHandler)handlers[index], index + 1);
+        }
+        wrapped += ExitHandlersRan;
+        if (!_replace(current, wrapped))
+        {
+            Note(ProcessExitHandlersReadable || !ReferenceEquals(_read, ReadProcessExit)
+                ? "the exit handlers changed while the watch read them, and were left as they were"
+                : "this runtime's exit handlers are not where the watch reads them, and were left as they were");
+        }
+    }
+
+    private void ExitBegan(object? sender, EventArgs e)
+    {
+        Volatile.Write(ref _exitBegan, Stopwatch.GetTimestamp());
+        Note("the process exit began: the watch's first exit handler ran");
+    }
+
+    private void ExitHandlersRan(object? sender, EventArgs e) =>
+        Note($"the exit handlers ran: {_handlerCount} in {Stopwatch.GetElapsedTime(Volatile.Read(ref _exitBegan)).TotalSeconds:0.000} s");
+
+    private EventHandler Timed(EventHandler handler, int position)
+    {
+        string name = $"exit handler {position} of {_handlerCount} ({NameOf(handler)})";
+        return (sender, e) =>
+        {
+            long started = Stopwatch.GetTimestamp();
+            Volatile.Write(ref _runningSince, started);
+            Volatile.Write(ref _running, name);
+            try
+            {
+                handler(sender, e);
+            }
+            finally
+            {
+                Volatile.Write(ref _running, null);
+                TimeSpan took = Stopwatch.GetElapsedTime(started);
+                if (took >= SlowHandler)
+                {
+                    Note($"{name} took {took.TotalSeconds:0.000} s");
+                }
+            }
+        };
+    }
+
+    private void WatchTheExit()
+    {
+        Thread.Sleep(_noteAfter);
+        string alive = $"still alive {_noteAfter.TotalSeconds:0} s after the last test";
+        int threads;
+        using (Process self = Process.GetCurrentProcess())
+        {
+            threads = self.Threads.Count;
+        }
+        if (Volatile.Read(ref _exitBegan) == 0)
+        {
+            Note($"{alive}, and no exit handler has started: a foreground thread or the runner holds the exit ({threads} threads)");
+        }
+        else if (Volatile.Read(ref _running) is { } running)
+        {
+            TimeSpan since = Stopwatch.GetElapsedTime(Volatile.Read(ref _runningSince));
+            Note($"{alive}, inside {running}, for {since.TotalSeconds:0.000} s ({threads} threads)");
+        }
+        else
+        {
+            Note($"{alive}, between exit handlers ({threads} threads)");
+        }
+    }
+
     private void Note(string what)
     {
-        if (_folder is not { Length: > 0 } folder)
+        if (_folder is not { } folder)
         {
             return;
         }
