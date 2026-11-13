@@ -377,9 +377,19 @@ whether the claim was lost, and the inherited incarnations (W§3, W§5).
   the single-note alert's Save that reaches `applyPendingNavigation(.closeVault)`
   (`:24792-24796`), Try again, and a committed Discard All's
   `.retireOnly` settle — is followed by W§4's re-check: no save in
-  flight, and the dirty set and each buffer's `bufferRevision`
-  unchanged since the settle began (for a Discard All: against the
-  covered buffers). A failed re-check never closes and never opens the
+  flight, and the dirty set, each buffer's `bufferRevision` and
+  `AppState.draftRevision` unchanged since the settle began (for a
+  Discard All: against the covered buffers and the drafts it covered).
+  `draftRevision` (new) is bumped by a `didSet` on every store the
+  close prompts read for drafts that are not tab buffers —
+  `propertiesSourceDraft` (`:22004`), `parkedPropertiesSourceDrafts`
+  (`:22053`) and `missingNoteRecoveryDrafts` (`:22210`), the stores
+  behind `uncommittedNoteDraftPaths` and `dirtyVaultClosePaths`
+  (`:22678`, `:23117-23135`, `:23222-23236`) — so an edit to a property
+  draft already dirty when the reader chose (which changes no tab
+  snapshot and no dirty path; `updatePropertiesSourceDraft` `:22021`)
+  still fails the re-check. Those drafts have no kept copy (Deviation
+  2), so this re-check is their only guard. A failed re-check never closes and never opens the
   discard-pending prompt: it goes back to the route's own decision,
   which for Close Vault, a switch and a quit is today's prompt with the
   new dirty count, so text typed during a settle, or after a Discard
@@ -490,6 +500,25 @@ whether the claim was lost, and the inherited incarnations (W§3, W§5).
   (`.markdown(path:)`, `Workspace/WorkspaceModel.swift:158`, keeping its
   `TabID`). A `Restore` entry whose text equals the disk body restores
   clean and is retired at once.
+- **Same-path siblings with no entry of their own are seeded.** A
+  saved layout can hold several markdown tabs on one note while only
+  the tab that was dirty and active had a buffer, and so an entry. Every
+  markdown layout tab whose path equals a restored tab's planned path
+  (`BaseExactIdentity.matches`, the rule `mirrorEdit` and
+  `mirrorSaveResult` use, `Workspace/WorkspaceState.swift:356-378`) and
+  that the plan names no entry for gets the same parked document: the
+  restored text (the latest, where peers were reconciled), its
+  baseline hash, identity, `restoredIdentityEnforced` and
+  `baselineTextUnknown`, `hasLoaded = true`, dirty. Without this, the
+  sibling's first activation reads the disk through
+  `restoreParkedOrLoadFromDisk` (`:10152-10189`) and its first edit
+  mirrors the disk text over the restored buffer (`mirrorEdit`), which
+  the writer then keeps. Seeded siblings claim their own entries at
+  their first change, as any dirty peer does (the peer rule, A§1); a
+  further crash restores both entries with one text, which the plan
+  restores as peers, never as a recovered note. Windows propagates
+  restored state to its peers the same way
+  (`MirrorSamePathDocumentState`).
 - **A planned new tab** opens in the active group after the layout's
   tabs, in `written_at` order, without taking the focus; a layout that
   failed to load or held no tabs gets a fresh model for them.
@@ -544,12 +573,25 @@ repair), otherwise none. A crash keeps nothing, as on `main`.
   Vec<String>) -> HotExitRestorePlan`**: classifies the snapshot's
   entries (A§3, through `classify_hot_exit_entries`) and applies W§5's
   rules, ported from `HotExitRestorePlan.For`
-  (`WorkspaceViewModel.HotExit.cs:77-197`) unchanged: peers on one path
-  (decision `Restore`/`RestoreStale`, path compared case-insensitively)
-  give the latest `written_at` text to every tab on the path; each other
+  (`WorkspaceViewModel.HotExit.cs:77-197`) with one change: **peers are
+  grouped by the file the filesystem says their paths name, never by a
+  case rule** (contract 32 I1, `32_canonical_file_identity_contracts.md:118-131`:
+  a global case rule merges distinct files on a case-sensitive volume).
+  Two entries are peers when both are `Restore`/`RestoreStale` (a file
+  exists at the path) and `canonical_path` (the provider's stored
+  spelling, `session.rs:4186-4189`) answers the same spelling for both;
+  where it answers `None` or fails, an entry's path is its own key
+  (exact bytes), so it is never merged. On a case-insensitive volume
+  `A.md` and `a.md` name one file and are peers; on a case-sensitive
+  volume they are two files, each restored with its own text. Windows'
+  `StringComparer.OrdinalIgnoreCase` grouping (`:115`) merges the
+  latter; #1934 moves Windows onto this rule. Peers give the latest
+  `written_at` text to every tab on the path; each other
   distinct text becomes a `Recovered` note at `{stem} (recovered).md`
   (then `(recovered 2)`, …), never on a name this plan already took or
-  a file at that path, keeping its entry's id; a second peer with the
+  a file at that path (a name the plan took is compared without case,
+  which can only skip a free name, never merge two notes), keeping its
+  entry's id; a second peer with the
   same distinct text is redundant (retired, never a second note); a
   layout tab whose id a recovered peer took is displaced. Records:
   `HotExitRestorePlan { layout: Vec<HotExitPlannedTab>, displaced:
@@ -565,8 +607,12 @@ repair), otherwise none. A crash keeps nothing, as on `main`.
   `compose_note`), the inverse `read_note_parts` already uses.
 - **`HOT_EXIT_REASON_DRAFTS_NOT_KEPT`** ("unsaved property changes and
   notes recovered from the Trash are not kept") with its accessor
-  `hot_exit_reason_drafts_not_kept()`, rendered inside
-  `UnsavedNotesNotKept` (corpus row and golden).
+  `hot_exit_reason_drafts_not_kept()`, beside the other reason
+  fragments (`a11y.rs:3552-3570`, accessors `lib.rs:9338-9373`). A
+  reason is a fragment of `UnsavedNotesNotKept`, not a corpus row:
+  core's `every_hot_exit_reason_completes_the_not_kept_sentence` and the
+  uniffi accessor test pin it, and no corpus fixture or host mirror
+  moves.
 - **Facts** (core, `session` tests): the plan's cases, each with a
   mutation it kills (§Tests); `compose_note(split_note(t)) == t` for
   every composed `t` over the corpus `compose_note` uses (`lib.rs:15432`)
@@ -611,8 +657,11 @@ by:
    logout or shutdown that AppKit ends first keeps what was durable, as
    a crash does (there is no `SessionEnding` analogue to add).
 4. **Restore planning is core's on the Mac and C#'s on Windows** until
-   the filed follow-up moves Windows to it; 29.1's facts pin the same
-   cases W's facts pin, so the two agree today.
+   #1934 moves Windows to it. 29.1's facts pin W's cases, with one
+   difference: core groups peers by the filesystem's stored spelling
+   (contract 32 I1), where Windows' C# groups them without case, which
+   merges two distinct files on a case-sensitive NTFS directory. #1934
+   fixes that by consuming core.
 5. **An ungated drop abandons rather than retires** (§3). A canvas or
    base opened into a dirty tab, and ⌘W on a dirty tab whose sibling was
    never loaded, lose the buffer on `main` without asking; with hot
@@ -633,7 +682,9 @@ by:
 | `divergent_peers_give_the_latest_text_to_every_tab_and_recover_the_rest` | latest to each peer; each other distinct text a `Recovered` note keeping its id; the holder displaced | keep only the latest |
 | `a_second_peer_with_the_same_text_is_redundant` | one recovered note per distinct text; the redundant entry's incarnations (payload and observed claim) listed | a second recovered note |
 | `a_recovered_name_never_lands_on_a_file_or_a_taken_name` | `(recovered)`, `(recovered 2)` past a file on disk and a name the plan took | ignore the disk |
-| `peers_on_one_path_compare_case_insensitively` | `A.md` and `a.md` are peers | ordinal grouping |
+| `peers_are_the_entries_whose_paths_name_one_file` | a provider whose `canonical_path` maps `A.md` and `a.md` to one stored spelling (a case-insensitive volume): one peer group, the latest text to both tabs | exact-path grouping |
+| `distinct_files_differing_only_in_case_are_never_peers` | a provider with both `A.md` and `a.md` stored (a case-sensitive volume): two groups, each tab restored with its own entry's text, no recovered note, nothing redundant | case-insensitive grouping (Windows' rule) |
+| `an_unanswered_canonical_path_never_merges` | `canonical_path` errors for one entry: it is its own group | fall back to a case rule |
 | `orphan_claims_are_claims_with_no_payload` | listed with their ids, a payload-less claim never planned as an entry | drop them |
 | `split_note_inverts_compose_note` | `compose_note(split_note(t)) == t` for each composed corpus note; offsets equal `read_note_parts`' | compare the parts; re-derive offsets |
 | `the_drafts_reason_renders_inside_not_kept` | the sentence and its priority | — |
@@ -685,12 +736,15 @@ The Mac adds:
 | `testKeepMineResolvesAReplacedFilesConflict` | a restored tab, its file replaced: the save conflicts; Keep Mine saves over it | keep the restored identity on Keep Mine |
 | `testEmptyingARestoredBufferStaysDirty` | a `RestoreStale` tab cleared to empty text: still dirty, its entry kept | compare against an empty baseline |
 | `testAnOrphanClaimIsInheritedByItsLayoutTab` | a claim with no payload under a layout tab's id: the tab's first edit claims expecting it and is kept; the tab closed first retires it | retire every orphan at the landing |
+| `testARestoreSeedsSamePathSiblingsWithoutEntries` | a layout with two tabs on `a.md`, one entry (the active tab's); after reopening, the other tab activated shows the restored text, dirty, with no disk read; edited, the edit mirrors into the restored tab; a kept close and a new process restore the edited text in both | leave the sibling to load from disk |
+| `testEditingAPropertyDraftDuringADiscardAsksAgain` | a dirty note and a dirty properties-source draft on one path; Discard All with `discardVault` held; the draft edited through `updatePropertiesSourceDraft`; the discard commits: the route does not close and Close Vault's prompt opens again | re-check tab snapshots and dirty paths only |
+| `testEveryDraftStoreBumpsTheDraftRevision` (census, source scan) | every stored property `uncommittedNoteDraftPaths`, `propertyRecoveryPaths` and `dirtyVaultClosePaths` read has a `didSet` that bumps `draftRevision` | a new draft store without the bump |
 | `testADiscardedRecoveryDraftIsRetired` | `discardMissingNoteRecoveryDraft` removes a dirty parked document: its entry is retired with no other trigger | observe the model only |
 | `HostCodeNeverPairsAHashWithASeparateIdentity` (census, source scan of `Sources/SlateMac`) | no call to `noteFileIdentity`; every assignment to `currentNoteContentHash` or a document's `contentHash` assigns the identity in the same block from a named source | set a hash without its identity |
 
-`A11yCorpusCensusTests` (existing) gains the drafts fragment through
-29.1's corpus row; its "consumed by a Mac site" list gains the seven
-events. Every existing `TerminationFlowTests`, `WorkspaceTabsTests`
+`A11yCorpusCensusTests` (existing): its "consumed by a Mac site" list
+gains the seven events (29.1 adds no corpus row: the drafts reason is a
+fragment of `UnsavedNotesNotKept`). Every existing `TerminationFlowTests`, `WorkspaceTabsTests`
 and switch test runs unchanged (no store installed).
 
 ## Accessibility
@@ -765,6 +819,26 @@ matrix `--check`; the VoiceOver pass above.
   keeps the prompt and speaks core's reason.
 - The restore speaks once, after the opening line, in core's words.
 - Every existing termination, tab and switch test passes unchanged.
+
+## Review record
+
+- **Red team, round 1 (2026-11-13; a fresh Claude agent against the
+  tree at f5a75a47).** Thirteen findings, all folded in: the re-check
+  after every settle that leads to a close; retire only on the reader's
+  word, an ungated drop abandons (#1932, #1933); every quit-prompt
+  result has a reply, and `frontPromptHostForTermination`; the fence
+  before any revert; detach after `closeVault`'s guards; Keep Mine
+  clears identity enforcement; the sidebar fence before the quit's
+  settle; orphan claims inherited by their layout tab; the round trip as
+  byte equality; one announcement seam; validated layout ids; the
+  `documents` map observed; citations.
+- **Codex adversarial review, round 1 (2026-11-13).** Three findings,
+  all folded in: same-path layout siblings with no entry are seeded
+  with the restored buffer (§5); `draftRevision` joins every re-check,
+  so a property draft edited during a Discard All asks again (§4);
+  peers are grouped by the filesystem's stored spelling, never a case
+  rule (§7, contract 32 I1). Also corrected: the drafts reason is a
+  fragment, not a corpus row (§7).
 
 ## Brief
 
