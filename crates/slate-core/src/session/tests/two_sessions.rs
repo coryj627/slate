@@ -212,14 +212,9 @@ fn a_newer_sessions_scan_leaves_the_older_sessions_cache_child() {
 /// The measurements are in BENCHMARKS.md.
 #[test]
 fn perf_guard_two_sessions_do_not_evict_each_others_cache() {
-    let reading =
-        within_limit_on_a_fresh_reading(two_sessions_reading).unwrap_or_else(|why| panic!("{why}"));
-    assert!(
-        reading.used_after * 10 >= reading.used_before * 9,
-        "A's cache fell between its rescans: {} -> {}",
-        reading.used_before,
-        reading.used_after
-    );
+    if let Err(why) = within_limit_on_a_fresh_reading(two_sessions_reading) {
+        panic!("{why}");
+    }
 }
 
 /// The most A's median rescan with B open may take, against its median
@@ -245,6 +240,18 @@ impl TwoSessionsReading {
         median(&self.with_b) / median(&self.alone)
     }
 
+    /// A's cache held between its rescans with B open.
+    fn cache_held(&self) -> Result<(), String> {
+        if self.used_after * 10 >= self.used_before * 9 {
+            Ok(())
+        } else {
+            Err(format!(
+                "A's cache fell between its rescans: {} -> {}",
+                self.used_before, self.used_after
+            ))
+        }
+    }
+
     fn describe(&self) -> String {
         format!(
             "{:.2}x (median {:.4}s with B, {:.4}s alone)",
@@ -266,16 +273,18 @@ fn median(samples: &[f64]) -> f64 {
     }
 }
 
-/// Takes a reading. One over [`LIMIT`] is taken again, and the guard fails
-/// only when both are over.
+/// Takes a reading. A reading whose cache fell fails at once. One over
+/// [`LIMIT`] is taken again, and the guard fails only when both are over.
 fn within_limit_on_a_fresh_reading(
     mut take: impl FnMut() -> TwoSessionsReading,
 ) -> Result<TwoSessionsReading, String> {
     let first = take();
+    first.cache_held()?;
     if first.ratio() <= LIMIT {
         return Ok(first);
     }
     let second = take();
+    second.cache_held()?;
     if second.ratio() <= LIMIT {
         return Ok(second);
     }
@@ -392,4 +401,29 @@ fn a_two_sessions_reading_over_the_limit_fails_only_when_a_fresh_one_agrees() {
     assert_eq!(taken, 2);
     let why = failed.err().expect("two readings over the limit fail");
     assert!(why.contains("1.50x"), "{why}");
+}
+
+/// Codex round 2: a reading in which A's cache fell fails at once, whatever
+/// its timing. The retry is for scheduler noise, and eviction is not noise.
+#[test]
+fn a_two_sessions_reading_whose_cache_fell_fails_without_a_second_reading() {
+    let evicted = |with_b: &[f64]| TwoSessionsReading {
+        used_before: 100,
+        used_after: 80,
+        ..synthetic(&[46.0; 24], with_b)
+    };
+    for with_b in [[69.0; 12], [46.0; 12]] {
+        let mut taken = 0;
+        let judged = within_limit_on_a_fresh_reading(|| {
+            taken += 1;
+            if taken == 1 {
+                evicted(&with_b)
+            } else {
+                synthetic(&[46.0; 24], &[46.0; 12])
+            }
+        });
+        assert_eq!(taken, 1, "a second reading was taken after the cache fell");
+        let why = judged.err().expect("a reading whose cache fell fails");
+        assert!(why.contains("100 -> 80"), "{why}");
+    }
 }
