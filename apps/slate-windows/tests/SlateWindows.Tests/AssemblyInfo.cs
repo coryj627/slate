@@ -13,3 +13,7 @@
 // desktop heap for the rest of the run, and CI's non-interactive 768 KB
 // heap cannot afford them (see Support/StaThread.cs).
 [assembly: SlateWindows.Tests.LeakedDispatcherGuard]
+
+// #1826: records how the test process exits after its last test, and dumps
+// a process still alive just before xUnit forces the exit (Support/ExitWatch.cs).
+[assembly: Xunit.AssemblyFixture(typeof(SlateWindows.Tests.ExitWatch))]
