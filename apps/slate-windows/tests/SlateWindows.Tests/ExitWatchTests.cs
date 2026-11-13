@@ -30,15 +30,8 @@ public sealed class ExitWatchTests : IDisposable
     private ExitWatch Watch(TimeSpan noteAfter, string? folder = null) =>
         new(folder ?? _folder, noteAfter, () => _exitHandlers, Replace);
 
-    private bool Replace(EventHandler? expected, EventHandler replacement)
-    {
-        if (!ReferenceEquals(_exitHandlers, expected))
-        {
-            return false;
-        }
-        _exitHandlers = replacement;
-        return true;
-    }
+    private bool Replace(EventHandler? expected, EventHandler replacement) =>
+        ExitWatch.ReplaceIfUnchanged(ref _exitHandlers, expected, replacement);
 
     private string LogPath => Path.Combine(_folder, ExitWatch.LogName);
 
@@ -169,19 +162,62 @@ public sealed class ExitWatchTests : IDisposable
         Assert.False(Directory.Exists(_folder));
     }
 
-    /// <summary>Exit handlers that changed while being read are left as they
-    /// are, and the log says so.</summary>
+    /// <summary>Codex round 2: a handler registered between the watch's read
+    /// and its swap is kept. The swap is a compare-and-swap, as the runtime's
+    /// own <c>+=</c> is, and the list is left as it was.</summary>
     [Fact]
-    public void ExitHandlersThatChangedWhileBeingReadAreLeftAsTheyAre()
+    public void AHandlerRegisteredWhileTheWatchReadsIsKept()
     {
         EventHandler original = (_, _) => { };
+        EventHandler late = (_, _) => { };
         _exitHandlers = original;
-        var watch = new ExitWatch(_folder, Timeout.InfiniteTimeSpan, () => _exitHandlers, (_, _) => false);
+        var watch = new ExitWatch(
+            _folder,
+            Timeout.InfiniteTimeSpan,
+            () =>
+            {
+                EventHandler? read = _exitHandlers;
+                _exitHandlers += late;
+                return read;
+            },
+            Replace);
 
         watch.Dispose();
 
-        Assert.Same(original, _exitHandlers);
-        Assert.EndsWith(" the exit handlers changed while the watch read them, and were left as they were", Log()[^1], StringComparison.Ordinal);
+        Assert.Equal(new Delegate[] { original, late }, Assert.IsType<EventHandler>(_exitHandlers).GetInvocationList());
+        Assert.EndsWith(" the exit handlers were not wrapped, and were left as they were: they changed while the watch read them, or this runtime keeps them elsewhere", Log()[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>The compare-and-swap replaces only the list it was given.</summary>
+    [Fact]
+    public void TheSwapReplacesOnlyTheListItWasGiven()
+    {
+        EventHandler first = (_, _) => { };
+        EventHandler second = (_, _) => { };
+        EventHandler replacement = (_, _) => { };
+        EventHandler? field = first;
+
+        Assert.False(ExitWatch.ReplaceIfUnchanged(ref field, second, replacement));
+        Assert.Same(first, field);
+        Assert.True(ExitWatch.ReplaceIfUnchanged(ref field, first, replacement));
+        Assert.Same(replacement, field);
+    }
+
+    /// <summary>Codex round 2: with the handlers left unwrapped, the watch
+    /// cannot see the exit's phase, and says so instead of blaming a
+    /// foreground thread.</summary>
+    [Fact]
+    public void StillAliveWithTheHandlersUnwrappedSaysThePhaseIsUnknown()
+    {
+        _exitHandlers = (_, _) => { };
+        var watch = new ExitWatch(_folder, TimeSpan.Zero, () => _exitHandlers, (_, _) => false);
+
+        watch.Dispose();
+
+        Assert.True(Watcher(watch).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
+        string late = Log()[^1];
+        Assert.Contains(" still alive 0 s after the last test, and the exit handlers were not wrapped, so where the exit stands is unknown", late, StringComparison.Ordinal);
+        Assert.DoesNotContain("foreground", late, StringComparison.Ordinal);
     }
 
     /// <summary>This runtime's exit handlers are readable where the watch

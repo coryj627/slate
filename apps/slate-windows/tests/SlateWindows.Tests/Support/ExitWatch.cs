@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Diagnostics;
-using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace SlateWindows.Tests;
 
@@ -61,9 +61,23 @@ public sealed class ExitWatch : IDisposable
     internal static readonly TimeSpan SlowHandler = TimeSpan.FromMilliseconds(100);
 
     /// <summary>The backing field of <see cref="AppDomain.ProcessExit"/>,
-    /// which every <c>ProcessExit +=</c> in the process adds to.</summary>
-    private static readonly FieldInfo? ProcessExitField =
-        typeof(AppDomain).GetField(nameof(AppDomain.ProcessExit), BindingFlags.NonPublic | BindingFlags.Instance);
+    /// which every <c>ProcessExit +=</c> in the process adds to, by
+    /// reference, so the watch's swap is the same compare-and-swap.</summary>
+    [UnsafeAccessor(UnsafeAccessorKind.Field, Name = nameof(AppDomain.ProcessExit))]
+    private static extern ref EventHandler? ProcessExitOf(AppDomain domain);
+
+    private static readonly Lazy<bool> s_readable = new(() =>
+    {
+        try
+        {
+            _ = Volatile.Read(ref ProcessExitOf(AppDomain.CurrentDomain));
+            return true;
+        }
+        catch (MissingFieldException)
+        {
+            return false;
+        }
+    });
 
     private readonly string? _folder;
     private readonly TimeSpan _noteAfter;
@@ -71,6 +85,7 @@ public sealed class ExitWatch : IDisposable
     private readonly Func<EventHandler?, EventHandler, bool> _replace;
     private readonly object _gate = new();
     private int _handlerCount;
+    private volatile bool _wrapped;
     private long _exitBegan;
     private string? _running;
     private long _runningSince;
@@ -95,33 +110,27 @@ public sealed class ExitWatch : IDisposable
 
     /// <summary>Whether this runtime keeps its exit handlers where the watch
     /// reads them.</summary>
-    internal static bool ProcessExitHandlersReadable => ProcessExitField?.FieldType == typeof(EventHandler);
+    internal static bool ProcessExitHandlersReadable => s_readable.Value;
 
     /// <summary>The thread that notes a process still alive; null until the
     /// last test finished, and with no folder.</summary>
     internal Thread? Watcher { get; private set; }
 
     internal static EventHandler? ReadProcessExit() =>
-        ProcessExitHandlersReadable ? ProcessExitField!.GetValue(AppDomain.CurrentDomain) as EventHandler : null;
+        ProcessExitHandlersReadable ? Volatile.Read(ref ProcessExitOf(AppDomain.CurrentDomain)) : null;
 
     /// <summary>Replaces the exit handlers, unless they changed since
     /// <paramref name="expected"/> was read.</summary>
-    private static bool ReplaceProcessExit(EventHandler? expected, EventHandler replacement)
-    {
-        if (!ProcessExitHandlersReadable)
-        {
-            return false;
-        }
-        lock (ProcessExitField!)
-        {
-            if (!ReferenceEquals(ProcessExitField.GetValue(AppDomain.CurrentDomain), expected))
-            {
-                return false;
-            }
-            ProcessExitField.SetValue(AppDomain.CurrentDomain, replacement);
-            return true;
-        }
-    }
+    private static bool ReplaceProcessExit(EventHandler? expected, EventHandler replacement) =>
+        ProcessExitHandlersReadable
+        && ReplaceIfUnchanged(ref ProcessExitOf(AppDomain.CurrentDomain), expected, replacement);
+
+    /// <summary>Puts <paramref name="replacement"/> in <paramref name="field"/>
+    /// only if it still holds <paramref name="expected"/>: a compare-and-swap,
+    /// as the runtime's own <c>ProcessExit +=</c> and <c>-=</c> are, so a
+    /// registration or removal made since the read is never lost.</summary>
+    internal static bool ReplaceIfUnchanged(ref EventHandler? field, EventHandler? expected, EventHandler replacement) =>
+        ReferenceEquals(Interlocked.CompareExchange(ref field, replacement, expected), expected);
 
     /// <summary>A handler's name: the type of the object it runs on (WPF's
     /// shut-down listeners differ only there), else its method's type, and
@@ -165,11 +174,10 @@ public sealed class ExitWatch : IDisposable
             wrapped += Timed((EventHandler)handlers[index], index + 1);
         }
         wrapped += ExitHandlersRan;
-        if (!_replace(current, wrapped))
+        _wrapped = _replace(current, wrapped);
+        if (!_wrapped)
         {
-            Note(ProcessExitHandlersReadable || !ReferenceEquals(_read, ReadProcessExit)
-                ? "the exit handlers changed while the watch read them, and were left as they were"
-                : "this runtime's exit handlers are not where the watch reads them, and were left as they were");
+            Note("the exit handlers were not wrapped, and were left as they were: they changed while the watch read them, or this runtime keeps them elsewhere");
         }
     }
 
@@ -215,7 +223,12 @@ public sealed class ExitWatch : IDisposable
         {
             threads = self.Threads.Count;
         }
-        if (Volatile.Read(ref _exitBegan) == 0)
+        if (!_wrapped)
+        {
+            // No mark is in place: the exit's phase cannot be seen.
+            Note($"{alive}, and the exit handlers were not wrapped, so where the exit stands is unknown ({threads} threads)");
+        }
+        else if (Volatile.Read(ref _exitBegan) == 0)
         {
             Note($"{alive}, and no exit handler has started: a foreground thread or the runner holds the exit ({threads} threads)");
         }
