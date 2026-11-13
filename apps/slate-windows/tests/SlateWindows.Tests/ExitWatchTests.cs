@@ -228,9 +228,11 @@ public sealed class ExitWatchTests : IDisposable
     {
         Assert.True(ExitWatch.ProcessExitHandlersReadable, "AppDomain's ProcessExit backing field moved");
         EventHandler handlers = Assert.IsType<EventHandler>(ExitWatch.ReadProcessExit(), exactMatch: false);
+        // ScratchTrashBin registers its clean-up on every load;
+        // DeviceStateForTests skips its own under a preset state root.
         Assert.Contains(
             handlers.GetInvocationList(),
-            handler => ExitWatch.NameOf(handler).Contains(nameof(DeviceStateForTests), StringComparison.Ordinal));
+            handler => ExitWatch.NameOf(handler).Contains(nameof(ScratchTrashBin), StringComparison.Ordinal));
     }
 
     /// <summary>The suite runs the watch as its assembly fixture, writing to
