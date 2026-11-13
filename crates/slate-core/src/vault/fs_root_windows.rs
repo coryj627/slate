@@ -727,7 +727,7 @@ fn file_index(file: &fs::File) -> io::Result<VaultRootIdentity> {
         volume: u64::from(info.dwVolumeSerialNumber),
         id_high: 0,
         id_low: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-        persistent: false,
+        persistent: true,
     })
 }
 

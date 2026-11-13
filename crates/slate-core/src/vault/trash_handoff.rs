@@ -467,7 +467,8 @@ pub(super) fn final_path_as(file: &std::fs::File, volume: u32) -> std::io::Resul
 #[cfg(windows)]
 pub(super) fn final_path_any(file: &std::fs::File) -> std::io::Result<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_GUID;
-    final_path(file).or_else(|_| final_path_as(file, VOLUME_NAME_GUID))
+    let _ = VOLUME_NAME_GUID;
+    final_path(file)
 }
 
 /// `final_path`'s result as a person reads it: `\\?\C:\…` as `C:\…`, and
