@@ -64,6 +64,51 @@ public sealed class StaThreadTests : IDisposable
         Assert.True(kept < Windows * 2, $"{Windows} facts' threads kept {kept} GDI handles after they ended");
     }
 
+    /// <summary>#1826: WPF gives each thread a weak-event table, a binding
+    /// engine and a text-layout cache, and each registers a shut-down
+    /// listener on the process's exit as well as on its dispatcher's
+    /// shutdown. A fact's thread never shuts its dispatcher down, so its
+    /// listeners stayed on the exit: 4,674 by the end of CI's run, which took
+    /// up to 10.45 s to run inside xUnit's 11 s exit limit. Each listener
+    /// removes itself from the whole list as it runs, so the cost grows with
+    /// the square of the count. The runner now runs the listeners' own
+    /// dispatcher-shutdown teardown as the thread ends.</summary>
+    [Fact]
+    public void AFactsThreadLeavesNoExitHandlerOnceItEnds()
+    {
+        Assert.True(ExitWatch.ProcessExitHandlersReadable, "this runtime keeps its exit handlers where the fact reads them");
+        const int Threads = 20;
+        int before = ExitHandlers();
+
+        for (int thread = 0; thread < Threads; thread++)
+        {
+            StaThread.Run(() =>
+            {
+                var box = new TextBox();
+                _ = box.SetBinding(TextBox.TextProperty, new System.Windows.Data.Binding(nameof(Window.Title)) { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(Window), 1) });
+                var rich = new RichTextBox();
+                rich.Document.Blocks.Add(new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("laid out by PTS")));
+                var host = new Window { Content = new StackPanel { Children = { box, rich } }, Width = 240, Height = 160, Title = "bound" };
+                host.Show();
+                PumpedDispatcher.Drain();
+                Assert.Equal("bound", box.Text);
+            });
+        }
+
+        int kept = ExitHandlers() - before;
+        Assert.True(kept < Threads, $"{Threads} facts' threads left {kept} exit handlers after they ended: {Kinds()}");
+    }
+
+    private static int ExitHandlers() => ExitWatch.ReadProcessExit()?.GetInvocationList().Length ?? 0;
+
+    private static string Kinds() =>
+        string.Join(
+            ", ",
+            (ExitWatch.ReadProcessExit()?.GetInvocationList() ?? [])
+                .GroupBy(ExitWatch.NameOf)
+                .OrderByDescending(kind => kind.Count())
+                .Select(kind => $"{kind.Count()} x {kind.Key}"));
+
     private static uint GdiHandles()
     {
         using System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();

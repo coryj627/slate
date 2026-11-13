@@ -149,6 +149,17 @@ internal static class StaThread
         "System.Windows.Media.MediaContext",
     ];
 
+    /// <summary>#1826: the shut-down listeners WPF makes for each thread's
+    /// weak-event table, binding engine and text-layout cache, by the type
+    /// each lives on. Each listens to its dispatcher's shutdown and to the
+    /// process's exit, and whichever comes first removes it from both.</summary>
+    private static readonly HashSet<string> ExitListeners =
+    [
+        "MS.Internal.WeakEventTable+WeakEventTableShutDownListener",
+        "MS.Internal.Data.DataBindEngine+DataBindEngineShutDownListener",
+        "MS.Internal.PtsHost.PtsCache+PtsCacheShutDownListener",
+    ];
+
     /// <summary>Whether WPF's text services are where this runner reads them.
     /// <c>StaThreadCensus</c> asserts it, so a framework change fails one census
     /// instead of silently bringing the leak back.</summary>
@@ -171,8 +182,13 @@ internal static class StaThread
     /// references from native text services and WPF's static list of render
     /// contexts each keep the thread's resources for the rest of the run:
     /// about 7 GDI handles a fact, which reached the process's limit of
-    /// 10,000. The window and layout handlers are left alone, so no window is
-    /// taken down and the foreground stays where it was.</summary>
+    /// 10,000. #1826: it also runs the thread's <see cref="ExitListeners"/>,
+    /// which otherwise stay on the process's exit. CI's run left 4,674 there,
+    /// and each one that runs removes itself from the whole list, so the
+    /// exit took up to 10.45 s of xUnit's 11 s limit. The window handlers are
+    /// left alone, so no window is taken down and the foreground stays where
+    /// it was. The handlers run in the order WPF registered them, as a
+    /// dispatcher's shutdown runs them.</summary>
     private static void ReleaseTextServices()
     {
         if (Dispatcher.FromThread(Thread.CurrentThread) is not { } dispatcher
@@ -194,7 +210,7 @@ internal static class StaThread
         foreach (EventHandler handler in handlers.GetInvocationList().Cast<EventHandler>())
         {
             if ((handler.Target?.GetType() ?? handler.Method.DeclaringType)?.FullName is { } owner
-                && TextServicesCleanup.Contains(owner))
+                && (TextServicesCleanup.Contains(owner) || ExitListeners.Contains(owner)))
             {
                 handler(dispatcher, EventArgs.Empty);
             }
