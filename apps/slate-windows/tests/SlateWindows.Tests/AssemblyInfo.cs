@@ -14,6 +14,7 @@
 // heap cannot afford them (see Support/StaThread.cs).
 [assembly: SlateWindows.Tests.LeakedDispatcherGuard]
 
-// #1826: records how the test process exits after its last test, and dumps
-// a process still alive just before xUnit forces the exit (Support/ExitWatch.cs).
+// #1826: records how the test process exits after its last test: when its
+// exit handlers start and end, which are slow, and what still holds a process
+// alive just before xUnit forces the exit (Support/ExitWatch.cs).
 [assembly: Xunit.AssemblyFixture(typeof(SlateWindows.Tests.ExitWatch))]
