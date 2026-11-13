@@ -114,7 +114,7 @@ public sealed class ExitWatch : IDisposable
     internal static bool ProcessExitHandlersReadable => s_readable.Value;
 
     /// <summary>The thread that notes a process still alive; null until the
-    /// last test finished, and with no folder.</summary>
+    /// last test finished, with no folder, and with no late note asked for.</summary>
     internal Thread? Watcher { get; private set; }
 
     internal static EventHandler? ReadProcessExit() =>
@@ -148,6 +148,11 @@ public sealed class ExitWatch : IDisposable
         }
         Note("the last test finished");
         WrapExitHandlers();
+        if (_noteAfter == Timeout.InfiniteTimeSpan)
+        {
+            // No late note asked for: no thread sleeps forever.
+            return;
+        }
         Watcher = new Thread(WatchTheExit)
         {
             // A foreground watch would hold the very exit it watches.
@@ -260,9 +265,11 @@ public sealed class ExitWatch : IDisposable
                     $"{DateTimeOffset.UtcNow:O} {what}{Environment.NewLine}");
             }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            // A diagnostic never changes how the run ends.
+            // A diagnostic never changes how the run ends: the marks run
+            // inside the exit handlers, where a throw would cut the rest
+            // short. A folder that is not a path throws ArgumentException.
         }
     }
 }

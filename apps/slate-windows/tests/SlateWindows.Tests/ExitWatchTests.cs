@@ -163,6 +163,36 @@ public sealed class ExitWatchTests : IDisposable
         Assert.Single(Log(), line => line.Contains(" still alive 0 s after the last test, inside exit handler 2 of 2 (", StringComparison.Ordinal));
     }
 
+    /// <summary>Codoki: with no late note asked for, no watch thread is
+    /// started to sleep forever.</summary>
+    [Fact]
+    public void WithNoLateNoteNoWatchThreadStarts()
+    {
+        ExitWatch watch = Watch(Timeout.InfiniteTimeSpan);
+
+        watch.Dispose();
+
+        Assert.Null(watch.Watcher);
+        Assert.Contains(Log(), line => line.EndsWith(" the last test finished", StringComparison.Ordinal));
+    }
+
+    /// <summary>Codoki: a log that cannot be written never throws into the
+    /// exit. The marks run inside the exit handlers, where a throw would cut
+    /// the rest short. Here the folder's name is not a path at all.</summary>
+    [Fact]
+    public void ALogThatCannotBeWrittenNeverThrowsIntoTheExit()
+    {
+        bool ran = false;
+        _exitHandlers += (_, _) => ran = true;
+        ExitWatch watch = Watch(TimeSpan.Zero, folder: "not\0a path");
+
+        watch.Dispose();
+        Exit();
+
+        Assert.True(ran, "the exit handler after the watch's mark never ran");
+        Assert.True(Watcher(watch).Join(TimeSpan.FromSeconds(10)), "the watch never ended");
+    }
+
     /// <summary>With no results folder named, the watch changes nothing.</summary>
     [Fact]
     public void WithoutAFolderTheWatchChangesNothing()
