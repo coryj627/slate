@@ -112,9 +112,12 @@ public sealed class StaThreadTests : IDisposable
         const int Threads = 5;
         int before = TargetedExitHandlers();
         int handled = 0;
+        Volatile.Write(ref s_sendsEnded, 0);
+        Volatile.Write(ref s_sendsTimedOut, 0);
 
         for (int thread = 0; thread < Threads; thread++)
         {
+            int ended = thread + 1;
             StaThread.Run(() =>
             {
                 var rich = new RichTextBox();
@@ -142,8 +145,14 @@ public sealed class StaThreadTests : IDisposable
                     SpinWait.SpinUntil(() => ((GetQueueStatus(QsSendMessage) >> 16) & QsSendMessage) != 0, TimeSpan.FromSeconds(10)),
                     "the finalizer's message was waiting on the thread before it ended");
             });
+            // The send outlives the teardown (Codex round 3): it ends when the
+            // thread does, or when the message runs, never by its own timeout.
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref s_sendsEnded) >= ended, TimeSpan.FromSeconds(30)),
+                "the finalizer's send ended once its thread had");
         }
 
+        Assert.True(Volatile.Read(ref s_sendsTimedOut) == 0, $"{s_sendsTimedOut} sends timed out before their thread ended, so the teardown may have run without one pending");
         int kept = TargetedExitHandlers() - before;
         Assert.True(kept == 0, $"{Threads} facts' threads left {kept} WPF shut-down listeners on the exit ({handled} of {Threads} pending messages ran as they ended): {Kinds()}");
     }
@@ -161,10 +170,26 @@ public sealed class StaThreadTests : IDisposable
 
     private sealed class SendsWhenFinalized(IntPtr window)
     {
-        ~SendsWhenFinalized() => _ = SendMessageTimeout(window, SentWhileEnding, IntPtr.Zero, IntPtr.Zero, 0, 2000, out _);
+        /// <summary>The send's own bound is the runner's: it outlasts any
+        /// teardown, and ends early only when its thread ends.</summary>
+        ~SendsWhenFinalized()
+        {
+            if (SendMessageTimeout(window, SentWhileEnding, IntPtr.Zero, IntPtr.Zero, 0, (uint)StaThread.DefaultTimeout.TotalMilliseconds, out _) == IntPtr.Zero
+                && Marshal.GetLastPInvokeError() == ErrorTimeout)
+            {
+                _ = Interlocked.Increment(ref s_sendsTimedOut);
+            }
+            _ = Interlocked.Increment(ref s_sendsEnded);
+        }
     }
 
-    [DllImport("user32.dll")]
+    private const int ErrorTimeout = 1460;
+
+    private static int s_sendsEnded;
+
+    private static int s_sendsTimedOut;
+
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
 
     private static int TargetedExitHandlers() =>
