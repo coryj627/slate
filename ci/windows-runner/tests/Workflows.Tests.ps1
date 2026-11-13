@@ -98,7 +98,7 @@ Describe 'windows.yml routing through the router' {
         $selector = "(needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home')))"
         $shards.Contains("runs-on: `${{ $selector && 'slate-win-model' || $($vendor.model) }}") | Should -BeTrue
         $shards | Should -Match (Get-CacheGate $selector) -Because 'the cache gate of windows-model-shard'
-        ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 4 -Because 'the three routed lanes and rust-real-trash, which is always on Namespace'
+        ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 5 -Because 'the three routed lanes, rust-real-trash and rust-weak-volumes, which are always on Namespace'
     }
     It 'runs the shell gate on windows-latest in every mode but home-only, and for a fork pull request or a Dependabot run even then, and only after a green app build whatever happened to route' {
         $flaui = Get-JobBlock $windows 'flaui'
@@ -111,14 +111,14 @@ Describe 'windows.yml routing through the router' {
     }
     It 'the gate waits on route too, runs whatever route did, and names the pools, the routing job''s result and the router''s attempt, quoted, when it fails' {
         $gate = Get-JobBlock $windows 'gate'
-        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, rust-real-trash, windows, windows-model, flaui]')
+        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui]')
         # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
         # skipped required check counts as passing. It is skipped, and so passes, only when changes decided that
         # the pull request touches none of the lane's paths (#1565); a failed decision runs it with the lanes.
         $gate | Should -Match (Get-JobLine "if: `${{ always() && needs.changes.outputs.run != 'false' }}")
         # GitHub reports a continue-on-error job's result as it sees fit; an empty router-attempt='' is the sign the
         # router produced nothing and the lanes took the vendor.
-        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
+        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
         foreach ($entry in 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
             'APP_POOL: ${{ needs.route.outputs.app-pool }}', 'MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}', 'MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}') {
             $gate | Should -Match ('(?m)^          ' + [regex]::Escape($entry) + '[ \t]*\r?$') -Because "the gate reads $entry through its step's environment"
@@ -143,6 +143,27 @@ Describe 'windows.yml routing through the router' {
         # #1921: diskpart can exit 1 after "successfully detached". The step
         # reports whether the probe volume is gone and never fails the job.
         $detach[0] | Should -Match 'Test-Path -LiteralPath \$volume' -Because 'the volume being gone is what the step checks'
+        $detach[0] | Should -Match '(?m)^          exit 0[ \t]*\r?$' -Because "diskpart's exit code never decides the job (#1921)"
+    }
+    It 'runs the gated weak-volume facts on FAT32, exFAT and letterless VHDs of their own, always on Namespace, and the gate requires them (plan 44 WB-27, WB-28)' {
+        $job = Get-JobBlock $windows 'rust-weak-volumes'
+        $job | Should -Not -BeNullOrEmpty
+        $job | Should -Match (Get-JobLine 'needs: [changes]') -Because 'it is never routed: the home pool cannot be assumed to attach a VHD'
+        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' }}")
+        $job | Should -Match (Get-JobLine "runs-on: `${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-weak-volumes', github.ref != 'refs/heads/main' && '-pr' || '') }}") -Because 'a cache of its own'
+        $job | Should -Not -Match 'needs\.route'
+        foreach ($text in 'format fs=fat32 quick', 'format fs=exfat quick', 'format fs=ntfs quick label=SlateNoLetter', 'remove all noerr',
+            'SLATE_WEAK_VOLUME_FAT32', 'SLATE_WEAK_VOLUME_EXFAT', 'SLATE_NO_LETTER_VOLUME',
+            "--skip `$skipped", 'weak_volume_case_only_rename_keeps_the_entry',
+            'a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers',
+            'a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames', '--ignored --test-threads=1', 'detach vdisk') {
+            $job.Contains($text) | Should -BeTrue -Because "the job needs $text"
+        }
+        $steps = Get-Steps $job
+        $detach = @($steps | Where-Object { $_.Contains('detach vdisk') })
+        $detach.Count | Should -Be 1
+        $detach[0] | Should -Match '(?m)^        if: \$\{\{ always\(\) \}\}[ \t]*\r?$' -Because 'the VHDs are detached even when a fact fails'
+        $detach[0] | Should -Match 'Get-DiskImage -ImagePath \$vhd' -Because 'whether each image is still attached is what the step checks'
         $detach[0] | Should -Match '(?m)^          exit 0[ \t]*\r?$' -Because "diskpart's exit code never decides the job (#1921)"
     }
     It 'every routed lane prints its runner first, and the router''s attempt only through the environment' {

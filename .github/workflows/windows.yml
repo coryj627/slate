@@ -541,6 +541,138 @@ jobs:
           }
           exit 0
 
+  # Plan 44 WB-27 and WB-28: the gated weak-volume facts on VHDs of their
+  # own, which before this job ran only in the owner's elevated session.
+  # FAT32 and exFAT get drive letters. An NTFS volume has every letter and
+  # mount folder removed, so it is reached only as \\?\Volume{...}\. Like
+  # rust-real-trash it is always on Namespace, whose jobs run elevated, with
+  # a cache of its own.
+  rust-weak-volumes:
+    name: weak volume facts (windows x64)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: ${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-weak-volumes', github.ref != 'refs/heads/main' && '-pr' || '') }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Cache Rust build (Namespace NVMe cache)
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1.7.0
+        with:
+          cache: rust
+
+      - name: Make and attach the FAT32, exFAT and letterless NTFS VHDs
+        id: vhds
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'diskpart needs an elevated job' }
+          $used = (Get-PSDrive -PSProvider FileSystem).Name
+          $free = @('T', 'S', 'R', 'Q', 'P', 'O', 'N') | Where-Object { $used -notcontains $_ }
+          if ($free.Count -lt 2) { throw 'two free drive letters are needed for the FAT32 and exFAT volumes' }
+          $volumes = @(
+            @{ Name = 'fat32'; Format = 'format fs=fat32 quick label=SLATEFAT32'; Letter = $free[0] }
+            @{ Name = 'exfat'; Format = 'format fs=exfat quick label=SlateExfat'; Letter = $free[1] }
+            @{ Name = 'noletter'; Format = 'format fs=ntfs quick label=SlateNoLetter'; Letter = $null }
+          )
+          $vhds = @()
+          foreach ($volume in $volumes) {
+            $vhd = Join-Path $env:RUNNER_TEMP "slate-weak-$($volume.Name).vhdx"
+            $script = Join-Path $env:RUNNER_TEMP "attach-$($volume.Name).txt"
+            # The letterless volume loses whatever automount gave it.
+            $last = if ($volume.Letter) { "assign letter=$($volume.Letter)" } else { 'remove all noerr' }
+            @(
+              "create vdisk file=`"$vhd`" maximum=1024 type=expandable"
+              "select vdisk file=`"$vhd`""
+              'attach vdisk'
+              'create partition primary'
+              $volume.Format
+              $last
+            ) | Set-Content -Path $script -Encoding ascii
+            diskpart /s $script
+            if ($LASTEXITCODE -ne 0) { throw "diskpart exit $LASTEXITCODE for the $($volume.Name) VHD" }
+            $vhds += $vhd
+          }
+          "WEAK_VHDS=$($vhds -join ';')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $fat32 = Get-Volume -DriveLetter $free[0]
+          $exfat = Get-Volume -DriveLetter $free[1]
+          if ($fat32.FileSystemType -ne 'FAT32') { throw "the FAT32 volume is $($fat32.FileSystemType)" }
+          if ($exfat.FileSystemType -ne 'exFAT') { throw "the exFAT volume is $($exfat.FileSystemType)" }
+          $noLetter = @(Get-Volume -FileSystemLabel 'SlateNoLetter')
+          if ($noLetter.Count -ne 1) { throw "expected one SlateNoLetter volume, found $($noLetter.Count)" }
+          if ($noLetter[0].DriveLetter) { throw "the letterless volume has the letter $($noLetter[0].DriveLetter)" }
+          $paths = @((Get-Partition -Volume $noLetter[0]).AccessPaths | Where-Object { $_ -notmatch '^\\\\\?\\Volume\{' })
+          if ($paths.Count -gt 0) { throw "the letterless volume is reachable as $($paths -join ', ')" }
+          $scratch = @{
+            SLATE_WEAK_VOLUME_FAT32 = "$($free[0]):\scratch"
+            SLATE_WEAK_VOLUME_EXFAT = "$($free[1]):\scratch"
+            SLATE_NO_LETTER_VOLUME = "$($noLetter[0].Path)scratch"
+          }
+          foreach ($entry in $scratch.GetEnumerator()) {
+            New-Item -ItemType Directory -Path $entry.Value -Force | Out-Null
+            "$($entry.Key)=$($entry.Value)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "$($entry.Key) = $($entry.Value)"
+          }
+          "FAT32 $($fat32.Size) bytes, exFAT $($exfat.Size) bytes, letterless NTFS $($noLetter[0].Size) bytes, run as $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+
+      - name: WB-27's gated no-replace facts on FAT32 and exFAT
+        run: |
+          # The case-only rename keeps the old spelling on FAT32 and exFAT
+          # (#1727); it runs again here once that is fixed.
+          $skipped = 'weak_volume_case_only_rename_keeps_the_entry'
+          $facts = @(
+            'weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one'
+            'weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one'
+            'weak_volume_identity_rename_refuses_an_occupied_name_at_the_kernel'
+            'weak_volume_stale_identity_refuses_where_ids_are_identities'
+            'weak_volume_gate_names_the_file_system_it_ran_on'
+          )
+          $listed = cargo test -p slate-core --profile ci --locked --lib weak_volume -- --ignored --list
+          if ($LASTEXITCODE -ne 0) { throw "listing the gated facts failed ($LASTEXITCODE)" }
+          foreach ($fact in $facts + $skipped) {
+            if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
+          }
+          $count = @($listed | Select-String ': test$').Count
+          if ($count -ne $facts.Count + 1) { throw "the ignored listing has $count facts; expected $($facts.Count + 1)" }
+          cargo test -p slate-core --profile ci --locked --lib weak_volume -- --ignored --test-threads=1 --nocapture --skip $skipped
+          if ($LASTEXITCODE -ne 0) { throw "the gated facts failed ($LASTEXITCODE)" }
+
+      - name: WB-28's session facts on FAT32, exFAT and the letterless volume
+        run: |
+          $facts = @(
+            'a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers'
+            'a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames'
+          )
+          $listed = cargo test -p slate-core --profile ci --locked --lib held_root_windows -- --ignored --list
+          if ($LASTEXITCODE -ne 0) { throw "listing the session facts failed ($LASTEXITCODE)" }
+          foreach ($fact in $facts) {
+            if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
+          }
+          foreach ($fact in $facts) {
+            cargo test -p slate-core --profile ci --locked --lib $fact -- --ignored --test-threads=1 --nocapture
+            if ($LASTEXITCODE -ne 0) { throw "$fact failed ($LASTEXITCODE)" }
+          }
+
+      - name: Detach the VHDs
+        if: ${{ always() }}
+        run: |
+          if (-not $env:WEAK_VHDS) { 'no VHD was attached'; exit 0 }
+          foreach ($vhd in $env:WEAK_VHDS -split ';') {
+            $script = Join-Path $env:RUNNER_TEMP 'detach.txt'
+            @("select vdisk file=`"$vhd`"", 'detach vdisk') | Set-Content -Path $script -Encoding ascii
+            diskpart /s $script
+            $code = $LASTEXITCODE
+            # diskpart can exit 1 after "successfully detached" (#1921). The
+            # facts have already decided this job; on a VM that is thrown
+            # away, the detach only reports.
+            if ((Get-DiskImage -ImagePath $vhd -ErrorAction SilentlyContinue).Attached) {
+              Write-Host "::warning::diskpart exited $code and $vhd is still attached; the runner VM is discarded with it"
+            } else {
+              "diskpart exited $code; $vhd is detached"
+            }
+          }
+          exit 0
+
   windows:
     name: app build + test (windows x64)
     needs: [changes, route]
@@ -1212,7 +1344,7 @@ jobs:
 
   gate:
     name: build + test (windows x64)
-    needs: [changes, route, rust-tests, rust-real-trash, windows, windows-model, flaui]
+    needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui]
     # Skipped, and so passed, only when changes decided that the pull request
     # touches none of the lane's paths (#1565).
     if: ${{ always() && needs.changes.outputs.run != 'false' }}
@@ -1230,7 +1362,7 @@ jobs:
           MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}
           MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}
         run: |
-          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.rust-real-trash.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.rust-real-trash.result }}" != "success" ] || [ "${{ needs.rust-weak-volumes.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
             exit 1
           fi

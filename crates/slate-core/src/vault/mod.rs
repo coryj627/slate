@@ -113,6 +113,15 @@ pub(crate) fn final_path_guid_for_tests(
     )
 }
 
+/// `GetFinalPathNameByHandleW`'s drive-letter form (`\\?\C:\…`), which a
+/// volume with no drive letter and no mount folder cannot give.
+#[cfg(all(windows, test))]
+pub(crate) fn final_path_dos_for_tests(
+    file: &std::fs::File,
+) -> std::io::Result<std::path::PathBuf> {
+    trash_handoff::final_path(file)
+}
+
 /// An open of an absolute path with exactly `access` (no `SYNCHRONIZE`),
 /// for the facts that check a hold's sharing under an ACL denying it.
 #[cfg(all(windows, test))]
