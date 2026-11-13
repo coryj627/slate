@@ -149,6 +149,17 @@ internal static class StaThread
         "System.Windows.Media.MediaContext",
     ];
 
+    /// <summary>#1826: the shut-down listeners WPF makes for each thread's
+    /// weak-event table, binding engine and text-layout cache, by the type
+    /// each lives on. Each listens to its dispatcher's shutdown and to the
+    /// process's exit, and whichever comes first removes it from both.</summary>
+    private static readonly HashSet<string> ExitListeners =
+    [
+        "MS.Internal.WeakEventTable+WeakEventTableShutDownListener",
+        "MS.Internal.Data.DataBindEngine+DataBindEngineShutDownListener",
+        "MS.Internal.PtsHost.PtsCache+PtsCacheShutDownListener",
+    ];
+
     /// <summary>Whether WPF's text services are where this runner reads them.
     /// <c>StaThreadCensus</c> asserts it, so a framework change fails one census
     /// instead of silently bringing the leak back.</summary>
@@ -172,7 +183,11 @@ internal static class StaThread
     /// contexts each keep the thread's resources for the rest of the run:
     /// about 7 GDI handles a fact, which reached the process's limit of
     /// 10,000. The window and layout handlers are left alone, so no window is
-    /// taken down and the foreground stays where it was.</summary>
+    /// taken down and the foreground stays where it was. #1826: it then takes
+    /// the thread's <see cref="ExitListeners"/> off the process's exit
+    /// (<see cref="StopExitListeners"/>). CI's run left 4,674 there, and each
+    /// one removes itself from the whole list as it runs, so the exit took
+    /// up to 10.45 s of xUnit's 11 s limit.</summary>
     private static void ReleaseTextServices()
     {
         if (Dispatcher.FromThread(Thread.CurrentThread) is not { } dispatcher
@@ -199,7 +214,52 @@ internal static class StaThread
                 handler(dispatcher, EventArgs.Empty);
             }
         }
+        // Read again: a message the teardown above admitted can have made a
+        // listener since.
+        StopExitListeners(dispatcher);
     }
+
+    /// <summary>#1826: takes the thread's <see cref="ExitListeners"/> off the
+    /// process's exit, and off the dispatcher and domain events they also
+    /// listen to, through WPF's own <c>StopListening</c>. Nothing is torn
+    /// down: their teardown would pump (<c>PtsCache</c>'s waits for pending
+    /// finalizers), and a window message sent from another thread would run
+    /// inside services already half shut down (Codex round 1). Each such
+    /// listener on the exit would tear down a dead thread's services there.</summary>
+    private static void StopExitListeners(Dispatcher dispatcher)
+    {
+        if (DispatcherShutdownFinished?.GetValue(dispatcher) is not EventHandler handlers)
+        {
+            return;
+        }
+        foreach (Delegate handler in handlers.GetInvocationList())
+        {
+            if (handler.Target is { } listener
+                && listener.GetType().FullName is { } kind
+                && ExitListeners.Contains(kind))
+            {
+                _ = StopListeningOf(listener.GetType())?.Invoke(listener, null);
+            }
+        }
+    }
+
+    /// <summary>WPF's <c>ShutDownListener.StopListening</c>, which a listener
+    /// type inherits. Each WPF assembly compiles its own copy of the base
+    /// class, so it is read from the listener's own type.</summary>
+    private static MethodInfo? StopListeningOf(Type listener) =>
+        listener.GetMethod("StopListening", HiddenInstance, Type.EmptyTypes);
+
+    /// <summary>Whether each of WPF's <see cref="ExitListeners"/> is where
+    /// this runner reads it, with its <c>StopListening</c>.
+    /// <c>StaThreadCensus</c> asserts it, so a framework change fails one
+    /// census instead of silently bringing the slow exit back.</summary>
+    internal static bool ExitListenersReadable =>
+        DispatcherShutdownFinished is not null
+        && ExitListeners.All(kind =>
+            new[] { typeof(Dispatcher).Assembly, typeof(System.Windows.FrameworkElement).Assembly }
+                .Select(assembly => assembly.GetType(kind))
+                .FirstOrDefault(type => type is not null) is { } type
+            && StopListeningOf(type) is not null);
 
     /// <summary><see cref="Run(Action, TimeSpan?, string?, TimeSpan?)"/> under
     /// <see cref="PumpedDispatcher.Run"/>: the body's documents capture the

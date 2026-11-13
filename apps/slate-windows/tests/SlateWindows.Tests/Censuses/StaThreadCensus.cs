@@ -75,6 +75,16 @@ public sealed class StaThreadCensus
             StaThread.TextServicesHookReadable,
             "WPF's private text-services members moved: fact threads keep their GDI handles until StaThread is taught the new ones.");
 
+    /// <summary>#1826: the runner takes each thread's WPF shut-down listeners
+    /// off the process's exit by reading WPF's private types. A framework
+    /// change that moves them fails here instead of silently bringing back
+    /// an exit slow enough for xUnit to fail the run.</summary>
+    [Fact]
+    public void TheRunnerReadsTheExitListenersWpfKeeps() =>
+        Assert.True(
+            StaThread.ExitListenersReadable,
+            "WPF's shut-down listener types or their StopListening moved: fact threads leave them on the process's exit until StaThread is taught the new ones.");
+
     [Fact]
     public void TheLeakGuardReadsTheDispatcherRegistryWpfKeeps()
     {

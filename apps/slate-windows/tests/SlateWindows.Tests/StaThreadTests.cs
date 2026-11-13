@@ -64,6 +64,157 @@ public sealed class StaThreadTests : IDisposable
         Assert.True(kept < Windows * 2, $"{Windows} facts' threads kept {kept} GDI handles after they ended");
     }
 
+    /// <summary>#1826: WPF gives each thread a weak-event table, a binding
+    /// engine and a text-layout cache, and each registers a shut-down
+    /// listener on the process's exit as well as on its dispatcher's
+    /// shutdown. A fact's thread never shuts its dispatcher down, so its
+    /// listeners stayed on the exit: 4,674 by the end of CI's run, which took
+    /// up to 10.45 s to run inside xUnit's 11 s exit limit. Each listener
+    /// removes itself from the whole list as it runs, so the cost grows with
+    /// the square of the count. The runner now runs the listeners' own
+    /// dispatcher-shutdown teardown as the thread ends.</summary>
+    [Fact]
+    public void AFactsThreadLeavesNoExitHandlerOnceItEnds()
+    {
+        Assert.True(ExitWatch.ProcessExitHandlersReadable, "this runtime keeps its exit handlers where the fact reads them");
+        const int Threads = 20;
+        int before = ExitHandlers();
+
+        for (int thread = 0; thread < Threads; thread++)
+        {
+            StaThread.Run(() =>
+            {
+                var box = new TextBox();
+                _ = box.SetBinding(TextBox.TextProperty, new System.Windows.Data.Binding(nameof(Window.Title)) { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(Window), 1) });
+                var rich = new RichTextBox();
+                rich.Document.Blocks.Add(new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("laid out by PTS")));
+                var host = new Window { Content = new StackPanel { Children = { box, rich } }, Width = 240, Height = 160, Title = "bound" };
+                host.Show();
+                PumpedDispatcher.Drain();
+                Assert.Equal("bound", box.Text);
+            });
+        }
+
+        int kept = ExitHandlers() - before;
+        Assert.True(kept < Threads, $"{Threads} facts' threads left {kept} exit handlers after they ended: {Kinds()}");
+    }
+
+    /// <summary>#1826 (Codex round 1): the runner takes the listeners off
+    /// the exit without tearing the thread's services down. A teardown
+    /// pumped: <c>PtsCache</c>'s waits for pending finalizers, so a window
+    /// message sent from another thread ran while the services were half
+    /// shut down. Here a finalizer sends one, and its handler starts a weak
+    /// event; no listener is left on the exit either way.</summary>
+    [Fact]
+    public void AMessageSentWhileTheThreadEndsLeavesNoExitHandler()
+    {
+        Assert.True(ExitWatch.ProcessExitHandlersReadable, "this runtime keeps its exit handlers where the fact reads them");
+        const int Threads = 5;
+        int before = TargetedExitHandlers();
+        int handled = 0;
+        Volatile.Write(ref s_sendsStarted, 0);
+        Volatile.Write(ref s_sendsEnded, 0);
+        Volatile.Write(ref s_sendsTimedOut, 0);
+
+        for (int thread = 0; thread < Threads; thread++)
+        {
+            int ended = thread + 1;
+            StaThread.Run(() =>
+            {
+                var rich = new RichTextBox();
+                rich.Document.Blocks.Add(new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("laid out by PTS")));
+                var host = new Window { Content = rich, Width = 240, Height = 160 };
+                host.Show();
+                PumpedDispatcher.Drain();
+                IntPtr window = new System.Windows.Interop.WindowInteropHelper(host).Handle;
+                System.Windows.Interop.HwndSource.FromHwnd(window).AddHook((IntPtr _, int message, IntPtr _, IntPtr _, ref bool _) =>
+                {
+                    if (message == SentWhileEnding)
+                    {
+                        System.Windows.WeakEventManager<System.Collections.ObjectModel.ObservableCollection<int>, System.Collections.Specialized.NotifyCollectionChangedEventArgs>
+                            .AddHandler([], nameof(System.Collections.ObjectModel.ObservableCollection<int>.CollectionChanged), (_, _) => { });
+                        _ = Interlocked.Increment(ref handled);
+                    }
+                    return IntPtr.Zero;
+                });
+                LeaveAFinalizerThatSends(window);
+                GC.Collect();
+                // Codoki: the message is waiting on this thread before the
+                // body ends, so the teardown runs with it pending. The queue's
+                // status is read without dispatching, and the wait sleeps.
+                // This finalizer's send has started first (Codex round 4): the
+                // queue's status counts a message from any thread.
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => Volatile.Read(ref s_sendsStarted) >= ended && ((GetQueueStatus(QsSendMessage) >> 16) & QsSendMessage) != 0,
+                        TimeSpan.FromSeconds(10)),
+                    "the finalizer's message was waiting on the thread before it ended");
+            });
+            // The send outlives the teardown (Codex round 3): it ends when the
+            // thread does, or when the message runs, never by its own timeout.
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref s_sendsEnded) >= ended, TimeSpan.FromSeconds(30)),
+                "the finalizer's send ended once its thread had");
+        }
+
+        Assert.True(Volatile.Read(ref s_sendsTimedOut) == 0, $"{s_sendsTimedOut} sends timed out before their thread ended, so the teardown may have run without one pending");
+        int kept = TargetedExitHandlers() - before;
+        Assert.True(kept == 0, $"{Threads} facts' threads left {kept} WPF shut-down listeners on the exit ({handled} of {Threads} pending messages ran as they ended): {Kinds()}");
+    }
+
+    private const int SentWhileEnding = 0x8000 + 0x1826;
+
+    /// <summary>A message sent from another thread is waiting.</summary>
+    private const uint QsSendMessage = 0x0040;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetQueueStatus(uint flags);
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void LeaveAFinalizerThatSends(IntPtr window) => _ = new SendsWhenFinalized(window);
+
+    private sealed class SendsWhenFinalized(IntPtr window)
+    {
+        /// <summary>The send's own bound is the runner's: it outlasts any
+        /// teardown, and ends early only when its thread ends.</summary>
+        ~SendsWhenFinalized()
+        {
+            _ = Interlocked.Increment(ref s_sendsStarted);
+            if (SendMessageTimeout(window, SentWhileEnding, IntPtr.Zero, IntPtr.Zero, 0, (uint)StaThread.DefaultTimeout.TotalMilliseconds, out _) == IntPtr.Zero
+                && Marshal.GetLastPInvokeError() == ErrorTimeout)
+            {
+                _ = Interlocked.Increment(ref s_sendsTimedOut);
+            }
+            _ = Interlocked.Increment(ref s_sendsEnded);
+        }
+    }
+
+    private const int ErrorTimeout = 1460;
+
+    private static int s_sendsStarted;
+
+    private static int s_sendsEnded;
+
+    private static int s_sendsTimedOut;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
+    private static int TargetedExitHandlers() =>
+        (ExitWatch.ReadProcessExit()?.GetInvocationList() ?? [])
+            .Count(handler => ExitWatch.NameOf(handler).Contains("ShutDownListener", StringComparison.Ordinal)
+                && !ExitWatch.NameOf(handler).Contains("ManagedWndProcTracker", StringComparison.Ordinal));
+
+    private static int ExitHandlers() => ExitWatch.ReadProcessExit()?.GetInvocationList().Length ?? 0;
+
+    private static string Kinds() =>
+        string.Join(
+            ", ",
+            (ExitWatch.ReadProcessExit()?.GetInvocationList() ?? [])
+                .GroupBy(ExitWatch.NameOf)
+                .OrderByDescending(kind => kind.Count())
+                .Select(kind => $"{kind.Count()} x {kind.Key}"));
+
     private static uint GdiHandles()
     {
         using System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();
