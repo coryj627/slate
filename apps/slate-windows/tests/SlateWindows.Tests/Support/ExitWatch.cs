@@ -42,9 +42,9 @@ namespace SlateWindows.Tests;
 /// and in which handler, if any.
 /// </para>
 /// <para>
-/// The watch never suspends the process (a dump did, for 12.5 s on CI, which
-/// could push a passing exit past xUnit's limit). A wrapped handler runs and
-/// throws exactly as before.
+/// The watch never suspends the process. A full dump would, for about 12.5 s
+/// on CI (StaThreadTests), which could push a passing exit past xUnit's
+/// limit. A wrapped handler runs and throws exactly as before.
 /// </para>
 /// </remarks>
 public sealed class ExitWatch : IDisposable
