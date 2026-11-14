@@ -123,57 +123,94 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>The logo's popup is open at <paramref name="menuId"/>, and the keys are on
     /// that menu's first enabled row.</summary>
     /// <remarks>#1939: on the home pool's job VMs the keys land on the last row instead, so a
-    /// failure reports where focus went while waiting, the menu's rows and where they sit
-    /// against the window and the screen, and the foreground, focus and keys down
-    /// (<see cref="KeyInputDiagnosis"/>).</remarks>
+    /// failure reports the focus at each check, the menu's rows and where they sit against
+    /// the window and the screen, and the foreground, focus and keys down
+    /// (<see cref="KeyInputDiagnosis"/>). The check reads what it always read, in the same
+    /// order: it keeps only the focused element it already fetched, and every name is read
+    /// after the failure, guarded, so no diagnostic can change the check or replace the
+    /// failure.</remarks>
     private static void AssertOpenOnItsFirstRow(Window window, UIA3Automation automation, string menuId)
     {
         AutomationElement menu = WaitForElement(window, menuId, TimeSpan.FromSeconds(10));
         AutomationElement? first = null;
-        var focusSeen = new List<string>();
+        var focusAtEachCheck = new List<AutomationElement?>();
         bool landed = Retry.WhileFalse(
             () =>
             {
                 first = menu.FindAllChildren(condition => condition.ByControlType(ControlType.MenuItem))
                     .FirstOrDefault(row => row.IsEnabled && !row.IsOffscreen);
+                if (menu.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value != ExpandCollapseState.Expanded
+                    || first is null)
+                {
+                    return false;
+                }
+
                 AutomationElement? focused = automation.FocusedElement();
-                NoteFocus(focusSeen, focused);
-                return menu.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded
-                    && first is not null
-                    && focused is not null
-                    && focused.Equals(first);
+                // Retry checks about every 100 ms, so 256 holds the whole 10 s.
+                if (focusAtEachCheck.Count < 256)
+                {
+                    focusAtEachCheck.Add(focused);
+                }
+
+                return focused is not null && focused.Equals(first);
             },
             TimeSpan.FromSeconds(10)).Success;
         if (!landed)
         {
             throw new Xunit.Sdk.XunitException(
-                $"{menuId} didn't open with the keys on its first row ({first?.Name}); they're on {automation.FocusedElement()?.Name} ({automation.FocusedElement()?.AutomationId}). "
-                + $"Focus while waiting, in order: {string.Join(" -> ", focusSeen)}. "
+                $"{menuId} didn't open with the keys on its first row ({DescribeForDiagnosis(first)}). "
+                + "Focus at each check while it was open with a first row: "
+                + (focusAtEachCheck.Count == 0
+                    ? "never checked, it never was"
+                    : string.Join(" -> ", Collapsed(focusAtEachCheck.Select(DescribeForDiagnosis))))
+                + ". "
                 + MenuDiagnosis(window, automation, menu) + " "
                 + KeyInputDiagnosis(automation) + " "
                 + MenuKeysDiagnosis());
         }
     }
 
-    /// <summary>Adds the focused element to <paramref name="seen"/> when it differs from the
-    /// last one there; never throws, so it can't replace the failure it explains.</summary>
-    private static void NoteFocus(List<string> seen, AutomationElement? focused)
+    /// <summary>An element's name and automation id for a failure message, or why there are
+    /// none; never throws, so it can't replace the failure it explains.</summary>
+    private static string DescribeForDiagnosis(AutomationElement? element)
     {
-        string label;
         try
         {
-            label = focused is null
+            return element is null
                 ? "none"
-                : $"'{focused.Properties.Name.ValueOrDefault}' ({focused.Properties.AutomationId.ValueOrDefault})";
+                : $"'{element.Properties.Name.ValueOrDefault}' ({element.Properties.AutomationId.ValueOrDefault})";
         }
         catch (Exception exception)
         {
-            label = $"<unreadable: {exception.GetType().Name}>";
+            return $"<unreadable: {exception.GetType().Name}>";
+        }
+    }
+
+    /// <summary>Each run of equal labels as one label with its count.</summary>
+    private static IEnumerable<string> Collapsed(IEnumerable<string> labels)
+    {
+        string? run = null;
+        int count = 0;
+        foreach (string label in labels)
+        {
+            if (label == run)
+            {
+                count++;
+                continue;
+            }
+
+            if (run is not null)
+            {
+                yield return count == 1 ? run : $"{run} x{count}";
+            }
+
+            run = label;
+            count = 1;
         }
 
-        if (seen.Count < 40 && (seen.Count == 0 || seen[^1] != label))
+        if (run is not null)
         {
-            seen.Add(label);
+            yield return count == 1 ? run : $"{run} x{count}";
         }
     }
 
@@ -186,13 +223,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             report.Append($"{menu.Properties.AutomationId.ValueOrDefault} is {menu.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault}; its rows: ");
-            IEnumerable<string> rows = menu.FindAllChildren()
-                .Select(row =>
-                    $"'{row.Properties.Name.ValueOrDefault}' {row.Properties.ControlType.ValueOrDefault}"
-                    + $" enabled={row.Properties.IsEnabled.ValueOrDefault}"
-                    + $" offscreen={row.Properties.IsOffscreen.ValueOrDefault}"
-                    + $" focused={row.Properties.HasKeyboardFocus.ValueOrDefault}"
-                    + $" at {row.Properties.BoundingRectangle.ValueOrDefault}");
+            IEnumerable<string> rows = menu.FindAllChildren().Select(DescribeRowForDiagnosis);
             report.Append(string.Join("; ", rows)).Append('.');
         }
         catch (Exception exception)
@@ -200,19 +231,47 @@ public sealed partial class ShellAccessibilityTests
             report.Append($"<menu unreadable: {exception.GetType().Name}: {exception.Message}>.");
         }
 
+        report.Append(" The window is at ").Append(Guarded(() => window.Properties.BoundingRectangle.ValueOrDefault.ToString()))
+            .Append(" with DPI ").Append(Guarded(() =>
+            {
+                IntPtr handle = window.Properties.NativeWindowHandle.ValueOrDefault;
+                return handle == IntPtr.Zero
+                    ? "unknown"
+                    : NativeMenuDiagnosis.GetDpiForWindow(handle).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }))
+            .Append("; the desktop is ").Append(Guarded(() => automation.GetDesktop().Properties.BoundingRectangle.ValueOrDefault.ToString()))
+            .Append('.');
+        return report.ToString();
+
+        static string Guarded(Func<string> read)
+        {
+            try
+            {
+                return read();
+            }
+            catch (Exception exception)
+            {
+                return $"<unreadable: {exception.GetType().Name}>";
+            }
+        }
+    }
+
+    /// <summary>One of a menu's rows with its state and bounds; never throws, so one row gone
+    /// can't drop the others from the report.</summary>
+    private static string DescribeRowForDiagnosis(AutomationElement row)
+    {
         try
         {
-            IntPtr handle = window.Properties.NativeWindowHandle.ValueOrDefault;
-            report.Append($" The window is at {window.Properties.BoundingRectangle.ValueOrDefault}")
-                .Append($" with DPI {(handle == IntPtr.Zero ? "unknown" : NativeMenuDiagnosis.GetDpiForWindow(handle).ToString(System.Globalization.CultureInfo.InvariantCulture))};")
-                .Append($" the desktop is {automation.GetDesktop().Properties.BoundingRectangle.ValueOrDefault}.");
+            return $"'{row.Properties.Name.ValueOrDefault}' {row.Properties.ControlType.ValueOrDefault}"
+                + $" enabled={row.Properties.IsEnabled.ValueOrDefault}"
+                + $" offscreen={row.Properties.IsOffscreen.ValueOrDefault}"
+                + $" focused={row.Properties.HasKeyboardFocus.ValueOrDefault}"
+                + $" at {row.Properties.BoundingRectangle.ValueOrDefault}";
         }
         catch (Exception exception)
         {
-            report.Append($" <window unreadable: {exception.GetType().Name}: {exception.Message}>.");
+            return $"<row unreadable: {exception.GetType().Name}>";
         }
-
-        return report.ToString();
     }
 
     /// <summary>The keys that move within a menu, which <see cref="KeyInputDiagnosis"/>
