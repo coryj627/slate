@@ -845,6 +845,17 @@ matrix `--check`; the VoiceOver pass above.
   rule (§7, contract 32 I1). Also corrected: the drafts reason is a
   fragment, not a corpus row (§7).
 
+- **Codex adversarial review of 29.2, round 1 (2026-11-14; #1942 at
+  ff1fe35d).** Three findings, all fixed with facts shown red first:
+  the quit's last sidebar/Trash wait is followed by another settle and
+  re-check, never a bare reply, and a wait whose bound ran out is not
+  repeated (`testAnEditDuringTheQuitsLastSidebarWaitIsKeptBeforeTheReply`);
+  Try again carries its route generation and writer, and a superseded
+  retry decides nothing (`testATryAgainOutlivedByAnotherVaultNeverActsOnIt`);
+  a tab clean as it closes ends its episode while its buffer can still be
+  read (`HotExitWriter.tabClosing`), so Save on the tab-close prompt
+  retires the entry (`testSavingThroughTheTabClosePromptRetiresTheEntry`).
+
 ## Delivery record
 
 - **29.1** (#1936, 2026-11-13): as §7, with `displaced` carrying planned

@@ -581,6 +581,43 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(try storedEntries(key).isEmpty)
     }
 
+    /// Codex adversarial review, round 2: Save on the tab-close prompt saves
+    /// and closes the tab in one turn, before the writer sees the clean
+    /// buffer. The saved note leaves nothing behind to come back unsaved,
+    /// even with a later revision still on its way to the store.
+    func testSavingThroughTheTabClosePromptRetiresTheEntry() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        state.updateEditorText("# note\n\none.\n")
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\none.\n"])
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let write = gates.arm(.write)
+        defer { write.open() }
+        state.updateEditorText("# note\n\ntwo.\n")
+        let writeEntered = await entered(write)
+        XCTAssertTrue(writeEntered, "the next revision is on its way")
+        state.requestCloseTab()
+        XCTAssertNotNil(state.pendingTabClose)
+        state.resolveTabCloseSave()
+        await state.saveTask?.value
+        XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n\ntwo.\n")
+        XCTAssertFalse(state.workspace.model.allTabs.contains { tab in
+            if case .markdown(let path) = tab.item { return path == "note.md" }
+            return false
+        }, "the save closed the tab")
+
+        write.open()
+        await settle(state)
+        XCTAssertTrue(try storedEntries(key).isEmpty, "nothing comes back unsaved")
+    }
+
     func testAnUngatedDropIsAbandonedNotRetired() async throws {
         // A canvas opened into a dirty note's tab drops the buffer without
         // the dirty gate (#1932): the store keeps it, and the next open
@@ -673,6 +710,44 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(try storedEntries(key).isEmpty)
     }
 
+    /// Codex adversarial review, round 2: Try again dismisses the alert and
+    /// waits on the store, and a direct open can replace the vault meanwhile.
+    /// The old vault's retry then decides nothing for the new one.
+    func testATryAgainOutlivedByAnotherVaultNeverActsOnIt() async throws {
+        let host = makeHost()
+        host.retirementRetryDelay = 60
+        let state = makeState(host: host)
+        let vaultA = try makeVault("A")
+        let vaultB = try makeVault("B")
+        await open(state, vaultA)
+        await select(state, "note.md")
+        state.updateEditorText("# note\n\ndirty.\n")
+        await settle(state)
+        host.beforeCallForTests = { $0.kind == .retire ? .io : nil }
+        await state.saveCurrentNote()?.value
+        state.closeVaultFromUserAction()
+        await state.hotExitRouteTask?.value
+        XCTAssertNotNil(state.pendingHotExitDiscard, "the retirement is unconfirmed")
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let retire = gates.arm(.retire)
+        defer { retire.open() }
+        state.resolveHotExitDiscardPending(.tryAgain)
+        let retryTask = state.hotExitRouteTask
+        let retireEntered = await entered(retire)
+        XCTAssertTrue(retireEntered, "Try again waits on the store")
+
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+        XCTAssertEqual(state.currentVaultURL?.lastPathComponent, "B")
+        retire.open()
+        await retryTask?.value
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(state.currentVaultURL?.lastPathComponent, "B", "B stays open")
+        XCTAssertNil(state.pendingHotExitDiscard, "A's alert never shows over B")
+    }
+
     func testCloseAndKeepTheCopiesAfterAFailedDiscard() async throws {
         let host = makeHost()
         let state = makeState(host: host)
@@ -718,6 +793,79 @@ final class HotExitTests: XCTestCase {
         await state.hotExitRouteTask?.value
         XCTAssertEqual(replies.values, [true])
         XCTAssertTrue(try storedEntries(key).isEmpty, "the discard committed before the reply")
+        _ = vault
+    }
+
+    /// Arms gates for store calls from the main actor; the hook reads them on
+    /// the store's worker.
+    final class CallGates: @unchecked Sendable {
+        private let lock = NSLock()
+        private var armed: [HotExitCallKind: Gate] = [:]
+        func arm(_ kind: HotExitCallKind) -> Gate {
+            let gate = Gate()
+            lock.withLock { armed[kind] = gate }
+            return gate
+        }
+        func hook(_ call: HotExitStoreCall) -> HotExitFault? {
+            let gate = lock.withLock { armed.removeValue(forKey: call.kind) }
+            gate?.hold()
+            return nil
+        }
+    }
+
+    /// Waits for a gate without blocking the main actor the held work needs.
+    func entered(_ gate: Gate, within seconds: Double = 5) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if gate.waitEntered(0) { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    /// Codex adversarial review, round 2: sidebar or Trash work admitted
+    /// during the quit's settle adds a wait after the last re-check, and the
+    /// editor stays writable through it. An edit made in that wait is kept
+    /// before the quit is answered, never left behind.
+    func testAnEditDuringTheQuitsLastSidebarWaitIsKeptBeforeTheReply() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        state.updateEditorText("# note\n\none.\n")
+        await settle(state)
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let epoch = gates.arm(.epoch)
+        let sidebar = Gate()
+        defer { sidebar.open() }
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater)
+        let epochEntered = await entered(epoch)
+        XCTAssertTrue(epochEntered, "the quit's settle reads the epoch")
+        state.enqueueSidebarOrganizationWriteForTesting { _ in sidebar.hold() }
+        let sidebarEntered = await entered(sidebar)
+        XCTAssertTrue(sidebarEntered, "a sidebar write holds the fence")
+        epoch.open()
+        // The settle decides within a frame or two; the fence then waits.
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(replies.values, [], "the fence holds the reply")
+
+        let write = gates.arm(.write)
+        state.updateEditorText("# note\n\ntwo.\n")
+        let writeEntered = await entered(write)
+        XCTAssertTrue(writeEntered, "the edit's write is issued")
+        sidebar.open()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(replies.values, [], "no reply while the edit is not kept")
+
+        write.open()
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(replies.values, [true])
+        XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\ntwo.\n"])
         _ = vault
     }
 

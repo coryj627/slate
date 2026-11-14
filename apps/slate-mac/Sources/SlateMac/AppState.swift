@@ -3658,6 +3658,10 @@ final class AppState: ObservableObject {
         {
             clearCloseSafeBulkPropertyPublicationVerification(for: path)
         }
+        // Plan 43 PR 29 §3: a tab that is clean as it closes (Save on its
+        // close prompt saves and closes in one turn) ends its episode here,
+        // while its buffer can still be read.
+        hotExitWriter?.tabClosing(id)
         if closingActive {
             // The buffer being closed must not leak into the successor's
             // snapshot: tear the active fields down BEFORE the model close

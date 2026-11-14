@@ -499,6 +499,18 @@ final class HotExitWriter {
         endByReader(stateFor(tab))
     }
 
+    /// A tab about to leave the model, read while it still can be. A clean
+    /// buffer ends its episode, so a save that closes its tab in the same
+    /// turn retires the entry rather than leaving it to come back unsaved
+    /// (Codex adversarial review, round 2). A dirty one goes through the
+    /// gate or the vanish rule, as before.
+    func tabClosing(_ tab: TabID) {
+        guard open.activeKey != nil, !detached, let source, states[tab] != nil,
+            let buffer = source.hotExitBuffer(for: tab), !buffer.dirty
+        else { return }
+        evaluate(tab, force: true)
+    }
+
     private func endByReader(_ state: TabState) {
         guard let key = open.activeKey, let source else { return }
         state.cancelDebounce()

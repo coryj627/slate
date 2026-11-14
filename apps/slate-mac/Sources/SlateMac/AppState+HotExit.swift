@@ -525,8 +525,10 @@ extension AppState {
     private func runHotExitQuit(_ generation: UInt64) async {
         // The sidebar fence first, so nothing typed lands after the last
         // re-check.
+        var fenceExpired = false
         if Self.hasPendingSidebarWorkAtTermination {
             await Self.settleSidebarWriterChainsForTermination()
+            fenceExpired = Self.hasPendingSidebarWorkAtTermination
         }
         while true {
             guard hotExitRouteGeneration == generation, let reply = pendingTerminationSettleReply,
@@ -542,15 +544,21 @@ extension AppState {
             let unchanged = after.unchanged(since: before)
             let draftsPending = draftsBefore || !uncommittedNoteDraftPaths().isEmpty
             if result.kept, unchanged, !draftsPending {
-                pendingTerminationSettleReply = nil
                 // The sidebar and Trash fence once more, for work admitted
-                // during the settle (red team PR 29.2).
-                let answer = terminationAnswer(reply)
-                if let fence = Self.settleSidebarFenceThenReply(answer) {
-                    terminationFenceTaskForTesting = fence
-                } else {
-                    answer(true)
+                // during the settle (red team PR 29.2). The editor stays
+                // writable while it waits, so the settle and the re-check run
+                // again after it: only a pass with no fence left answers
+                // (Codex adversarial review, round 2).
+                // A wait whose bound ran out with work still pending is not
+                // repeated: that work was journaled before it was
+                // acknowledged, as on today's path.
+                if Self.hasPendingSidebarWorkAtTermination, !fenceExpired {
+                    await Self.settleSidebarWriterChainsForTermination()
+                    fenceExpired = Self.hasPendingSidebarWorkAtTermination
+                    continue
                 }
+                pendingTerminationSettleReply = nil
+                terminationAnswer(reply)(true)
                 return
             }
             if after.dirty.isEmpty, !draftsPending {
@@ -866,10 +874,19 @@ extension AppState {
         hotExitDiscardPendingHandlers = nil
         switch choice {
         case .tryAgain:
-            // Try again is one more settle, never a round.
+            // Try again is one more settle, never a round. The alert is gone
+            // while it waits, so a newer route or another vault can take
+            // over; then this retry decides nothing (Codex adversarial
+            // review, round 2).
+            hotExitRouteGeneration &+= 1
+            let generation = hotExitRouteGeneration
+            let writer = hotExitWriter
             hotExitRouteTask = Task { [weak self] in
                 guard let self else { return }
                 let confirmed = await handlers.retry()
+                guard self.hotExitRouteGeneration == generation, self.hotExitWriter === writer,
+                    writer?.detached == false
+                else { return }
                 guard self.hotExitRecheck().unchanged(since: handlers.before) else {
                     self.hotExitReprompt(proceed: handlers.keepCopies)
                     return
