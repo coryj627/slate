@@ -262,8 +262,8 @@ final class HotExitWriter {
     /// The tab left the model or stopped being Markdown without the reader
     /// ending its episode through a gate: a dirty buffer dropped with no
     /// gate is abandoned, so the store keeps it (§3) — unless another tab
-    /// holds a loaded buffer with the same text on the same path, whose own
-    /// entry keeps it. A clean tab carrying incarnations retires them.
+    /// holds the same text on the same path and its own entry has durably
+    /// kept it. A clean tab carrying incarnations retires them.
     private func vanished(_ state: TabState) {
         defer { states[state.tab] = nil }
         state.cancelDebounce()
@@ -271,14 +271,19 @@ final class HotExitWriter {
             if !state.held.isEmpty || !state.inherited.isEmpty { endByReader(state) }
             return
         }
+        // The peer must have kept this text itself, not only hold it: a
+        // peer whose own write was refused leaves this entry the only
+        // durable copy (Codex adversarial review, round 4).
         if let last = state.lastSeen, let source,
             source.hotExitMarkdownTabs.contains(where: { other in
-                other != state.tab
-                    && source.hotExitBuffer(for: other).map {
-                        $0.dirty && BaseExactIdentity.matches($0.path, last.path)
-                            && BaseExactIdentity.matches($0.body, last.body)
-                            && BaseExactIdentity.matches($0.fmSource, last.fmSource)
-                    } == true
+                guard other != state.tab, let buffer = source.hotExitBuffer(for: other),
+                    buffer.dirty, BaseExactIdentity.matches(buffer.path, last.path),
+                    BaseExactIdentity.matches(buffer.body, last.body),
+                    BaseExactIdentity.matches(buffer.fmSource, last.fmSource),
+                    let peer = states[other], !peer.claimLost, !peer.discardedUnkept,
+                    peer.liveClaim != nil, let kept = peer.lastKept, kept.sameSnapshot(buffer)
+                else { return false }
+                return true
             })
         {
             endByReader(state)

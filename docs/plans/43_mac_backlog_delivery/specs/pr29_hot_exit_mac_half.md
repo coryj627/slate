@@ -873,6 +873,14 @@ matrix `--check`; the VoiceOver pass above.
   stamp carries the parked document's identity and the path, since a
   rename builds a new document whose count starts again
   (`testAParkedDirtyTabRenamedTwiceIsKeptAtItsNewestPath`).
+- **Codex adversarial review of 29.2, round 4 (2026-11-14; #1942 at
+  06734a78).** One finding, fixed with a fact shown red first: a closing
+  tab's entry retires because of a same-path peer only when that peer's
+  own entry has durably kept the same snapshot, never on matching text
+  alone (`testClosingAPeerKeepsItsEntryWhileTheSurvivorIsNotKept`). When
+  the peer was not kept, the closing tab's entry is abandoned like an
+  ungated drop, so a crash restores the text twice (the survivor's tab,
+  seeded, and the closed tab as a new one): never lost.
 
 ## Delivery record
 
