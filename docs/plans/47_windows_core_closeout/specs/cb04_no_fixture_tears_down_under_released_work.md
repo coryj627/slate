@@ -8,7 +8,7 @@ A fixture that lets held work go waits for that work before its session goes, an
 
 ## Current state on main
 
-Paths: `T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` = `apps/slate-windows/src/SlateWindows/`, `RCVM` = `S/Reading/ReadingContentViewModel.cs`. Every line was opened at c2377210. Nothing was built or run.
+Paths: `T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` = `apps/slate-windows/src/SlateWindows/`, `RCVM` = `S/Reading/ReadingContentViewModel.cs`. Every line was opened at c2377210; those in `StaThreadCensus.cs` and `windows.yml`, which changed since, were re-read on 2026-11-14 at f0bde81c. Nothing was built or run.
 
 **The product already has every drain, so no product file changes.** `RCVM:717-726` `WhenRefreshWorkDrained()` ends when every tracked fetch (`:606`) and diagram stage (`:2035`) has ended; tests see internals (`S/AssemblyInfo.cs:7`). The property header is a `PanelWorkScheduler` with `WhenAllWorkDrained()` (`S/Panels/PanelWorkScheduler.cs:564`). The palette lane has `WhenIdle()` (`S/CommandPaletteWorkLane.cs:69-83`). `PumpedDispatcher.PumpUntilDrained(Task)` (`T/PumpedDispatcher.cs:127-131`) pumps until a task ends and observes its fault. The two right shapes for a gate are `T/Support/HeldWork.cs` (a `TaskCompletionSource`, nothing to dispose) and "the events are left to the collector" (`T/GraphDiagramTests.Lineage.cs:48-51`, `T/GraphDocumentTests.RequestLineage.cs:94-97`).
 
@@ -40,7 +40,7 @@ Right already: the two collector parks, `HeldWork`, `T/PendingImport.cs:35-45`, 
 
 ## Reference
 
-`T/Censuses/StaThreadCensus.cs` (allow-list `:33-40`, stale-entry check `:62-65`, walk `:133-170`); `T/Censuses/ShellLaunchCensus.cs:38` (a floor, so a walk that missed files fails); `T/Censuses/AnnouncementNameCensus.cs:150-170` (a rule run on planted source, parsed with `CSharpSyntaxTree.ParseText`; `CSharpSource.LoadPath` reads files only). Plan 47 §4 rules 2, 3, 4, 6, 7, 8.
+`T/Censuses/StaThreadCensus.cs` (allow-list `:33-40`, stale-entry check `:62-65`, walk `:143-180`); `T/Censuses/ShellLaunchCensus.cs:38` (a floor, so a walk that missed files fails); `T/Censuses/AnnouncementNameCensus.cs:150-170` (a rule run on planted source, parsed with `CSharpSyntaxTree.ParseText`; `CSharpSource.LoadPath` reads files only). Plan 47 §4 rules 2, 3, 4, 6, 7, 8.
 
 ## Design
 
@@ -90,7 +90,7 @@ Each fact is seen failing on today's teardown first. None sleeps.
 
 - `GraphTableTests.AFetchThatReachesTheParkAfterItsDisposalPassesThrough`: `document.FetchGateForTests!()` after `park.Dispose()`.
 - `FinalMergeDeltaTests.ALoadThatReachesTheParkAfterItsDisposalPassesThrough`: read `host.Workspace.InteractionBackgroundFaultForTests` before `loads.Dispose()`; call it with `EditorInteractionWorkerKind.Artifact` after.
-- `ConnectionsLeafTests.AHoldAfterTheParksDisposalPassesThrough`: `parked.Dispose()`, then `parked.Hold()`; `TimedOut` stays false. The name must not start with `TheModelOf` (the lane's filter, `windows.yml:774`).
+- `ConnectionsLeafTests.AHoldAfterTheParksDisposalPassesThrough`: `parked.Dispose()`, then `parked.Hold()`; `TimedOut` stays false. The name must not start with `TheModelOf` (the lane's filter, `windows.yml:909`).
 
 **Cannot be forced.** A pool thread still waking inside `Wait` while the fixture disposes that event (#4, #5, #8, and the event half of #1, #6, #7). There is no seam inside `ManualResetEventSlim`, and whether the wake is harmless is the runtime's detail. No fact is written for it, and #8 has none. Rule 3a proves the form is gone, and its planted cases prove the rule sees it.
 
