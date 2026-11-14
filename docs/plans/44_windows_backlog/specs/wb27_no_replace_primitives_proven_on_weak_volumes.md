@@ -32,6 +32,11 @@ below, it wins.
   case-only fact fails on both: the rename reports success and the
   entry keeps its old spelling, and `MoveFileEx` behaves the same. Filed
   as #1727, outside this chunk; the matrix rows now say so.
+- **The gated facts run on CI, 2026-11-13.** `windows.yml`'s
+  `rust-weak-volumes` job makes FAT32 and exFAT VHDs on a Namespace
+  runner (its jobs run elevated) and runs five of the six gated facts on
+  both, on every lane run. The case-only fact is skipped by name until
+  #1727 is fixed. SMB stays the recorded run: the job has no share.
 - **A third non-ignored fact.**
   `weak_volume_gate_decides_each_kind_from_what_the_volume_reports`. The
   gate is split in two:

@@ -1120,6 +1120,131 @@ fn the_held_paths_volume_guid_form_names_the_held_folder() {
     );
 }
 
+/// WD24 amended, on real volumes: a vault on FAT32 or exFAT opens on the
+/// identity its file system answers. Step 0 recorded both answering no
+/// `FileIdInfo` (error 87), so the session takes the weak file index; the
+/// seam facts above cover the same path on NTFS. The volumes are WB-27's
+/// scratch folders, which CI's `rust-weak-volumes` job makes on VHDs.
+#[test]
+#[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]
+fn a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers() {
+    use crate::vault::fs_root::sys::identity_reads_for_tests;
+    let mut ran = Vec::new();
+    for (variable, file_system) in [
+        ("SLATE_WEAK_VOLUME_FAT32", "FAT32"),
+        ("SLATE_WEAK_VOLUME_EXFAT", "exFAT"),
+    ] {
+        let Some(scratch) = std::env::var_os(variable) else {
+            continue;
+        };
+        let scratch = std::path::PathBuf::from(scratch);
+        let vault = tempfile::tempdir_in(&scratch).unwrap();
+        let (file_id_info, name, index) = identity_reads_for_tests(vault.path()).unwrap();
+        assert_eq!(
+            name.as_deref().ok(),
+            Some(file_system),
+            "{variable}: {} is on a volume that names itself {file_system}",
+            scratch.display()
+        );
+        std::fs::write(vault.path().join("note.md"), "# Note\n").unwrap();
+
+        let session = session_at(vault.path()).unwrap();
+        let identity = session
+            .root_identity()
+            .unwrap_or_else(|| panic!("{variable}: the open reads an identity"));
+        assert_eq!(
+            identity.persistent,
+            file_id_info.is_ok(),
+            "{variable}: persistent exactly when the volume answers FileIdInfo ({file_id_info:?})"
+        );
+        if !identity.persistent {
+            let index = index.unwrap();
+            assert_eq!(
+                (identity.volume, identity.id_low),
+                (index.volume, index.id_low),
+                "{variable}: the weak identity is the file index, the watcher's pair"
+            );
+        }
+        assert!(
+            vault.path().join(".slate").is_dir(),
+            "{variable}: the open made .slate beneath the held root"
+        );
+        scanned(&session);
+        session.create_exclusive("saved.md", "# Saved\n").unwrap();
+        assert_eq!(session.read_text("saved.md").unwrap(), "# Saved\n");
+        assert_eq!(
+            std::fs::read_to_string(vault.path().join("saved.md")).unwrap(),
+            "# Saved\n",
+            "{variable}: the note saved through the session is on the volume"
+        );
+        drop(session);
+        ran.push(variable);
+    }
+    assert!(
+        !ran.is_empty(),
+        "neither SLATE_WEAK_VOLUME_FAT32 nor SLATE_WEAK_VOLUME_EXFAT is set: a named run never passes without a volume"
+    );
+}
+
+/// A vault on a volume with no drive letter and no mount folder, reached
+/// only as `\\?\Volume{…}\…`: the held path's drive-letter form fails there,
+/// so the open, the scan, a save, a rename and the display path all go
+/// through the volume-GUID form (codex round 4's fallback, here on a real
+/// volume). CI's `rust-weak-volumes` job makes the volume on a VHD.
+#[test]
+#[ignore = "needs SLATE_NO_LETTER_VOLUME, a scratch folder on a volume with no drive letter and no mount folder"]
+fn a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let scratch = std::path::PathBuf::from(
+        std::env::var_os("SLATE_NO_LETTER_VOLUME")
+            .expect("SLATE_NO_LETTER_VOLUME is set: a named run never passes without the volume"),
+    );
+    assert!(
+        scratch.to_string_lossy().starts_with(r"\\?\Volume{"),
+        "{} is a volume-GUID path",
+        scratch.display()
+    );
+    let vault = tempfile::tempdir_in(&scratch).unwrap();
+    let folder = std::fs::OpenOptions::new()
+        .access_mode(0x80) // FILE_READ_ATTRIBUTES
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(vault.path())
+        .unwrap();
+    assert!(
+        crate::vault::final_path_dos_for_tests(&folder).is_err(),
+        "{}: the volume has no drive-letter form, so the fallback is what runs",
+        vault.path().display()
+    );
+    drop(folder);
+    std::fs::write(vault.path().join("note.md"), "# Note\n").unwrap();
+
+    let session = session_at(vault.path()).unwrap();
+    let identity = session.root_identity().expect("the open reads an identity");
+    assert!(identity.persistent, "an NTFS volume answers FileIdInfo");
+    let display = session
+        .root_display_path()
+        .expect("the held root has a display path");
+    assert!(
+        display.to_string_lossy().starts_with(r"\\?\Volume{"),
+        "the display path is the volume-GUID form: {}",
+        display.display()
+    );
+    scanned(&session);
+    session.create_exclusive("saved.md", "# Saved\n").unwrap();
+    assert_eq!(session.read_text("saved.md").unwrap(), "# Saved\n");
+    session.rename_file("note.md", "renamed.md").unwrap();
+    assert_eq!(
+        session.canonical_path("renamed.md").unwrap().as_deref(),
+        Some("renamed.md")
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.path().join("renamed.md")).unwrap(),
+        "# Note\n",
+        "the rename landed on the volume"
+    );
+    assert!(!vault.path().join("note.md").exists());
+}
+
 /// A followed stat of a reparse point that is no link (an AF_UNIX socket)
 /// reports the entry itself, as `std::fs::metadata` does
 /// (rust-lang/rust#109106; codex round 4).

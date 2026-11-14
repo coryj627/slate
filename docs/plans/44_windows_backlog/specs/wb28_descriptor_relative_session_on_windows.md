@@ -63,6 +63,14 @@ overwrite) there.
   stable and distinct within the mount, and that changes on a rename.
   The seams fail `FileIdInfo` with 87. D2 needs no answer: no FAT volume
   answers `FileIdInfo` at all.
+- **The real-volume session facts run on CI, 2026-11-13.** PR 1 left two
+  undelivered for want of an elevated session. Both now exist and run in
+  `windows.yml`'s `rust-weak-volumes` job, on VHDs a Namespace runner
+  makes:
+  - `a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers`,
+    on FAT32 and exFAT;
+  - `a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames`,
+    on an NTFS volume with every letter and mount folder removed.
 - **The SQLite path is `C:\|slate-fd\<token>\<leaf>`, not
   `\\.slate-fd\<token>\<leaf>` (item 3).** SQLite takes a path that
   starts with `\\` for a network share and shares one lock handle among a
