@@ -479,7 +479,7 @@ whether the claim was lost, and the inherited incarnations (W§3, W§5).
 `workspace.adopt(...)` and **before** `activateTab`:
 
 - **A layout tab the plan names** gets a parked `NoteDocument` built
-  from its planned entry: `split_note(text)` gives `fmSource`, `body`
+  from its planned entry: `splitNote(text)` (a `NoteSplit`) gives `fmSource`, `body`
   and the offsets; `hasLoaded = true`; `hasUnsavedChanges = true`;
   `path` the planned path. `Restore` and `RestoreStale`:
   `contentHash`/`fileIdentity` are the entry's baseline and
@@ -595,16 +595,21 @@ repair), otherwise none. A crash keeps nothing, as on `main`.
   same distinct text is redundant (retired, never a second note); a
   layout tab whose id a recovered peer took is displaced. Records:
   `HotExitRestorePlan { layout: Vec<HotExitPlannedTab>, displaced:
-  Vec<String>, new_tabs: Vec<HotExitPlannedTab>, orphan_claims:
-  Vec<HotExitCurrentClaim>, redundant: Vec<HotExitRedundantEntry {
-  entry_id, incarnations }> }`; `HotExitPlannedTab { entry_id, entry,
-  decision, path, text, observed_claim: Option<String> }`. A displaced
-  layout tab keeps showing the latest text through its own
-  `HotExitPlannedTab` under the id the host gives it (the host maps the
-  displaced id to a fresh one). The host's id format stays the host's.
-- **`split_note(text) -> NoteParts { fm_source, body, body_byte_offset,
+  Vec<HotExitPlannedTab>, new_tabs: Vec<HotExitPlannedTab>,
+  orphan_claims: Vec<HotExitCurrentClaim>, redundant:
+  Vec<HotExitRedundantEntry { entry_id, incarnations }> }`;
+  `HotExitPlannedTab { entry_id, entry, decision, path, text,
+  observed_claim: Option<String> }`, whose `entry_id` is the layout
+  tab's id for `layout` and `displaced` and the entry's id for
+  `new_tabs`. A displaced layout tab's planned tab carries the latest
+  entry and text; the host maps its id to a fresh one. `new_tabs` is
+  sorted by `written_at`, then the snapshot's order, where the C# lists
+  peer groups first. The host's id format stays the host's.
+- **`split_note(text) -> NoteSplit { fm_source, body, body_byte_offset,
   body_line_offset }`** over the FFI (`#[uniffi::export]`, beside
-  `compose_note`), the inverse `read_note_parts` already uses.
+  `compose_note`), through core's `split_note_with_offsets`, which
+  `read_note_parts` now calls too, so the two cannot drift. (`NoteSplit`,
+  not `NoteParts`: core's `NoteParts` keeps private delimiter bytes.)
 - **`HOT_EXIT_REASON_DRAFTS_NOT_KEPT`** ("unsaved property changes and
   notes recovered from the Trash are not kept") with its accessor
   `hot_exit_reason_drafts_not_kept()`, beside the other reason
@@ -839,6 +844,11 @@ matrix `--check`; the VoiceOver pass above.
   peers are grouped by the filesystem's stored spelling, never a case
   rule (§7, contract 32 I1). Also corrected: the drafts reason is a
   fragment, not a corpus row (§7).
+
+## Delivery record
+
+- **29.1** (#1936, 2026-11-13): as §7, with `displaced` carrying planned
+  tabs and the split record named `NoteSplit` (recorded above).
 
 ## Brief
 

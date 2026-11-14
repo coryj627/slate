@@ -274,6 +274,33 @@ pub fn compose_note(fm_source: String, body: String) -> String {
     core::compose_note(&fm_source, &body)
 }
 
+/// A note split at its frontmatter boundary, with the body's place in the
+/// whole text. Mirrors `slate_core::NoteSplit`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NoteSplit {
+    pub fm_source: String,
+    pub body: String,
+    /// Body start in the whole text, UTF-8 bytes.
+    pub body_byte_offset: u64,
+    /// Newlines before the body start.
+    pub body_line_offset: u32,
+}
+
+/// Plan 43 PR 29 §5: the inverse of `compose_note` for kept text — the
+/// parts and offsets `read_note_parts` gives for the same bytes, so a
+/// host builds a restored body-only buffer the way it builds a loaded one
+/// rather than composing a second split rule.
+#[uniffi::export]
+pub fn split_note(text: String) -> NoteSplit {
+    let split = core::split_note_with_offsets(&text);
+    NoteSplit {
+        fm_source: split.fm_source,
+        body: split.body,
+        body_byte_offset: split.body_byte_offset,
+        body_line_offset: split.body_line_offset,
+    }
+}
+
 /// The TOP-LEVEL keys of a frontmatter block, in document order.
 ///
 /// Add-property surfaces must collision-check against THIS, not against
@@ -1488,6 +1515,21 @@ impl VaultSession {
             .into_iter()
             .map(Into::into)
             .collect()
+    }
+
+    /// Plan 43 PR 29 §7: how a snapshot's entries come back into a
+    /// workspace whose layout's markdown tabs have `layout_entry_ids` —
+    /// each entry classified and peers reconciled by core, so both hosts
+    /// restore alike. Peers are entries whose paths name one file by the
+    /// filesystem's stored spelling, never a case rule.
+    pub fn plan_hot_exit_restore(
+        &self,
+        snapshot: HotExitSnapshot,
+        layout_entry_ids: Vec<String>,
+    ) -> HotExitRestorePlan {
+        self.inner
+            .plan_hot_exit_restore(&snapshot.into(), &layout_entry_ids)
+            .into()
     }
 
     /// Read a note split into `{ fm_source, body }` plus the whole-file
@@ -9161,6 +9203,103 @@ impl From<core::hot_exit::HotExitRestore> for HotExitRestore {
     }
 }
 
+impl From<core::hot_exit::HotExitCurrentClaim> for HotExitCurrentClaim {
+    fn from(claim: core::hot_exit::HotExitCurrentClaim) -> Self {
+        Self {
+            entry_id: claim.entry_id,
+            incarnation: claim.incarnation,
+        }
+    }
+}
+
+impl From<HotExitSnapshot> for core::hot_exit::HotExitSnapshot {
+    fn from(snapshot: HotExitSnapshot) -> Self {
+        Self {
+            epoch: snapshot.epoch,
+            entries: snapshot.entries.into_iter().map(Into::into).collect(),
+            claims: snapshot
+                .claims
+                .into_iter()
+                .map(|claim| core::hot_exit::HotExitCurrentClaim {
+                    entry_id: claim.entry_id,
+                    incarnation: claim.incarnation,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Plan 43 PR 29 §7: one tab a restore installs a kept buffer into.
+/// `entry_id` is the layout tab's id for `layout` and `displaced`, and
+/// the entry's id for `new_tabs`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitPlannedTab {
+    pub entry_id: String,
+    pub entry: HotExitEntry,
+    pub decision: HotExitRestore,
+    pub path: String,
+    pub text: String,
+    /// The snapshot's current claim on `entry_id`: what the tab's first
+    /// claim expects.
+    pub observed_claim: Option<String>,
+}
+
+impl From<core::hot_exit::HotExitPlannedTab> for HotExitPlannedTab {
+    fn from(tab: core::hot_exit::HotExitPlannedTab) -> Self {
+        Self {
+            entry_id: tab.entry_id,
+            entry: tab.entry.into(),
+            decision: tab.decision.into(),
+            path: tab.path,
+            text: tab.text,
+            observed_claim: tab.observed_claim,
+        }
+    }
+}
+
+/// A peer's entry another peer's recovered note already carries: retired
+/// once the workspace is built.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitRedundantEntry {
+    pub entry_id: String,
+    pub incarnations: Vec<String>,
+}
+
+/// Plan 43 PR 29 §7: how a snapshot's entries come back into a
+/// workspace. Mirrors `slate_core::hot_exit::HotExitRestorePlan`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitRestorePlan {
+    pub layout: Vec<HotExitPlannedTab>,
+    /// Layout tabs a recovered peer displaced: give each a fresh id.
+    pub displaced: Vec<HotExitPlannedTab>,
+    /// Entries no layout tab holds, in `written_at` order.
+    pub new_tabs: Vec<HotExitPlannedTab>,
+    pub orphan_claims: Vec<HotExitCurrentClaim>,
+    pub redundant: Vec<HotExitRedundantEntry>,
+}
+
+impl From<core::hot_exit::HotExitRestorePlan> for HotExitRestorePlan {
+    fn from(plan: core::hot_exit::HotExitRestorePlan) -> Self {
+        let tabs = |tabs: Vec<core::hot_exit::HotExitPlannedTab>| {
+            tabs.into_iter().map(Into::into).collect()
+        };
+        Self {
+            layout: tabs(plan.layout),
+            displaced: tabs(plan.displaced),
+            new_tabs: tabs(plan.new_tabs),
+            orphan_claims: plan.orphan_claims.into_iter().map(Into::into).collect(),
+            redundant: plan
+                .redundant
+                .into_iter()
+                .map(|entry| HotExitRedundantEntry {
+                    entry_id: entry.entry_id,
+                    incarnations: entry.incarnations,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A hot-exit store failure; `reason` completes core's
 /// `UnsavedNotesNotKept` sentence.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -9297,14 +9436,7 @@ impl HotExitStore {
         Ok(HotExitSnapshot {
             epoch: snapshot.epoch,
             entries: snapshot.entries.into_iter().map(Into::into).collect(),
-            claims: snapshot
-                .claims
-                .into_iter()
-                .map(|claim| HotExitCurrentClaim {
-                    entry_id: claim.entry_id,
-                    incarnation: claim.incarnation,
-                })
-                .collect(),
+            claims: snapshot.claims.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -9345,6 +9477,13 @@ pub fn hot_exit_refusal_reason(refusal: HotExitRefusal) -> String {
 #[uniffi::export]
 pub fn hot_exit_reason_timed_out() -> String {
     core::a11y::HOT_EXIT_REASON_TIMED_OUT.to_string()
+}
+
+/// Plan 43 PR 29 §4: why a quit or switch with a draft that is not a tab
+/// buffer (a property draft, a note recovered from the Trash) prompts.
+#[uniffi::export]
+pub fn hot_exit_reason_drafts_not_kept() -> String {
+    core::a11y::HOT_EXIT_REASON_DRAFTS_NOT_KEPT.to_string()
 }
 
 /// WB-29 §7: the host's own reasons for `UnsavedNotesNotKept`.
@@ -14806,6 +14945,10 @@ mod tests {
                 hot_exit_reason_store_unwritable(),
                 core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE,
             ),
+            (
+                hot_exit_reason_drafts_not_kept(),
+                core::a11y::HOT_EXIT_REASON_DRAFTS_NOT_KEPT,
+            ),
         ] {
             assert_eq!(accessor, fragment);
         }
@@ -15446,6 +15589,117 @@ mod tests {
             compose_note("title: Ghost\n".to_string(), "Body\n".to_string()),
             "---\ntitle: Ghost\n---\nBody\n"
         );
+    }
+
+    /// Plan 43 PR 29 §7: `split_note` is `compose_note`'s inverse for the
+    /// bytes a composed save writes — the note, not its parts, round
+    /// trips, since `compose_note` canonicalises some frontmatter shapes
+    /// — and its offsets are `read_note_parts`' for those bytes.
+    #[test]
+    fn split_note_inverts_compose_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into()).unwrap();
+        for (index, (fm, body)) in [
+            ("", "Body only\n"),
+            ("title: Ghost\n", "Body\n"),
+            ("title: Ghost\n\n\n", "Body\n"),
+            ("a: 1\r\n", "line one\r\nline two"),
+            ("", "---\nnot: frontmatter\n"),
+            ("", ""),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let composed = compose_note(fm.to_string(), body.to_string());
+            let split = split_note(composed.clone());
+            assert_eq!(
+                compose_note(split.fm_source.clone(), split.body.clone()),
+                composed,
+                "{fm:?} + {body:?}"
+            );
+            let path = format!("n{index}.md");
+            std::fs::write(tmp.path().join(&path), &composed).unwrap();
+            let read = session.read_note_parts(path).unwrap();
+            assert_eq!(
+                (
+                    split.fm_source,
+                    split.body,
+                    split.body_byte_offset,
+                    split.body_line_offset
+                ),
+                (
+                    read.fm_source,
+                    read.body,
+                    read.body_byte_offset,
+                    read.body_line_offset
+                )
+            );
+        }
+    }
+
+    /// Plan 43 PR 29 §7: the plan crosses the FFI field for field — a
+    /// divergent peer pair restores as the latest text in its tab, a
+    /// recovered note keeping the older entry's id, and the displaced tab.
+    #[test]
+    fn the_restore_plan_crosses_the_ffi() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into()).unwrap();
+        let baseline = Some(core::vault::content_hash(b"# A\n"));
+        let entry = |id: &str, text: &str, minute: u32| HotExitEntry {
+            entry_id: id.into(),
+            incarnation: format!("inc-{id}"),
+            generation: 1,
+            path: "a.md".into(),
+            text: text.into(),
+            baseline_hash: baseline.clone(),
+            baseline_file_id: None,
+            written_at: format!("2026-11-01T00:{minute:02}:00.000Z"),
+        };
+        let plan = session.plan_hot_exit_restore(
+            HotExitSnapshot {
+                epoch: 1,
+                entries: vec![entry("p1", "older", 1), entry("p2", "newer", 2)],
+                claims: vec![
+                    HotExitCurrentClaim {
+                        entry_id: "p1".into(),
+                        incarnation: "claim-p1".into(),
+                    },
+                    HotExitCurrentClaim {
+                        entry_id: "orphan".into(),
+                        incarnation: "claim-orphan".into(),
+                    },
+                ],
+            },
+            vec!["p1".into(), "p2".into()],
+        );
+        assert_eq!(plan.layout.len(), 1);
+        assert_eq!(plan.layout[0].entry_id, "p2");
+        assert_eq!(plan.layout[0].text, "newer");
+        assert_eq!(
+            plan.layout[0].decision,
+            HotExitRestore::Restore {
+                path: "a.md".into()
+            }
+        );
+        assert_eq!(plan.new_tabs.len(), 1);
+        let recovered = &plan.new_tabs[0];
+        assert_eq!(recovered.entry_id, "p1");
+        assert_eq!(recovered.path, "a (recovered).md");
+        assert_eq!(recovered.text, "older");
+        assert_eq!(recovered.observed_claim.as_deref(), Some("claim-p1"));
+        assert_eq!(recovered.entry.incarnation, "inc-p1");
+        assert_eq!(plan.displaced.len(), 1);
+        assert_eq!(plan.displaced[0].entry_id, "p1");
+        assert_eq!(plan.displaced[0].text, "newer");
+        assert_eq!(
+            plan.orphan_claims,
+            [HotExitCurrentClaim {
+                entry_id: "orphan".into(),
+                incarnation: "claim-orphan".into(),
+            }]
+        );
+        assert!(plan.redundant.is_empty());
     }
 
     /// W7-7 (#1249): the error detail a host gets through the FFI is the

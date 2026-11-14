@@ -4466,6 +4466,260 @@ impl VaultSession {
             .collect()
     }
 
+    /// Plan 43 PR 29 §7: how a snapshot's entries come back into a
+    /// workspace whose layout holds tabs with `layout_entry_ids`. It
+    /// classifies the entries ([`Self::classify_hot_exit_entries`]) and
+    /// applies WB-29 §5's rules, ported from Windows'
+    /// `HotExitRestorePlan.For` so both hosts share them:
+    ///
+    /// - an entry whose id a layout tab holds restores into that tab; any
+    ///   other opens as a new tab (`written_at` order);
+    /// - **peers** — `Restore`/`RestoreStale` entries whose paths name one
+    ///   file, by the filesystem's stored spelling ([`Self::canonical_path`],
+    ///   contract 32 I1), never by a case rule; a path whose spelling
+    ///   cannot be read is its own group — give the latest `written_at`
+    ///   text to every tab on that file; each other distinct text becomes
+    ///   a `Recovered` note at `{stem} (recovered).md` (numbered past
+    ///   names taken and files on disk) keeping its entry's id; a second
+    ///   peer with the same text is redundant; a layout tab whose id a
+    ///   recovered or redundant peer held is displaced onto the latest
+    ///   text;
+    /// - peers whose texts are all the latest are one buffer: each keeps
+    ///   its own tab (layout or new) with that text, and none is redundant;
+    /// - a displaced tab opens at its own entry's path (the spelling it
+    ///   held), showing the latest entry's text;
+    /// - current claims with no payload are orphans.
+    ///
+    /// The host keeps its own id format: it maps a displaced tab to a
+    /// fresh id and decides which new-tab entry ids it can adopt as tab
+    /// ids.
+    pub fn plan_hot_exit_restore(
+        &self,
+        snapshot: &crate::hot_exit::HotExitSnapshot,
+        layout_entry_ids: &[String],
+    ) -> crate::hot_exit::HotExitRestorePlan {
+        use crate::hot_exit::{
+            HotExitEntry, HotExitPlannedTab, HotExitRedundantEntry, HotExitRestore,
+            HotExitRestorePlan,
+        };
+        use std::collections::{HashMap, HashSet};
+
+        #[derive(PartialEq, Eq, Hash)]
+        enum PeerKey {
+            /// The filesystem's stored spelling of the file.
+            Stored(String),
+            /// No answer: the entry is its own group, never merged.
+            Own(usize),
+        }
+
+        let mut plan = HotExitRestorePlan::default();
+        let decisions = self.classify_hot_exit_entries(&snapshot.entries);
+        let kept: Vec<(&HotExitEntry, HotExitRestore)> =
+            snapshot.entries.iter().zip(decisions).collect();
+        let entry_ids: HashSet<&str> = kept
+            .iter()
+            .map(|(entry, _)| entry.entry_id.as_str())
+            .collect();
+        plan.orphan_claims = snapshot
+            .claims
+            .iter()
+            .filter(|claim| !entry_ids.contains(claim.entry_id.as_str()))
+            .cloned()
+            .collect();
+        let observed = |entry: &HotExitEntry| {
+            snapshot
+                .claims
+                .iter()
+                .find(|claim| claim.entry_id == entry.entry_id)
+                .map(|claim| claim.incarnation.clone())
+        };
+        let planned = |entry: &HotExitEntry, decision: &HotExitRestore| HotExitPlannedTab {
+            entry_id: entry.entry_id.clone(),
+            entry: entry.clone(),
+            decision: decision.clone(),
+            path: decision.path().to_string(),
+            text: entry.text.clone(),
+            observed_claim: observed(entry),
+        };
+        let mut layout_tabs: HashSet<&str> = layout_entry_ids.iter().map(String::as_str).collect();
+        // Names this plan has spoken for, compared without case: skipping a
+        // free name is harmless; merging two notes is not, and that is
+        // decided by `PeerKey` alone.
+        let mut taken: Vec<String> = kept
+            .iter()
+            .map(|(_, decision)| decision.path().to_lowercase())
+            .collect();
+        // Each new tab with its entry's place in the snapshot, the tie-break
+        // for one instant.
+        let mut new_tabs: Vec<(usize, HotExitPlannedTab)> = Vec::new();
+
+        // Groups in order of first appearance, found by key in O(1).
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut group_of: HashMap<PeerKey, usize> = HashMap::new();
+        for (index, (_, decision)) in kept.iter().enumerate() {
+            if !matches!(
+                decision,
+                HotExitRestore::Restore { .. } | HotExitRestore::RestoreStale { .. }
+            ) {
+                continue;
+            }
+            let key = match self.canonical_path(decision.path()) {
+                Ok(Some(stored)) => PeerKey::Stored(stored),
+                _ => PeerKey::Own(index),
+            };
+            match group_of.get(&key) {
+                Some(&group) => groups[group].push(index),
+                None => {
+                    group_of.insert(key, groups.len());
+                    groups.push(vec![index]);
+                }
+            }
+        }
+
+        for members in &groups {
+            // The last of the latest `written_at` (a stable sort's last).
+            let latest_index = members
+                .iter()
+                .copied()
+                .reduce(|best, index| {
+                    if kept[index].0.written_at >= kept[best].0.written_at {
+                        index
+                    } else {
+                        best
+                    }
+                })
+                .expect("a group has a member");
+            let latest = kept[latest_index].0;
+            let mut recovered_by_text: HashMap<&str, String> = HashMap::new();
+            for &index in members {
+                let (entry, decision) = &kept[index];
+                if entry.text == latest.text {
+                    let tab = planned(entry, decision);
+                    if layout_tabs.contains(entry.entry_id.as_str()) {
+                        plan.layout.push(tab);
+                    } else {
+                        new_tabs.push((index, tab));
+                    }
+                    continue;
+                }
+                let redundant = recovered_by_text.contains_key(entry.text.as_str());
+                if redundant {
+                    let mut incarnations = vec![entry.incarnation.clone()];
+                    if let Some(claim) = observed(entry)
+                        && claim != entry.incarnation
+                    {
+                        incarnations.push(claim);
+                    }
+                    plan.redundant.push(HotExitRedundantEntry {
+                        entry_id: entry.entry_id.clone(),
+                        incarnations,
+                    });
+                }
+                let name = match recovered_by_text.get(entry.text.as_str()) {
+                    Some(name) => name.clone(),
+                    None => self.free_peer_recovered_name(decision.path(), &taken, &entry.entry_id),
+                };
+                recovered_by_text.insert(entry.text.as_str(), name.clone());
+                taken.push(name.to_lowercase());
+                if layout_tabs.remove(entry.entry_id.as_str()) {
+                    plan.displaced.push(HotExitPlannedTab {
+                        entry_id: entry.entry_id.clone(),
+                        entry: latest.clone(),
+                        decision: decision.clone(),
+                        path: decision.path().to_string(),
+                        text: latest.text.clone(),
+                        observed_claim: None,
+                    });
+                }
+                if redundant {
+                    continue;
+                }
+                new_tabs.push((
+                    index,
+                    HotExitPlannedTab {
+                        entry_id: entry.entry_id.clone(),
+                        entry: (*entry).clone(),
+                        decision: HotExitRestore::Recovered { path: name.clone() },
+                        path: name,
+                        text: entry.text.clone(),
+                        observed_claim: observed(entry),
+                    },
+                ));
+            }
+        }
+
+        for (index, (entry, decision)) in kept.iter().enumerate() {
+            if matches!(
+                decision,
+                HotExitRestore::Restore { .. } | HotExitRestore::RestoreStale { .. }
+            ) {
+                continue;
+            }
+            let tab = planned(entry, decision);
+            if layout_tabs.contains(entry.entry_id.as_str()) {
+                plan.layout.push(tab);
+            } else {
+                new_tabs.push((index, tab));
+            }
+        }
+        // `written_at`, then the snapshot's order: entries of one instant
+        // keep it whichever pass planned them.
+        new_tabs.sort_by(|(a_index, a), (b_index, b)| {
+            a.entry
+                .written_at
+                .cmp(&b.entry.written_at)
+                .then(a_index.cmp(b_index))
+        });
+        plan.new_tabs = new_tabs.into_iter().map(|(_, tab)| tab).collect();
+        plan
+    }
+
+    /// `{stem} (recovered).md` beside `path`, then `(recovered 2)`, …: the
+    /// first that names no file in the vault and nothing in `taken`
+    /// (lower-cased). A vault that does not answer for a name counts it as
+    /// taken; past a bounded search the entry id makes the name unique, and
+    /// its first save is create-exclusive whatever is there.
+    fn free_peer_recovered_name(&self, path: &str, taken: &[String], entry_id: &str) -> String {
+        const TRIES: u32 = 1_000;
+        let (prefix, name) = match path.rfind('/') {
+            Some(slash) => (&path[..=slash], &path[slash + 1..]),
+            None => ("", path),
+        };
+        let stem = name.rfind('.').map_or(name, |dot| &name[..dot]);
+        let is_taken = |candidate: &str| taken.iter().any(|t| *t == candidate.to_lowercase());
+        for n in 1..=TRIES {
+            let candidate = if n == 1 {
+                format!("{prefix}{stem} (recovered).md")
+            } else {
+                format!("{prefix}{stem} (recovered {n}).md")
+            };
+            if is_taken(&candidate) {
+                continue;
+            }
+            match self.provider.stat(&candidate) {
+                Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return candidate;
+                }
+                _ => {}
+            }
+        }
+        let id: String = entry_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(64)
+            .collect();
+        (1..=taken.len() + 1)
+            .map(|k| {
+                if k == 1 {
+                    format!("{prefix}{stem} (recovered {id}).md")
+                } else {
+                    format!("{prefix}{stem} (recovered {id} {k}).md")
+                }
+            })
+            .find(|candidate| !is_taken(candidate))
+            .expect("one of taken.len() + 1 names is free")
+    }
+
     /// The first `Recovered note.md`, `Recovered note 2.md`, … that names
     /// nothing in the vault and nothing already chosen. The search is
     /// bounded and stops at the first answer that is not "no such file" (a
@@ -9531,22 +9785,16 @@ impl VaultSession {
             file_identity,
         } = self.read_text_identified(path)?;
         let mtime_ms = self.provider.stat(path)?.mtime_ms;
-        let parts = crate::split_note(&contents);
-        // Byte-exact by construction: the body is a suffix of `contents`
-        // (split_note never rewrites bytes), so the prefix length is the
-        // difference — no compose-rule arithmetic anywhere.
-        let body_byte_offset = contents.len() - parts.body.len();
-        let body_line_offset = contents[..body_byte_offset]
-            .bytes()
-            .filter(|b| *b == b'\n')
-            .count() as u32;
+        // Byte-exact by construction (see `split_note_with_offsets`): no
+        // compose-rule arithmetic anywhere.
+        let parts = crate::split_note_with_offsets(&contents);
         Ok(NotePartsBundle {
             fm_source: parts.fm_source,
             body: parts.body,
             content_hash,
             mtime_ms,
-            body_byte_offset: body_byte_offset as u64,
-            body_line_offset,
+            body_byte_offset: parts.body_byte_offset,
+            body_line_offset: parts.body_line_offset,
             file_identity,
         })
     }
@@ -22935,6 +23183,8 @@ mod tests {
     mod held_root_windows;
 
     mod hot_exit_session;
+
+    mod hot_exit_plan;
 
     mod fault_guard;
     mod rename_planning;
