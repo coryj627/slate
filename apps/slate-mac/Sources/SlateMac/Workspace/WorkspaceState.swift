@@ -37,7 +37,52 @@ final class WorkspaceState: ObservableObject {
     /// Parked state for tabs that are not the active tab of the active
     /// group. The ACTIVE tab's state lives in AppState's fields; its entry
     /// here is stale while active and overwritten on park.
-    private(set) var documents: [TabID: NoteDocument] = [:]
+    private(set) var documents: [TabID: NoteDocument] = [:] {
+        didSet {
+            for document in documents.values where document.onChange == nil {
+                document.onChange = { [weak self] in self?.onBufferChange?() }
+            }
+            onBufferChange?()
+        }
+    }
+
+    /// Plan 43 PR 29 §3: called after any parked document or the documents
+    /// map changes (the hot-exit writer's O7 signal; the model's changes
+    /// arrive through `objectWillChange`).
+    var onBufferChange: (() -> Void)?
+
+    /// Plan 43 PR 29 §2: the recovery id of a tab whose entry id is not its
+    /// own `TabID` (an entry restored from an id this host never writes).
+    private(set) var recoveryEntryIds: [TabID: String] = [:]
+
+    func recoveryEntryId(for tab: TabID) -> String {
+        recoveryEntryIds[tab] ?? tab.raw.uuidString
+    }
+
+    /// Plan 43 PR 29 §3: a tab whose dirty buffer was dropped without the
+    /// gate keeps its abandoned entry under its old id; its next note claims
+    /// a fresh one.
+    func assignFreshRecoveryEntryId(_ tab: TabID) {
+        recoveryEntryIds[tab] = UUID().uuidString
+    }
+
+    /// Plan 43 PR 29 §5: a restored tab's parked document, installed before
+    /// the first activation.
+    func installRestoredDocument(_ document: NoteDocument, recoveryEntryId: String? = nil) {
+        documents[document.id] = document
+        if let recoveryEntryId, recoveryEntryId != document.id.raw.uuidString {
+            recoveryEntryIds[document.id] = recoveryEntryId
+        }
+        loadedBaselineRevision &+= 1
+    }
+
+    /// Plan 43 PR 29 §5: an entry with no layout tab opens as a new tab in
+    /// the active group, after its tabs, without taking the focus (a group
+    /// with none shows it).
+    func appendRestoredTab(_ tab: WorkspaceTab) {
+        model.appendTabToActiveGroup(tab)
+        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
+    }
 
     /// Monotonic stamp for the set and values returned by
     /// `loadedBaselineSnapshots`. Detached NoteParts validation compares large
@@ -276,6 +321,7 @@ final class WorkspaceState: ObservableObject {
     /// structurally impossible rather than merely avoided by call order.
     func snapshotActiveTab(
         text: String?, baseline: String?, contentHash: String?,
+        baselineIdentity: BaselineIdentity,
         hasUnsavedChanges: Bool, saveError: String?, saveConflict: SaveConflict?,
         loadedFilePath: String?,
         fmSource: String = "", bodyByteOffset: Int = 0, bodyLineOffset: Int = 0
@@ -288,6 +334,7 @@ final class WorkspaceState: ObservableObject {
         doc.text = text
         doc.savedBaselineText = baseline
         doc.contentHash = contentHash
+        doc.baselineIdentity = baselineIdentity
         doc.hasUnsavedChanges = hasUnsavedChanges
         doc.saveError = saveError
         doc.saveConflict = saveConflict
@@ -305,7 +352,7 @@ final class WorkspaceState: ObservableObject {
     /// would resurrect stale frontmatter over the new bytes.
     func mirrorFrontmatter(
         path: String, fmSource: String, bodyByteOffset: Int,
-        bodyLineOffset: Int, contentHash: String?
+        bodyLineOffset: Int, contentHash: String?, fileIdentity: String?
     ) {
         for doc in documents.values
         where BaseExactIdentity.matches(doc.path, path)
@@ -314,6 +361,11 @@ final class WorkspaceState: ObservableObject {
             doc.bodyByteOffset = bodyByteOffset
             doc.bodyLineOffset = bodyLineOffset
             doc.contentHash = contentHash
+            // A fresh read of the file this process just wrote: the
+            // baseline is disk's now, so a restored guard ends (§5).
+            doc.baselineIdentity = BaselineIdentity(
+                fileIdentity: fileIdentity,
+                textUnknown: doc.baselineIdentity.textUnknown)
         }
     }
 
@@ -364,12 +416,15 @@ final class WorkspaceState: ObservableObject {
 
     /// Same-path parked documents also share save results (baseline/hash
     /// move together — they are one file).
-    func mirrorSaveResult(path: String, baseline: String, contentHash: String?) {
+    func mirrorSaveResult(
+        path: String, baseline: String, contentHash: String?, baselineIdentity: BaselineIdentity
+    ) {
         for doc in documents.values
         where BaseExactIdentity.matches(doc.path, path)
         {
             doc.savedBaselineText = baseline
             doc.contentHash = contentHash
+            doc.baselineIdentity = baselineIdentity
             doc.hasUnsavedChanges = !BaseExactIdentity.matches(doc.text, baseline)
             doc.saveConflict = nil
             doc.saveError = nil
@@ -412,6 +467,7 @@ final class WorkspaceState: ObservableObject {
             rebound.text = old.text
             rebound.savedBaselineText = old.savedBaselineText
             rebound.contentHash = old.contentHash
+            rebound.baselineIdentity = old.baselineIdentity
             rebound.hasUnsavedChanges = old.hasUnsavedChanges
             rebound.fmSource = old.fmSource
             rebound.bodyByteOffset = old.bodyByteOffset
@@ -556,6 +612,7 @@ final class WorkspaceState: ObservableObject {
             document.text = parts.body
             document.savedBaselineText = parts.body
             document.contentHash = parts.contentHash
+            document.baselineIdentity = .fromDisk(parts.fileIdentity)
             document.fmSource = parts.fmSource
             document.bodyByteOffset = Int(parts.bodyByteOffset)
             document.bodyLineOffset = Int(parts.bodyLineOffset)
@@ -683,6 +740,7 @@ final class WorkspaceState: ObservableObject {
     func reset() {
         model = WorkspaceModel()
         documents = [:]
+        recoveryEntryIds = [:]
         loadedBaselineRevision &+= 1
         viewModes = [:]
         readingScrollParks = [:]
@@ -711,6 +769,7 @@ final class WorkspaceState: ObservableObject {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
+        recoveryEntryIds = [:]
         loadedBaselineRevision &+= 1
         // #856: transient by contract — a restored session starts with
         // no reading-scroll parks (never persisted; see the property doc).

@@ -161,6 +161,7 @@ extension AppState {
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath,

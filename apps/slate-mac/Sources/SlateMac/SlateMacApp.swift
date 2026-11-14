@@ -67,7 +67,7 @@ final class SlateAppDelegate: NSObject, NSApplicationDelegate {
 
     /// The Dock click's reopen event, sent to this process: the window group
     /// answers it by opening its window when none is open.
-    private static func reopenMainWindow() {
+    static func reopenMainWindow() {
         let reopen = NSAppleEventDescriptor(
             eventClass: AEEventClass(kCoreEventClass),
             eventID: AEEventID(kAEReopenApplication),
@@ -355,6 +355,10 @@ struct SlateMacApp: App {
         // temporary directory.
         MainActor.assumeIsolated {
             AppState.installProductionSidebarWriteJournal()
+            // Plan 43 PR 29 §1: unsaved buffers are kept under Application
+            // Support as you type; only the app installs the real store.
+            AppState.installProductionHotExitStore()
+            AppState.frontPromptHostHook = AppState.frontPromptHostInApp
         }
     }
 

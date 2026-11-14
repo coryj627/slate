@@ -849,6 +849,54 @@ matrix `--check`; the VoiceOver pass above.
 
 - **29.1** (#1936, 2026-11-13): as §7, with `displaced` carrying planned
   tabs and the split record named `NoteSplit` (recorded above).
+- **29.2** (2026-11-13): the Mac host as §1–§6, with these as-built
+  choices:
+  - **Change signals.** The writer observes `AppState.objectWillChange`,
+    `WorkspaceState.objectWillChange` and each `NoteDocument`'s
+    `onChange`, and skips a tab whose buffer stamp is unchanged
+    (`HotExitBuffer.Stamp`: `AppState.hotExitBufferRevision` for the
+    active fields, `NoteDocument.hotExitRevision` for a parked one), so a
+    drain never compares whole bodies; explicit re-evaluations (an
+    outcome, the fence lifting, a settle) are forced.
+  - **The baseline travels as one value.** `BaselineIdentity` (file
+    identity, `identityEnforced`, `textUnknown`) is assigned beside every
+    content hash; `HotExitIdentityCensusTests` pins it.
+  - **A kept close clears the dirty flag** in `closeVault()` after the
+    writer detaches, before the workspace reset, so the selection clear
+    never gates on buffers the store holds.
+  - **The quit's re-front is a hook** (`AppState.frontPromptHostHook`) the
+    app installs at launch; XCTest keeps a no-op, so no test activates its
+    own process.
+  - **A tab whose dirty buffer was dropped without a gate** takes a fresh
+    recovery id if it stays in the model, so its next note never claims
+    over the abandoned entry.
+  - **Close and keep the copies after a Discard All the store did not
+    confirm** reverts nothing and speaks `VaultClosed`; both it and Try
+    again re-check first and send a change back to the route's own prompt.
+  - **Every route that starts a hot-exit task answers a quit still
+    settling**, and a quit's own discard-pending prompt keeps its reply in
+    `pendingTerminationReply`, where a newer request answers it.
+  - **The launch's opening line waits for the app to settle** (VoiceOver
+    field pass, 2026-11-14). VoiceOver drops an announcement a newly
+    launched app posts before it has read the app's window, and that read
+    came 0.5 s to more than 4 s after `MainSplitView`'s mount, so the
+    restore sentences were never heard at launch (nor was the opening line,
+    before this PR). The first vault-opened line in a process waits until
+    the main thread has kept time for 1.5 s (at most 10 s), then speaks with
+    the restore sentences behind it; later mounts and direct switches speak
+    at once, and a close drops a held line. SwiftUI's lifecycle installs its
+    own `NSApplication`, so the app cannot see VoiceOver's first query.
+  - **The fallback prompt says why** (VoiceOver field pass, 2026-11-14).
+    VoiceOver reads a prompt the moment it opens, over the not-kept
+    sentence posted just before it, so the sentence was never heard. The
+    "Save changes?" and vault-close prompts now show core's not-kept
+    sentence under their question while they show
+    (`AppState.hotExitPromptNotice`); the announcement is still posted from
+    the same four sites.
+  - **Accepted, not built:** opening another vault directly over a clean
+    one (AppKit's open-document handoff) does not settle the old vault's
+    obligations first; a retirement still parked when the app quits can
+    bring the saved text back once, unsaved (the shape of W Deviation 6).
 
 ## Brief
 

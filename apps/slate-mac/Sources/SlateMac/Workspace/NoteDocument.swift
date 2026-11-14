@@ -22,14 +22,28 @@ final class NoteDocument: ObservableObject, Identifiable {
     nonisolated let id: TabID
     let path: String
 
-    @Published var text: String = ""
-    @Published var hasUnsavedChanges: Bool = false
-    var savedBaselineText: String = ""
-    var contentHash: String?
+    @Published var text: String = "" {
+        didSet { bumpHotExitRevision() }
+    }
+    @Published var hasUnsavedChanges: Bool = false {
+        didSet { bumpHotExitRevision() }
+    }
+    var savedBaselineText: String = "" {
+        didSet { bumpHotExitRevision() }
+    }
+    var contentHash: String? {
+        didSet { bumpHotExitRevision() }
+    }
+    /// Plan 43 PR 29: travels with `contentHash` (BaselineIdentity's docs).
+    var baselineIdentity = BaselineIdentity.none {
+        didSet { bumpHotExitRevision() }
+    }
     /// U3-3 (#467/#469): `text` is the BODY; the frontmatter source and
     /// the whole-file→body deltas park alongside it (straight from
     /// `read_note_parts` — never re-derived; two composers diverge).
-    var fmSource: String = ""
+    var fmSource: String = "" {
+        didSet { bumpHotExitRevision() }
+    }
     var bodyByteOffset: Int = 0
     var bodyLineOffset: Int = 0
     var saveError: String?
@@ -38,10 +52,26 @@ final class NoteDocument: ObservableObject, Identifiable {
     /// operation. Dirty buffers remain parked for recovery; activation
     /// restores them into the missing-file state instead of attempting a
     /// disk read that would erase the only in-memory copy.
-    var isMissingFromDisk: Bool = false
+    var isMissingFromDisk: Bool = false {
+        didSet { bumpHotExitRevision() }
+    }
     /// False until the tab has been activated (and thus disk-loaded) once.
     /// Restore short-circuits the disk read only when true.
-    var hasLoaded: Bool = false
+    var hasLoaded: Bool = false {
+        didSet { bumpHotExitRevision() }
+    }
+
+    /// Plan 43 PR 29 §3: the hot-exit writer's change signal (O7), set by
+    /// `WorkspaceState` when it stores the document.
+    var onChange: (() -> Void)?
+    /// Bumped by every write to a buffer field: the writer's cheap change
+    /// stamp (`HotExitBuffer.Stamp`).
+    private(set) var hotExitRevision: UInt64 = 0
+
+    private func bumpHotExitRevision() {
+        hotExitRevision &+= 1
+        onChange?()
+    }
 
     init(id: TabID, path: String) {
         self.id = id
