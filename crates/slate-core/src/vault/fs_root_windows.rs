@@ -731,6 +731,30 @@ fn file_index(file: &fs::File) -> io::Result<VaultRootIdentity> {
     })
 }
 
+/// What the volume of the folder at `path` answers to each identity read,
+/// through a handle of its own, apart from any session: `FileIdInfo`, the
+/// file system's name and the file index. The gated FAT32 and exFAT session
+/// fact checks the session's identity against these.
+#[cfg(test)]
+pub(crate) fn identity_reads_for_tests(
+    path: &Path,
+) -> io::Result<(
+    io::Result<VaultRootIdentity>,
+    io::Result<String>,
+    io::Result<VaultRootIdentity>,
+)> {
+    let folder = fs::OpenOptions::new()
+        .access_mode(FOLDER_ACCESS)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    Ok((
+        file_id_info(&folder),
+        file_system_name(&folder),
+        file_index(&folder),
+    ))
+}
+
 /// The identity decision (design item 6), pure so its table is a fact:
 /// `FileIdInfo` when it answers; otherwise the file index, but only on a
 /// volume whose file system names itself `FAT`, `FAT32` or `exFAT` (ASCII,
