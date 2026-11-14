@@ -1345,6 +1345,41 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(restored.allSatisfy { $0.body == "# note\n\npeers.\n" && $0.dirty })
     }
 
+    /// Codex adversarial review, round 5: pointing a tab at another note in
+    /// place drops its buffer without the dirty gate while a peer holds the
+    /// text. The note's entry stays until that peer has kept it itself.
+    func testPointingAPeerAtAnotherNoteKeepsItsEntryWhileTheSurvivorIsNotKept() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        state.updateEditorText("# note\n\npeers.\n")
+        await settle(state)
+        let original = try XCTUnwrap(state.workspace.activeTab?.id)
+
+        host.beforeCallForTests = {
+            $0.kind == .claim || $0.kind == .write ? .refused(.vaultFull) : nil
+        }
+        state.newTab()
+        await settle(state)
+        state.activateTab(original)
+        await select(state, "two.md")
+        XCTAssertNil(state.pendingNavigation, "a peer holds the text, so nothing asks")
+        await settle(state)
+        XCTAssertEqual(
+            try storedEntries(key).map(\.text), ["# note\n\npeers.\n"],
+            "the entry stays until the survivor is kept")
+
+        state.saveWorkspaceLayout()
+        let reopened = makeState(host: newProcess(after: host))
+        await open(reopened, vault)
+        let restored = buffers(reopened, path: "note.md")
+        XCTAssertFalse(restored.isEmpty)
+        XCTAssertTrue(restored.allSatisfy { $0.body == "# note\n\npeers.\n" && $0.dirty })
+    }
+
     func testASaveNeverWaitsOnARecoveryWriteAndALateWriteIsRetired() async throws {
         let host = makeHost()
         let state = makeState(host: host)

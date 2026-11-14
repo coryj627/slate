@@ -881,6 +881,15 @@ matrix `--check`; the VoiceOver pass above.
   the peer was not kept, the closing tab's entry is abandoned like an
   ungated drop, so a crash restores the text twice (the survivor's tab,
   seeded, and the closed tab as a new one): never lost.
+- **Codex adversarial review of 29.2, round 5 (2026-11-14; #1942 at
+  6785af32).** One finding, fixed with a fact shown red first: an open
+  into the current tab that the dirty gate lets through (a peer holds the
+  text) now goes through the same rule as a close
+  (`HotExitWriter.tabReplacing`, called from `handleSelectionChange`
+  before the fields are cleared). The outgoing note retires only when
+  clean or durably kept by a peer; otherwise its entry is abandoned and
+  the tab takes a fresh id for its next note
+  (`testPointingAPeerAtAnotherNoteKeepsItsEntryWhileTheSurvivorIsNotKept`).
 
 ## Delivery record
 

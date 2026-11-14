@@ -264,7 +264,27 @@ final class HotExitWriter {
     /// gate is abandoned, so the store keeps it (§3) — unless another tab
     /// holds the same text on the same path and its own entry has durably
     /// kept it. A clean tab carrying incarnations retires them.
-    private func vanished(_ state: TabState) {
+    /// The active tab is pointed at another note in place (an open into the
+    /// current tab) after the dirty gate let it through, because a peer
+    /// holds the text. The outgoing note is treated as if its tab closed: a
+    /// clean buffer retires its entry, a dirty one retires only behind a
+    /// durably kept peer, and otherwise its entry is abandoned and the tab
+    /// takes a fresh id for its next note (Codex adversarial review, round
+    /// 5). A rename does not come here: it keeps the tab's note.
+    func tabReplacing(_ tab: TabID) {
+        guard open.activeKey != nil, !detached, let source, let state = states[tab] else { return }
+        if let buffer = source.hotExitBuffer(for: tab) {
+            if !buffer.dirty {
+                evaluate(tab, force: true)
+                states[tab] = nil
+                return
+            }
+            state.lastSeen = buffer
+        }
+        vanished(state, tabStays: true)
+    }
+
+    private func vanished(_ state: TabState, tabStays: Bool = false) {
         defer { states[state.tab] = nil }
         state.cancelDebounce()
         guard state.episodeLive else {
@@ -294,8 +314,9 @@ final class HotExitWriter {
         // abandoned entry under its old id; its next note claims a fresh one
         // (red team PR 29.2), and the next open restores the abandoned text
         // as a new tab.
-        if source?.hotExitMarkdownTabs.contains(state.tab) == false,
-            source?.hotExitTabExists(state.tab) == true
+        if tabStays
+            || (source?.hotExitMarkdownTabs.contains(state.tab) == false
+                && source?.hotExitTabExists(state.tab) == true)
         {
             source?.hotExitAssignFreshEntryId(state.tab)
         }

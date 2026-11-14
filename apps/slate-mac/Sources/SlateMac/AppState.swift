@@ -10080,6 +10080,13 @@ final class AppState: ObservableObject {
         // replacing the active tab's item in place also ends the scope —
         // the pending close would otherwise target a different document.
         pendingTabCloseAfterSave = nil
+        // Plan 43 PR 29 §3: the outgoing note leaves this tab, read while its
+        // fields still hold it (Codex adversarial review, round 5).
+        if let outgoing = workspace.activeTab, case .markdown = outgoing.item,
+            !BaseExactIdentity.matches(path, loadedFilePath)
+        {
+            hotExitWriter?.tabReplacing(outgoing.id)
+        }
         cancelNoteScopedWork()
         clearActiveNoteFields()
         // Workspace model update (U1-4 mirror; tab switches took the
