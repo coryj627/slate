@@ -869,6 +869,80 @@ final class HotExitTests: XCTestCase {
         _ = vault
     }
 
+    /// Codex adversarial review, round 2 (second pass): the fallback
+    /// prompt's Discard waits on the store, and a newer request answers the
+    /// quit meanwhile. The discard's completion then closes nothing.
+    func testASupersededQuitsHeldDiscardNeverClosesTheVault() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        await open(state, try makeVault())
+        await select(state, "note.md")
+        host.beforeCallForTests = { $0.kind == .write || $0.kind == .claim ? .io : nil }
+        state.updateEditorText("# note\n\nunkept.\n")
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater)
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(state.pendingNavigation, .closeVault, "the fallback prompt")
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let discard = gates.arm(.discard)
+        defer { discard.open() }
+        state.resolvePendingNavigationDiscard()
+        let discardTask = state.hotExitRouteTask
+        let discardEntered = await entered(discard)
+        XCTAssertTrue(discardEntered, "the discard waits on the store")
+
+        state.selectedFilePath = "two.md"
+        XCTAssertEqual(state.pendingNavigation, .selectFile("two.md"))
+        XCTAssertEqual(replies.values, [false], "the newer request answers the quit")
+        state.resolvePendingNavigationCancel()
+        discard.open()
+        await discardTask?.value
+        await state.hotExitRouteTask?.value
+        XCTAssertNotNil(state.currentSession, "the vault stays open")
+        XCTAssertEqual(state.currentNoteText, "# note\n\nunkept.\n")
+        XCTAssertEqual(replies.values, [false])
+    }
+
+    /// Codex adversarial review, round 2 (second pass): Close and keep the
+    /// copies on a quit waits on the sidebar fence before it answers, and the
+    /// editor stays writable meanwhile. Text typed in that wait goes back to
+    /// the quit's prompt (owner call 3), never closed over.
+    func testAKeepCopiesQuitAsksAgainAboutAnEditDuringItsLastWait() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        await open(state, try makeVault())
+        await select(state, "note.md")
+        host.beforeCallForTests = { $0.kind == .write || $0.kind == .claim ? .io : nil }
+        state.updateEditorText("# note\n\nunkept.\n")
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater)
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(state.pendingNavigation, .closeVault, "the fallback prompt")
+        host.beforeCallForTests = { $0.kind == .discard ? .io : nil }
+        state.resolvePendingNavigationDiscard()
+        await state.hotExitRouteTask?.value
+        XCTAssertNotNil(state.pendingHotExitDiscard, "the discard is unconfirmed")
+
+        let sidebar = Gate()
+        defer { sidebar.open() }
+        state.enqueueSidebarOrganizationWriteForTesting { _ in sidebar.hold() }
+        let sidebarEntered = await entered(sidebar)
+        XCTAssertTrue(sidebarEntered, "a sidebar write holds the fence")
+        state.resolveHotExitDiscardPending(.closeKeepingCopies)
+        XCTAssertEqual(replies.values, [], "the fence holds the reply")
+        state.updateEditorText("# note\n\nunkept, then more.\n")
+        sidebar.open()
+        await state.terminationFenceTaskForTesting?.value
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(replies.values, [], "no yes over text typed after the choice")
+        XCTAssertEqual(state.pendingNavigation, .closeVault, "the quit's prompt asks again")
+        state.resolvePendingNavigationCancel()
+        XCTAssertEqual(replies.values, [false])
+        XCTAssertNotNil(state.currentSession)
+    }
+
     func testAQuitThatCannotKeepFallsBackWithItsReason() async throws {
         for fault in [HotExitFault.io, .refused(.vaultFull)] {
             let host = makeHost()

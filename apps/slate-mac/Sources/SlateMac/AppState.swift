@@ -12150,6 +12150,10 @@ final class AppState: ObservableObject {
             return
         }
         pendingVaultSwitchTarget = nil
+        if hotExitEngaged, Self.hasPendingSidebarWorkAtTermination {
+            finishHotExitQuitAfterFence(reply)
+            return
+        }
         if let fence = Self.settleSidebarFenceThenReply(answer) {
             terminationFenceTaskForTesting = fence
         } else {
@@ -12165,6 +12169,10 @@ final class AppState: ObservableObject {
     /// fence's reply (true) stands, as it did before the prompt existed.
     func supersedePendingTermination() {
         supersedeHotExitTerminationSettle()
+        // Plan 43 PR 29: a hot-exit route the waiting quit started (its
+        // prompt's Discard waiting on the store) belongs to that quit, and
+        // stops deciding with it (Codex adversarial review, round 2).
+        if pendingTerminationReply != nil { hotExitRouteGeneration &+= 1 }
         finishPendingTermination(proceed: false)
     }
 

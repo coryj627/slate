@@ -855,6 +855,15 @@ matrix `--check`; the VoiceOver pass above.
   a tab clean as it closes ends its episode while its buffer can still be
   read (`HotExitWriter.tabClosing`), so Save on the tab-close prompt
   retires the entry (`testSavingThroughTheTabClosePromptRetiresTheEntry`).
+- **Codex adversarial review of 29.2, round 2 (2026-11-14; #1942 at
+  5e14ddf9).** Two findings, both fixed with facts shown red first: a
+  newer request that answers a quit waiting at its prompt also stops the
+  hot-exit route that quit started, so a held Discard closes nothing
+  (`testASupersededQuitsHeldDiscardNeverClosesTheVault`); a quit about to
+  answer yes behind the sidebar/Trash fence compares the buffers with the
+  moment of the choice once the fence is done, and text typed meanwhile
+  goes back to the quit's prompt
+  (`testAKeepCopiesQuitAsksAgainAboutAnEditDuringItsLastWait`).
 
 ## Delivery record
 

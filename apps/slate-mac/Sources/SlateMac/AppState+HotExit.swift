@@ -601,6 +601,38 @@ extension AppState {
         }
     }
 
+    /// A quit about to answer yes waits on the sidebar and Trash fence, and
+    /// the editor stays writable while it does. The buffers are compared with
+    /// the moment of the choice once the fence is done: unchanged, the quit
+    /// goes ahead; text typed meanwhile goes back to the quit's prompt (owner
+    /// call 3), never closed over (Codex adversarial review, round 2).
+    func finishHotExitQuitAfterFence(_ reply: @escaping @MainActor (Bool) -> Void) {
+        let before = hotExitRecheck()
+        let draftsBefore = uncommittedNoteDraftPaths()
+        hotExitRouteTask = Task { [weak self] in
+            await Self.settleSidebarWriterChainsForTermination()
+            guard let self else {
+                reply(true)
+                return
+            }
+            if self.hotExitRecheck().unchanged(since: before),
+                self.uncommittedNoteDraftPaths() == draftsBefore
+            {
+                self.terminationAnswer(reply)(true)
+                return
+            }
+            switch self.presentTerminationPrompt() {
+            case .presented:
+                self.pendingTerminationReply = reply
+                self.frontPromptHostForTermination()
+            case .clean:
+                self.terminationAnswer(reply)(true)
+            case .refused:
+                self.terminationAnswer(reply)(false)
+            }
+        }
+    }
+
     /// A newer request takes the quit over while its settle runs: the quit is
     /// answered false and the settle's task stops deciding.
     func supersedeHotExitTerminationSettle() {
