@@ -92,7 +92,7 @@ found"; install the pinned version with
 `dotnet-install.ps1 -Version <global.json's version>`:
 
 ```powershell
-cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs --locked
+cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.12.0+v0.32.0 uniffi-bindgen-cs --locked
 ```
 
 The daily loop, from the repo root:

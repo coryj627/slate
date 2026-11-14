@@ -542,7 +542,7 @@ records the check.
 | Issue | Waits for | Check | Action when it lands |
 |---|---|---|---|
 | #1457 | — closed 2026-10-22: MathCAT 0.7.7 carries zip 9, and #1537 moved to it | — | none; `.cargo/audit.toml` holds no exception |
-| #998 | a uniffi-bindgen-cs tag for uniffi 0.32 (#176 open) | weekly | WB-32's spike makes the bump a day's work |
+| #998 | — met 2026-11-09: uniffi-bindgen-cs `v0.12.0+v0.32.0`; WB-32's spike (`44_windows_backlog/reports/uniffi_032_spike_2026-11-13.md`) found no source change, and the bump landed with the owner's cooldown exception for the tag | — | none; the next pair is a generator tag for uniffi 0.33 |
 | #1493 | notify 9.0.0 (rc.6 is newest, 2026-10-17) | weekly | one-line bump; recheck the Windows overflow arm |
 | #480 | a citationberg or hayagriva registry release | monthly | drop the Git patch; the runbook's qualification run |
 
