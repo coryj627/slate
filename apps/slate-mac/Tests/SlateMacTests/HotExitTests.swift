@@ -618,6 +618,31 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(try storedEntries(key).isEmpty, "nothing comes back unsaved")
     }
 
+    /// Codex adversarial review, round 3: a rename builds the parked tab a
+    /// new document whose change counter starts again, so two renames in a
+    /// row can look unchanged to the writer. The kept entry follows each.
+    func testAParkedDirtyTabRenamedTwiceIsKeptAtItsNewestPath() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        await open(state, try makeVault())
+        await select(state, "two.md")
+        let key = try key(state)
+        state.updateEditorText("# two\n\nparked and dirty.\n")
+        state.newTab()
+        await select(state, "note.md")
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).map(\.path), ["two.md"])
+
+        await state.renameEntry(path: "two.md", isDirectory: false, to: "three.md")?.value
+        await state.nativeDocumentRetargetTask?.value
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).map(\.path), ["three.md"])
+        await state.renameEntry(path: "three.md", isDirectory: false, to: "four.md")?.value
+        await state.nativeDocumentRetargetTask?.value
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).map(\.path), ["four.md"], "kept at its newest path")
+    }
+
     func testAnUngatedDropIsAbandonedNotRetired() async throws {
         // A canvas opened into a dirty note's tab drops the buffer without
         // the dirty gate (#1932): the store keeps it, and the next open
@@ -867,6 +892,37 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(replies.values, [true])
         XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\ntwo.\n"])
         _ = vault
+    }
+
+    /// Codex adversarial review, round 3: Close Vault's Discard All waits on
+    /// the store, and a second Close Vault is asked and cancelled meanwhile.
+    /// The first discard's completion then closes nothing.
+    func testACancelledNewerCloseStopsTheOlderDiscardAll() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        await open(state, try makeVault())
+        await dirtyTwo(state)
+        await settle(state)
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let discard = gates.arm(.discard)
+        defer { discard.open() }
+        state.closeVaultFromUserAction()
+        XCTAssertEqual(state.pendingVaultClose, 2)
+        state.resolveVaultCloseDiscardAll()
+        let discardTask = state.hotExitRouteTask
+        let discardEntered = await entered(discard)
+        XCTAssertTrue(discardEntered, "the discard waits on the store")
+
+        state.closeVaultFromUserAction()
+        XCTAssertEqual(state.pendingVaultClose, 2, "the newer close asks")
+        state.resolveVaultCloseCancel()
+        discard.open()
+        await discardTask?.value
+        await state.hotExitRouteTask?.value
+        XCTAssertNotNil(state.currentSession, "the vault stays open")
+        XCTAssertEqual(state.currentNoteText, "# note\n\ndirty note.\n")
+        XCTAssertEqual(state.workspace.dirtyParkedDocuments().count, 1)
     }
 
     /// Codex adversarial review, round 2 (second pass): the fallback

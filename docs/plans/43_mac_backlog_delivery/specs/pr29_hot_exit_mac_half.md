@@ -864,6 +864,15 @@ matrix `--check`; the VoiceOver pass above.
   moment of the choice once the fence is done, and text typed meanwhile
   goes back to the quit's prompt
   (`testAKeepCopiesQuitAsksAgainAboutAnEditDuringItsLastWait`).
+- **Codex adversarial review of 29.2, round 3 (2026-11-14; #1942 at
+  a0e58a8a).** Two findings, both fixed with facts shown red first: every
+  newer request that takes a close prompt over stops the hot-exit route an
+  older request started, quit or not, so a cancelled second Close Vault
+  leaves the vault open
+  (`testACancelledNewerCloseStopsTheOlderDiscardAll`); the writer's change
+  stamp carries the parked document's identity and the path, since a
+  rename builds a new document whose count starts again
+  (`testAParkedDirtyTabRenamedTwiceIsKeptAtItsNewestPath`).
 
 ## Delivery record
 

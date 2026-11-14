@@ -80,7 +80,8 @@ extension AppState: HotExitBufferSource {
                 let body = currentNoteText
             else { return nil }
             return HotExitBuffer(
-                stamp: .init(active: true, revision: hotExitBufferRevision),
+                stamp: .init(
+                    active: true, revision: hotExitBufferRevision, document: nil, path: loaded),
                 path: loaded, body: body, fmSource: currentNoteFMSource,
                 baselineHash: currentNoteContentHash, baselineIdentity: currentNoteBaselineIdentity,
                 dirty: hasUnsavedChanges)
@@ -89,7 +90,9 @@ extension AppState: HotExitBufferSource {
             BaseExactIdentity.matches(document.path, path)
         else { return nil }
         return HotExitBuffer(
-            stamp: .init(active: false, revision: document.hotExitRevision),
+            stamp: .init(
+                active: false, revision: document.hotExitRevision,
+                document: ObjectIdentifier(document), path: document.path),
             path: document.path, body: document.text, fmSource: document.fmSource,
             baselineHash: document.contentHash, baselineIdentity: document.baselineIdentity,
             dirty: document.hasUnsavedChanges)

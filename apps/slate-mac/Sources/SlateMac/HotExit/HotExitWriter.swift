@@ -13,6 +13,11 @@ struct HotExitBuffer: Equatable {
     struct Stamp: Equatable {
         let active: Bool
         let revision: UInt64
+        /// The parked document the revision counts for: a rename builds a
+        /// new document whose count starts again (Codex adversarial review,
+        /// round 3). Nil for the active fields.
+        let document: ObjectIdentifier?
+        let path: String
     }
 
     let stamp: Stamp

@@ -12169,10 +12169,12 @@ final class AppState: ObservableObject {
     /// fence's reply (true) stands, as it did before the prompt existed.
     func supersedePendingTermination() {
         supersedeHotExitTerminationSettle()
-        // Plan 43 PR 29: a hot-exit route the waiting quit started (its
-        // prompt's Discard waiting on the store) belongs to that quit, and
-        // stops deciding with it (Codex adversarial review, round 2).
-        if pendingTerminationReply != nil { hotExitRouteGeneration &+= 1 }
+        // Plan 43 PR 29: a newer request owns the close now, so a hot-exit
+        // route an older request started (a Discard All waiting on the store,
+        // for a quit or a plain Close Vault) stops deciding (Codex
+        // adversarial review, rounds 2 and 3). Every caller supersedes before
+        // it starts a route of its own.
+        hotExitRouteGeneration &+= 1
         finishPendingTermination(proceed: false)
     }
 
