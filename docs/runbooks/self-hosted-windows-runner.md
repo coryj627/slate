@@ -545,7 +545,7 @@ saw before changing anything.
   `ci/windows-runner/golden/versions.json` (`pythonToolcacheSha256`,
   `gitSha256`, `pwshSha256`, `runnerSha256`, `rustupInitSha256`) with the one published where its
   `sources` entry points; for the runner, the SHA-256 that its GitHub
-  release page lists for `actions-runner-win-x64-2.338.0.zip`. Do that
+  release page lists for `actions-runner-win-x64-<runnerVersion>.zip`. Do that
   before changing either.
 - [ ] The two evergreen downloads pass their signature check: phase 1 gets
   past `vs_BuildTools.exe` and `dotnet-install.ps1` without `signature of`
