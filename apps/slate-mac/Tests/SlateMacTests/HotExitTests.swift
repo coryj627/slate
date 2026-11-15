@@ -529,7 +529,8 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(reopened.activeNoteHasUnsavedChanges, "Save stays available")
         XCTAssertNotNil(reopened.activePropertyAuthoringDisabledReason)
 
-        await reopened.saveCurrentNote()?.value
+        let save = try XCTUnwrap(reopened.saveCurrentNote(), "Save is offered")
+        await save.value
         XCTAssertNil(reopened.currentSaveConflict)
         XCTAssertFalse(reopened.currentNoteBaselineIdentity.identityEnforced, "the checked save ends the guard")
         XCTAssertFalse(reopened.hasUnsavedChanges)
