@@ -165,7 +165,7 @@ public sealed partial class ShellAccessibilityTests
 
             Assert.Equal(label, ComboValue(combo));
             AssertEventuallyFocused(combo, "the theme change took focus off the combo.");
-            AssertWindowIsLight(window, expectLight);
+            AssertFirstFrameIsLight(window.Properties.NativeWindowHandle.Value, expectLight);
             AssertAxeClean(process, "settings-sheet-light");
         }
         finally
@@ -182,10 +182,12 @@ public sealed partial class ShellAccessibilityTests
         {
             process = LaunchWith(device, logs);
             if (!HasInteractiveDesktop(process, "theme-preference")) { return; }
+            // The first frame is read from the moment the window is visible, before UI
+            // Automation finds it, which can be seconds later: a shorter flash would be gone.
+            AssertFirstFrameIsLight(WaitForVisibleMainWindowHandle(process), expectLight);
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
-            AssertWindowIsLight(window, expectLight);
             if (thenChoose is VirtualKeyShort key)
             {
                 ChooseThemeByKeys(window, key);
@@ -233,31 +235,292 @@ public sealed partial class ShellAccessibilityTests
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
     }
 
-    /// <summary>The window's commonest colour is its background, whatever's drawn on it.</summary>
-    private static void AssertWindowIsLight(AutomationElement window, bool expectLight)
+    /// <summary>The theme of this app's first rendered frame, read from the window's own pixels
+    /// (#1943). The fact used to capture the screen under the window, which shows whatever lies
+    /// on top: on job VMs it read greys no Slate theme paints and failed the dark step, and a
+    /// light window over ours passed both light steps. <see cref="OwnPixels"/> asks Windows for
+    /// the window's own content, so nothing on top can stand in for it. Until the first render
+    /// that content is pure black, which no Slate theme paints (the dark window is #121212), so
+    /// the fact samples every 50 ms, skips black, and judges the first frame that isn't
+    /// (<see cref="FirstRenderedFrame"/>), whatever its colour: a launch that first paints the
+    /// other theme, or any grey or white, and corrects itself a frame later still fails, which
+    /// is DS-10's first-paint promise. A window that never renders within 10 seconds fails too,
+    /// saying so.</summary>
+    private static void AssertFirstFrameIsLight(IntPtr handle, bool expectLight)
     {
-        int Background()
-        {
-            using CaptureImage capture = CapturePhysicalPixels(window);
-            var counts = new Dictionary<int, int>();
-            Bitmap bitmap = capture.Bitmap;
-            for (var y = 0; y < bitmap.Height; y += 4)
-            {
-                for (var x = 0; x < bitmap.Width; x += 4)
-                {
-                    int rgb = bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF;
-                    counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
-                }
-            }
+        var seen = new List<string>();
+        int[]? lastPixels = null;
+        Size lastSize = Size.Empty;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
 
-            return counts.MaxBy(pair => pair.Value).Key;
+        IEnumerable<int> Samples()
+        {
+            while (true)
+            {
+                (lastPixels, lastSize) = OwnPixels(handle);
+                int color = CommonestColor(lastPixels, lastSize);
+                seen.Add($"#{color:X6}");
+                yield return color;
+                if (DateTime.UtcNow >= deadline)
+                {
+                    yield break;
+                }
+
+                Thread.Sleep(50);
+            }
         }
 
-        int color = Background();
+        int? first = FirstRenderedFrame(Samples());
+        string samples = $"Samples 50 ms apart: {RunsOf(seen)}.";
+        if (first is not int color)
+        {
+            Assert.Fail(
+                $"the window never rendered a frame within 10 seconds, wanting {(expectLight ? "light" : "dark")}. "
+                + samples + SaveThemeEvidence(lastPixels, lastSize));
+            return;
+        }
+
         double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
-        Assert.True(
-            expectLight ? brightness > 180 : brightness < 80,
-            $"the window's background is #{color:X6}, wanting {(expectLight ? "light" : "dark")}.");
+        if (!(expectLight ? brightness > 180 : brightness < 80))
+        {
+            Assert.Fail(
+                $"the window's first frame is #{color:X6}, wanting {(expectLight ? "light" : "dark")}. "
+                + samples + SaveThemeEvidence(lastPixels, lastSize));
+        }
+    }
+
+    /// <summary>The launch's main window as soon as Windows shows it, polled every 5 ms.</summary>
+    private static IntPtr WaitForVisibleMainWindowHandle(Process process)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            Assert.False(process.HasExited, "Slate exited before showing its window.");
+            process.Refresh();
+            IntPtr handle = process.MainWindowHandle;
+            if (handle != IntPtr.Zero && NativePrint.IsWindowVisible(handle))
+            {
+                return handle;
+            }
+
+            Thread.Sleep(5);
+        }
+
+        throw new Xunit.Sdk.XunitException("Slate showed no window within 30 seconds.");
+    }
+
+    /// <summary>#1943: the first sample that isn't pure black, the window's own content before
+    /// its first render; null when every sample is.</summary>
+    internal static int? FirstRenderedFrame(IEnumerable<int> commonestColors)
+    {
+        foreach (int color in commonestColors)
+        {
+            if (color != 0x000000)
+            {
+                return color;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Codex on #1943: a launch's first rendered frame is judged though the frames
+    /// after it are right, whatever its colour.</summary>
+    [Fact]
+    public void FirstRenderedFrame_IsTheFirstThatIsNotBlack()
+    {
+        // A grey, a white or the other theme first, then the right theme: the first is judged.
+        Assert.Equal(0xC3BEC4, FirstRenderedFrame([0x000000, 0xC3BEC4, 0x121212, 0x121212]));
+        Assert.Equal(0xFFFFFF, FirstRenderedFrame([0x000000, 0x000000, 0xFFFFFF, 0x121212]));
+        Assert.Equal(0xF7F7F7, FirstRenderedFrame([0xF7F7F7, 0x121212]));
+        // Slate's dark window background isn't black.
+        Assert.Equal(0x121212, FirstRenderedFrame([0x000000, 0x121212]));
+        // Never rendered.
+        Assert.Null(FirstRenderedFrame([0x000000, 0x000000]));
+    }
+
+    /// <summary>The commonest colour of a frame, every fourth pixel each way.</summary>
+    private static int CommonestColor(int[] pixels, Size size)
+    {
+        var counts = new Dictionary<int, int>();
+        for (var y = 0; y < size.Height; y += 4)
+        {
+            for (var x = 0; x < size.Width; x += 4)
+            {
+                int rgb = pixels[(y * size.Width) + x] & 0xFFFFFF;
+                counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
+            }
+        }
+
+        return counts.Count == 0 ? 0 : counts.MaxBy(pair => pair.Value).Key;
+    }
+
+    /// <summary>The window's own content in physical pixels, as Windows renders it for
+    /// <c>PrintWindow</c> with <c>PW_RENDERFULLCONTENT</c>: what the app drew, not what the
+    /// screen shows there.</summary>
+    private static (int[] Pixels, Size Size) OwnPixels(IntPtr window)
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        IntPtr dc = IntPtr.Zero;
+        IntPtr dib = IntPtr.Zero;
+        IntPtr old = IntPtr.Zero;
+        try
+        {
+            Assert.True(NativePrint.GetWindowRect(window, out NativePrint.Rect rect), "the window has no rectangle.");
+            var size = new Size(rect.Right - rect.Left, rect.Bottom - rect.Top);
+            Assert.True(size.Width > 0 && size.Height > 0, $"the window's rectangle is {size}.");
+            var header = new NativePrint.BitmapInfoHeader
+            {
+                Size = 40,
+                Width = size.Width,
+                Height = -size.Height,
+                Planes = 1,
+                BitCount = 32,
+            };
+            dc = NativePrint.CreateCompatibleDC(IntPtr.Zero);
+            dib = NativePrint.CreateDIBSection(dc, ref header, 0, out IntPtr bits, IntPtr.Zero, 0);
+            Assert.True(dib != IntPtr.Zero, "no bitmap for the window's own pixels.");
+            old = NativePrint.SelectObject(dc, dib);
+            Assert.True(NativePrint.PrintWindow(window, dc, NativePrint.RenderFullContent), "PrintWindow failed.");
+            var pixels = new int[size.Width * size.Height];
+            System.Runtime.InteropServices.Marshal.Copy(bits, pixels, 0, pixels.Length);
+            return (pixels, size);
+        }
+        finally
+        {
+            if (old != IntPtr.Zero)
+            {
+                _ = NativePrint.SelectObject(dc, old);
+            }
+
+            if (dib != IntPtr.Zero)
+            {
+                _ = NativePrint.DeleteObject(dib);
+            }
+
+            if (dc != IntPtr.Zero)
+            {
+                _ = NativePrint.DeleteDC(dc);
+            }
+
+            SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    /// <summary>On a failure, the last frame of the window's own pixels goes to the folder the
+    /// gate uploads. Best effort: a save error never replaces the failure.</summary>
+    private static string SaveThemeEvidence(int[]? pixels, Size size)
+    {
+        string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (pixels is null || string.IsNullOrWhiteSpace(directory))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string destination = Path.Combine(directory, "theme-first-paint");
+            Directory.CreateDirectory(destination);
+            string file = DateTime.UtcNow.ToString("HHmmssfff", System.Globalization.CultureInfo.InvariantCulture) + "-window.png";
+            using var bitmap = new Bitmap(size.Width, size.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+            System.Drawing.Imaging.BitmapData data = bitmap.LockBits(
+                new Rectangle(Point.Empty, size), System.Drawing.Imaging.ImageLockMode.WriteOnly, bitmap.PixelFormat);
+            try
+            {
+                System.Runtime.InteropServices.Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            bitmap.Save(Path.Combine(destination, file), System.Drawing.Imaging.ImageFormat.Png);
+            return $" The last frame is theme-first-paint\\{file}.";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Repeated samples as one entry with a count, so a long wait stays readable.</summary>
+    private static string RunsOf(List<string> samples)
+    {
+        var runs = new List<string>();
+        for (var start = 0; start < samples.Count;)
+        {
+            int end = start;
+            while (end + 1 < samples.Count && samples[end + 1] == samples[start])
+            {
+                end++;
+            }
+
+            int count = end - start + 1;
+            runs.Add(count == 1 ? samples[start] : $"{samples[start]} x{count}");
+            start = end + 1;
+        }
+
+        return string.Join(", ", runs);
+    }
+
+    private static class NativePrint
+    {
+        internal const uint RenderFullContent = 2;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct Rect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct BitmapInfoHeader
+        {
+            public int Size;
+            public int Width;
+            public int Height;
+            public short Planes;
+            public short BitCount;
+            public int Compression;
+            public int SizeImage;
+            public int XPelsPerMeter;
+            public int YPelsPerMeter;
+            public int ClrUsed;
+            public int ClrImportant;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool IsWindowVisible(IntPtr window);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr CreateCompatibleDC(IntPtr dc);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr CreateDIBSection(
+            IntPtr dc, ref BitmapInfoHeader header, uint usage, out IntPtr bits, IntPtr section, uint offset);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr SelectObject(IntPtr dc, IntPtr gdiObject);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool DeleteObject(IntPtr gdiObject);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool DeleteDC(IntPtr dc);
     }
 
     [Fact]
