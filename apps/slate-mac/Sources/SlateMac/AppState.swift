@@ -14899,9 +14899,13 @@ final class AppState: ObservableObject {
         }
         if BaseExactIdentity.matches(currentNoteText, newText) { return }
         currentNoteText = newText
-        // §5: a restored buffer whose baseline text is unknown stays dirty
-        // until a save lands or a reload replaces it.
+        // §5: a restored buffer whose baseline text is unknown, or whose
+        // kept baseline still guards its identity, stays dirty until a save
+        // lands or a reload replaces it: edited back to its baseline it keeps
+        // Save, whose checked save ends the guard (Codex adversarial review,
+        // round 11).
         hasUnsavedChanges = currentNoteBaselineIdentity.textUnknown
+            || currentNoteBaselineIdentity.identityEnforced
             || !BaseExactIdentity.matches(newText, savedBaselineText ?? "")
         // U1-2: a duplicated tab (same path in another tab) is the same
         // buffer — mirror the edit into same-path parked documents so an

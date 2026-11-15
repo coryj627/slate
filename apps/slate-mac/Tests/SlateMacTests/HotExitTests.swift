@@ -509,6 +509,35 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n")
     }
 
+    /// Codex adversarial review, round 11: a restored note edited back to its
+    /// baseline still guards its identity, so it stays unsaved: Save stays
+    /// available, its checked save lands and ends the guard, and property
+    /// editing works again.
+    func testARestoredNoteEditedBackToItsBaselineStaysSaveable() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        state.updateEditorText("# note\n\nmine.\n")
+        let next = await keptQuit(state, host: host)
+
+        let reopened = makeState(host: next)
+        await open(reopened, vault)
+        XCTAssertTrue(reopened.currentNoteBaselineIdentity.identityEnforced)
+        reopened.updateEditorText("# note\n")
+        XCTAssertTrue(reopened.activeNoteHasUnsavedChanges, "Save stays available")
+        XCTAssertNotNil(reopened.activePropertyAuthoringDisabledReason)
+
+        await reopened.saveCurrentNote()?.value
+        XCTAssertNil(reopened.currentSaveConflict)
+        XCTAssertFalse(reopened.currentNoteBaselineIdentity.identityEnforced, "the checked save ends the guard")
+        XCTAssertFalse(reopened.hasUnsavedChanges)
+        XCTAssertNil(reopened.activePropertyAuthoringDisabledReason)
+        await reopened.setProperty(path: "note.md", key: "title", value: .text(value: "Mine"))?.value
+        XCTAssertTrue(try onDisk(vault, "note.md").contains("title: Mine"))
+    }
+
     func testEmptyingARestoredBufferStaysDirty() async throws {
         let host = makeHost()
         let state = makeState(host: host)

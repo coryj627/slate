@@ -929,6 +929,13 @@ matrix `--check`; the VoiceOver pass above.
   the hash check, and the refresh after a property write dropped the guard
   the next save relied on
   (`testARestoredNoteStillGuardingItsIdentityTakesNoPropertyWrite`).
+- **Codex adversarial review of 29.2, round 11 (2026-11-14; #1942 at
+  c9389ffa).** One finding, fixed with a fact shown red first: a restored
+  buffer whose kept baseline still guards its identity stays dirty, as one
+  with unknown text does, until a save lands or a reload replaces it.
+  Edited back to its baseline it keeps Save, whose checked save ends the
+  guard and lets property editing resume
+  (`testARestoredNoteEditedBackToItsBaselineStaysSaveable`).
 
 ## Delivery record
 
