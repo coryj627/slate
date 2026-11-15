@@ -845,10 +845,150 @@ matrix `--check`; the VoiceOver pass above.
   rule (§7, contract 32 I1). Also corrected: the drafts reason is a
   fragment, not a corpus row (§7).
 
+- **Codex adversarial review of 29.2, round 1 (2026-11-14; #1942 at
+  ff1fe35d).** Three findings, all fixed with facts shown red first:
+  the quit's last sidebar/Trash wait is followed by another settle and
+  re-check, never a bare reply, and a wait whose bound ran out is not
+  repeated (`testAnEditDuringTheQuitsLastSidebarWaitIsKeptBeforeTheReply`);
+  Try again carries its route generation and writer, and a superseded
+  retry decides nothing (`testATryAgainOutlivedByAnotherVaultNeverActsOnIt`);
+  a tab clean as it closes ends its episode while its buffer can still be
+  read (`HotExitWriter.tabClosing`), so Save on the tab-close prompt
+  retires the entry (`testSavingThroughTheTabClosePromptRetiresTheEntry`).
+- **Codex adversarial review of 29.2, round 2 (2026-11-14; #1942 at
+  5e14ddf9).** Two findings, both fixed with facts shown red first: a
+  newer request that answers a quit waiting at its prompt also stops the
+  hot-exit route that quit started, so a held Discard closes nothing
+  (`testASupersededQuitsHeldDiscardNeverClosesTheVault`); a quit about to
+  answer yes behind the sidebar/Trash fence compares the buffers with the
+  moment of the choice once the fence is done, and text typed meanwhile
+  goes back to the quit's prompt
+  (`testAKeepCopiesQuitAsksAgainAboutAnEditDuringItsLastWait`).
+- **Codex adversarial review of 29.2, round 3 (2026-11-14; #1942 at
+  a0e58a8a).** Two findings, both fixed with facts shown red first: every
+  newer request that takes a close prompt over stops the hot-exit route an
+  older request started, quit or not, so a cancelled second Close Vault
+  leaves the vault open
+  (`testACancelledNewerCloseStopsTheOlderDiscardAll`); the writer's change
+  stamp carries the parked document's identity and the path, since a
+  rename builds a new document whose count starts again
+  (`testAParkedDirtyTabRenamedTwiceIsKeptAtItsNewestPath`).
+- **Codex adversarial review of 29.2, round 4 (2026-11-14; #1942 at
+  06734a78).** One finding, fixed with a fact shown red first: a closing
+  tab's entry retires because of a same-path peer only when that peer's
+  own entry has durably kept the same snapshot, never on matching text
+  alone (`testClosingAPeerKeepsItsEntryWhileTheSurvivorIsNotKept`). When
+  the peer was not kept, the closing tab's entry is abandoned like an
+  ungated drop, so a crash restores the text twice (the survivor's tab,
+  seeded, and the closed tab as a new one): never lost.
+- **Codex adversarial review of 29.2, round 5 (2026-11-14; #1942 at
+  6785af32).** One finding, fixed with a fact shown red first: an open
+  into the current tab that the dirty gate lets through (a peer holds the
+  text) now goes through the same rule as a close
+  (`HotExitWriter.tabReplacing`, called from `handleSelectionChange`
+  before the fields are cleared). The outgoing note retires only when
+  clean or durably kept by a peer; otherwise its entry is abandoned and
+  the tab takes a fresh id for its next note
+  (`testPointingAPeerAtAnotherNoteKeepsItsEntryWhileTheSurvivorIsNotKept`).
+- **Codex adversarial review of 29.2, round 6 (2026-11-14; #1942 at
+  e293a413).** Two findings, both fixed with facts shown red first: a
+  clean tab pointed at another note also retires an inherited orphan
+  claim, so the next note's claim under the same id is not refused
+  (`testOpeningAnotherNoteIntoATabWithAnOrphanClaimKeepsTheNewNote`); the
+  quit, the switch and the settle-or-close fast paths read every tab now
+  (`HotExitWriter.reconcileNow`) before deciding nothing needs settling, so
+  a kept edit reverted in the same turn is retired first
+  (`testARevertQuitInTheSameTurnRetiresTheKeptCopy`,
+  `testARevertClosedInTheSameTurnRetiresTheKeptCopy`).
+- **Codex adversarial review of 29.2, round 7 (2026-11-14; #1942 at
+  2ea1faef).** Two findings, both fixed with facts shown red first: a quit
+  that starts clean with sidebar or Trash work pending goes through hot
+  exit, which re-checks after the wait
+  (`testACleanQuitBehindTheSidebarFenceKeepsAnEditMadeWhileItWaits`); a
+  claim is admitted to its entry's queue before `issueClaim` returns
+  (`HotExitStoreHost.claimNow`), so a retirement issued in the same turn
+  runs after it and no orphan claim lands
+  (`testAnEpisodeEndedBeforeItsClaimRunsLeavesTheNextEditKept`).
+- **Codex adversarial review of 29.2, round 8 (2026-11-14; #1942 at
+  a0bc49cf).** One finding, fixed with a fact shown red first: a property
+  write started while a quit settles has no recovery payload, so the quit
+  waits for it (at most 4 s) and settles and re-checks again, or is
+  refused with the property-edit reason if it does not finish; the
+  re-check records it as it records a save
+  (`testAQuitNeverAnswersYesWhileAPropertyWriteRuns`).
+- **Codex adversarial review of 29.2, round 9 (2026-11-14; #1942 at
+  a1538d4d).** One finding, fixed with a fact shown red first: a restored
+  note whose baseline text is unknown (a file now at its path, so no
+  hash) takes no property write until a save or reload gives it a
+  baseline; a property write without a hash would overwrite the file the
+  save refuses (`testARestoredNoteWithAFileNowAtItsPathTakesNoPropertyWrite`).
+- **Codex adversarial review of 29.2, round 10 (2026-11-14; #1942 at
+  e082fbdc).** One finding, fixed with a fact shown red first: round 9's
+  guard also covers a restored note whose kept baseline still enforces its
+  identity. A file replaced with the same bytes after the restore passes
+  the hash check, and the refresh after a property write dropped the guard
+  the next save relied on
+  (`testARestoredNoteStillGuardingItsIdentityTakesNoPropertyWrite`).
+- **Codex adversarial review of 29.2, round 11 (2026-11-14; #1942 at
+  c9389ffa).** One finding, fixed with a fact shown red first: a restored
+  buffer whose kept baseline still guards its identity stays dirty, as one
+  with unknown text does, until a save lands or a reload replaces it.
+  Edited back to its baseline it keeps Save, whose checked save ends the
+  guard and lets property editing resume
+  (`testARestoredNoteEditedBackToItsBaselineStaysSaveable`).
+
 ## Delivery record
 
 - **29.1** (#1936, 2026-11-13): as §7, with `displaced` carrying planned
   tabs and the split record named `NoteSplit` (recorded above).
+- **29.2** (2026-11-13): the Mac host as §1–§6, with these as-built
+  choices:
+  - **Change signals.** The writer observes `AppState.objectWillChange`,
+    `WorkspaceState.objectWillChange` and each `NoteDocument`'s
+    `onChange`, and skips a tab whose buffer stamp is unchanged
+    (`HotExitBuffer.Stamp`: `AppState.hotExitBufferRevision` for the
+    active fields, `NoteDocument.hotExitRevision` for a parked one), so a
+    drain never compares whole bodies; explicit re-evaluations (an
+    outcome, the fence lifting, a settle) are forced.
+  - **The baseline travels as one value.** `BaselineIdentity` (file
+    identity, `identityEnforced`, `textUnknown`) is assigned beside every
+    content hash; `HotExitIdentityCensusTests` pins it.
+  - **A kept close clears the dirty flag** in `closeVault()` after the
+    writer detaches, before the workspace reset, so the selection clear
+    never gates on buffers the store holds.
+  - **The quit's re-front is a hook** (`AppState.frontPromptHostHook`) the
+    app installs at launch; XCTest keeps a no-op, so no test activates its
+    own process.
+  - **A tab whose dirty buffer was dropped without a gate** takes a fresh
+    recovery id if it stays in the model, so its next note never claims
+    over the abandoned entry.
+  - **Close and keep the copies after a Discard All the store did not
+    confirm** reverts nothing and speaks `VaultClosed`; both it and Try
+    again re-check first and send a change back to the route's own prompt.
+  - **Every route that starts a hot-exit task answers a quit still
+    settling**, and a quit's own discard-pending prompt keeps its reply in
+    `pendingTerminationReply`, where a newer request answers it.
+  - **The launch's opening line waits for the app to settle** (VoiceOver
+    field pass, 2026-11-14). VoiceOver drops an announcement a newly
+    launched app posts before it has read the app's window, and that read
+    came 0.5 s to more than 4 s after `MainSplitView`'s mount, so the
+    restore sentences were never heard at launch (nor was the opening line,
+    before this PR). The first vault-opened line in a process waits until
+    the main thread has kept time for 1.5 s (at most 10 s), then speaks with
+    the restore sentences behind it; later mounts and direct switches speak
+    at once, and a close drops a held line. SwiftUI's lifecycle installs its
+    own `NSApplication`, so the app cannot see VoiceOver's first query.
+  - **The fallback prompt says why** (VoiceOver field pass, 2026-11-14).
+    VoiceOver reads a prompt the moment it opens, over the not-kept
+    sentence posted just before it, so the sentence was never heard. The
+    "Save changes?" and vault-close prompts now show core's not-kept
+    sentence under their question while they show
+    (`AppState.hotExitPromptNotice`); the announcement is still posted from
+    the same four sites.
+  - **Accepted, not built:** opening another vault directly over a clean
+    one (AppKit's open-document handoff) does not settle the old vault's
+    obligations first; a retirement still parked when the app quits can
+    bring the saved text back once, unsaved (the shape of W Deviation 6).
 
 ## Brief
 

@@ -34,6 +34,8 @@ extension AppState {
     /// hash, so its next save is a compare-and-swap on exactly those bytes.
     struct CreateLanding {
         let contentHash: String
+        /// Plan 43 PR 29: the created file's identity, from the same landing.
+        let fileIdentity: String?
         let caveat: A11yEvent?
     }
 
@@ -44,10 +46,13 @@ extension AppState {
     ) throws -> CreateLanding {
         switch try session.createExclusiveReporting(path: path, content: content) {
         case .committed(let report):
-            return CreateLanding(contentHash: report.newContentHash, caveat: nil)
-        case .publishedUnindexed(_, let contentHash, _, let errorMessage):
+            return CreateLanding(
+                contentHash: report.newContentHash, fileIdentity: report.fileIdentity,
+                caveat: nil)
+        case .publishedUnindexed(_, let contentHash, let fileIdentity, let errorMessage):
             return CreateLanding(
                 contentHash: contentHash,
+                fileIdentity: fileIdentity,
                 caveat: .createPublishedUnindexed(name: displayName, reason: errorMessage))
         }
     }

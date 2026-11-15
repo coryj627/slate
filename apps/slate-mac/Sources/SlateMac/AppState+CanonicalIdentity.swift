@@ -131,12 +131,18 @@ extension AppState {
     /// the bytes the conflict is about. An occupant that cannot be read
     /// leaves that hash empty, and Keep Mine then recreates or conflicts
     /// again on core's answer.
+    ///
+    /// Plan 43 PR 29 §5: a restored buffer whose baseline came from a kept
+    /// entry passes `expectedFileIdentity` too, and saves through
+    /// `save_text_checked` of the note core composes, so a file put at the
+    /// path since the buffer was kept is refused even with the same bytes.
     nonisolated static func writeNoteSave(
         session: VaultSession,
         path: String,
         fmSource: String,
         body: String,
         expectedContentHash: String?,
+        expectedFileIdentity: String? = nil,
         displayName: String
     ) throws -> NoteSaveLanding {
         guard let expectedContentHash else {
@@ -147,7 +153,8 @@ extension AppState {
                     content: composeNote(fmSource: fmSource, body: body),
                     displayName: displayName)
                 return NoteSaveLanding(
-                    newContentHash: landing.contentHash, caveat: landing.caveat)
+                    newContentHash: landing.contentHash, fileIdentity: landing.fileIdentity,
+                    caveat: landing.caveat)
             } catch VaultError.DestinationExists {
                 let occupant = try? session.readNoteParts(path: path)
                 throw VaultError.WriteConflict(
@@ -156,12 +163,23 @@ extension AppState {
                     currentMtimeMs: occupant?.mtimeMs ?? 0)
             }
         }
+        if let expectedFileIdentity {
+            let report = try session.saveTextChecked(
+                path: path,
+                contents: composeNote(fmSource: fmSource, body: body),
+                expectedContentHash: expectedContentHash,
+                expectedFileIdentity: expectedFileIdentity)
+            return NoteSaveLanding(
+                newContentHash: report.newContentHash, fileIdentity: report.fileIdentity,
+                caveat: nil)
+        }
         let report = try session.saveComposed(
             path: path,
             fmSource: fmSource,
             body: body,
             expectedContentHash: expectedContentHash)
-        return NoteSaveLanding(newContentHash: report.newContentHash, caveat: nil)
+        return NoteSaveLanding(
+            newContentHash: report.newContentHash, fileIdentity: report.fileIdentity, caveat: nil)
     }
 }
 
@@ -170,6 +188,8 @@ extension AppState {
 /// (`CreatePublishedUnindexed`), spoken after the saved sentence.
 struct NoteSaveLanding {
     let newContentHash: String
+    /// Plan 43 PR 29: the identity of the file the save published.
+    let fileIdentity: String?
     let caveat: A11yEvent?
 }
 
