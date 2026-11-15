@@ -900,6 +900,15 @@ matrix `--check`; the VoiceOver pass above.
   a kept edit reverted in the same turn is retired first
   (`testARevertQuitInTheSameTurnRetiresTheKeptCopy`,
   `testARevertClosedInTheSameTurnRetiresTheKeptCopy`).
+- **Codex adversarial review of 29.2, round 7 (2026-11-14; #1942 at
+  2ea1faef).** Two findings, both fixed with facts shown red first: a quit
+  that starts clean with sidebar or Trash work pending goes through hot
+  exit, which re-checks after the wait
+  (`testACleanQuitBehindTheSidebarFenceKeepsAnEditMadeWhileItWaits`); a
+  claim is admitted to its entry's queue before `issueClaim` returns
+  (`HotExitStoreHost.claimNow`), so a retirement issued in the same turn
+  runs after it and no orphan claim lands
+  (`testAnEpisodeEndedBeforeItsClaimRunsLeavesTheNextEditKept`).
 
 ## Delivery record
 

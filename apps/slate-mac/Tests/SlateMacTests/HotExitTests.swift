@@ -643,6 +643,70 @@ final class HotExitTests: XCTestCase {
         XCTAssertTrue(try storedEntries(key).isEmpty, "the reverted text never comes back")
     }
 
+    /// Codex adversarial review, round 7: a quit that starts clean, with
+    /// sidebar work pending, waits on that fence while the editor stays
+    /// writable. What is typed in the wait is kept before the reply.
+    func testACleanQuitBehindTheSidebarFenceKeepsAnEditMadeWhileItWaits() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        let sidebar = Gate()
+        defer { sidebar.open() }
+        state.enqueueSidebarOrganizationWriteForTesting { _ in sidebar.hold() }
+        let sidebarEntered = await entered(sidebar)
+        XCTAssertTrue(sidebarEntered, "a sidebar write holds the fence")
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater, "the fence holds the quit")
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let claim = gates.arm(.claim)
+        defer { claim.open() }
+        state.updateEditorText("# note\n\ntyped while the quit waited.\n")
+        let claimEntered = await entered(claim)
+        XCTAssertTrue(claimEntered, "the edit's claim is issued")
+        sidebar.open()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(replies.values, [], "no reply while the edit is not kept")
+
+        claim.open()
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(replies.values, [true])
+        XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\ntyped while the quit waited.\n"])
+        _ = vault
+    }
+
+    /// Codex adversarial review, round 7: an episode that ends before its
+    /// claim reaches the store queues its retirement after that claim, so
+    /// the claim never lands as an orphan that refuses the next episode.
+    func testAnEpisodeEndedBeforeItsClaimRunsLeavesTheNextEditKept() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        await open(state, try makeVault())
+        await select(state, "note.md")
+        let key = try key(state)
+        let tab = try XCTUnwrap(state.workspace.activeTab?.id)
+        // One turn: the edit's claim is issued, then the revert ends the
+        // episode, before any task runs.
+        state.updateEditorText("# note\n\nbriefly.\n")
+        state.hotExitWriter?.reconcileNow()
+        state.updateEditorText("# note\n")
+        state.hotExitWriter?.reconcileNow()
+        await settle(state)
+        XCTAssertTrue(
+            try HotExitStore.open(deviceRoot: deviceRoot.path).readBuffers(key: key).claims.isEmpty,
+            "the ended episode's claim never lands after its retirement")
+
+        state.updateEditorText("# note\n\nagain.\n")
+        await settle(state)
+        XCTAssertTrue(state.hotExitWriter?.isKeptForTests(tab) ?? false, "the next edit is kept")
+        XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\nagain.\n"])
+    }
+
     // MARK: - Discards (§3, §4)
 
     func testATabsOwnDiscardRetiresItsEntry() async throws {

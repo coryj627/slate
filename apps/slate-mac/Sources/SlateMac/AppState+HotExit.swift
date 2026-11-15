@@ -517,7 +517,11 @@ extension AppState {
             }
             return nil
         }
-        guard dirty || writer.hasUnresolvedObligations else { return nil }
+        // Sidebar or Trash work pending makes the quit wait with the editor
+        // writable, so hot exit takes it over and re-checks after the wait
+        // (Codex adversarial review, round 7).
+        guard dirty || writer.hasUnresolvedObligations || Self.hasPendingSidebarWorkAtTermination
+        else { return nil }
         isTerminationReplyOutstanding = true
         pendingTerminationSettleReply = reply
         hotExitRouteGeneration &+= 1

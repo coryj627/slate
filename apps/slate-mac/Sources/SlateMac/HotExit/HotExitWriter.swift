@@ -356,9 +356,11 @@ final class HotExitWriter {
         let epoch = self.epoch
         let entryId = source.hotExitEntryId(for: state.tab)
         let expected = state.expectedClaim
-        Task { [weak self, host] in
-            let result = await host.claim(
-                key, epoch: epoch, entryId: entryId, expected: expected, incarnation: incarnation)
+        // Queued now, so a retirement this turn issues runs after it (Codex
+        // adversarial review, round 7).
+        host.claimNow(
+            key, epoch: epoch, entryId: entryId, expected: expected, incarnation: incarnation
+        ) { [weak self] result in
             self?.onClaimResolved(state, token: token, incarnation: incarnation, result: result)
         }
     }

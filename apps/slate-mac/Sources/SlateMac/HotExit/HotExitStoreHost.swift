@@ -307,17 +307,26 @@ final class HotExitStoreHost: @unchecked Sendable {
 
     /// A claim runs in order for its entry id (O2). It carries the
     /// incarnation made for it, so a retry after an error is idempotent and a
-    /// retirement can name it either way.
-    func claim(
-        _ key: HotExitVaultKey, epoch: UInt64, entryId: String, expected: String?, incarnation: String
-    ) async -> HotExitResult<HotExitClaimOutcome> {
-        await queued(
+    /// retirement can name it either way. It is admitted to its entry's
+    /// queue before this returns, so a retirement issued after it always runs
+    /// after it; the outcome comes back on the main actor (Codex adversarial
+    /// review, round 7).
+    func claimNow(
+        _ key: HotExitVaultKey, epoch: UInt64, entryId: String, expected: String?, incarnation: String,
+        onResult: @escaping @MainActor (HotExitResult<HotExitClaimOutcome>) -> Void
+    ) {
+        let deliver: @Sendable (HotExitResult<HotExitClaimOutcome>) -> Void = { result in
+            DispatchQueue.main.async { MainActor.assumeIsolated { onResult(result) } }
+        }
+        enqueueQueued(
             key, entryId: entryId,
             HotExitStoreCall(kind: .claim, keyText: key.text, entryId: entryId, incarnations: [incarnation], generation: 0),
-            incarnations: [incarnation], claimedAtEpoch: epoch, parksOnError: false
-        ) {
-            try $0.claimEntry(key: key, epoch: epoch, entryId: entryId, expected: expected, incarnation: incarnation)
-        }
+            incarnations: [incarnation], claimedAtEpoch: epoch, parksOnError: false,
+            body: { (store: HotExitStore) -> HotExitClaimOutcome in
+                try store.claimEntry(
+                    key: key, epoch: epoch, entryId: entryId, expected: expected, incarnation: incarnation)
+            },
+            completion: Completion<HotExitClaimOutcome>(deliver: deliver))
     }
 
     /// A retirement runs in order for its entry id. It resolves only once the
@@ -615,17 +624,26 @@ final class HotExitStoreHost: @unchecked Sendable {
     private final class Completion<T>: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<HotExitResult<T>, Never>?
+        private var deliver: (@Sendable (HotExitResult<T>) -> Void)?
 
         init(_ continuation: CheckedContinuation<HotExitResult<T>, Never>?) {
             self.continuation = continuation
         }
 
+        init(deliver: @escaping @Sendable (HotExitResult<T>) -> Void) {
+            self.deliver = deliver
+        }
+
         func trySet(_ result: HotExitResult<T>) {
-            let pending: CheckedContinuation<HotExitResult<T>, Never>? = lock.withLock {
-                defer { continuation = nil }
-                return continuation
+            let (pending, callback) = lock.withLock {
+                defer {
+                    continuation = nil
+                    deliver = nil
+                }
+                return (continuation, deliver)
             }
             pending?.resume(returning: result)
+            callback?(result)
         }
     }
 
