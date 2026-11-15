@@ -60,20 +60,20 @@ public partial class MainWindow
         }
 
         HoldTheRestingPointer();
-        LandTheKeys(AppMenuItem);
+        AppMenuItem.Focus();
         AppMenuItem.IsSubmenuOpen = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
             if (target is null)
             {
-                LandTheKeys(menus.FirstOrDefault(menu => menu.IsEnabled));
+                menus.FirstOrDefault(menu => menu.IsEnabled)?.Focus();
                 return;
             }
 
-            LandTheKeys(target);
+            target.Focus();
             target.IsSubmenuOpen = true;
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
-                LandTheKeys(target.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled && row.IsVisible)));
+                target.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled && row.IsVisible)?.Focus());
         });
         return true;
     }
@@ -82,18 +82,15 @@ public partial class MainWindow
     /// since; null otherwise.</summary>
     private NativePointer.Point? _restingPointer;
 
-    /// <summary>True while a key's own handling, or the app's landing, moves the keys: those
-    /// moves are the keys', wherever the pointer rests.</summary>
-    private bool _keysMoveTheKeys;
-
     /// <summary>#1939: the keys open the menu on its first row, and a pointer resting where the
     /// popup appears mustn't take them. When a popup appears under a resting pointer WPF finds
-    /// a row under it and hovers it, and a hovered row takes the keys; WPF's own guard (a
-    /// <see cref="MenuItem"/>'s ignore-mouse flag) lapses at Background priority, so on a slow
-    /// machine the row under the pointer took the keys, Exit among them. While the keys hold
-    /// the menu and the pointer hasn't moved, a row the pointer is over can't take the keys,
-    /// though the keys themselves can move there; the rows still take a click. A move, a press
-    /// or the menu closing ends it, and hovering works as before.</summary>
+    /// a row under it and hovers it, and a hovered row takes the keys and the selection (and a
+    /// hovered menu's row opens its menu); WPF's own guard (a <see cref="MenuItem"/>'s
+    /// ignore-mouse flag) lapses at Background priority, so on a slow machine the row under the
+    /// pointer took the keys, Exit among them. While the keys hold the menu and the pointer
+    /// rests, the rows are out of hit testing, so nothing hovers. A move gives them back; so
+    /// does a press, which then re-reads what is under the pointer, and the release works that
+    /// row as a menu's press-and-release does; and so does the menu closing.</summary>
     private void HoldTheRestingPointer()
     {
         if (!NativePointer.GetCursorPos(out NativePointer.Point at))
@@ -103,54 +100,18 @@ public partial class MainWindow
 
         if (_restingPointer is null)
         {
-            // Focus moving to a row inside the popup routes through the logo, and the open menu
-            // holds the mouse, so every move and press reaches the bar's own route.
-            AppMenuItem.PreviewGotKeyboardFocus += KeepTheKeysFromTheRestingPointer;
-            AppMenuItem.PreviewKeyDown += LetTheKeyMoveTheKeys;
+            // The open menu holds the mouse, so every move and press reaches the bar's own
+            // route, over the popups or not.
             MainMenu.PreviewMouseMove += ReleaseThePointerOnceItMoves;
             MainMenu.PreviewMouseDown += ReleaseThePointerOnAPress;
             AppMenuItem.SubmenuClosed += ReleaseThePointerWhenTheMenuCloses;
         }
 
         _restingPointer = at;
-    }
-
-    /// <summary>Gives <paramref name="row"/> the keys as the app's own landing, which the
-    /// resting pointer doesn't hold back.</summary>
-    private void LandTheKeys(MenuItem? row)
-    {
-        bool was = _keysMoveTheKeys;
-        _keysMoveTheKeys = true;
-        try
+        foreach (MenuItem row in RowsOf(AppMenuItem))
         {
-            row?.Focus();
+            row.IsHitTestVisible = false;
         }
-        finally
-        {
-            _keysMoveTheKeys = was;
-        }
-    }
-
-    private void KeepTheKeysFromTheRestingPointer(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (!_keysMoveTheKeys
-            && _restingPointer is { } rested
-            && e.NewFocus is MenuItem { IsMouseOver: true } row
-            && !ReferenceEquals(row, AppMenuItem)
-            && NativePointer.GetCursorPos(out NativePointer.Point now)
-            && now.X == rested.X
-            && now.Y == rested.Y)
-        {
-            e.Handled = true;
-        }
-    }
-
-    private void LetTheKeyMoveTheKeys(object sender, KeyEventArgs e)
-    {
-        // The key's own handling runs on from here, in this same input operation; the reset
-        // waits behind it, ahead of the next input.
-        _keysMoveTheKeys = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Normal, () => _keysMoveTheKeys = false);
     }
 
     private void ReleaseThePointerOnceItMoves(object sender, MouseEventArgs e)
@@ -163,7 +124,18 @@ public partial class MainWindow
         }
     }
 
-    private void ReleaseThePointerOnAPress(object sender, MouseButtonEventArgs e) => ReleaseThePointer();
+    private void ReleaseThePointerOnAPress(object sender, MouseButtonEventArgs e)
+    {
+        if (_restingPointer is null)
+        {
+            return;
+        }
+
+        ReleaseThePointer();
+        // The press went where the rows weren't; now they're back, the row under the pointer
+        // is read again before the release, which a menu's row answers.
+        Mouse.Synchronize();
+    }
 
     private void ReleaseThePointerWhenTheMenuCloses(object sender, RoutedEventArgs e)
     {
@@ -182,11 +154,26 @@ public partial class MainWindow
         }
 
         _restingPointer = null;
-        AppMenuItem.PreviewGotKeyboardFocus -= KeepTheKeysFromTheRestingPointer;
-        AppMenuItem.PreviewKeyDown -= LetTheKeyMoveTheKeys;
         MainMenu.PreviewMouseMove -= ReleaseThePointerOnceItMoves;
         MainMenu.PreviewMouseDown -= ReleaseThePointerOnAPress;
         AppMenuItem.SubmenuClosed -= ReleaseThePointerWhenTheMenuCloses;
+        foreach (MenuItem row in RowsOf(AppMenuItem))
+        {
+            row.ClearValue(IsHitTestVisibleProperty);
+        }
+    }
+
+    /// <summary>Every row under <paramref name="menu"/>, at any depth.</summary>
+    private static IEnumerable<MenuItem> RowsOf(MenuItem menu)
+    {
+        foreach (MenuItem row in menu.Items.OfType<MenuItem>())
+        {
+            yield return row;
+            foreach (MenuItem inner in RowsOf(row))
+            {
+                yield return inner;
+            }
+        }
     }
 
     private static class NativePointer

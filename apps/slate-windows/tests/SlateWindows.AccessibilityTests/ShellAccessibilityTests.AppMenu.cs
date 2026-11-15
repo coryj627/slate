@@ -108,6 +108,19 @@ public sealed partial class ShellAccessibilityTests
                 Assert.Equal(resting, Mouse.Position);
                 AssertItemNamesAreSpeakable(process, "app-menu-resting-pointer");
 
+                // A hovered menu's row opens its menu after the menu-show delay (Windows' 400 ms
+                // unless changed): the row under the resting pointer stays shut well past it.
+                Thread.Sleep(TimeSpan.FromMilliseconds(1500));
+                Assert.True(
+                    under!.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault != ExpandCollapseState.Expanded,
+                    $"The resting pointer opened {DescribeForDiagnosis(under)}'s menu.");
+                AssertOpenOnItsFirstRow(window, automation, "FileMenu");
+
+                // A hover that didn't take the keys could still take the menu's selection, and
+                // Down would then go on from the row under the pointer; it goes on from the first.
+                PressKey(VirtualKeyShort.DOWN);
+                AssertEventuallyFocused(rows[1], $"Down from the first row didn't reach the second, with the pointer resting on {DescribeForDiagnosis(under)}.");
+
                 // A click with the pointer still resting works the row under it: a command
                 // closes the menu, a menu's row opens its menu.
                 string clicked = DescribeForDiagnosis(under);
