@@ -31,6 +31,9 @@
     <Content Include="..\..\chords.json" Link="fixtures\chords.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\SlateWindows\MainWindow.xaml" Link="fixtures\MainWindow.xaml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\SlateWindows\WorkspaceTemplates.xaml" Link="fixtures\WorkspaceTemplates.xaml" CopyToOutputDirectory="PreserveNewest" />
+    <!-- #1943: the theme fact knows Slate's own window backgrounds. -->
+    <Content Include="..\..\src\SlateWindows\Themes\Slate.Light.xaml" Link="fixtures\Slate.Light.xaml" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\SlateWindows\Themes\Slate.Dark.xaml" Link="fixtures\Slate.Dark.xaml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\..\crates\slate-core\tests\fixtures\markdown\editor_semantics.md"
              Link="fixtures\editor_semantics.md"
              CopyToOutputDirectory="PreserveNewest" />

@@ -235,20 +235,20 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>The window's commonest colour is its background, whatever's drawn on it, judged
-    /// only once the screen shows this app's window there (#1943). A capture is the screen under
-    /// the window's rectangle, so on a job VM it can be another window lying over ours, or a
-    /// frame that isn't ours yet; either read as a light grey and failed the dark step. So the
-    /// fact waits, up to 10 seconds, until this app's window is the one at the rectangle's
-    /// centre, two samples 150 ms apart agree, and, when <paramref name="before"/> holds the
-    /// screen from before the launch, the colour is no longer what was there. At the deadline it
-    /// still judges a steady sample of this app's window, whatever was there before; with none,
-    /// it can't see the app and fails as an environmental failure, naming what lay on top. A
-    /// theme painted wrong stays wrong across the wait and still fails; a wrong paint corrected
-    /// within the wait doesn't, which one capture at an unknown moment never reliably caught
-    /// either.</summary>
+    /// only on frames the screen shows as this app's (#1943). A capture is the screen under the
+    /// window's rectangle, so on a job VM it can be another window lying over ours, or a frame
+    /// that isn't ours yet; either read as a light grey and failed the dark step. So the fact
+    /// samples every 150 ms, for up to 10 seconds, and reads each sample by
+    /// <see cref="ReadThemeSample"/>: the other theme's own window background on this app's
+    /// window fails at once, whether or not it lasts and whatever was there before the launch
+    /// (Codex on #1943), which keeps DS-10's first-paint promise; any other colour is judged
+    /// once it is this app's window, steady, and not what was there before. At the deadline it
+    /// still judges a steady sample of this app's window; with none, it can't see the app and
+    /// fails as an environmental failure, naming what lay on top.</summary>
     private static void AssertShownWindowIsLight(
         AutomationElement window, Process process, CaptureImage? before, bool expectLight)
     {
+        int otherTheme = WindowBackgroundOf(light: !expectLight);
         var seen = new List<string>();
         int? previous = null;
         int color = 0;
@@ -270,7 +270,17 @@ public sealed partial class ShellAccessibilityTests
                 bool ours = owner == (uint)process.Id;
                 steadyAndOurs = ours && color == previous;
                 seen.Add($"#{color:X6}{(ours ? string.Empty : $" with pid {owner} on top")}");
-                if ((steadyAndOurs && color != behind) || DateTime.UtcNow >= deadline)
+                ThemeSample reading = ReadThemeSample(color, ours, previous, behind, otherTheme);
+                if (reading == ThemeSample.OtherTheme)
+                {
+                    Assert.Fail(
+                        $"this app's window showed #{color:X6}, the {(expectLight ? "dark" : "light")} theme's "
+                        + $"window background, wanting {(expectLight ? "light" : "dark")}. "
+                        + $"Slate is pid {process.Id}; samples 150 ms apart: {RunsOf(seen)}. "
+                        + FocusDiagnosis() + SaveThemeEvidence(before, last));
+                }
+
+                if (reading == ThemeSample.Judge || DateTime.UtcNow >= deadline)
                 {
                     break;
                 }
@@ -306,6 +316,92 @@ public sealed partial class ShellAccessibilityTests
         {
             last?.Dispose();
         }
+    }
+
+    internal enum ThemeSample
+    {
+        /// <summary>Not yet a frame to judge: someone else's window, a frame still changing, or
+        /// what was on the screen before the launch.</summary>
+        Wait,
+
+        /// <summary>This app's window, steady, and not what was there before: judge it.</summary>
+        Judge,
+
+        /// <summary>This app's window showing the other theme's own window background.</summary>
+        OtherTheme,
+    }
+
+    /// <summary>#1943: how the theme fact reads one sample. The other theme's own window
+    /// background on this app's window is that theme painted, so it fails even on a single
+    /// sample and even when the screen had that colour before the launch; only another window,
+    /// a changing frame or the earlier screen waits. Each channel may be off by 4, as a frame
+    /// still settling is (#131313 on the way to #121212).</summary>
+    internal static ThemeSample ReadThemeSample(int color, bool ours, int? previous, int? behind, int otherThemeBackground)
+    {
+        if (!ours)
+        {
+            return ThemeSample.Wait;
+        }
+
+        if (Math.Abs((color >> 16 & 255) - (otherThemeBackground >> 16 & 255)) <= 4
+            && Math.Abs((color >> 8 & 255) - (otherThemeBackground >> 8 & 255)) <= 4
+            && Math.Abs((color & 255) - (otherThemeBackground & 255)) <= 4)
+        {
+            return ThemeSample.OtherTheme;
+        }
+
+        return color == previous && color != behind ? ThemeSample.Judge : ThemeSample.Wait;
+    }
+
+    /// <summary><c>Slate.WindowBackgroundColor</c> as the theme dictionary the app ships says,
+    /// read from the copy this project carries, so the fact can't drift from the app.</summary>
+    internal static int WindowBackgroundOf(bool light)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", light ? "Slate.Light.xaml" : "Slate.Dark.xaml");
+        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(path),
+            "x:Key=\"Slate\\.WindowBackgroundColor\">#FF([0-9A-Fa-f]{6})<");
+        Assert.True(match.Success, $"{path} has no opaque Slate.WindowBackgroundColor.");
+        return Convert.ToInt32(match.Groups[1].Value, 16);
+    }
+
+    /// <summary>Codex on #1943: a frame of this app's window in the other theme fails though the
+    /// next sample is right, and though the screen had that colour before the launch.</summary>
+    [Fact]
+    public void ThemeSample_TheOtherThemeOnSlatesWindowFailsAtOnce()
+    {
+        int light = WindowBackgroundOf(light: true);
+        int dark = WindowBackgroundOf(light: false);
+        Assert.Equal(0xF7F7F7, light);
+        Assert.Equal(0x121212, dark);
+
+        // Wanting dark: a single light frame, before any steady one.
+        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(light, ours: true, previous: null, behind: null, otherThemeBackground: light));
+        // The same, when the screen was that light before the launch.
+        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(light, ours: true, previous: light, behind: light, otherThemeBackground: light));
+        // Wanting light: a dark frame still settling.
+        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(0x131313, ours: true, previous: null, behind: null, otherThemeBackground: dark));
+    }
+
+    /// <summary>#1943: what lies over the window, a frame still changing and the earlier screen
+    /// wait; a steady frame of this app's window is judged.</summary>
+    [Fact]
+    public void ThemeSample_WaitsForSlatesOwnSteadyFrame()
+    {
+        int light = WindowBackgroundOf(light: true);
+        int dark = WindowBackgroundOf(light: false);
+
+        // Wanting dark: another process's light window on top, even in Slate's own light.
+        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: false, previous: null, behind: null, otherThemeBackground: light));
+        Assert.Equal(ThemeSample.Wait, ReadThemeSample(light, ours: false, previous: light, behind: null, otherThemeBackground: light));
+        // A grey that is no theme's background, on Slate's window: first sample, then a change.
+        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: true, previous: null, behind: null, otherThemeBackground: light));
+        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: true, previous: 0xB8B6C2, behind: null, otherThemeBackground: light));
+        // Steady, but what the screen showed before the launch.
+        Assert.Equal(ThemeSample.Wait, ReadThemeSample(dark, ours: true, previous: dark, behind: dark, otherThemeBackground: light));
+        // Steady, Slate's, and new: judged (the brightness then decides).
+        Assert.Equal(ThemeSample.Judge, ReadThemeSample(dark, ours: true, previous: dark, behind: 0x2B2B2B, otherThemeBackground: light));
+        Assert.Equal(ThemeSample.Judge, ReadThemeSample(0xC3BEC4, ours: true, previous: 0xC3BEC4, behind: null, otherThemeBackground: light));
     }
 
     /// <summary>Repeated samples as one entry with a count, so a long wait stays readable.</summary>
