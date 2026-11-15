@@ -3378,6 +3378,7 @@ final class AppState: ObservableObject {
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath,
@@ -3425,6 +3426,7 @@ final class AppState: ObservableObject {
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath,
@@ -3602,6 +3604,8 @@ final class AppState: ObservableObject {
             return path
         }()
         pendingTabClose = nil
+        // Plan 43 PR 29 §3: the reader discarded this tab through the gate.
+        hotExitWriter?.endEpisodeByReader(target)
         if let discardedRecoveryPath {
             if missingNoteRecoveryDraft(for: discardedRecoveryPath) != nil {
                 discardMissingNoteRecoveryDraft(
@@ -3654,6 +3658,10 @@ final class AppState: ObservableObject {
         {
             clearCloseSafeBulkPropertyPublicationVerification(for: path)
         }
+        // Plan 43 PR 29 §3: a tab that is clean as it closes (Save on its
+        // close prompt saves and closes in one turn) ends its episode here,
+        // while its buffer can still be read.
+        hotExitWriter?.tabClosing(id)
         if closingActive {
             // The buffer being closed must not leak into the successor's
             // snapshot: tear the active fields down BEFORE the model close
@@ -3803,7 +3811,9 @@ final class AppState: ObservableObject {
     /// through the ONE Rust composer (`compose_note` inside
     /// `save_composed`), never a Swift mirror. Refreshed by load, property
     /// edits, and the U3-4 source editor.
-    @Published private(set) var currentNoteFMSource: String = ""
+    @Published private(set) var currentNoteFMSource: String = "" {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
 
     /// Whole-file → body deltas, straight from `read_note_parts` (computed
     /// Rust-side as `whole − body` at the split point — byte-exact by
@@ -3954,12 +3964,17 @@ final class AppState: ObservableObject {
             path: path, fmSource: parts.fmSource,
             bodyByteOffset: Int(parts.bodyByteOffset),
             bodyLineOffset: Int(parts.bodyLineOffset),
-            contentHash: parts.contentHash)
+            contentHash: parts.contentHash,
+            fileIdentity: parts.fileIdentity)
         if BaseExactIdentity.matches(loadedFilePath, path) {
             currentNoteFMSource = parts.fmSource
             bodyByteOffset = Int(parts.bodyByteOffset)
             bodyLineOffset = Int(parts.bodyLineOffset)
             currentNoteContentHash = parts.contentHash
+            // A fresh read of the file this process just wrote (§5).
+            currentNoteBaselineIdentity = BaselineIdentity(
+                fileIdentity: parts.fileIdentity,
+                textUnknown: currentNoteBaselineIdentity.textUnknown)
             currentNoteProperties = snapshot.properties
         }
         return .published
@@ -4315,23 +4330,38 @@ final class AppState: ObservableObject {
         guard let vaultURL = currentVaultURL else { return }
         let store = WorkspaceStore(
             vaultRoot: vaultURL, rootIdentity: sidebarVaultRootIdentity)
-        guard let snapshot = store.load() else { return }
-        // Restore the active leaf independently of the tab model: an unknown or
-        // absent token (or a leaf not yet registered) falls back to `.outline`
-        // (Leaf.init(persisted:)). Assigning before the empty-model guard means
-        // the remembered panel survives even a vault reopened with no tabs.
-        workspace.activeLeaf = Leaf(persisted: snapshot.activeLeaf)
-        // #873: likewise the expanded-folder set — assigned before the model
-        // guard so expansion survives a vault reopened with no restorable
-        // tabs. The sidebar's bind(to:) consumes this when it rehydrates.
-        treeExpandedDirPaths = WorkspaceStore.expandedDirPaths(from: snapshot)
-        guard let restored = WorkspaceStore.model(from: snapshot),
-            !restored.isEmpty
-        else { return }
-        workspace.adopt(
-            restored, viewModes: WorkspaceStore.viewModes(from: snapshot),
-            propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot),
-            canvasSurfaces: WorkspaceStore.canvasSurfaces(from: snapshot))
+        var snapshot = store.load()
+        if let snapshot {
+            // Restore the active leaf independently of the tab model: an
+            // unknown or absent token (or a leaf not yet registered) falls
+            // back to `.outline` (Leaf.init(persisted:)). Assigning before
+            // the empty-model guard means the remembered panel survives even
+            // a vault reopened with no tabs.
+            workspace.activeLeaf = Leaf(persisted: snapshot.activeLeaf)
+            // #873: likewise the expanded-folder set — assigned before the
+            // model guard so expansion survives a vault reopened with no
+            // restorable tabs. The sidebar's bind(to:) consumes this when it
+            // rehydrates.
+            treeExpandedDirPaths = WorkspaceStore.expandedDirPaths(from: snapshot)
+        }
+        // Plan 43 PR 29 §2, §5: the kept buffers are read and planned
+        // against the layout's validated Markdown tabs; displaced tabs take
+        // fresh ids and restored tabs their classified paths in the saved
+        // layout before the model is built from it.
+        let layoutModel = snapshot.flatMap { WorkspaceStore.model(from: $0) }
+        let plan = readAndPlanHotExit(layoutEntryIds: Self.markdownEntryIds(layoutModel))
+        var displaced: [String: TabID] = [:]
+        if let plan, let current = snapshot {
+            for planned in plan.displaced { displaced[planned.entryId] = TabID() }
+            snapshot = Self.rewriteForHotExit(current, plan: plan, displaced: displaced)
+        }
+        if let snapshot, let restored = WorkspaceStore.model(from: snapshot), !restored.isEmpty {
+            workspace.adopt(
+                restored, viewModes: WorkspaceStore.viewModes(from: snapshot),
+                propertiesCollapsed: WorkspaceStore.propertiesCollapsed(from: snapshot),
+                canvasSurfaces: WorkspaceStore.canvasSurfaces(from: snapshot))
+        }
+        if let plan { installHotExitRestore(plan, displaced: displaced) }
         if let tab = workspace.model.activeGroup.activeTabID {
             activateTab(tab)
         }
@@ -4409,6 +4439,7 @@ final class AppState: ObservableObject {
             workspace.snapshotActiveTab(
                 text: currentNoteText, baseline: savedBaselineText,
                 contentHash: currentNoteContentHash,
+                baselineIdentity: currentNoteBaselineIdentity,
                 hasUnsavedChanges: hasUnsavedChanges,
                 saveError: saveError, saveConflict: currentSaveConflict,
                 loadedFilePath: loadedFilePath,
@@ -4473,6 +4504,7 @@ final class AppState: ObservableObject {
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath,
@@ -4610,13 +4642,18 @@ final class AppState: ObservableObject {
     /// is selected or while loading is in flight. Writable so the
     /// editor's two-way `Binding<String>` can update the buffer
     /// directly via `updateEditorText(_:)`.
-    @Published var currentNoteText: String?
+    @Published var currentNoteText: String? {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
     /// The last-saved (or freshly-loaded) version of the current
     /// note. `hasUnsavedChanges` is derived from
     /// `currentNoteText != savedBaselineText`. Stored separately so
     /// the editor can compare without losing the live buffer.
     @Published private(set) var savedBaselineText: String? {
-        didSet { noteBodyBaselineRevision &+= 1 }
+        didSet {
+            noteBodyBaselineRevision &+= 1
+            hotExitBufferRevision &+= 1
+        }
     }
     /// Cheap ownership stamp for detached whole-body validation. A property
     /// publication may capture String values and compare their bytes off the
@@ -4626,18 +4663,32 @@ final class AppState: ObservableObject {
     /// loaded it (or last saved it). Used as
     /// `expectedContentHash` in `saveCurrentNote` so an external
     /// writer is caught via `WriteConflict`.
-    @Published private(set) var currentNoteContentHash: String?
+    @Published private(set) var currentNoteContentHash: String? {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
+    /// Plan 43 PR 29: travels with `currentNoteContentHash`, from the same
+    /// core result (`BaselineIdentity`'s docs).
+    @Published private(set) var currentNoteBaselineIdentity = BaselineIdentity.none {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
+    /// Plan 43 PR 29 §3: bumped by every write to an active buffer field —
+    /// the writer's cheap change stamp (`HotExitBuffer.Stamp`).
+    private(set) var hotExitBufferRevision: UInt64 = 0
     /// Path of the note whose text+hash we last successfully loaded.
     /// Distinct from `selectedFilePath`: the latter reflects the
     /// user's UI intent (and the file-list selection), while
     /// `loadedFilePath` is what's actually in `currentNoteText`. The
     /// two diverge while a dirty save-changes prompt is open.
-    @Published private(set) var loadedFilePath: String?
+    @Published private(set) var loadedFilePath: String? {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
     /// True when the editor buffer differs from the on-disk
     /// baseline. Drives the toolbar indicator, Cmd+S enablement,
     /// and the save-or-discard prompts triggered by navigation
     /// while dirty.
-    @Published private(set) var hasUnsavedChanges: Bool = false
+    @Published private(set) var hasUnsavedChanges: Bool = false {
+        didSet { hotExitBufferRevision &+= 1 }
+    }
     /// Populated when `saveCurrentNote` returns `WriteConflict`.
     /// Drives the "Keep mine / Reload from disk / Cancel" alert in
     /// `MainSplitView`.
@@ -4741,7 +4792,9 @@ final class AppState: ObservableObject {
     /// `currentSaveConflict` but scoped to a single key edit rather
     /// than a whole-file save so the resolve actions can re-issue
     /// the original property edit verbatim.
-    @Published var currentPropertyEditConflict: PropertyEditConflict?
+    @Published var currentPropertyEditConflict: PropertyEditConflict? {
+        didSet { hotExitDraftRevision &+= 1 }
+    }
 
     /// Surfaced when `setProperty` / `deleteProperty` fails with
     /// something other than `WriteConflict` — invalid value, malformed
@@ -9056,6 +9109,49 @@ final class AppState: ObservableObject {
     /// The default wraps the global `postAccessibilityAnnouncement`;
     /// tests inject a recording fake to assert the announce gates.
     let announcer: AnnouncementPosting
+
+    // MARK: Hot exit (plan 43 PR 29, `AppState+HotExit.swift`)
+
+    /// The process's hot-exit store host (§1). The app installs the
+    /// production one (`installProductionHotExitStore`); any other process
+    /// gets a host with no store, which keeps today's prompts silently.
+    @MainActor static var sharedHotExitStoreHost = HotExitStoreHost.uninstalled
+    /// This `AppState`'s host: the shared one, or a test's own.
+    let hotExitHost: HotExitStoreHost
+    /// The open vault's recovery writer (§3); nil with no vault open.
+    var hotExitWriter: HotExitWriter?
+    /// The open's key and hold step, read by the layout restore (§2).
+    var hotExitPendingOpen: HotExitOpen?
+    /// Core's sentences for what the open restored, spoken once after the
+    /// vault-opened line (§5).
+    var pendingHotExitNotices: [A11yEvent] = []
+    /// Core's not-kept sentence, shown under a close prompt's question while
+    /// that prompt shows (`AppState+HotExit.swift`).
+    @Published var hotExitPromptNotice: String?
+    /// When the app has settled enough for VoiceOver to hear the launch's
+    /// vault-opened line (`AppState+HotExit.swift`); tests install their own.
+    var launchAnnouncementSettle: LaunchAnnouncementSettle.Waiter = LaunchAnnouncementSettle.production
+    /// The launch's vault-opened line while it waits for the app to settle.
+    var heldLaunchAnnouncement: AnyCancellable?
+    /// True once this process has spoken a vault-opened line: later mounts
+    /// speak at once.
+    var hasAnnouncedAVaultOpen = false
+    /// The discard-pending prompt (owner call D-1), nil when none shows.
+    @Published var pendingHotExitDiscard: HotExitDiscardPendingPrompt?
+    /// What the discard-pending prompt's three choices do.
+    var hotExitDiscardPendingHandlers: HotExitDiscardPendingHandlers?
+    /// A quit's reply while its hot-exit settle runs (§4); a newer request
+    /// answers it false.
+    var pendingTerminationSettleReply: (@MainActor (Bool) -> Void)?
+    /// The route task a hot-exit quit, switch or close runs (test hook).
+    var hotExitRouteTask: Task<Void, Never>?
+    /// Bumped by every route that starts or supersedes a hot-exit route.
+    var hotExitRouteGeneration: UInt64 = 0
+    var hotExitCancellables: Set<AnyCancellable> = []
+    /// Bumped by every store the close prompts read for drafts that are not
+    /// tab buffers (§4's re-check): those drafts have no kept copy.
+    var hotExitDraftRevision: UInt64 = 0
+
     /// Clipboard seam for the Sidebar action dispatcher. The production value
     /// is AppKit-backed; tests inject a recorder so copy failures are observable
     /// without mutating the user's clipboard.
@@ -9068,9 +9164,11 @@ final class AppState: ObservableObject {
         commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil,
         announcer: AnnouncementPosting = AppKitAnnouncementPoster(),
         sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard(),
-        sidebarSectionDefaults: UserDefaults = .standard
+        sidebarSectionDefaults: UserDefaults = .standard,
+        hotExitHost: HotExitStoreHost? = nil
     ) {
         self.announcer = announcer
+        self.hotExitHost = hotExitHost ?? Self.sharedHotExitStoreHost
         self.sidebarPasteboard = sidebarPasteboard
         self.sidebarSectionDefaults = sidebarSectionDefaults
         // FL5-2 rule 1: Tags section collapsed state is device-local,
@@ -9283,6 +9381,7 @@ final class AppState: ObservableObject {
         // cycle.
         registerCoreCommands(into: commandRegistry, appState: self)
         wireWorkspacePersistence()
+        wireHotExitObservation()
     }
 
     /// Entry point for the "Show Command Palette…" menu command and
@@ -9971,6 +10070,7 @@ final class AppState: ObservableObject {
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: hasUnsavedChanges,
             saveError: saveError, saveConflict: currentSaveConflict,
             loadedFilePath: loadedFilePath,
@@ -9980,6 +10080,13 @@ final class AppState: ObservableObject {
         // replacing the active tab's item in place also ends the scope —
         // the pending close would otherwise target a different document.
         pendingTabCloseAfterSave = nil
+        // Plan 43 PR 29 §3: the outgoing note leaves this tab, read while its
+        // fields still hold it (Codex adversarial review, round 5).
+        if let outgoing = workspace.activeTab, case .markdown = outgoing.item,
+            !BaseExactIdentity.matches(path, loadedFilePath)
+        {
+            hotExitWriter?.tabReplacing(outgoing.id)
+        }
         cancelNoteScopedWork()
         clearActiveNoteFields()
         // Workspace model update (U1-4 mirror; tab switches took the
@@ -10105,6 +10212,7 @@ final class AppState: ObservableObject {
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
+        currentNoteBaselineIdentity = .none
         currentNoteFMSource = ""
         bodyByteOffset = 0
         bodyLineOffset = 0
@@ -10157,6 +10265,7 @@ final class AppState: ObservableObject {
             currentNoteText = parked.text
             savedBaselineText = parked.savedBaselineText
             currentNoteContentHash = parked.contentHash
+            currentNoteBaselineIdentity = parked.baselineIdentity
             currentNoteFMSource = parked.fmSource
             bodyByteOffset = parked.bodyByteOffset
             bodyLineOffset = parked.bodyLineOffset
@@ -10821,6 +10930,9 @@ final class AppState: ObservableObject {
             scanAnnouncementLastFiredAt = .distantPast
             bibliographyLoadCount = 0
             recordOpened(url: url)
+            // Plan 43 PR 29 §2: the hot-exit key and hold, before the layout
+            // restore reads and plans the kept buffers.
+            beginHotExitOpen(session: session)
             // U1-6 (#458): restore the persisted workspace layout. Tabs
             // load lazily; a missing file surfaces the existing per-tab
             // load-error state rather than being dropped.
@@ -10912,6 +11024,7 @@ final class AppState: ObservableObject {
     /// cleared so no stale rows, selections, watchers, or scans survive
     /// into the Welcome screen.
     private func tearDownVaultScopedStateForAbortedOpen() {
+        tearDownHotExit()
         scanTask?.cancel()
         scanTask = nil
         cancelRescanForVaultTransition()
@@ -11379,9 +11492,7 @@ final class AppState: ObservableObject {
     private func announceDirectVaultSwitch(to vaultRoot: URL) {
         let notice = sidebarVaultPrefsNotice
             .map { " \($0.localizedDescription)" } ?? ""
-        announcer.post(
-            .vaultOpened(
-                vaultTitle: vaultRoot.lastPathComponent, sidebarNotice: notice))
+        announceVaultOpened(vaultTitle: vaultRoot.lastPathComponent, sidebarNotice: notice)
     }
 
     /// The recent vault the user asked to switch to while the current vault
@@ -11389,7 +11500,7 @@ final class AppState: ObservableObject {
     /// close committed (`closeVault()`'s tail opens it) or the dirty-gate
     /// prompt was cancelled (the cancel resolvers clear it → no switch).
     /// `private(set)` so tests can assert the gate parked / cleared it.
-    private(set) var pendingVaultSwitchTarget: RecentVault?
+    var pendingVaultSwitchTarget: RecentVault?
     /// A clean recent-vault switch closes A before synchronously opening B.
     /// SwiftUI can coalesce that false→true transition without remounting
     /// `MainSplitView`, so the close tail marks B as state-announced just as a
@@ -11432,23 +11543,9 @@ final class AppState: ObservableObject {
         supersedePendingTabCloseForVaultTransition()
         supersedePendingTermination()
         pendingVaultSwitchTarget = entry
-        let parkedDirty = workspace.dirtyParkedDocuments()
-        let recoveryPaths = uncommittedNoteDraftPaths()
-        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
-            if hasUnsavedChanges {
-                // Single dirty document → "Save changes?" (pendingNavigation
-                // = .closeVault). On Save/Discard the resolver calls
-                // closeVault(), whose tail opens the target; on Cancel the
-                // resolver clears the target (no switch).
-                attemptCloseVault()
-            } else {
-                // Clean → close now; the tail opens the target.
-                closeVault()
-            }
-        } else {
-            // Multiple dirty tabs → Save All / Discard All / Cancel prompt.
-            pendingVaultClose = dirtyVaultClosePaths().count
-        }
+        // Plan 43 PR 29 §4: a kept switch closes without asking.
+        if beginHotExitSwitch() { return }
+        presentVaultSwitchPrompt()
     }
 
     /// Open a recent-vaults entry. If the path no longer exists on
@@ -11673,6 +11770,29 @@ final class AppState: ObservableObject {
     ///   eventual close announces from `applyPendingNavigation`.
     /// - Clean editor → closes immediately and posts the
     ///   announcement inline here.
+    /// A switch's own decision (#784's prompts): the single note's "Save
+    /// changes?", the multi-tab prompt, or a clean close whose tail opens
+    /// the target.
+    func presentVaultSwitchPrompt() {
+        let parkedDirty = workspace.dirtyParkedDocuments()
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
+            if hasUnsavedChanges {
+                // Single dirty document → "Save changes?" (pendingNavigation
+                // = .closeVault). On Save/Discard the resolver calls
+                // closeVault(), whose tail opens the target; on Cancel the
+                // resolver clears the target (no switch).
+                pendingNavigation = .closeVault
+            } else if !hotExitCloseAfterSettle(proceed: { [weak self] in self?.closeVault() }) {
+                // Clean → close now; the tail opens the target.
+                closeVault()
+            }
+        } else {
+            // Multiple dirty tabs → Save All / Discard All / Cancel prompt.
+            pendingVaultClose = dirtyVaultClosePaths().count
+        }
+    }
+
     func closeVaultFromUserAction() {
         guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
@@ -11694,9 +11814,15 @@ final class AppState: ObservableObject {
             if hasUnsavedChanges {
                 attemptCloseVault()
             } else {
-                if closeVault() {
-                    announcer.post(.vaultClosed)
+                let close: @MainActor () -> Void = { [weak self] in
+                    guard let self else { return }
+                    if self.closeVault() {
+                        self.announcer.post(.vaultClosed)
+                    }
                 }
+                // Plan 43 PR 29 §4 (O5): a clean close settles what the
+                // store still owes first.
+                if !hotExitCloseAfterSettle(proceed: close) { close() }
             }
         } else {
             pendingVaultClose = dirtyVaultClosePaths().count
@@ -11834,15 +11960,21 @@ final class AppState: ObservableObject {
                 generation: generation, session: session)
             else { return }
             self.pendingVaultClose = nil
-            if self.isTerminationPending {
-                // #784: every note is saved; the quit goes ahead.
-                self.finishPendingTermination(proceed: true)
-                return
+            let close: @MainActor () -> Void = { [weak self] in
+                guard let self else { return }
+                if self.isTerminationPending {
+                    // #784: every note is saved; the quit goes ahead.
+                    self.finishPendingTermination(proceed: true)
+                    return
+                }
+                let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
+                if self.closeVault(), !completesVaultSwitch {
+                    self.announcer.post(.vaultClosedAllSaved)
+                }
             }
-            let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
-            if self.closeVault(), !completesVaultSwitch {
-                self.announcer.post(.vaultClosedAllSaved)
-            }
+            // Plan 43 PR 29 §4 (O5): each save's retirement settles before
+            // the close.
+            if !self.hotExitCloseAfterSettle(proceed: close) { close() }
         }
         vaultCloseSaveAllTask = task
     }
@@ -11862,6 +11994,18 @@ final class AppState: ObservableObject {
             postMutationAnnouncement(reason)
             return
         }
+        // Plan 43 PR 29 §4 (O6): the store's fence before anything is
+        // reverted; a quit's Discard All too.
+        if beginHotExitDiscardAll(
+            dismiss: { pendingVaultClose = nil },
+            perform: { [weak self] in self?.performVaultCloseDiscardAll() })
+        {
+            return
+        }
+        performVaultCloseDiscardAll()
+    }
+
+    private func performVaultCloseDiscardAll() {
         if isTerminationPending {
             finishPendingTermination(proceed: true)
             return
@@ -11901,16 +12045,16 @@ final class AppState: ObservableObject {
     /// only there; called exactly once, by `finishPendingTermination`. Nil
     /// while a quit waits on the sidebar fence alone: the fence is not a
     /// prompt, so nothing supersedes it, and it always ends with true.
-    private var pendingTerminationReply: (@MainActor (Bool) -> Void)?
+    var pendingTerminationReply: (@MainActor (Bool) -> Void)?
 
     /// True from a `.terminateLater` until its reply is sent: through the
     /// prompt and the sidebar fence after it, and through a clean quit that
     /// waits on the fence alone. A second ⌘Q in that window is refused, so
     /// AppKit never waits on two replies.
-    private var isTerminationReplyOutstanding = false
+    var isTerminationReplyOutstanding = false
 
     /// Test hook: the sidebar-fence wait that ends a quit (rounds 31–32).
-    private(set) var terminationFenceTaskForTesting: Task<Void, Never>?
+    var terminationFenceTaskForTesting: Task<Void, Never>?
 
     /// True while ⌘Q waits on the Close Vault prompt (termination mode).
     var isTerminationPending: Bool { pendingTerminationReply != nil }
@@ -11928,6 +12072,8 @@ final class AppState: ObservableObject {
         reply: @escaping @MainActor (Bool) -> Void
     ) -> NSApplication.TerminateReply {
         guard !isTerminationReplyOutstanding else { return .terminateCancel }
+        // Plan 43 PR 29 §4: a kept quit closes without asking.
+        if let decision = admitHotExitTermination(reply: reply) { return decision }
         if isVaultOpen {
             switch presentTerminationPrompt() {
             case .refused:
@@ -11948,12 +12094,12 @@ final class AppState: ObservableObject {
         return .terminateLater
     }
 
-    private enum TerminationPrompt { case clean, presented, refused }
+    enum TerminationPrompt { case clean, presented, refused }
 
     /// Close Vault's front half for a quit. The quit supersedes a narrower
     /// prompt (a tab close, a file switch) and a vault switch in progress,
     /// so exactly one prompt owns the answer.
-    private func presentTerminationPrompt() -> TerminationPrompt {
+    func presentTerminationPrompt() -> TerminationPrompt {
         if let reason = authoredPropertyPublicationRecoveryReason {
             postMutationAnnouncement(reason)
             return .refused
@@ -11984,7 +12130,7 @@ final class AppState: ObservableObject {
     }
 
     /// Clears the outstanding mark as the reply goes out.
-    private func terminationAnswer(
+    func terminationAnswer(
         _ reply: @escaping @MainActor (Bool) -> Void
     ) -> @MainActor (Bool) -> Void {
         { [weak self] proceed in
@@ -11998,7 +12144,7 @@ final class AppState: ObservableObject {
     /// sidebar fence (rounds 31–32) before it replies true — dirty tabs
     /// first, then the fence; otherwise the app keeps running. A no-op when
     /// no quit is waiting.
-    private func finishPendingTermination(proceed: Bool) {
+    func finishPendingTermination(proceed: Bool) {
         guard let reply = pendingTerminationReply else { return }
         pendingTerminationReply = nil
         pendingVaultClose = nil
@@ -12011,6 +12157,10 @@ final class AppState: ObservableObject {
             return
         }
         pendingVaultSwitchTarget = nil
+        if hotExitEngaged, Self.hasPendingSidebarWorkAtTermination {
+            finishHotExitQuitAfterFence(reply)
+            return
+        }
         if let fence = Self.settleSidebarFenceThenReply(answer) {
             terminationFenceTaskForTesting = fence
         } else {
@@ -12024,7 +12174,14 @@ final class AppState: ObservableObject {
     /// already past its prompt, or a clean one waiting on the sidebar fence
     /// alone, has no prompt to take over: this is a no-op for it, and the
     /// fence's reply (true) stands, as it did before the prompt existed.
-    private func supersedePendingTermination() {
+    func supersedePendingTermination() {
+        supersedeHotExitTerminationSettle()
+        // Plan 43 PR 29: a newer request owns the close now, so a hot-exit
+        // route an older request started (a Discard All waiting on the store,
+        // for a quit or a plain Close Vault) stops deciding (Codex
+        // adversarial review, rounds 2 and 3). Every caller supersedes before
+        // it starts a route of its own.
+        hotExitRouteGeneration &+= 1
         finishPendingTermination(proceed: false)
     }
 
@@ -12102,6 +12259,9 @@ final class AppState: ObservableObject {
                 reflect: { _ in },
                 isBacklogDrain: true)
         }
+        // Plan 43 PR 29 §3: the route decided; every live episode is
+        // abandoned before the reset below can read as clean transitions.
+        tearDownHotExit()
         invalidateNoteAuthoringOwnership()
         cancelSaveOwnership()
         cancelPendingNavigationSave()
@@ -12278,6 +12438,10 @@ final class AppState: ObservableObject {
         // the about-to-be-discarded buffer, and mirrorSingleSelection would
         // close only the ACTIVE tab, leaving siblings pointing into a
         // closed vault.
+        // Plan 43 PR 29 §4: a kept close (a quit's or a switch's) drops
+        // buffers the hot-exit store holds; the writer is detached above,
+        // and the selection clear below must not gate on them.
+        hasUnsavedChanges = false
         workspace.reset()
         pendingTabClose = nil
         pendingTabCloseAfterSave = nil
@@ -12999,6 +13163,7 @@ final class AppState: ObservableObject {
             currentNoteText = parts.body
             savedBaselineText = parts.body
             currentNoteContentHash = parts.contentHash
+            currentNoteBaselineIdentity = .fromDisk(parts.fileIdentity)
             currentNoteFMSource = parts.fmSource
             bodyByteOffset = Int(parts.bodyByteOffset)
             bodyLineOffset = Int(parts.bodyLineOffset)
@@ -13020,6 +13185,7 @@ final class AppState: ObservableObject {
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
+            currentNoteBaselineIdentity = .none
             currentNoteFMSource = ""
             bodyByteOffset = 0
             bodyLineOffset = 0
@@ -14194,6 +14360,7 @@ final class AppState: ObservableObject {
             // the on-disk file changed and the cached content
             // hash needs updating to match.
             currentNoteContentHash = report.newContentHash
+            currentNoteBaselineIdentity = .fromDisk(report.fileIdentity)
             // The `toggleCurrentTask` guard (#158) blocks toggles
             // while `hasUnsavedChanges == true`, so we only reach
             // this branch with the buffer already matching disk
@@ -14732,8 +14899,14 @@ final class AppState: ObservableObject {
         }
         if BaseExactIdentity.matches(currentNoteText, newText) { return }
         currentNoteText = newText
-        hasUnsavedChanges = !BaseExactIdentity.matches(
-            newText, savedBaselineText ?? "")
+        // §5: a restored buffer whose baseline text is unknown, or whose
+        // kept baseline still guards its identity, stays dirty until a save
+        // lands or a reload replaces it: edited back to its baseline it keeps
+        // Save, whose checked save ends the guard (Codex adversarial review,
+        // round 11).
+        hasUnsavedChanges = currentNoteBaselineIdentity.textUnknown
+            || currentNoteBaselineIdentity.identityEnforced
+            || !BaseExactIdentity.matches(newText, savedBaselineText ?? "")
         // U1-2: a duplicated tab (same path in another tab) is the same
         // buffer — mirror the edit into same-path parked documents so an
         // unfocused pane never renders stale bytes. Copy-on-write assign.
@@ -14800,6 +14973,10 @@ final class AppState: ObservableObject {
             return nil
         }
         let expected = currentNoteContentHash
+        // §5: a restored baseline's identity travels to its saves until one
+        // lands.
+        let expectedIdentity = currentNoteBaselineIdentity.identityEnforced
+            ? currentNoteBaselineIdentity.fileIdentity : nil
         let structuralToken: Int?
         let structuralRefresher: StructuralBatchRefreshRunner?
         if expected == nil {
@@ -14831,6 +15008,7 @@ final class AppState: ObservableObject {
                 contents: contents,
                 fmSource: fmSource,
                 expectedHash: expected,
+                expectedFileIdentity: expectedIdentity,
                 saveGeneration: generation,
                 structuralToken: structuralToken,
                 structuralRefresher: structuralRefresher
@@ -14899,6 +15077,7 @@ final class AppState: ObservableObject {
         contents: String,
         fmSource: String,
         expectedHash: String?,
+        expectedFileIdentity: String? = nil,
         saveGeneration: UInt64,
         structuralToken: Int? = nil,
         structuralRefresher: StructuralBatchRefreshRunner? = nil,
@@ -14971,6 +15150,7 @@ final class AppState: ObservableObject {
                         fmSource: fmSource,
                         body: contents,
                         expectedContentHash: expectedHash,
+                        expectedFileIdentity: expectedHash == nil ? nil : expectedFileIdentity,
                         displayName: displayName))
             } catch let error as VaultError {
                 return .failure(error)
@@ -15057,7 +15237,8 @@ final class AppState: ObservableObject {
                 workspace.mirrorSaveResult(
                     path: path,
                     baseline: contents,
-                    contentHash: landing.newContentHash)
+                    contentHash: landing.newContentHash,
+                    baselineIdentity: .fromDisk(landing.fileIdentity))
             }
         }
         guard BaseExactIdentity.matches(loadedFilePath, path) else {
@@ -15068,6 +15249,8 @@ final class AppState: ObservableObject {
         switch outcome {
         case .success(let landing):
             currentNoteContentHash = landing.newContentHash
+            // A landed save ends a restored guard (§5).
+            currentNoteBaselineIdentity = .fromDisk(landing.fileIdentity)
             savedBaselineText = contents
             // Defensive newest-buffer check even though the visible editor is
             // read-only during Save. A queued/programmatic producer must never
@@ -15963,7 +16146,33 @@ final class AppState: ObservableObject {
         if isEditingProperty, BaseExactIdentity.matches(loadedFilePath, path) {
             return Self.propertyEditInProgressReason
         }
+        if restoredBaselineGuarded(for: path) {
+            return Self.restoredNotePropertyEditReason
+        }
         return noteAuthoringDisabledReason(for: path)
+    }
+
+    /// Plan 43 PR 29 §5 (Codex adversarial review, rounds 9 and 10): a
+    /// restored note whose baseline is guarded takes no property write until
+    /// a save or a reload resolves it. With its text unknown (a file now at
+    /// its path) it has no hash, and a write without one overwrites whatever
+    /// is there; with its identity enforced, a file replaced by the same
+    /// bytes passes the hash, and the refresh after the write would drop the
+    /// guard the next save relies on. Property writes check only the hash.
+    private func restoredBaselineGuarded(for path: String) -> Bool {
+        if BaseExactIdentity.matches(loadedFilePath, path) {
+            return currentNoteBaselineIdentity.textUnknown
+                || currentNoteBaselineIdentity.identityEnforced
+        }
+        let active = workspace.activeTab?.id
+        return workspace.model.allTabs.contains { tab in
+            guard tab.id != active, case .markdown(let tabPath) = tab.item,
+                BaseExactIdentity.matches(tabPath, path),
+                let document = workspace.document(for: tab.id)
+            else { return false }
+            return document.baselineIdentity.textUnknown
+                || document.baselineIdentity.identityEnforced
+        }
     }
 
     var activePropertyAuthoringDisabledReason: String? {
@@ -16263,6 +16472,8 @@ final class AppState: ObservableObject {
 
     static let saveInProgressReason =
         "Wait for the current save to finish."
+    static let restoredNotePropertyEditReason =
+        "Save this restored note before changing its properties."
 
     static let propertyEditInProgressReason =
         "Wait for the current property update to finish."
@@ -21553,6 +21764,7 @@ final class AppState: ObservableObject {
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
+            currentNoteBaselineIdentity = .none
             currentNoteFMSource = ""
             bodyByteOffset = 0
             bodyLineOffset = 0
@@ -21575,6 +21787,7 @@ final class AppState: ObservableObject {
             text: body,
             baseline: baseline,
             contentHash: currentNoteContentHash,
+            baselineIdentity: currentNoteBaselineIdentity,
             hasUnsavedChanges: true,
             saveError: saveError,
             saveConflict: currentSaveConflict,
@@ -21586,6 +21799,7 @@ final class AppState: ObservableObject {
             workspace.markDocumentMissing(activeID)
         }
         currentNoteContentHash = nil
+        currentNoteBaselineIdentity = .none
         loadedFilePath = path
         hasUnsavedChanges = true
     }
@@ -22002,10 +22216,16 @@ final class AppState: ObservableObject {
     /// missing-file transition cannot erase the only copy held by view-local
     /// state.
     @Published var propertiesSourceDraft = "" {
-        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+        didSet {
+            hotExitDraftRevision &+= 1
+            publishPropertyRecoveryTransitionIfNeeded()
+        }
     }
     @Published var propertiesSourceDraftPath: String? {
-        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+        didSet {
+            hotExitDraftRevision &+= 1
+            publishPropertyRecoveryTransitionIfNeeded()
+        }
     }
 
     /// Low-churn observation edge for row/source recovery ownership. The
@@ -22052,7 +22272,10 @@ final class AppState: ObservableObject {
     }
     private var parkedPropertiesSourceDrafts:
         [String: ParkedPropertiesSourceDraftRecord] = [:] {
-            didSet { publishPropertyRecoveryTransitionIfNeeded() }
+            didSet {
+                hotExitDraftRevision &+= 1
+                publishPropertyRecoveryTransitionIfNeeded()
+            }
         }
 
     private func propertiesSourceDraftKey(_ path: String) -> String {
@@ -22171,7 +22394,10 @@ final class AppState: ObservableObject {
         }
     }
     private var preservedPropertyDrafts: [String: PreservedPropertyDraftRecord] = [:] {
-        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+        didSet {
+            hotExitDraftRevision &+= 1
+            publishPropertyRecoveryTransitionIfNeeded()
+        }
     }
     private struct PropertyPublicationUncertainty {
         let path: String
@@ -22184,7 +22410,10 @@ final class AppState: ObservableObject {
     }
     private var propertyPublicationUncertainties:
         [String: PropertyPublicationUncertainty] = [:] {
-            didSet { publishPropertyRecoveryTransitionIfNeeded() }
+            didSet {
+                hotExitDraftRevision &+= 1
+                publishPropertyRecoveryTransitionIfNeeded()
+            }
         }
     /// Observable, per-row reset epochs for an explicit identity-scoped
     /// Reload. A row listens independently of `Property` equality, because an
@@ -22207,7 +22436,9 @@ final class AppState: ObservableObject {
     /// transition into the error UI. The dictionary is published so that a
     /// recovery payload captured during reconciliation remounts the error pane
     /// with selectable/copyable content immediately.
-    @Published private var missingNoteRecoveryDrafts: [String: MissingNoteRecoveryDraft] = [:]
+    @Published private var missingNoteRecoveryDrafts: [String: MissingNoteRecoveryDraft] = [:] {
+        didSet { hotExitDraftRevision &+= 1 }
+    }
 
     private func propertyDraftKey(path: String, key: String) -> String {
         BaseExactIdentity.key(
@@ -22675,7 +22906,7 @@ final class AppState: ObservableObject {
     /// Only user-authored bytes that closing could actually discard. A
     /// publication uncertainty is verification state for an already-committed
     /// write, so it must never create a Save/Discard close prompt.
-    private func uncommittedNoteDraftPaths() -> [String] {
+    func uncommittedNoteDraftPaths() -> [String] {
         var paths: [String: String] = [:]
         func include(_ path: String) {
             paths[BaseExactIdentity.registryKey(
@@ -23219,7 +23450,7 @@ final class AppState: ObservableObject {
     /// Unique note identities at risk during vault close. Duplicate tabs do not
     /// inflate the count, and registry-only recovery remains visible even when
     /// its last tab has already unmounted.
-    private func dirtyVaultClosePaths() -> [String] {
+    func dirtyVaultClosePaths() -> [String] {
         var paths: [String: String] = [:]
         func include(_ path: String) {
             paths[BaseExactIdentity.registryKey(
@@ -23311,6 +23542,12 @@ final class AppState: ObservableObject {
     }
 
     private func discardMissingNoteRecoveryDraft(path: String, announce: Bool) {
+        // Plan 43 PR 29 §3: an explicit discard of a recovery draft ends the
+        // episodes of the tabs that held it.
+        for tab in hotExitMarkdownTabs
+        where hotExitTabPath(tab).map({ BaseExactIdentity.matches($0, path) }) == true {
+            hotExitWriter?.endEpisodeByReader(tab)
+        }
         missingNoteRecoveryDrafts[missingNoteRecoveryKey(path)] = nil
         preservedPropertyDrafts = preservedPropertyDrafts.filter {
             !BaseExactIdentity.matches($0.value.path, path)
@@ -23325,6 +23562,7 @@ final class AppState: ObservableObject {
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
+            currentNoteBaselineIdentity = .none
             currentNoteFMSource = ""
             bodyByteOffset = 0
             bodyLineOffset = 0
@@ -23530,6 +23768,7 @@ final class AppState: ObservableObject {
         currentNoteText = parts.body
         savedBaselineText = parts.body
         currentNoteContentHash = parts.contentHash
+        currentNoteBaselineIdentity = .fromDisk(parts.fileIdentity)
         currentNoteFMSource = parts.fmSource
         bodyByteOffset = Int(parts.bodyByteOffset)
         bodyLineOffset = Int(parts.bodyLineOffset)
@@ -24740,7 +24979,25 @@ final class AppState: ObservableObject {
             postMutationAnnouncement(reason)
             return
         }
+        // Plan 43 PR 29 §4 (O6): the single note's Discard on a close goes
+        // through the store's fence before the buffer is reverted.
+        if case .closeVault = pending,
+            beginHotExitDiscardAll(
+                dismiss: { pendingNavigation = nil },
+                perform: { [weak self] in self?.performPendingNavigationDiscard(pending) })
+        {
+            return
+        }
+        performPendingNavigationDiscard(pending)
+    }
+
+    private func performPendingNavigationDiscard(_ pending: PendingNavigation) {
         cancelPendingNavigationSave()
+        // Plan 43 PR 29 §3: the reader discarded this tab's buffer through
+        // the gate; its episode is retired before the revert.
+        if case .selectFile = pending, let active = workspace.model.activeGroup.activeTabID {
+            hotExitWriter?.endEpisodeByReader(active)
+        }
         if let path = loadedFilePath,
             missingNoteRecoveryDraft(for: path) != nil
         {
@@ -24783,6 +25040,20 @@ final class AppState: ObservableObject {
     /// navigation.
     private func applyPendingNavigation(_ pending: PendingNavigation) {
         cancelPendingNavigationSave()
+        // Plan 43 PR 29 §4 (O5): the close settles what the store still
+        // owes first (the save's own retirement).
+        if case .closeVault = pending,
+            hotExitCloseAfterSettle(proceed: { [weak self] in
+                self?.finishPendingNavigationClose(pending)
+            })
+        {
+            pendingNavigation = nil
+            return
+        }
+        finishPendingNavigationClose(pending)
+    }
+
+    private func finishPendingNavigationClose(_ pending: PendingNavigation) {
         if case .closeVault = pending, isTerminationPending {
             // #784: the quit's prompt resolved; the quit goes ahead with the
             // vault open, as a clean quit does.
@@ -24859,7 +25130,7 @@ final class AppState: ObservableObject {
             pendingVaultClose = dirtyVaultClosePaths().count
         } else if hasUnsavedChanges {
             pendingNavigation = .closeVault
-        } else {
+        } else if !hotExitCloseAfterSettle(proceed: { [weak self] in self?.closeVault() }) {
             closeVault()
         }
     }
