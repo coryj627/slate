@@ -50,12 +50,11 @@ public sealed class ReadingSvgEmbedDecodeTests
                     startInteractionBackgroundWork: true);
                 tab.ToggleViewMode();
                 ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
-                // Longer than a decode may take here, so a slow one is
-                // waited out too (Codex on #1949).
+                // A slow decode is waited out too (Codex on #1949).
                 Assert.True(
                     PumpedDispatcher.PumpUntil(
                         () => !reading.IsLoading && reading.Document is not null,
-                        TimeSpan.FromMilliseconds(UnhurriedSvgDecodes.Milliseconds) + TimeSpan.FromSeconds(30)),
+                        UnhurriedSvgDecodes.LandingWait()),
                     "the projection never landed");
 
                 Assert.Empty(built);
