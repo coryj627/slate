@@ -165,7 +165,7 @@ public sealed partial class ShellAccessibilityTests
 
             Assert.Equal(label, ComboValue(combo));
             AssertEventuallyFocused(combo, "the theme change took focus off the combo.");
-            AssertShownWindowIsLight(window, process, before: null, expectLight);
+            AssertFirstFrameIsLight(window.Properties.NativeWindowHandle.Value, expectLight);
             AssertAxeClean(process, "settings-sheet-light");
         }
         finally
@@ -180,13 +180,14 @@ public sealed partial class ShellAccessibilityTests
         Process? process = null;
         try
         {
-            using CaptureImage before = CaptureScreenPhysicalPixels();
             process = LaunchWith(device, logs);
             if (!HasInteractiveDesktop(process, "theme-preference")) { return; }
+            // The first frame is read from the moment the window is visible, before UI
+            // Automation finds it, which can be seconds later: a shorter flash would be gone.
+            AssertFirstFrameIsLight(WaitForVisibleMainWindowHandle(process), expectLight);
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
-            AssertShownWindowIsLight(window, process, before, expectLight);
             if (thenChoose is VirtualKeyShort key)
             {
                 ChooseThemeByKeys(window, key);
@@ -234,174 +235,212 @@ public sealed partial class ShellAccessibilityTests
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
     }
 
-    /// <summary>The window's commonest colour is its background, whatever's drawn on it, judged
-    /// only on frames the screen shows as this app's (#1943). A capture is the screen under the
-    /// window's rectangle, so on a job VM it can be another window lying over ours, or a frame
-    /// that isn't ours yet; either read as a light grey and failed the dark step. So the fact
-    /// samples every 150 ms, for up to 10 seconds, and reads each sample by
-    /// <see cref="ReadThemeSample"/>: the other theme's own window background on this app's
-    /// window fails at once, whether or not it lasts and whatever was there before the launch
-    /// (Codex on #1943), which keeps DS-10's first-paint promise; any other colour is judged
-    /// once it is this app's window, steady, and not what was there before. At the deadline it
-    /// still judges a steady sample of this app's window; with none, it can't see the app and
-    /// fails as an environmental failure, naming what lay on top.</summary>
-    private static void AssertShownWindowIsLight(
-        AutomationElement window, Process process, CaptureImage? before, bool expectLight)
+    /// <summary>The theme of this app's first rendered frame, read from the window's own pixels
+    /// (#1943). The fact used to capture the screen under the window, which shows whatever lies
+    /// on top: on job VMs it read greys no Slate theme paints and failed the dark step, and a
+    /// light window over ours passed both light steps. <see cref="OwnPixels"/> asks Windows for
+    /// the window's own content, so nothing on top can stand in for it. Until the first render
+    /// that content is pure black, which no Slate theme paints (the dark window is #121212), so
+    /// the fact samples every 50 ms, skips black, and judges the first frame that isn't
+    /// (<see cref="FirstRenderedFrame"/>), whatever its colour: a launch that first paints the
+    /// other theme, or any grey or white, and corrects itself a frame later still fails, which
+    /// is DS-10's first-paint promise. A window that never renders within 10 seconds fails too,
+    /// saying so.</summary>
+    private static void AssertFirstFrameIsLight(IntPtr handle, bool expectLight)
     {
-        int otherTheme = WindowBackgroundOf(light: !expectLight);
         var seen = new List<string>();
-        int? previous = null;
-        int color = 0;
-        bool steadyAndOurs = false;
-        CaptureImage? last = null;
+        int[]? lastPixels = null;
+        Size lastSize = Size.Empty;
         DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-        try
+
+        IEnumerable<int> Samples()
         {
             while (true)
             {
-                Rectangle bounds = PhysicalBounds(window);
-                uint owner = TopLevelOwnerAt(new Point(bounds.Left + (bounds.Width / 2), bounds.Top + (bounds.Height / 2)));
-                last?.Dispose();
-                last = CapturePhysicalPixels(window);
-                color = CommonestColor(last.Bitmap, new Rectangle(Point.Empty, last.Bitmap.Size));
-                int? behind = before is null
-                    ? null
-                    : CommonestColor(before.Bitmap, bounds with { X = bounds.X - before.OriginalBounds.X, Y = bounds.Y - before.OriginalBounds.Y });
-                bool ours = owner == (uint)process.Id;
-                steadyAndOurs = ours && color == previous;
-                seen.Add($"#{color:X6}{(ours ? string.Empty : $" with pid {owner} on top")}");
-                ThemeSample reading = ReadThemeSample(color, ours, previous, behind, otherTheme);
-                if (reading == ThemeSample.OtherTheme)
+                (lastPixels, lastSize) = OwnPixels(handle);
+                int color = CommonestColor(lastPixels, lastSize);
+                seen.Add($"#{color:X6}");
+                yield return color;
+                if (DateTime.UtcNow >= deadline)
                 {
-                    Assert.Fail(
-                        $"this app's window showed #{color:X6}, the {(expectLight ? "dark" : "light")} theme's "
-                        + $"window background, wanting {(expectLight ? "light" : "dark")}. "
-                        + $"Slate is pid {process.Id}; samples 150 ms apart: {RunsOf(seen)}. "
-                        + FocusDiagnosis() + SaveThemeEvidence(before, last));
+                    yield break;
                 }
 
-                if (reading == ThemeSample.Judge || DateTime.UtcNow >= deadline)
-                {
-                    break;
-                }
-
-                if (!ours)
-                {
-                    window.SetForeground();
-                }
-
-                previous = ours ? color : null;
-                Thread.Sleep(150);
+                Thread.Sleep(50);
             }
+        }
 
-            string samples = $"Slate is pid {process.Id}; samples 150 ms apart: {RunsOf(seen)}. ";
-            if (!steadyAndOurs)
+        int? first = FirstRenderedFrame(Samples());
+        string samples = $"Samples 50 ms apart: {RunsOf(seen)}.";
+        if (first is not int color)
+        {
+            Assert.Fail(
+                $"the window never rendered a frame within 10 seconds, wanting {(expectLight ? "light" : "dark")}. "
+                + samples + SaveThemeEvidence(lastPixels, lastSize));
+            return;
+        }
+
+        double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
+        if (!(expectLight ? brightness > 180 : brightness < 80))
+        {
+            Assert.Fail(
+                $"the window's first frame is #{color:X6}, wanting {(expectLight ? "light" : "dark")}. "
+                + samples + SaveThemeEvidence(lastPixels, lastSize));
+        }
+    }
+
+    /// <summary>The launch's main window as soon as Windows shows it, polled every 5 ms.</summary>
+    private static IntPtr WaitForVisibleMainWindowHandle(Process process)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            Assert.False(process.HasExited, "Slate exited before showing its window.");
+            process.Refresh();
+            IntPtr handle = process.MainWindowHandle;
+            if (handle != IntPtr.Zero && NativePrint.IsWindowVisible(handle))
             {
-                Assert.Fail(
-                    $"the screen never steadily showed this app's window within 10 seconds, so its "
-                    + $"theme can't be judged (last #{color:X6}, wanting {(expectLight ? "light" : "dark")}). "
-                    + samples + FocusDiagnosis() + SaveThemeEvidence(before, last));
+                return handle;
             }
 
-            double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
-            if (!(expectLight ? brightness > 180 : brightness < 80))
+            Thread.Sleep(5);
+        }
+
+        throw new Xunit.Sdk.XunitException("Slate showed no window within 30 seconds.");
+    }
+
+    /// <summary>#1943: the first sample that isn't pure black, the window's own content before
+    /// its first render; null when every sample is.</summary>
+    internal static int? FirstRenderedFrame(IEnumerable<int> commonestColors)
+    {
+        foreach (int color in commonestColors)
+        {
+            if (color != 0x000000)
             {
-                Assert.Fail(
-                    $"the window's background is #{color:X6}, wanting {(expectLight ? "light" : "dark")}. "
-                    + "It was this app's window, on top and steady. "
-                    + samples + FocusDiagnosis() + SaveThemeEvidence(before, last));
+                return color;
             }
+        }
+
+        return null;
+    }
+
+    /// <summary>Codex on #1943: a launch's first rendered frame is judged though the frames
+    /// after it are right, whatever its colour.</summary>
+    [Fact]
+    public void FirstRenderedFrame_IsTheFirstThatIsNotBlack()
+    {
+        // A grey, a white or the other theme first, then the right theme: the first is judged.
+        Assert.Equal(0xC3BEC4, FirstRenderedFrame([0x000000, 0xC3BEC4, 0x121212, 0x121212]));
+        Assert.Equal(0xFFFFFF, FirstRenderedFrame([0x000000, 0x000000, 0xFFFFFF, 0x121212]));
+        Assert.Equal(0xF7F7F7, FirstRenderedFrame([0xF7F7F7, 0x121212]));
+        // Slate's dark window background isn't black.
+        Assert.Equal(0x121212, FirstRenderedFrame([0x000000, 0x121212]));
+        // Never rendered.
+        Assert.Null(FirstRenderedFrame([0x000000, 0x000000]));
+    }
+
+    /// <summary>The commonest colour of a frame, every fourth pixel each way.</summary>
+    private static int CommonestColor(int[] pixels, Size size)
+    {
+        var counts = new Dictionary<int, int>();
+        for (var y = 0; y < size.Height; y += 4)
+        {
+            for (var x = 0; x < size.Width; x += 4)
+            {
+                int rgb = pixels[(y * size.Width) + x] & 0xFFFFFF;
+                counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
+            }
+        }
+
+        return counts.Count == 0 ? 0 : counts.MaxBy(pair => pair.Value).Key;
+    }
+
+    /// <summary>The window's own content in physical pixels, as Windows renders it for
+    /// <c>PrintWindow</c> with <c>PW_RENDERFULLCONTENT</c>: what the app drew, not what the
+    /// screen shows there.</summary>
+    private static (int[] Pixels, Size Size) OwnPixels(IntPtr window)
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        IntPtr dc = IntPtr.Zero;
+        IntPtr dib = IntPtr.Zero;
+        IntPtr old = IntPtr.Zero;
+        try
+        {
+            Assert.True(NativePrint.GetWindowRect(window, out NativePrint.Rect rect), "the window has no rectangle.");
+            var size = new Size(rect.Right - rect.Left, rect.Bottom - rect.Top);
+            Assert.True(size.Width > 0 && size.Height > 0, $"the window's rectangle is {size}.");
+            var header = new NativePrint.BitmapInfoHeader
+            {
+                Size = 40,
+                Width = size.Width,
+                Height = -size.Height,
+                Planes = 1,
+                BitCount = 32,
+            };
+            dc = NativePrint.CreateCompatibleDC(IntPtr.Zero);
+            dib = NativePrint.CreateDIBSection(dc, ref header, 0, out IntPtr bits, IntPtr.Zero, 0);
+            Assert.True(dib != IntPtr.Zero, "no bitmap for the window's own pixels.");
+            old = NativePrint.SelectObject(dc, dib);
+            Assert.True(NativePrint.PrintWindow(window, dc, NativePrint.RenderFullContent), "PrintWindow failed.");
+            var pixels = new int[size.Width * size.Height];
+            System.Runtime.InteropServices.Marshal.Copy(bits, pixels, 0, pixels.Length);
+            return (pixels, size);
         }
         finally
         {
-            last?.Dispose();
+            if (old != IntPtr.Zero)
+            {
+                _ = NativePrint.SelectObject(dc, old);
+            }
+
+            if (dib != IntPtr.Zero)
+            {
+                _ = NativePrint.DeleteObject(dib);
+            }
+
+            if (dc != IntPtr.Zero)
+            {
+                _ = NativePrint.DeleteDC(dc);
+            }
+
+            SetThreadDpiAwarenessContext(previous);
         }
     }
 
-    internal enum ThemeSample
+    /// <summary>On a failure, the last frame of the window's own pixels goes to the folder the
+    /// gate uploads. Best effort: a save error never replaces the failure.</summary>
+    private static string SaveThemeEvidence(int[]? pixels, Size size)
     {
-        /// <summary>Not yet a frame to judge: someone else's window, a frame still changing, or
-        /// what was on the screen before the launch.</summary>
-        Wait,
-
-        /// <summary>This app's window, steady, and not what was there before: judge it.</summary>
-        Judge,
-
-        /// <summary>This app's window showing the other theme's own window background.</summary>
-        OtherTheme,
-    }
-
-    /// <summary>#1943: how the theme fact reads one sample. The other theme's own window
-    /// background on this app's window is that theme painted, so it fails even on a single
-    /// sample and even when the screen had that colour before the launch; only another window,
-    /// a changing frame or the earlier screen waits. Each channel may be off by 4, as a frame
-    /// still settling is (#131313 on the way to #121212).</summary>
-    internal static ThemeSample ReadThemeSample(int color, bool ours, int? previous, int? behind, int otherThemeBackground)
-    {
-        if (!ours)
+        string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (pixels is null || string.IsNullOrWhiteSpace(directory))
         {
-            return ThemeSample.Wait;
+            return string.Empty;
         }
 
-        if (Math.Abs((color >> 16 & 255) - (otherThemeBackground >> 16 & 255)) <= 4
-            && Math.Abs((color >> 8 & 255) - (otherThemeBackground >> 8 & 255)) <= 4
-            && Math.Abs((color & 255) - (otherThemeBackground & 255)) <= 4)
+        try
         {
-            return ThemeSample.OtherTheme;
+            string destination = Path.Combine(directory, "theme-first-paint");
+            Directory.CreateDirectory(destination);
+            string file = DateTime.UtcNow.ToString("HHmmssfff", System.Globalization.CultureInfo.InvariantCulture) + "-window.png";
+            using var bitmap = new Bitmap(size.Width, size.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+            System.Drawing.Imaging.BitmapData data = bitmap.LockBits(
+                new Rectangle(Point.Empty, size), System.Drawing.Imaging.ImageLockMode.WriteOnly, bitmap.PixelFormat);
+            try
+            {
+                System.Runtime.InteropServices.Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            bitmap.Save(Path.Combine(destination, file), System.Drawing.Imaging.ImageFormat.Png);
+            return $" The last frame is theme-first-paint\\{file}.";
         }
-
-        return color == previous && color != behind ? ThemeSample.Judge : ThemeSample.Wait;
-    }
-
-    /// <summary><c>Slate.WindowBackgroundColor</c> as the theme dictionary the app ships says,
-    /// read from the copy this project carries, so the fact can't drift from the app.</summary>
-    internal static int WindowBackgroundOf(bool light)
-    {
-        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", light ? "Slate.Light.xaml" : "Slate.Dark.xaml");
-        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
-            File.ReadAllText(path),
-            "x:Key=\"Slate\\.WindowBackgroundColor\">#FF([0-9A-Fa-f]{6})<");
-        Assert.True(match.Success, $"{path} has no opaque Slate.WindowBackgroundColor.");
-        return Convert.ToInt32(match.Groups[1].Value, 16);
-    }
-
-    /// <summary>Codex on #1943: a frame of this app's window in the other theme fails though the
-    /// next sample is right, and though the screen had that colour before the launch.</summary>
-    [Fact]
-    public void ThemeSample_TheOtherThemeOnSlatesWindowFailsAtOnce()
-    {
-        int light = WindowBackgroundOf(light: true);
-        int dark = WindowBackgroundOf(light: false);
-        Assert.Equal(0xF7F7F7, light);
-        Assert.Equal(0x121212, dark);
-
-        // Wanting dark: a single light frame, before any steady one.
-        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(light, ours: true, previous: null, behind: null, otherThemeBackground: light));
-        // The same, when the screen was that light before the launch.
-        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(light, ours: true, previous: light, behind: light, otherThemeBackground: light));
-        // Wanting light: a dark frame still settling.
-        Assert.Equal(ThemeSample.OtherTheme, ReadThemeSample(0x131313, ours: true, previous: null, behind: null, otherThemeBackground: dark));
-    }
-
-    /// <summary>#1943: what lies over the window, a frame still changing and the earlier screen
-    /// wait; a steady frame of this app's window is judged.</summary>
-    [Fact]
-    public void ThemeSample_WaitsForSlatesOwnSteadyFrame()
-    {
-        int light = WindowBackgroundOf(light: true);
-        int dark = WindowBackgroundOf(light: false);
-
-        // Wanting dark: another process's light window on top, even in Slate's own light.
-        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: false, previous: null, behind: null, otherThemeBackground: light));
-        Assert.Equal(ThemeSample.Wait, ReadThemeSample(light, ours: false, previous: light, behind: null, otherThemeBackground: light));
-        // A grey that is no theme's background, on Slate's window: first sample, then a change.
-        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: true, previous: null, behind: null, otherThemeBackground: light));
-        Assert.Equal(ThemeSample.Wait, ReadThemeSample(0xC3BEC4, ours: true, previous: 0xB8B6C2, behind: null, otherThemeBackground: light));
-        // Steady, but what the screen showed before the launch.
-        Assert.Equal(ThemeSample.Wait, ReadThemeSample(dark, ours: true, previous: dark, behind: dark, otherThemeBackground: light));
-        // Steady, Slate's, and new: judged (the brightness then decides).
-        Assert.Equal(ThemeSample.Judge, ReadThemeSample(dark, ours: true, previous: dark, behind: 0x2B2B2B, otherThemeBackground: light));
-        Assert.Equal(ThemeSample.Judge, ReadThemeSample(0xC3BEC4, ours: true, previous: 0xC3BEC4, behind: null, otherThemeBackground: light));
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>Repeated samples as one entry with a count, so a long wait stays readable.</summary>
@@ -424,101 +463,64 @@ public sealed partial class ShellAccessibilityTests
         return string.Join(", ", runs);
     }
 
-    private static int CommonestColor(Bitmap bitmap, Rectangle region)
+    private static class NativePrint
     {
-        region.Intersect(new Rectangle(Point.Empty, bitmap.Size));
-        var counts = new Dictionary<int, int>();
-        for (int y = region.Top; y < region.Bottom; y += 4)
+        internal const uint RenderFullContent = 2;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct Rect
         {
-            for (int x = region.Left; x < region.Right; x += 4)
-            {
-                int rgb = bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF;
-                counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
-            }
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
         }
 
-        return counts.Count == 0 ? -1 : counts.MaxBy(pair => pair.Value).Key;
-    }
-
-    /// <summary>The whole desktop in physical pixels, as <see cref="CapturePhysicalPixels"/>
-    /// takes one element; its <c>OriginalBounds</c> places it on the screen.</summary>
-    private static CaptureImage CaptureScreenPhysicalPixels()
-    {
-        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
-        try
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct BitmapInfoHeader
         {
-            return Capture.Screen();
+            public int Size;
+            public int Width;
+            public int Height;
+            public short Planes;
+            public short BitCount;
+            public int Compression;
+            public int SizeImage;
+            public int XPelsPerMeter;
+            public int YPelsPerMeter;
+            public int ClrUsed;
+            public int ClrImportant;
         }
-        finally
-        {
-            SetThreadDpiAwarenessContext(previous);
-        }
-    }
-
-    private static Rectangle PhysicalBounds(AutomationElement element)
-    {
-        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
-        try
-        {
-            return element.BoundingRectangle;
-        }
-        finally
-        {
-            SetThreadDpiAwarenessContext(previous);
-        }
-    }
-
-    /// <summary>The process whose top-level window is at a physical point on the screen.</summary>
-    private static uint TopLevelOwnerAt(Point point)
-    {
-        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
-        try
-        {
-            IntPtr root = NativeHitTest.GetAncestor(NativeHitTest.WindowFromPoint(point), NativeHitTest.RootAncestor);
-            _ = NativeForeground.GetWindowThreadProcessId(root, out uint processId);
-            return processId;
-        }
-        finally
-        {
-            SetThreadDpiAwarenessContext(previous);
-        }
-    }
-
-    /// <summary>On a failure, the screen from before the launch and the last capture go to the
-    /// folder the gate uploads, so the next failure shows what lay over the window. Best effort:
-    /// a save error never replaces the failure.</summary>
-    private static string SaveThemeEvidence(CaptureImage? before, CaptureImage? last)
-    {
-        string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            string destination = Path.Combine(directory, "theme-first-paint");
-            Directory.CreateDirectory(destination);
-            string stamp = DateTime.UtcNow.ToString("HHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-            before?.ToFile(Path.Combine(destination, $"{stamp}-screen-before-launch.png"));
-            last?.ToFile(Path.Combine(destination, $"{stamp}-window.png"));
-            return $" The captures are in theme-first-paint\\{stamp}-*.png.";
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
-        {
-            return string.Empty;
-        }
-    }
-
-    private static class NativeHitTest
-    {
-        internal const uint RootAncestor = 2;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
-        internal static extern IntPtr WindowFromPoint(Point point);
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
-        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool IsWindowVisible(IntPtr window);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr CreateCompatibleDC(IntPtr dc);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr CreateDIBSection(
+            IntPtr dc, ref BitmapInfoHeader header, uint usage, out IntPtr bits, IntPtr section, uint offset);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        internal static extern IntPtr SelectObject(IntPtr dc, IntPtr gdiObject);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool DeleteObject(IntPtr gdiObject);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool DeleteDC(IntPtr dc);
     }
 
     [Fact]
