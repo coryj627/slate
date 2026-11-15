@@ -3254,14 +3254,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private const int DecodeStateFinished = 2;
     private const int DecodeStateAbandoned = 3;
 
-    [ThreadStatic]
-    private static int? svgDecodeBudgetMillisecondsForTests;
+    private static readonly AsyncLocal<int?> svgDecodeBudgetMillisecondsForTests = new();
 
-    /// <summary>Test seam: the wait's budget, per caller thread.</summary>
+    /// <summary>Test seam: the wait's budget, for the caller and the work it
+    /// starts. It flows with the caller's execution context rather than
+    /// staying on its thread, so a test reaches a decode the reading refresh
+    /// runs on its worker (#1949), and never another test's.</summary>
     internal static int? SvgDecodeBudgetMillisecondsForTests
     {
-        get => svgDecodeBudgetMillisecondsForTests;
-        set => svgDecodeBudgetMillisecondsForTests = value;
+        get => svgDecodeBudgetMillisecondsForTests.Value;
+        set => svgDecodeBudgetMillisecondsForTests.Value = value;
     }
 
     [ThreadStatic]
