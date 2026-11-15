@@ -42,9 +42,12 @@ struct HotExitRecheck {
     let dirty: [TabID: HotExitBuffer]
     let draftRevision: UInt64
     let saving: Bool
+    /// A property write in flight has no recovery payload (Codex adversarial
+    /// review, round 8).
+    let propertyWriting: Bool
 
     func unchanged(since earlier: HotExitRecheck) -> Bool {
-        guard !saving, draftRevision == earlier.draftRevision,
+        guard !saving, !propertyWriting, draftRevision == earlier.draftRevision,
             dirty.count == earlier.dirty.count
         else { return false }
         return dirty.allSatisfy { id, buffer in
@@ -168,7 +171,19 @@ extension AppState {
         for id in hotExitMarkdownTabs {
             if let buffer = hotExitBuffer(for: id), buffer.dirty { dirty[id] = buffer }
         }
-        return HotExitRecheck(dirty: dirty, draftRevision: hotExitDraftRevision, saving: isSaving)
+        return HotExitRecheck(
+            dirty: dirty, draftRevision: hotExitDraftRevision, saving: isSaving,
+            propertyWriting: isEditingProperty)
+    }
+
+    /// Waits, at most `budget`, for a property write in flight to finish
+    /// (Codex adversarial review, round 8). True when none runs.
+    func hotExitAwaitPropertyWrite(budget: TimeInterval = 4) async -> Bool {
+        let deadline = Date().addingTimeInterval(budget)
+        while isEditingProperty, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return !isEditingProperty
     }
 
     // MARK: - The open (§2)
@@ -548,6 +563,20 @@ extension AppState {
             guard hotExitRouteGeneration == generation, pendingTerminationSettleReply != nil else {
                 return
             }
+            // A property write started during the settle has no recovery
+            // payload: the quit waits for it, then settles and re-checks
+            // again, or is refused if it does not finish (Codex adversarial
+            // review, round 8).
+            if isEditingProperty {
+                let finished = await hotExitAwaitPropertyWrite()
+                guard hotExitRouteGeneration == generation, pendingTerminationSettleReply != nil
+                else { return }
+                if finished { continue }
+                pendingTerminationSettleReply = nil
+                postMutationAnnouncement(Self.propertyEditInProgressReason)
+                terminationAnswer(reply)(false)
+                return
+            }
             let after = hotExitRecheck()
             let unchanged = after.unchanged(since: before)
             let draftsPending = draftsBefore || !uncommittedNoteDraftPaths().isEmpty
@@ -621,6 +650,11 @@ extension AppState {
             await Self.settleSidebarWriterChainsForTermination()
             guard let self else {
                 reply(true)
+                return
+            }
+            if self.isEditingProperty, !(await self.hotExitAwaitPropertyWrite()) {
+                self.postMutationAnnouncement(Self.propertyEditInProgressReason)
+                self.terminationAnswer(reply)(false)
                 return
             }
             if self.hotExitRecheck().unchanged(since: before),

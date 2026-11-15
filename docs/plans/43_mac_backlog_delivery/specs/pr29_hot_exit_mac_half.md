@@ -909,6 +909,13 @@ matrix `--check`; the VoiceOver pass above.
   (`HotExitStoreHost.claimNow`), so a retirement issued in the same turn
   runs after it and no orphan claim lands
   (`testAnEpisodeEndedBeforeItsClaimRunsLeavesTheNextEditKept`).
+- **Codex adversarial review of 29.2, round 8 (2026-11-14; #1942 at
+  a0bc49cf).** One finding, fixed with a fact shown red first: a property
+  write started while a quit settles has no recovery payload, so the quit
+  waits for it (at most 4 s) and settles and re-checks again, or is
+  refused with the property-edit reason if it does not finish; the
+  re-check records it as it records a save
+  (`testAQuitNeverAnswersYesWhileAPropertyWriteRuns`).
 
 ## Delivery record
 

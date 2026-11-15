@@ -707,6 +707,75 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\nagain.\n"])
     }
 
+    /// Holds an async step (a property write's publish) until released.
+    actor AsyncHold {
+        private var entered = false
+        private var released = false
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func suspend() async {
+            guard !released else { return }
+            entered = true
+            for waiter in entranceWaiters { waiter.resume() }
+            entranceWaiters = []
+            await withCheckedContinuation { releaseWaiter = $0 }
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
+    /// Codex adversarial review, round 8: a property write started while the
+    /// quit settles has no recovery payload, so the quit never answers yes
+    /// while it runs.
+    func testAQuitNeverAnswersYesWhileAPropertyWriteRuns() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        try "---\ntitle: Props\n---\n# props\n".write(
+            to: vault.appendingPathComponent("props.md"), atomically: true, encoding: .utf8)
+        await open(state, vault)
+        await select(state, "two.md")
+        state.updateEditorText("# two\n\ndirty and parked.\n")
+        state.newTab()
+        await select(state, "props.md")
+        await settle(state)
+
+        let gates = CallGates()
+        host.beforeCallForTests = { gates.hook($0) }
+        let epoch = gates.arm(.epoch)
+        defer { epoch.open() }
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater)
+        let epochEntered = await entered(epoch)
+        XCTAssertTrue(epochEntered, "the quit's settle reads the epoch")
+
+        let publish = AsyncHold()
+        state.basesPostWritePublishGate = { await publish.suspend() }
+        let edit = try XCTUnwrap(state.deleteProperty(path: "props.md", key: "title"))
+        await publish.waitUntilEntered()
+        XCTAssertTrue(state.isEditingProperty)
+        epoch.open()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(replies.values, [], "no yes while the property write runs")
+
+        await publish.release()
+        await edit.value
+        state.basesPostWritePublishGate = nil
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(replies.values, [true], "the quit goes ahead once the write is done")
+        XCTAssertFalse(try onDisk(vault, "props.md").contains("title:"))
+    }
+
     // MARK: - Discards (§3, §4)
 
     func testATabsOwnDiscardRetiresItsEntry() async throws {
