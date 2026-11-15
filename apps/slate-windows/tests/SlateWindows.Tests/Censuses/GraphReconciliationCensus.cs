@@ -22,6 +22,7 @@ namespace SlateWindows.Tests.Censuses;
 /// decisions and issue list carry the counts F9 pins.
 /// </summary>
 [Trait("census", "graph-reconciliation")]
+[Trait("tier", "census")]
 public sealed class GraphReconciliationCensus
 {
     private const string SectionHeading = "## Issue reconciliation (#746)";

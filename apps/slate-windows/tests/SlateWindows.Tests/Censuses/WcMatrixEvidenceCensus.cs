@@ -13,6 +13,7 @@ namespace SlateWindows.Tests.Censuses;
 /// canvas/graph facts retain their peer and behavioral assertions; these shared
 /// checks cover every wave, including their rows.</summary>
 [Trait("census", "w-c-matrix")]
+[Trait("tier", "census")]
 public sealed class WcMatrixEvidenceCensus
 {
     private static readonly string PlanRoot = Path.Combine(SourceText.RepoRoot(), "docs", "plans", "18_windows_port");

@@ -62,6 +62,10 @@ tests) disagree, the tests and the code win.
   verb changes `docs/plans/18_windows_port/parity_matrix.md`. Rerun
   `python3 scripts/generate-parity-matrix.py`; `windows.yml` fails on drift
   (`--check`).
+- A Windows test that reads a census-only path (a Mac source, or a plan or
+  help document in `census-paths`) carries `[Trait("tier", "census")]` on its
+  class, and so does every test that calls a helper that reads one.
+  `scripts/check_windows_census_trait.py` fails the lane otherwise.
 - GitHub closes an issue when any form of close, fix or resolve stands before
   its number, even mid-sentence. A PR that only references an issue keeps those
   words away from the number. Check `gh pr view N --json closingIssuesReferences`
@@ -82,9 +86,13 @@ tests) disagree, the tests and the code win.
 - Swift tests reuse the Windows test name where a Windows twin exists.
 - Run only the lanes the change touches, and batch follow-up pushes. Every
   lane reports on every PR but runs its jobs only for its own paths (its
-  other jobs report as skipped, which counts as passed); any change under
-  `apps/slate-mac/` or `crates/`, or to a plan document its censuses read,
-  also starts the Windows lane, and lane runs cost money.
+  other jobs report as skipped, which counts as passed). A change under
+  `crates/` starts the whole Windows lane. A PR that touches only
+  `apps/slate-mac/` and the plan and help documents the Windows censuses
+  read (`census-paths` in `windows.yml`) runs its census tier: the app
+  build and the tests tagged `[Trait("tier", "census")]`, every other
+  Windows job skipped. Anything else on the lane's list, and every push to
+  `main`, runs it in full. Lane runs cost money.
 - Report verification as the command you ran and its result, not as a claim.
 
 ## Dependencies

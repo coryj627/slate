@@ -29,6 +29,15 @@
 #     Namespace ships interactive Windows sessions (they ship RDP, so
 #     a desktop plainly can exist).
 #
+# Census tier (#1945): a pull request whose every lane path is in the
+# changes job's census-paths (the Mac sources and the plan and help
+# documents the censuses read) runs only the app job, which builds and runs
+# the tests tagged [Trait("tier", "census")], and the docs census job; the
+# Rust tests, the volume facts, the model shards and the shell gate report
+# skipped. Every other pull request, and every push to main, runs in full.
+# scripts/check_windows_census_trait.py fails the lane when a test reads a
+# census-only path without the tag.
+#
 # The historical check name "build + test (windows x64)" belongs to the
 # `gate` aggregate job, which fails unless ALL FOUR lanes succeed — a
 # branch rule (or a human) requiring the historical name still gates on
@@ -194,6 +203,31 @@ jobs:
       contents: read
     with:
       workflow: .github/workflows/windows.yml
+      # #1945: the census tier. A pull request whose every lane path is
+      # below runs only the app job's build and the tests tagged
+      # [Trait("tier", "census")], the checks that read these files; the
+      # model shards, the Rust tests, the volume facts and the shell gate
+      # report skipped. Each pattern is one of on.push.paths, verbatim;
+      # anything else the lane lists runs it in full, and so does a push
+      # to main. scripts/check_windows_census_trait.py fails the lane when
+      # a Windows test reads one of these paths without the trait.
+      census-paths: |
+        apps/slate-mac/**
+        docs/plans/22_property_panel_contracts.md
+        docs/plans/23_citation_surfaces_contracts.md
+        docs/plans/25_bases_grid_contracts.md
+        docs/plans/29_search_overlay_contracts.md
+        docs/plans/34_canvas_contracts.md
+        docs/plans/35_graph_contracts.md
+        docs/plans/37_editor_peer_contracts.md
+        docs/plans/38_notification_dispatcher_contracts.md
+        docs/plans/39_at_navigation_contracts.md
+        docs/plans/40_nvda_matrix_remediation_contracts.md
+        docs/plans/18_windows_port/**
+        docs/plans/15_files_sidebar/specs/fl4_spec.md
+        docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md
+        docs/help/**
+        BENCHMARKS.md
 
   # The rule lives in ci/windows-runner/route/route.py (spec §3–§5): it
   # reads the state the host publishes (vars) and decides a pool per lane.
@@ -253,7 +287,7 @@ jobs:
   rust-tests:
     name: rust tests (windows x64)
     needs: [changes, route]
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
@@ -437,7 +471,7 @@ jobs:
   rust-real-trash:
     name: real recycle bin facts (windows x64)
     needs: [changes]
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}
     runs-on: ${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-real-trash', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 45
     steps:
@@ -550,7 +584,7 @@ jobs:
   rust-weak-volumes:
     name: weak volume facts (windows x64)
     needs: [changes]
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}
     runs-on: ${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-weak-volumes', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 45
     steps:
@@ -895,6 +929,8 @@ jobs:
       # dumps of this same process have shipped in this folder since #1641.
       # TestHostCrashDumpCensus pins these settings and fails if the job ever
       # gains a secret, a token or an id-token grant.
+      # #1945: the census tier runs only the tests tagged tier=census, the
+      # ones that read the census-only paths; the full lane runs them all.
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
@@ -902,14 +938,21 @@ jobs:
           DOTNET_DbgMiniDumpType: '4'
           DOTNET_DbgMiniDumpName: '${{ runner.temp }}\slate-app-results\crash-%e-%p.dmp'
           DOTNET_CreateDumpDiagnostics: '1'
+          TEST_FILTER: ${{ needs.changes.outputs.scope == 'census' && 'tier=census&FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark' || 'FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark' }}
         run: >-
           pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 --
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
           --configuration Release --no-build
-          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark"
+          --filter "$env:TEST_FILTER"
           --logger "trx;LogFileName=slate-windows-app.trx"
           --results-directory "${{ runner.temp }}\slate-app-results"
           --blame-hang-timeout 10m --blame-hang-dump-type mini
+
+      # #1945: a filter that matches nothing passes, so the results must show
+      # that every type scripts/check_windows_census_trait.py requires the
+      # trait on ran. In both scopes, so a full run exercises the check too.
+      - name: Every test type that reads a census-only path ran
+        run: python -I scripts/check_windows_census_trait.py --trx '${{ runner.temp }}\slate-app-results\slate-windows-app.trx'
 
       # #1331: the device-state guard both test steps run under, and the
       # field-pass launcher, are tested where they run: on Windows, through
@@ -980,7 +1023,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # A census-tier pull request changes no Windows source (#1945).
       - name: Format gate (dotnet format --verify-no-changes)
+        if: ${{ needs.changes.outputs.scope != 'census' }}
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
 
       - name: Cache footprint report
@@ -1032,7 +1077,7 @@ jobs:
   windows-model-shard:
     name: app model (windows x64, shard ${{ matrix.shard }})
     needs: [changes, route]
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))) && 'slate-win-model' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '') }}
     strategy:
       fail-fast: false
@@ -1207,7 +1252,7 @@ jobs:
   windows-model:
     name: app model (windows x64)
     needs: [changes, windows-model-shard]
-    if: ${{ always() && needs.changes.outputs.run != 'false' }}
+    if: ${{ always() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1228,9 +1273,6 @@ jobs:
 
       # W6-2 PR F (F7, IPJ-2-1): the committed parity matrix is the
       # generator's output for this tree — drift fails the lane.
-      - name: Verify the parity matrix is the generator's output
-        run: python3 scripts/generate-parity-matrix.py --check
-
       - name: Download every model shard report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -1249,7 +1291,7 @@ jobs:
   flaui:
     name: shell accessibility gate (windows x64)
     needs: [changes, windows]
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.windows.result == 'success' }}
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' && needs.windows.result == 'success' }}
     runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}
     # Outside home-only mode the gate runs on windows-latest, where the
     # journeys took 12-18 minutes by October 2026 (WB-22's two find journeys
@@ -1345,9 +1387,22 @@ jobs:
       - name: Every docs path the lane reads starts the lane
         run: python3 scripts/check_windows_docs_trigger.py
 
+      # #1945: the census tier runs only the tests tagged tier=census, so a
+      # test that reads a census-only path without the tag fails here.
+      - name: Test the census trait check
+        run: python3 -m unittest discover -s scripts/tests -p test_windows_census_trait.py
+
+      - name: Every Windows test that reads a census-only path carries the census trait
+        run: python3 scripts/check_windows_census_trait.py
+
+      # Here, not in the model job, so the census tier checks it too: the
+      # generator reads the Mac sources and the help catalog.
+      - name: Verify the parity matrix is the generator's output
+        run: python3 scripts/generate-parity-matrix.py --check
+
   gate:
     name: build + test (windows x64)
-    needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui]
+    needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui, docs-trigger]
     # Skipped, and so passed, only when changes decided that the pull request
     # touches none of the lane's paths (#1565).
     if: ${{ always() && needs.changes.outputs.run != 'false' }}
@@ -1357,7 +1412,12 @@ jobs:
       - name: Verify all windows lanes succeeded
         # The routing job's outputs are written by the pull request's own
         # route.py: they reach the script as data, never as expressions.
+        # #1945: in the census tier the app job and the docs census must
+        # succeed and every other lane reports skipped; in the full lane (an
+        # empty scope, from a failed decision, is the full lane) every lane
+        # must succeed.
         env:
+          SCOPE: ${{ needs.changes.outputs.scope }}
           ROUTE_RESULT: ${{ needs.route.result }}
           ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}
           RUST_POOL: ${{ needs.route.outputs.rust-pool }}
@@ -1365,7 +1425,19 @@ jobs:
           MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}
           MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}
         run: |
-          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.rust-real-trash.result }}" != "success" ] || [ "${{ needs.rust-weak-volumes.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
+          ok=true
+          for result in ${{ needs.windows.result }} ${{ needs.docs-trigger.result }}; do
+            [ "$result" = success ] || ok=false
+          done
+          for result in ${{ needs.rust-tests.result }} ${{ needs.rust-real-trash.result }} ${{ needs.rust-weak-volumes.result }} ${{ needs.windows-model.result }} ${{ needs.flaui.result }}; do
+            if [ "$SCOPE" = census ]; then
+              [ "$result" = skipped ] || [ "$result" = success ] || ok=false
+            else
+              [ "$result" = success ] || ok=false
+            fi
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::scope=$SCOPE rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} docs=${{ needs.docs-trigger.result }} route=$ROUTE_RESULT router-attempt='$ROUTER_ATTEMPT' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"
             exit 1
           fi
+          echo "scope=${SCOPE:-full}: every lane this scope runs succeeded."

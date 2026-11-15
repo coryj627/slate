@@ -11,6 +11,7 @@ namespace SlateWindows.Tests.Censuses;
 /// marked PASS with a number and a budget, and the end-to-end row's five
 /// measures — so the evidence the owner reads cannot lose a row or a
 /// verdict without the lane noticing (the lane now runs on the file).</summary>
+[Trait("tier", "census")]
 public sealed class BenchmarksRollupCensus
 {
     private const string Heading = "## Milestone W6-2 — graph through the C# binding — 2026-09-15 (#746)";

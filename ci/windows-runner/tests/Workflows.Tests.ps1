@@ -6,8 +6,8 @@
 # its script's behaviour is BranchCleanup.Tests.ps1), over the PR gate that
 # main's ruleset requires, over the pause on Dependabot version updates, over
 # a11y-check.yml's gate on results whose download failed (#1575), and over the
-# .NET SDK pin every setup-dotnet step reads (#1568), and over the Windows
-# lane's clippy step (#1570).
+# .NET SDK pin every setup-dotnet step reads (#1568), over the Windows
+# lane's clippy step (#1570), and over the Windows lane's census tier (#1945).
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -84,17 +84,19 @@ Describe 'windows.yml routing through the router' {
         }
     }
     It 'every routed lane depends on changes and route, runs when route was skipped or failed, and uses the router only in its own attempt with today''s vendor string as the fallback, verbatim' {
+        # The app job runs in both scopes; the Rust tests and the model shards only in the full lane (#1945).
         $lanePredicate = "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' }}"
-        foreach ($pair in @(@('rust-tests', 'rust', 'rust'), @('windows', 'app', 'app'))) {
+        $fullPredicate = "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}"
+        foreach ($pair in @(@('rust-tests', 'rust', 'rust', $fullPredicate), @('windows', 'app', 'app', $lanePredicate))) {
             $block = Get-JobBlock $windows $pair[0]
             $block | Should -Match (Get-JobLine 'needs: [changes, route]')
-            $block | Should -Match (Get-JobLine $lanePredicate) -Because "lane $($pair[0]) must run when route was skipped or failed"
+            $block | Should -Match (Get-JobLine $pair[3]) -Because "lane $($pair[0]) must run when route was skipped or failed"
             $block.Contains("runs-on: `${{ $(Get-Predicate "$($pair[1])-pool") && 'slate-win-$($pair[1])' || $($vendor[$pair[2]]) }}") | Should -BeTrue -Because "lane $($pair[0])"
             $block | Should -Match (Get-CacheGate (Get-Predicate "$($pair[1])-pool")) -Because "the cache gate of $($pair[0])"
         }
         $shards = Get-JobBlock $windows 'windows-model-shard'
         $shards | Should -Match (Get-JobLine 'needs: [changes, route]')
-        $shards | Should -Match (Get-JobLine $lanePredicate) -Because 'the model shards must run when route was skipped or failed'
+        $shards | Should -Match (Get-JobLine $fullPredicate) -Because 'the model shards must run when route was skipped or failed'
         $selector = "(needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home')))"
         $shards.Contains("runs-on: `${{ $selector && 'slate-win-model' || $($vendor.model) }}") | Should -BeTrue
         $shards | Should -Match (Get-CacheGate $selector) -Because 'the cache gate of windows-model-shard'
@@ -107,19 +109,19 @@ Describe 'windows.yml routing through the router' {
         # Dependabot started or re-ran (plan 42 §3.7).
         $flaui | Should -Match (Get-JobLine "runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}")
         $flaui | Should -Match (Get-JobLine 'needs: [changes, windows]')
-        $flaui | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.windows.result == 'success' }}")
+        $flaui | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' && needs.windows.result == 'success' }}")
     }
     It 'the gate waits on route too, runs whatever route did, and names the pools, the routing job''s result and the router''s attempt, quoted, when it fails' {
         $gate = Get-JobBlock $windows 'gate'
-        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui]')
+        $gate | Should -Match (Get-JobLine 'needs: [changes, route, rust-tests, rust-real-trash, rust-weak-volumes, windows, windows-model, flaui, docs-trigger]')
         # Without always() the gate is skipped with a skipped route (every run outside home and home-only), and a
         # skipped required check counts as passing. It is skipped, and so passes, only when changes decided that
         # the pull request touches none of the lane's paths (#1565); a failed decision runs it with the lanes.
         $gate | Should -Match (Get-JobLine "if: `${{ always() && needs.changes.outputs.run != 'false' }}")
         # GitHub reports a continue-on-error job's result as it sees fit; an empty router-attempt='' is the sign the
         # router produced nothing and the lanes took the vendor.
-        $gate.Contains('echo "::error::rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
-        foreach ($entry in 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
+        $gate.Contains('echo "::error::scope=$SCOPE rust-tests=${{ needs.rust-tests.result }} real-trash=${{ needs.rust-real-trash.result }} weak-volumes=${{ needs.rust-weak-volumes.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }} docs=${{ needs.docs-trigger.result }} route=$ROUTE_RESULT router-attempt=''$ROUTER_ATTEMPT'' attempt=${{ github.run_attempt }} pools: rust=$RUST_POOL app=$APP_POOL model-0=$MODEL_0_POOL model-1=$MODEL_1_POOL"') | Should -BeTrue
+        foreach ($entry in 'SCOPE: ${{ needs.changes.outputs.scope }}', 'ROUTE_RESULT: ${{ needs.route.result }}', 'ROUTER_ATTEMPT: ${{ needs.route.outputs.attempt }}', 'RUST_POOL: ${{ needs.route.outputs.rust-pool }}',
             'APP_POOL: ${{ needs.route.outputs.app-pool }}', 'MODEL_0_POOL: ${{ needs.route.outputs.model-0-pool }}', 'MODEL_1_POOL: ${{ needs.route.outputs.model-1-pool }}') {
             $gate | Should -Match ('(?m)^          ' + [regex]::Escape($entry) + '[ \t]*\r?$') -Because "the gate reads $entry through its step's environment"
         }
@@ -128,7 +130,7 @@ Describe 'windows.yml routing through the router' {
         $job = Get-JobBlock $windows 'rust-real-trash'
         $job | Should -Not -BeNullOrEmpty
         $job | Should -Match (Get-JobLine 'needs: [changes]') -Because 'it is never routed: the home pool cannot be assumed to attach a VHD'
-        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' }}")
+        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}")
         $job | Should -Match (Get-JobLine "runs-on: `${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-real-trash', github.ref != 'refs/heads/main' && '-pr' || '') }}") -Because 'a cache of its own, never rust-tests'' volume'
         $job | Should -Not -Match 'needs\.route' -Because 'WD14 as amended runs it on the serving pool in every mode'
         foreach ($text in 'create vdisk file=', 'attach vdisk', 'format fs=ntfs quick label=SlateTrashProbe', 'SLATE_TRASH_PROBE_VOLUME=',
@@ -149,7 +151,7 @@ Describe 'windows.yml routing through the router' {
         $job = Get-JobBlock $windows 'rust-weak-volumes'
         $job | Should -Not -BeNullOrEmpty
         $job | Should -Match (Get-JobLine 'needs: [changes]') -Because 'it is never routed: the home pool cannot be assumed to attach a VHD'
-        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' }}")
+        $job | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.scope != 'census' }}")
         $job | Should -Match (Get-JobLine "runs-on: `${{ format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-weak-volumes', github.ref != 'refs/heads/main' && '-pr' || '') }}") -Because 'a cache of its own'
         $job | Should -Not -Match 'needs\.route'
         foreach ($text in 'format fs=fat32 quick', 'format fs=exfat quick', 'format fs=ntfs quick label=SlateNoLetter', 'remove all noerr',
@@ -177,7 +179,7 @@ Describe 'windows.yml routing through the router' {
         # Each run: with its block, which runs while the following lines are indented deeper than the key.
         $runs = @([regex]::Matches($windows, '(?m)^(?<indent>[ ]+)run:[^\n]*(?:\n(?:\k<indent>[ ]+\S[^\n]*|[ \t]*(?=\n)))*') | ForEach-Object { $_.Value })
         @($runs | Where-Object { $_.Contains('router-attempt=$env:ROUTER_ATTEMPT') }).Count | Should -Be 3 -Because 'the three Record the runner scripts are among the blocks'
-        @($runs | Where-Object { $_.Contains('echo "::error::rust-tests=') }).Count | Should -Be 1 -Because 'the gate''s multi-line script is among the blocks'
+        @($runs | Where-Object { $_.Contains('echo "::error::scope=$SCOPE rust-tests=') }).Count | Should -Be 1 -Because 'the gate''s multi-line script is among the blocks'
         foreach ($run in $runs) {
             # needs.route (any case, dotted or indexed) anywhere inside one ${{ }} expression, format() arguments included.
             $run | Should -Not -Match '(?i)\$\{\{(?:(?!\}\}).)*needs\s*(?:\.\s*route\b|\[\s*''route''\s*\])' -Because 'a router output in a script runs as shell; pass it through env:'
@@ -698,12 +700,15 @@ Describe 'lane change detection' {
         $decider | Should -Not -Match '(?m)^  (pull_request|pull_request_target|push|workflow_dispatch|schedule):'
         $decider | Should -Match (Get-Lines @('permissions: {}'))
         $decider | Should -Match (Get-Lines @('        value: ${{ jobs.match.outputs.run }}'))
+        $decider | Should -Match (Get-Lines @('        value: ${{ jobs.match.outputs.scope }}'))
+        $decider | Should -Match (Get-Lines @('      census-paths:', '        description: The lane''s census-only paths, a sub-list of its on.push.paths, one a line (#1945).',
+                '        type: string', '        required: false', "        default: ''"))
         $decider | Should -Not -Match 'secrets\.'
         (Get-JobIds $decider) -join ', ' | Should -BeExactly 'match'
         $match = Get-JobBlock $decider 'match'
         $match | Should -Match (Get-Lines @('    runs-on: ubuntu-latest'))
         $match | Should -Match (Get-Lines @('    permissions:', '      contents: read'))
-        $match | Should -Match (Get-Lines @('    outputs:', '      run: ${{ steps.match.outputs.run }}'))
+        $match | Should -Match (Get-Lines @('    outputs:', '      run: ${{ steps.match.outputs.run }}', '      scope: ${{ steps.match.outputs.scope }}'))
         $pin = [regex]::Match($lane, 'uses: actions/checkout@[0-9a-f]{40}  # v\d+(?:\.\d+)*').Value
         $pin | Should -Not -BeNullOrEmpty
         $steps = Get-Steps $match
@@ -712,20 +717,25 @@ Describe 'lane change detection' {
         $steps[0] | Should -Match (Get-Lines @("        if: github.event_name == 'pull_request'", "        $pin", '        with:', '          fetch-depth: 2',
                 '          filter: blob:none', '          sparse-checkout: |', '            /scripts/lane_changes.py', '            /.github/workflows/',
                 '          sparse-checkout-cone-mode: false', '          persist-credentials: false'))
-        $steps[1] | Should -Match (Get-Lines @('        id: match', '        env:', '          EVENT: ${{ github.event_name }}', '          WORKFLOW: ${{ inputs.workflow }}', '        run: |'))
-        # Outside a pull request the trigger's own path filter chose the run.
-        $steps[1] | Should -Match (Get-Lines @('          if [ "$EVENT" != pull_request ]; then'))
-        $steps[1] | Should -Match (Get-Lines @('            echo "run=true" >> "$GITHUB_OUTPUT"', '            exit 0', '          fi'))
+        $steps[1] | Should -Match (Get-Lines @('        id: match', '        env:', '          EVENT: ${{ github.event_name }}', '          WORKFLOW: ${{ inputs.workflow }}',
+                '          CENSUS_PATHS: ${{ inputs.census-paths }}', '        run: |'))
+        # Outside a pull request the trigger's own path filter chose the run, and it runs in full: a push to main
+        # never takes the census tier (#1945).
+        $steps[1] | Should -Match (Get-Lines @('          if [ "$EVENT" != pull_request ]; then',
+                '            echo "A $EVENT run: the trigger''s own path filter chose it, so the lane runs in full."',
+                '            echo "scope=full" >> "$GITHUB_OUTPUT"', '            echo "run=true" >> "$GITHUB_OUTPUT"', '            exit 0', '          fi'))
         # A pull request that changes the decision runs every lane, so a decision that wrongly answers false cannot
         # skip the tests that would catch it; a diff that fails answers true, with a warning.
         $steps[1] | Should -Match (Get-Lines @(
                 '          if ! decider="$(git diff --name-only --no-renames HEAD^1 HEAD -- scripts/lane_changes.py .github/workflows/lane-changes.yml)"; then',
-                '            echo "::warning::cannot diff the merge commit with its base parent, so the lane runs."',
+                '            echo "::warning::cannot diff the merge commit with its base parent, so the lane runs in full."',
+                '            echo "scope=full" >> "$GITHUB_OUTPUT"',
                 '            echo "run=true" >> "$GITHUB_OUTPUT"',
                 '            exit 0',
                 '          fi',
                 '          if [ -n "$decider" ]; then',
-                '            echo "This pull request changes the lane decision itself, so the lane runs: $decider"',
+                '            echo "This pull request changes the lane decision itself, so the lane runs in full: $decider"',
+                '            echo "scope=full" >> "$GITHUB_OUTPUT"',
                 '            echo "run=true" >> "$GITHUB_OUTPUT"',
                 '            exit 0',
                 '          fi',
@@ -825,6 +835,90 @@ Describe 'lane change detection' {
                 $code | Should -Be $case[0] -Because "route=$($case[1]) xctest=$($case[2]) sdk=$($case[3]) bundle=$($case[4]) fork=$($case[5])"
             }
         }
+    }
+}
+
+Describe 'windows.yml census tier' {
+    # #1945: a pull request whose every lane path is census-only (the Mac sources and the plan and help documents the
+    # censuses read) runs the app job's build and the tests tagged [Trait("tier", "census")], and the docs census; the
+    # Rust tests, the volume facts, the model shards and the shell gate report skipped. Anything else, a failed decision
+    # (an empty scope) and every push to main (lane change detection, above) run the lane in full.
+    BeforeAll {
+        $onPush = [regex]::Match($windows, '(?ms)^  push:\r?\n.*?^    paths:\r?\n(?<list>(?:      [^\n]*\n)+)').Groups['list'].Value
+        $script:lanePaths = @([regex]::Matches($onPush, "(?m)^      - '([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+        $block = [regex]::Match((Get-JobBlock $windows 'changes'), '(?m)^      census-paths: \|\r?\n(?<list>(?:        [^\n]*\n)+)').Groups['list'].Value
+        $script:census = @($block -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+        function Get-If([string]$Job) { [regex]::Match((Get-JobBlock $windows $Job), '(?m)^    if: (.*?)[ \t]*\r?$').Groups[1].Value }
+        $script:appSteps = Get-Steps (Get-JobBlock $windows 'windows')
+    }
+    It 'the changes job hands lane-changes.yml a census list, each pattern one of on.push.paths' {
+        $lanePaths.Count | Should -BeGreaterThan 10
+        $census.Count | Should -BeGreaterThan 0
+        foreach ($pattern in $census) { $lanePaths | Should -Contain $pattern -Because "census path $pattern must be one of the lane's paths" }
+        $census | Should -Contain 'apps/slate-mac/**'
+    }
+    It 'no path the full lane needs is census-only' {
+        # tests/fixtures/** stays full until the owner decides (#1945): slate-core's corpus test reads it too.
+        foreach ($full in 'apps/slate-windows/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'global.json',
+            'design/windows/fonts/**', 'design/windows/assets/logo/**', 'design/windows/tokens/**', '.github/workflows/windows.yml',
+            'ci/windows-runner/route/**', 'scripts/verify_windows_model_shards.py', 'scripts/tests/test_windows_model_shards.py', 'scripts/**',
+            'tests/fixtures/**') {
+            $lanePaths | Should -Contain $full -Because "the lane lists $full"
+            $census | Should -Not -Contain $full -Because "$full runs the full lane"
+        }
+    }
+    It 'skips the full-tier jobs in the census tier, and runs the app job, the docs census, the router and the gate in both' {
+        foreach ($job in 'rust-tests', 'rust-real-trash', 'rust-weak-volumes', 'windows-model-shard', 'windows-model', 'flaui') {
+            Get-If $job | Should -Match "&& needs\.changes\.outputs\.scope != 'census'(?: &&| \}\}$)" -Because "$job is full tier"
+        }
+        foreach ($job in 'windows', 'docs-trigger', 'route', 'gate') {
+            Get-If $job | Should -Not -BeNullOrEmpty
+            Get-If $job | Should -Not -Match 'outputs\.scope' -Because "$job runs in both scopes"
+        }
+    }
+    It 'the app job tests the census trait in the census tier and everything but the model otherwise' {
+        $test = @($appSteps | Where-Object { $_ -match '(?m)^      - name: Test[ \t]*\r?$' })
+        $test.Count | Should -Be 1
+        $test[0] | Should -Match (Get-Lines @("          TEST_FILTER: `${{ needs.changes.outputs.scope == 'census' && 'tier=census&FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark' || 'FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark' }}"))
+        $test[0] | Should -Match (Get-Lines @('          --filter "$env:TEST_FILTER"'))
+        $test[0] | Should -Match ([regex]::Escape('--logger "trx;LogFileName=slate-windows-app.trx"'))
+    }
+    It 'proves right after the tests, in both scopes, that every type the guard requires the trait on ran' {
+        # A filter that matches nothing passes dotnet test.
+        $names = @($appSteps | ForEach-Object { [regex]::Match($_, '(?m)^      - name: (.*?)[ \t]*\r?$').Groups[1].Value })
+        $at = [array]::IndexOf($names, 'Every test type that reads a census-only path ran')
+        $at | Should -Be ([array]::IndexOf($names, 'Test') + 1)
+        $appSteps[$at] | Should -Not -Match '(?m)^        if:' -Because 'a full run exercises the check too'
+        $appSteps[$at] | Should -Match (Get-Lines @("        run: python -I scripts/check_windows_census_trait.py --trx '`${{ runner.temp }}\slate-app-results\slate-windows-app.trx'"))
+    }
+    It 'skips nothing else in the app job but the format gate, so every green app job still uploads the shell gate''s binaries' {
+        $format = @($appSteps | Where-Object { $_ -match '(?m)^      - name: Format gate' })
+        $format.Count | Should -Be 1
+        $format[0] | Should -Match (Get-Lines @("        if: `${{ needs.changes.outputs.scope != 'census' }}"))
+        @($appSteps | Where-Object { $_ -match 'outputs\.scope' }).Count | Should -Be 2 -Because 'the Test step''s filter and the format gate'
+    }
+    It 'the docs census runs the census trait check, its tests and the parity matrix check, in both scopes' {
+        $docs = Get-JobBlock $windows 'docs-trigger'
+        foreach ($run in 'run: python3 -m unittest discover -s scripts/tests -p test_windows_census_trait.py',
+            'run: python3 scripts/check_windows_census_trait.py', 'run: python3 scripts/generate-parity-matrix.py --check') {
+            $docs | Should -Match (Get-Lines @("        $run"))
+        }
+        (Get-JobBlock $windows 'windows-model') | Should -Not -Match 'generate-parity-matrix' -Because 'the model job is skipped in the census tier'
+    }
+    It 'the gate requires the app job and the docs census in both scopes, and lets only the full-tier lanes skip, in the census tier' {
+        (Get-JobBlock $windows 'gate') | Should -Match (Get-Lines @(
+                '          ok=true',
+                '          for result in ${{ needs.windows.result }} ${{ needs.docs-trigger.result }}; do',
+                '            [ "$result" = success ] || ok=false',
+                '          done',
+                '          for result in ${{ needs.rust-tests.result }} ${{ needs.rust-real-trash.result }} ${{ needs.rust-weak-volumes.result }} ${{ needs.windows-model.result }} ${{ needs.flaui.result }}; do',
+                '            if [ "$SCOPE" = census ]; then',
+                '              [ "$result" = skipped ] || [ "$result" = success ] || ok=false',
+                '            else',
+                '              [ "$result" = success ] || ok=false',
+                '            fi',
+                '          done',
+                '          if [ "$ok" != true ]; then'))
     }
 }
 

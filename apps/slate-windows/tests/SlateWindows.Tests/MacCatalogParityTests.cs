@@ -27,6 +27,7 @@ namespace SlateWindows.Tests;
 /// directions, so an entry cannot linger and shield a real divergence.
 /// </para>
 /// </remarks>
+[Trait("tier", "census")]
 public sealed class MacCatalogParityTests
 {
     [Fact]

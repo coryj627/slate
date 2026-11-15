@@ -20,6 +20,7 @@ using Microsoft.CodeAnalysis.Operations;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "connections-leaf")]
+[Trait("tier", "census")]
 public sealed class ConnectionsLeafCensus
 {
     private static string ShellRoot => SourceText.ShellSourceRoot();
