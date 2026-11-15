@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -58,6 +59,7 @@ public partial class MainWindow
             return false;
         }
 
+        HoldTheRestingPointer();
         AppMenuItem.Focus();
         AppMenuItem.IsSubmenuOpen = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
@@ -74,5 +76,98 @@ public partial class MainWindow
                 target.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled && row.IsVisible)?.Focus());
         });
         return true;
+    }
+
+    /// <summary>Where the pointer rested when the keys opened the menu, while it hasn't moved
+    /// since; null otherwise.</summary>
+    private NativePointer.Point? _restingPointer;
+
+    /// <summary>#1939: the keys open the menu on its first row, and a pointer resting where the
+    /// popup appears mustn't take them. Windows sends a mouse move when a popup appears under
+    /// the pointer, and WPF's own guard (a <see cref="MenuItem"/>'s ignore-mouse flag) lapses at
+    /// Background priority, so on a slow machine the row under the pointer took the keys, Exit
+    /// among them. The menu's rows stop answering the pointer until it moves or the menu
+    /// closes; then hovering works as before.</summary>
+    private void HoldTheRestingPointer()
+    {
+        if (!NativePointer.GetCursorPos(out NativePointer.Point at))
+        {
+            return;
+        }
+
+        if (_restingPointer is null)
+        {
+            // The open menu holds the mouse, so every move reaches the bar's own route.
+            MainMenu.PreviewMouseMove += ReleaseThePointerOnceItMoves;
+            AppMenuItem.SubmenuClosed += ReleaseThePointerWhenTheMenuCloses;
+        }
+
+        _restingPointer = at;
+        foreach (MenuItem row in RowsOf(AppMenuItem))
+        {
+            row.IsHitTestVisible = false;
+        }
+    }
+
+    private void ReleaseThePointerOnceItMoves(object sender, MouseEventArgs e)
+    {
+        if (_restingPointer is { } rested
+            && NativePointer.GetCursorPos(out NativePointer.Point now)
+            && (now.X != rested.X || now.Y != rested.Y))
+        {
+            ReleaseThePointer();
+        }
+    }
+
+    private void ReleaseThePointerWhenTheMenuCloses(object sender, RoutedEventArgs e)
+    {
+        // A menu inside the popup closing bubbles here too; only the popup's own close counts.
+        if (!AppMenuItem.IsSubmenuOpen)
+        {
+            ReleaseThePointer();
+        }
+    }
+
+    private void ReleaseThePointer()
+    {
+        if (_restingPointer is null)
+        {
+            return;
+        }
+
+        _restingPointer = null;
+        MainMenu.PreviewMouseMove -= ReleaseThePointerOnceItMoves;
+        AppMenuItem.SubmenuClosed -= ReleaseThePointerWhenTheMenuCloses;
+        foreach (MenuItem row in RowsOf(AppMenuItem))
+        {
+            row.ClearValue(IsHitTestVisibleProperty);
+        }
+    }
+
+    /// <summary>Every row under <paramref name="menu"/>, at any depth.</summary>
+    private static IEnumerable<MenuItem> RowsOf(MenuItem menu)
+    {
+        foreach (MenuItem row in menu.Items.OfType<MenuItem>())
+        {
+            yield return row;
+            foreach (MenuItem inner in RowsOf(row))
+            {
+                yield return inner;
+            }
+        }
+    }
+
+    private static class NativePointer
+    {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct Point
+        {
+            public int X;
+            public int Y;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetCursorPos(out Point point);
     }
 }
