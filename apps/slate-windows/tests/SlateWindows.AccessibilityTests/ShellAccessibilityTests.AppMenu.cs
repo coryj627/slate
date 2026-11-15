@@ -47,71 +47,77 @@ public sealed partial class ShellAccessibilityTests
             }
         });
 
-    /// <summary>#1939: a pointer resting where the menu opens doesn't take the keys. Windows
-    /// sends a mouse move when the popup appears under it, and WPF's own guard against that
-    /// lapses at Background priority, so on a slow machine the keys went to the row under the
-    /// pointer (Exit on the job VMs, where Enter quits). Once the pointer moves, hovering a row
-    /// takes the keys as before.</summary>
+    /// <summary>#1939: a pointer resting where the menu opens doesn't take the keys. When the
+    /// popup appears under a resting pointer WPF hovers the row there, and WPF's own guard
+    /// against that lapses at Background priority, so on the job VMs the keys went to the row
+    /// under the pointer (Exit, where Enter quits). That is a race, and there is no input that
+    /// forces its losing side from outside the app (WPF drops a move that doesn't change the
+    /// pointer's place), so this opens the menu over a resting pointer until a middle row is
+    /// under it and wants the first row every time; with the guard off it fails on the first
+    /// such open on the owner's desktop. Once the pointer moves, hovering a row takes the keys,
+    /// and a click with the pointer still resting works the row under it.</summary>
     [Fact]
     public void AppMenu_APointerRestingWhereItOpensLeavesTheKeysOnTheFirstRow() =>
         RunFindInNoteJourney("app-menu-resting-pointer", (process, window, automation, editor) =>
         {
             try
             {
+                // A move makes hovering take the keys again.
                 editor.Focus();
                 AssertEventuallyFocused(editor, "the note didn't take the keys.");
                 PressChord(VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
                 AssertOpenOnItsFirstRow(window, automation, "FileMenu");
                 AutomationElement[] rows = RowsOf(window, "FileMenu");
                 System.Drawing.Point resting = SettledBoundsOf(rows[rows.Length / 2]).Center();
+                AutomationElement exit = rows[^1];
+                System.Drawing.Point onExit = SettledBoundsOf(exit).Center();
+                Mouse.Position = onExit with { X = onExit.X + 4 };
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+                Mouse.Position = onExit with { X = onExit.X + 8 };
+                AssertEventuallyFocused(exit, "Moving the pointer onto Exit didn't give it the keys.");
                 CloseTheAppMenu(window, automation, editor);
                 Mouse.Position = resting;
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
 
                 // File's popup stops somewhere a little different each open (it's placed
                 // against File's row while the logo's popup still slides in), so the pointer
-                // stays put and the menu opens again until it opens with a row past the first
-                // under the pointer: a separator or the first row there tests nothing.
+                // stays put and the menu opens again until a middle row is under it: a
+                // separator or the first row there tests nothing, and the click below
+                // mustn't land on Exit.
                 AutomationElement? under = null;
-                for (int open = 0; open < 6; open++)
+                for (int open = 0; open < 8 && under is null; open++)
                 {
+                    if (open > 0)
+                    {
+                        CloseTheAppMenu(window, automation, editor);
+                    }
+
                     editor.Focus();
                     AssertEventuallyFocused(editor, "the note didn't take the keys.");
                     PressChord(VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
                     AssertOpenOnItsFirstRow(window, automation, "FileMenu");
                     rows = RowsOf(window, "FileMenu");
                     SettledBoundsOf(rows[0]);
-                    under = rows.Skip(1).FirstOrDefault(row => row.BoundingRectangle.Contains(resting));
-                    if (under is not null)
-                    {
-                        break;
-                    }
-
-                    CloseTheAppMenu(window, automation, editor);
+                    under = rows[1..^1].FirstOrDefault(row => row.BoundingRectangle.Contains(resting));
                 }
 
                 Assert.True(
                     under is not null,
-                    $"Six opens never put a row past the first under the pointer at {resting}; "
+                    $"Eight opens never put a middle row under the pointer at {resting}; "
                     + MenuDiagnosis(window, automation, WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(5))));
-
-                // The move Windows sends when the popup appears raced WPF's guard; a fast
-                // machine usually won. This one comes after the guard has lapsed, as on the
-                // job VMs, with the pointer still where it rested.
                 Assert.Equal(resting, Mouse.Position);
-                Assert.Equal(1u, NativePointerInput.MoveByNothing());
-                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
-                AssertOpenOnItsFirstRow(window, automation, "FileMenu");
-                // The rows stop answering the pointer while it rests; their names don't change.
                 AssertItemNamesAreSpeakable(process, "app-menu-resting-pointer");
 
-                AutomationElement exit = LastRowOf(window, "FileMenu");
-                System.Drawing.Point onExit = exit.BoundingRectangle.Center();
-                Mouse.Position = onExit with { X = onExit.X + 4 };
-                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-                Mouse.Position = onExit with { X = onExit.X + 8 };
-                AssertEventuallyFocused(exit, "Moving the pointer onto Exit didn't give it the keys.");
-                CloseTheAppMenu(window, automation, editor);
+                // A click with the pointer still resting works the row under it: a command
+                // closes the menu, a menu's row opens its menu.
+                string clicked = DescribeForDiagnosis(under);
+                Mouse.Click();
+                Assert.True(
+                    Retry.WhileFalse(
+                        () => StateOf(window, "AppMenu") != ExpandCollapseState.Expanded
+                            || under!.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault == ExpandCollapseState.Expanded,
+                        TimeSpan.FromSeconds(5)).Success,
+                    $"A click on {clicked} with the pointer resting didn't work it.");
             }
             finally
             {
@@ -119,43 +125,6 @@ public sealed partial class ShellAccessibilityTests
                 Mouse.Position = new System.Drawing.Point(0, 0);
             }
         });
-
-    /// <summary>A mouse move that leaves the pointer where it is, as Windows sends when a
-    /// window appears under a resting pointer.</summary>
-    private static class NativePointerInput
-    {
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct MouseInput
-        {
-            public int Dx;
-            public int Dy;
-            public uint MouseData;
-            public uint Flags;
-            public uint Time;
-            public IntPtr ExtraInfo;
-        }
-
-        // INPUT's union is MOUSEINPUT at its largest, so this is INPUT for a mouse event.
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct Input
-        {
-            public uint Type;
-            public MouseInput Mouse;
-        }
-
-        private const uint InputMouse = 0;
-        private const uint MouseEventMove = 0x0001;
-
-        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
-        private static extern uint SendInput(uint count, Input[] inputs, int size);
-
-        /// <summary>Sends a relative move of nothing; answers how many inputs went in.</summary>
-        internal static uint MoveByNothing() =>
-            SendInput(
-                1,
-                [new Input { Type = InputMouse, Mouse = new MouseInput { Flags = MouseEventMove } }],
-                System.Runtime.InteropServices.Marshal.SizeOf<Input>());
-    }
 
     /// <summary><paramref name="row"/>'s bounds once two reads 150 ms apart agree: the popup
     /// slides in, so a read during the slide finds it short of where it stops.</summary>
