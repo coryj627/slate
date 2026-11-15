@@ -453,6 +453,33 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n")
     }
 
+    /// Codex adversarial review, round 9: a restored note with no known
+    /// baseline (a file now at its path) takes no property write until a
+    /// save resolves the path, since a property write without a hash would
+    /// overwrite the file the save refuses.
+    func testARestoredNoteWithAFileNowAtItsPathTakesNoPropertyWrite() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        state.updateEditorText("# note\n\nmine.\n")
+        let next = await keptQuit(state, host: host)
+        try replaceWithSameBytes(vault, "note.md")
+
+        let reopened = makeState(host: next)
+        await open(reopened, vault)
+        XCTAssertNil(reopened.currentNoteContentHash)
+        XCTAssertNotNil(reopened.activePropertyAuthoringDisabledReason)
+        let task = reopened.applyPropertiesSource("title: Mine\n")
+        await task?.value
+        XCTAssertNil(task, "the write is refused")
+        XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n", "the file at the path is untouched")
+        XCTAssertNil(reopened.setProperty(path: "note.md", key: "title", value: .text(value: "Mine")))
+        XCTAssertNil(reopened.deleteProperty(path: "note.md", key: "title"))
+        XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n")
+    }
+
     func testEmptyingARestoredBufferStaysDirty() async throws {
         let host = makeHost()
         let state = makeState(host: host)

@@ -916,6 +916,14 @@ matrix `--check`; the VoiceOver pass above.
   refused with the property-edit reason if it does not finish; the
   re-check records it as it records a save
   (`testAQuitNeverAnswersYesWhileAPropertyWriteRuns`).
+- **Codex adversarial review of 29.2, round 9 (2026-11-14; #1942 at
+  a1538d4d).** One finding, fixed with a fact shown red first: a restored
+  note whose baseline text is unknown (a file now at its path, so no
+  hash) takes no property write until a save or reload gives it a
+  baseline; a property write without a hash would overwrite the file the
+  save refuses (`testARestoredNoteWithAFileNowAtItsPathTakesNoPropertyWrite`).
+  A stale restore keeps its hash, so core's hash check already refuses a
+  property write there.
 
 ## Delivery record
 

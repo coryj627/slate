@@ -16142,7 +16142,28 @@ final class AppState: ObservableObject {
         if isEditingProperty, BaseExactIdentity.matches(loadedFilePath, path) {
             return Self.propertyEditInProgressReason
         }
+        if restoredBaselineUnknown(for: path) {
+            return Self.restoredNotePropertyEditReason
+        }
         return noteAuthoringDisabledReason(for: path)
+    }
+
+    /// Plan 43 PR 29 §5 (Codex adversarial review, round 9): a restored note
+    /// whose baseline text is unknown (a file now at its path) has no hash,
+    /// and a property write without one overwrites whatever is there. It
+    /// takes no property write until a save or a reload gives it a baseline.
+    private func restoredBaselineUnknown(for path: String) -> Bool {
+        if BaseExactIdentity.matches(loadedFilePath, path) {
+            return currentNoteBaselineIdentity.textUnknown
+        }
+        let active = workspace.activeTab?.id
+        return workspace.model.allTabs.contains { tab in
+            guard tab.id != active, case .markdown(let tabPath) = tab.item,
+                BaseExactIdentity.matches(tabPath, path),
+                let document = workspace.document(for: tab.id)
+            else { return false }
+            return document.baselineIdentity.textUnknown
+        }
     }
 
     var activePropertyAuthoringDisabledReason: String? {
@@ -16442,6 +16463,8 @@ final class AppState: ObservableObject {
 
     static let saveInProgressReason =
         "Wait for the current save to finish."
+    static let restoredNotePropertyEditReason =
+        "Save this restored note before changing its properties: a file is now at its path."
 
     static let propertyEditInProgressReason =
         "Wait for the current property update to finish."
