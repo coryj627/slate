@@ -22,6 +22,7 @@ namespace SlateWindows.Tests.Censuses;
 /// designation the ledger's own list admits.
 /// </summary>
 [Trait("census", "graph-trigger-parity")]
+[Trait("tier", "census")]
 public sealed class GraphTriggerParityCensus
 {
     private static readonly Dictionary<string, string> FamilyOfArm = new()

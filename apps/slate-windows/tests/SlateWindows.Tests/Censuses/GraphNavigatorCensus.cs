@@ -21,6 +21,7 @@ namespace SlateWindows.Tests.Censuses;
 /// census with the write class closed (xv), and the label theory (C-13).
 /// </summary>
 [Trait("census", "graph-navigator")]
+[Trait("tier", "census")]
 public sealed class GraphNavigatorCensus
 {
     private const string TheNavigatorType = "SlateWindows.Graph.GraphNavigator";

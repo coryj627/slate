@@ -10,6 +10,7 @@ using uniffi.slate_uniffi;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "a11y-trigger-parity")]
+[Trait("tier", "census")]
 public sealed class A11yTriggerParityCensus
 {
     private static readonly Lazy<A11yTriggerInventory.Inventory> Inventory = new(A11yTriggerInventory.Read);

@@ -18,6 +18,7 @@ namespace SlateWindows.Tests.Censuses;
 /// not in a reader's ear.
 /// </summary>
 [Trait("census", "canvas-trigger-parity")]
+[Trait("tier", "census")]
 public sealed class CanvasTriggerParityCensus
 {
     private static readonly string[] Families =

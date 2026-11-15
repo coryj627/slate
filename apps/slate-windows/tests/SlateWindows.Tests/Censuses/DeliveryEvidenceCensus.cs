@@ -23,6 +23,7 @@ namespace SlateWindows.Tests.Censuses;
 /// command groups.
 /// </summary>
 [Trait("census", "delivery-evidence")]
+[Trait("tier", "census")]
 public sealed class DeliveryEvidenceCensus
 {
     private static string RepoRoot => SourceText.RepoRoot();

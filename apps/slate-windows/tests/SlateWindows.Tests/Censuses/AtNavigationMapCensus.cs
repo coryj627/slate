@@ -14,6 +14,7 @@ namespace SlateWindows.Tests.Censuses;
 /// <summary>N-5/N-6: the map is authored Markdown, checked against the
 /// enumerated Mac construction sites and the Windows source/evidence.</summary>
 [Trait("census", "at-navigation")]
+[Trait("tier", "census")]
 public sealed class AtNavigationMapCensus
 {
     private static string PlanRoot => Path.Combine(SourceText.RepoRoot(), "docs", "plans", "18_windows_port");

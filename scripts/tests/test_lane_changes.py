@@ -41,6 +41,41 @@ WORKFLOW = textwrap.dedent(
     """
 )
 
+# A lane with a census tier (#1945): its changes job hands lane-changes.yml the
+# census-only patterns, a sub-list of on.push.paths.
+CENSUS_WORKFLOW = textwrap.dedent(
+    """\
+    name: lane
+
+    on:
+      pull_request:
+      push:
+        branches: [main]
+        paths:
+          - 'crates/**'
+          - 'docs/plans/18_x/**'
+          - 'BENCHMARKS.md'
+          - '.github/workflows/lane.yml'
+
+    jobs:
+      changes:
+        name: changes
+        uses: ./.github/workflows/lane-changes.yml
+        permissions:
+          contents: read
+        with:
+          workflow: .github/workflows/lane.yml
+          census-paths: |
+            # The plan folder the censuses read.
+            docs/plans/18_x/**
+
+            BENCHMARKS.md
+      noop:
+        needs: [changes]
+        runs-on: ubuntu-latest
+    """
+)
+
 
 class GitHubPatternFacts(unittest.TestCase):
     """GitHub's filter-pattern cheat sheet, for the syntax the lanes use."""
@@ -135,6 +170,56 @@ class DecisionFacts(unittest.TestCase):
             lane_changes.lane_patterns(WORKFLOW.replace("'crates/**'", "'crates/*.r?'"))
 
 
+class CensusScopeFacts(unittest.TestCase):
+    """#1945: the census tier runs only when every lane path the pull request touches is census-only."""
+
+    def test_the_census_list_is_the_changes_jobs_block_without_blank_or_comment_lines(self):
+        self.assertEqual(["docs/plans/18_x/**", "BENCHMARKS.md"], lane_changes.census_patterns(CENSUS_WORKFLOW))
+
+    def test_a_lane_without_a_census_list_has_none(self):
+        self.assertEqual([], lane_changes.census_patterns(WORKFLOW))
+
+    def test_a_census_list_in_another_job_or_key_is_not_the_lanes(self):
+        moved = CENSUS_WORKFLOW.replace("  changes:\n    name: changes", "  other:\n    name: other")
+        self.assertEqual([], lane_changes.census_patterns(moved))
+
+    def test_a_census_list_that_is_not_a_literal_block_is_refused(self):
+        # A folded block joins the lines with spaces: one pattern GitHub and this script would read differently.
+        for style in (">", ">-", "'docs/plans/18_x/**'"):
+            with self.subTest(style=style):
+                with self.assertRaises(ValueError):
+                    lane_changes.census_patterns(CENSUS_WORKFLOW.replace("census-paths: |", f"census-paths: {style}"))
+
+    def test_a_census_pattern_must_be_one_of_the_lanes_paths(self):
+        lane = lane_changes.lane_patterns(CENSUS_WORKFLOW)
+        self.assertEqual(["docs/plans/18_x/**", "BENCHMARKS.md"],
+                         lane_changes.checked_census(lane_changes.census_patterns(CENSUS_WORKFLOW), lane))
+        with self.assertRaises(ValueError, msg="a census path outside the lane"):
+            lane_changes.checked_census(["docs/plans/18_x/**", "docs/help/**"], lane)
+        for extra in ("!BENCHMARKS.md", "docs/plans/18_x/a?.md"):
+            with self.subTest(extra=extra):
+                with self.assertRaises(ValueError):
+                    lane_changes.checked_census(["docs/plans/18_x/**", extra], lane + [extra])
+
+    def test_census_only_when_every_lane_path_touched_is_census_only(self):
+        census = ["docs/plans/18_x/**", "BENCHMARKS.md"]
+        self.assertEqual("census", lane_changes.scope(["BENCHMARKS.md"], census))
+        self.assertEqual("census", lane_changes.scope(["docs/plans/18_x/a.md", "BENCHMARKS.md"], census))
+        self.assertEqual("full", lane_changes.scope(["docs/plans/18_x/a.md", "crates/lib.rs"], census))
+        self.assertEqual("full", lane_changes.scope(["crates/lib.rs"], census))
+
+    def test_full_when_nothing_matched_or_the_lane_has_no_census_list(self):
+        self.assertEqual("full", lane_changes.scope([], ["BENCHMARKS.md"]))
+        self.assertEqual("full", lane_changes.scope(["BENCHMARKS.md"], []))
+
+    def test_the_windows_lane_has_a_census_list_inside_its_path_list(self):
+        text = (lane_changes.REPO / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+        census = lane_changes.checked_census(lane_changes.census_patterns(text), lane_changes.lane_patterns(text))
+        self.assertIn("apps/slate-mac/**", census)
+        for full in ("apps/slate-windows/**", "crates/**", "scripts/**", ".github/workflows/windows.yml"):
+            self.assertNotIn(full, census)
+
+
 def git(repo: Path, *args: str) -> str:
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     command = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
@@ -145,12 +230,12 @@ def git(repo: Path, *args: str) -> str:
 class EndToEndFacts(unittest.TestCase):
     """The script in a real repository: a base, a pull request branch and GitHub's merge commit."""
 
-    def make_merge(self, root: Path, change) -> Path:
+    def make_merge(self, root: Path, change, workflow: str = WORKFLOW) -> Path:
         repo = root / "repo"
         repo.mkdir()
         git(repo, "init", "-q")
         (repo / ".github/workflows").mkdir(parents=True)
-        (repo / ".github/workflows/lane.yml").write_text(WORKFLOW, encoding="utf-8")
+        (repo / ".github/workflows/lane.yml").write_text(workflow, encoding="utf-8")
         (repo / "crates").mkdir()
         (repo / "crates/lib.rs").write_text("base\n", encoding="utf-8")
         # A second file, so renaming lib.rs away is not a rename of the whole folder to git's merge.
@@ -171,10 +256,14 @@ class EndToEndFacts(unittest.TestCase):
         git(repo, "merge", "-q", "--no-ff", "-m", "merge", "topic")
         return repo
 
-    def run_script(self, repo: Path, root: Path) -> tuple[int, str, str]:
+    def run_script(self, repo: Path, root: Path, census: str | None = None) -> tuple[int, str, str]:
         output = root / "github_output"
         output.write_text("", encoding="utf-8")
         env = dict(os.environ, GITHUB_OUTPUT=str(output), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        env.pop("CENSUS_PATHS", None)
+        if census is not None:
+            # What lane-changes.yml hands the script: the input as GitHub read it.
+            env["CENSUS_PATHS"] = census
         result = subprocess.run([sys.executable, "-I", str(SCRIPT), ".github/workflows/lane.yml"], cwd=repo,
                                 env=env, capture_output=True, text=True)
         return result.returncode, output.read_text(encoding="utf-8"), result.stdout + result.stderr
@@ -185,7 +274,7 @@ class EndToEndFacts(unittest.TestCase):
             repo = self.make_merge(root, lambda r: (r / "crates/lib.rs").write_text("topic\n", encoding="utf-8"))
             code, output, log = self.run_script(repo, root)
         self.assertEqual(0, code, log)
-        self.assertEqual("run=true\n", output)
+        self.assertEqual("run=true\nscope=full\n", output)
         self.assertIn("crates/lib.rs", log)
 
     def test_a_pull_request_that_changes_no_lane_path_skips_the_lane(self):
@@ -194,7 +283,7 @@ class EndToEndFacts(unittest.TestCase):
             repo = self.make_merge(root, lambda r: (r / "README.md").write_text("topic\n", encoding="utf-8"))
             code, output, log = self.run_script(repo, root)
         self.assertEqual(0, code, log)
-        self.assertEqual("run=false\n", output, "main's own change to crates/ is not the pull request's")
+        self.assertEqual("run=false\nscope=full\n", output, "main's own change to crates/ is not the pull request's")
 
     def test_a_file_renamed_out_of_the_lane_paths_runs_the_lane(self):
         # A rename is a delete and an add: the lane's file is gone, which the lane must see.
@@ -203,7 +292,7 @@ class EndToEndFacts(unittest.TestCase):
             repo = self.make_merge(root, lambda r: (r / "crates/lib.rs").rename(r / "lib.txt"))
             code, output, log = self.run_script(repo, root)
         self.assertEqual(0, code, log)
-        self.assertEqual("run=true\n", output)
+        self.assertEqual("run=true\nscope=full\n", output)
 
     def test_a_head_that_is_not_a_merge_commit_fails_with_no_output(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,6 +311,51 @@ class EndToEndFacts(unittest.TestCase):
             code, output, log = self.run_script(repo, root)
         self.assertNotEqual(0, code, log)
         self.assertEqual("", output)
+
+
+    CENSUS_INPUT = "# The plan folder the censuses read.\ndocs/plans/18_x/**\n\nBENCHMARKS.md\n"
+
+    def census_merge(self, root: Path, *paths: str) -> Path:
+        def change(repo: Path) -> None:
+            for path in paths:
+                (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                (repo / path).write_text("topic\n", encoding="utf-8")
+        return self.make_merge(root, change, CENSUS_WORKFLOW)
+
+    def test_a_pull_request_that_touches_only_census_paths_runs_the_census_tier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.census_merge(root, "docs/plans/18_x/a.md", "BENCHMARKS.md", "README.md")
+            code, output, log = self.run_script(repo, root, self.CENSUS_INPUT)
+        self.assertEqual(0, code, log)
+        self.assertEqual("run=true\nscope=census\n", output)
+        self.assertIn("census tier", log)
+
+    def test_a_pull_request_that_also_touches_a_full_path_runs_the_whole_lane(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.census_merge(root, "docs/plans/18_x/a.md", "crates/lib.rs")
+            code, output, log = self.run_script(repo, root, self.CENSUS_INPUT)
+        self.assertEqual(0, code, log)
+        self.assertEqual("run=true\nscope=full\n", output)
+        self.assertIn("crates/lib.rs", log)
+
+    def test_a_census_input_that_differs_from_the_workflows_block_fails_with_no_output(self):
+        # The guard reads the block in the file and the decision reads what GitHub passed: they must agree.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.census_merge(root, "BENCHMARKS.md")
+            code, output, log = self.run_script(repo, root, "BENCHMARKS.md\ncrates/**\n")
+        self.assertNotEqual(0, code, log)
+        self.assertEqual("", output, "no output: the lane's jobs read a missing scope as full")
+
+    def test_the_workflows_block_decides_when_no_input_is_handed_over(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self.census_merge(root, "BENCHMARKS.md")
+            code, output, log = self.run_script(repo, root)
+        self.assertEqual(0, code, log)
+        self.assertEqual("run=true\nscope=census\n", output)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ namespace SlateWindows.Tests.Censuses;
 /// H9(e) pins over the fifteen inputs, each numbered.
 /// </summary>
 [Trait("census", "canvas-reconciliation")]
+[Trait("tier", "census")]
 public sealed class CanvasReconciliationCensus
 {
     private const string SectionHeading = "## Issue reconciliation (#745)";

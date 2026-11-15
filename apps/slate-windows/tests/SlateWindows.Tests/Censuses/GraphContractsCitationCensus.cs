@@ -18,6 +18,7 @@ namespace SlateWindows.Tests.Censuses;
 /// own (<see cref="ContractsCitationCensus.DeclaredNames"/>).
 /// </summary>
 [Trait("census", "graph-contracts-citation")]
+[Trait("tier", "census")]
 public sealed class GraphContractsCitationCensus
 {
     private const string ContractsDoc = "35_graph_contracts.md";
