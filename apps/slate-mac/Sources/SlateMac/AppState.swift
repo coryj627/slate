@@ -16142,19 +16142,23 @@ final class AppState: ObservableObject {
         if isEditingProperty, BaseExactIdentity.matches(loadedFilePath, path) {
             return Self.propertyEditInProgressReason
         }
-        if restoredBaselineUnknown(for: path) {
+        if restoredBaselineGuarded(for: path) {
             return Self.restoredNotePropertyEditReason
         }
         return noteAuthoringDisabledReason(for: path)
     }
 
-    /// Plan 43 PR 29 §5 (Codex adversarial review, round 9): a restored note
-    /// whose baseline text is unknown (a file now at its path) has no hash,
-    /// and a property write without one overwrites whatever is there. It
-    /// takes no property write until a save or a reload gives it a baseline.
-    private func restoredBaselineUnknown(for path: String) -> Bool {
+    /// Plan 43 PR 29 §5 (Codex adversarial review, rounds 9 and 10): a
+    /// restored note whose baseline is guarded takes no property write until
+    /// a save or a reload resolves it. With its text unknown (a file now at
+    /// its path) it has no hash, and a write without one overwrites whatever
+    /// is there; with its identity enforced, a file replaced by the same
+    /// bytes passes the hash, and the refresh after the write would drop the
+    /// guard the next save relies on. Property writes check only the hash.
+    private func restoredBaselineGuarded(for path: String) -> Bool {
         if BaseExactIdentity.matches(loadedFilePath, path) {
             return currentNoteBaselineIdentity.textUnknown
+                || currentNoteBaselineIdentity.identityEnforced
         }
         let active = workspace.activeTab?.id
         return workspace.model.allTabs.contains { tab in
@@ -16163,6 +16167,7 @@ final class AppState: ObservableObject {
                 let document = workspace.document(for: tab.id)
             else { return false }
             return document.baselineIdentity.textUnknown
+                || document.baselineIdentity.identityEnforced
         }
     }
 
@@ -16464,7 +16469,7 @@ final class AppState: ObservableObject {
     static let saveInProgressReason =
         "Wait for the current save to finish."
     static let restoredNotePropertyEditReason =
-        "Save this restored note before changing its properties: a file is now at its path."
+        "Save this restored note before changing its properties."
 
     static let propertyEditInProgressReason =
         "Wait for the current property update to finish."

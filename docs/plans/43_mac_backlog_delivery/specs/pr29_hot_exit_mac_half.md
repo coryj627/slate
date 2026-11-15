@@ -922,8 +922,13 @@ matrix `--check`; the VoiceOver pass above.
   hash) takes no property write until a save or reload gives it a
   baseline; a property write without a hash would overwrite the file the
   save refuses (`testARestoredNoteWithAFileNowAtItsPathTakesNoPropertyWrite`).
-  A stale restore keeps its hash, so core's hash check already refuses a
-  property write there.
+- **Codex adversarial review of 29.2, round 10 (2026-11-14; #1942 at
+  e082fbdc).** One finding, fixed with a fact shown red first: round 9's
+  guard also covers a restored note whose kept baseline still enforces its
+  identity. A file replaced with the same bytes after the restore passes
+  the hash check, and the refresh after a property write dropped the guard
+  the next save relied on
+  (`testARestoredNoteStillGuardingItsIdentityTakesNoPropertyWrite`).
 
 ## Delivery record
 

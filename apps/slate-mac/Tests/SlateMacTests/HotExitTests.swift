@@ -480,6 +480,35 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n")
     }
 
+    /// Codex adversarial review, round 10: a restored note whose kept
+    /// baseline still guards its identity takes no property write either. A
+    /// file replaced with the same bytes after the restore passes a hash
+    /// check, and the refresh after a property write would drop the guard
+    /// the next save relies on.
+    func testARestoredNoteStillGuardingItsIdentityTakesNoPropertyWrite() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        state.updateEditorText("# note\n\nmine.\n")
+        let next = await keptQuit(state, host: host)
+
+        let reopened = makeState(host: next)
+        await open(reopened, vault)
+        XCTAssertTrue(reopened.currentNoteBaselineIdentity.identityEnforced)
+        try replaceWithSameBytes(vault, "note.md")
+        XCTAssertNotNil(reopened.activePropertyAuthoringDisabledReason)
+        let task = reopened.applyPropertiesSource("title: Mine\n")
+        await task?.value
+        XCTAssertNil(task, "the write is refused")
+        XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n", "the replacement is untouched")
+        XCTAssertTrue(reopened.currentNoteBaselineIdentity.identityEnforced, "the guard stands")
+        await reopened.saveCurrentNote()?.value
+        XCTAssertNotNil(reopened.currentSaveConflict, "the save still refuses the replacement")
+        XCTAssertEqual(try onDisk(vault, "note.md"), "# note\n")
+    }
+
     func testEmptyingARestoredBufferStaysDirty() async throws {
         let host = makeHost()
         let state = makeState(host: host)
