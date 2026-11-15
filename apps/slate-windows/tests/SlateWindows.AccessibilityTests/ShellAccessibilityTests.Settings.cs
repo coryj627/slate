@@ -165,7 +165,7 @@ public sealed partial class ShellAccessibilityTests
 
             Assert.Equal(label, ComboValue(combo));
             AssertEventuallyFocused(combo, "the theme change took focus off the combo.");
-            AssertWindowIsLight(window, expectLight);
+            AssertShownWindowIsLight(window, process, before: null, expectLight);
             AssertAxeClean(process, "settings-sheet-light");
         }
         finally
@@ -180,12 +180,13 @@ public sealed partial class ShellAccessibilityTests
         Process? process = null;
         try
         {
+            using CaptureImage before = CaptureScreenPhysicalPixels();
             process = LaunchWith(device, logs);
             if (!HasInteractiveDesktop(process, "theme-preference")) { return; }
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
-            AssertWindowIsLight(window, expectLight);
+            AssertShownWindowIsLight(window, process, before, expectLight);
             if (thenChoose is VirtualKeyShort key)
             {
                 ChooseThemeByKeys(window, key);
@@ -233,31 +234,195 @@ public sealed partial class ShellAccessibilityTests
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
     }
 
-    /// <summary>The window's commonest colour is its background, whatever's drawn on it.</summary>
-    private static void AssertWindowIsLight(AutomationElement window, bool expectLight)
+    /// <summary>The window's commonest colour is its background, whatever's drawn on it, judged
+    /// only once the screen shows this app's window there (#1943). A capture is the screen under
+    /// the window's rectangle, so on a job VM it can be another window lying over ours, or a
+    /// frame that isn't ours yet; either read as a light grey and failed the dark step. So the
+    /// fact waits, up to 10 seconds, until this app's window is the one at the rectangle's
+    /// centre, two samples 150 ms apart agree, and, when <paramref name="before"/> holds the
+    /// screen from before the launch, the colour is no longer what was there. At the deadline it
+    /// still judges a steady sample of this app's window, whatever was there before; with none,
+    /// it can't see the app and fails as an environmental failure, naming what lay on top. A
+    /// theme painted wrong stays wrong across the wait and still fails; a wrong paint corrected
+    /// within the wait doesn't, which one capture at an unknown moment never reliably caught
+    /// either.</summary>
+    private static void AssertShownWindowIsLight(
+        AutomationElement window, Process process, CaptureImage? before, bool expectLight)
     {
-        int Background()
+        var seen = new List<string>();
+        int? previous = null;
+        int color = 0;
+        bool steadyAndOurs = false;
+        CaptureImage? last = null;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        try
         {
-            using CaptureImage capture = CapturePhysicalPixels(window);
-            var counts = new Dictionary<int, int>();
-            Bitmap bitmap = capture.Bitmap;
-            for (var y = 0; y < bitmap.Height; y += 4)
+            while (true)
             {
-                for (var x = 0; x < bitmap.Width; x += 4)
+                Rectangle bounds = PhysicalBounds(window);
+                uint owner = TopLevelOwnerAt(new Point(bounds.Left + (bounds.Width / 2), bounds.Top + (bounds.Height / 2)));
+                last?.Dispose();
+                last = CapturePhysicalPixels(window);
+                color = CommonestColor(last.Bitmap, new Rectangle(Point.Empty, last.Bitmap.Size));
+                int? behind = before is null
+                    ? null
+                    : CommonestColor(before.Bitmap, bounds with { X = bounds.X - before.OriginalBounds.X, Y = bounds.Y - before.OriginalBounds.Y });
+                bool ours = owner == (uint)process.Id;
+                steadyAndOurs = ours && color == previous;
+                seen.Add($"#{color:X6}{(ours ? string.Empty : $" with pid {owner} on top")}");
+                if ((steadyAndOurs && color != behind) || DateTime.UtcNow >= deadline)
                 {
-                    int rgb = bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF;
-                    counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
+                    break;
                 }
+
+                if (!ours)
+                {
+                    window.SetForeground();
+                }
+
+                previous = ours ? color : null;
+                Thread.Sleep(150);
             }
 
-            return counts.MaxBy(pair => pair.Value).Key;
+            string samples = $"Slate is pid {process.Id}; samples 150 ms apart: {RunsOf(seen)}. ";
+            if (!steadyAndOurs)
+            {
+                Assert.Fail(
+                    $"the screen never steadily showed this app's window within 10 seconds, so its "
+                    + $"theme can't be judged (last #{color:X6}, wanting {(expectLight ? "light" : "dark")}). "
+                    + samples + FocusDiagnosis() + SaveThemeEvidence(before, last));
+            }
+
+            double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
+            if (!(expectLight ? brightness > 180 : brightness < 80))
+            {
+                Assert.Fail(
+                    $"the window's background is #{color:X6}, wanting {(expectLight ? "light" : "dark")}. "
+                    + "It was this app's window, on top and steady. "
+                    + samples + FocusDiagnosis() + SaveThemeEvidence(before, last));
+            }
+        }
+        finally
+        {
+            last?.Dispose();
+        }
+    }
+
+    /// <summary>Repeated samples as one entry with a count, so a long wait stays readable.</summary>
+    private static string RunsOf(List<string> samples)
+    {
+        var runs = new List<string>();
+        for (var start = 0; start < samples.Count;)
+        {
+            int end = start;
+            while (end + 1 < samples.Count && samples[end + 1] == samples[start])
+            {
+                end++;
+            }
+
+            int count = end - start + 1;
+            runs.Add(count == 1 ? samples[start] : $"{samples[start]} x{count}");
+            start = end + 1;
         }
 
-        int color = Background();
-        double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
-        Assert.True(
-            expectLight ? brightness > 180 : brightness < 80,
-            $"the window's background is #{color:X6}, wanting {(expectLight ? "light" : "dark")}.");
+        return string.Join(", ", runs);
+    }
+
+    private static int CommonestColor(Bitmap bitmap, Rectangle region)
+    {
+        region.Intersect(new Rectangle(Point.Empty, bitmap.Size));
+        var counts = new Dictionary<int, int>();
+        for (int y = region.Top; y < region.Bottom; y += 4)
+        {
+            for (int x = region.Left; x < region.Right; x += 4)
+            {
+                int rgb = bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF;
+                counts[rgb] = counts.GetValueOrDefault(rgb) + 1;
+            }
+        }
+
+        return counts.Count == 0 ? -1 : counts.MaxBy(pair => pair.Value).Key;
+    }
+
+    /// <summary>The whole desktop in physical pixels, as <see cref="CapturePhysicalPixels"/>
+    /// takes one element; its <c>OriginalBounds</c> places it on the screen.</summary>
+    private static CaptureImage CaptureScreenPhysicalPixels()
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            return Capture.Screen();
+        }
+        finally
+        {
+            SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    private static Rectangle PhysicalBounds(AutomationElement element)
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            return element.BoundingRectangle;
+        }
+        finally
+        {
+            SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    /// <summary>The process whose top-level window is at a physical point on the screen.</summary>
+    private static uint TopLevelOwnerAt(Point point)
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            IntPtr root = NativeHitTest.GetAncestor(NativeHitTest.WindowFromPoint(point), NativeHitTest.RootAncestor);
+            _ = NativeForeground.GetWindowThreadProcessId(root, out uint processId);
+            return processId;
+        }
+        finally
+        {
+            SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    /// <summary>On a failure, the screen from before the launch and the last capture go to the
+    /// folder the gate uploads, so the next failure shows what lay over the window. Best effort:
+    /// a save error never replaces the failure.</summary>
+    private static string SaveThemeEvidence(CaptureImage? before, CaptureImage? last)
+    {
+        string? directory = Environment.GetEnvironmentVariable("SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string destination = Path.Combine(directory, "theme-first-paint");
+            Directory.CreateDirectory(destination);
+            string stamp = DateTime.UtcNow.ToString("HHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+            before?.ToFile(Path.Combine(destination, $"{stamp}-screen-before-launch.png"));
+            last?.ToFile(Path.Combine(destination, $"{stamp}-window.png"));
+            return $" The captures are in theme-first-paint\\{stamp}-*.png.";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static class NativeHitTest
+    {
+        internal const uint RootAncestor = 2;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr WindowFromPoint(Point point);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
     }
 
     [Fact]
