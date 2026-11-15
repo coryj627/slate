@@ -890,6 +890,16 @@ matrix `--check`; the VoiceOver pass above.
   clean or durably kept by a peer; otherwise its entry is abandoned and
   the tab takes a fresh id for its next note
   (`testPointingAPeerAtAnotherNoteKeepsItsEntryWhileTheSurvivorIsNotKept`).
+- **Codex adversarial review of 29.2, round 6 (2026-11-14; #1942 at
+  e293a413).** Two findings, both fixed with facts shown red first: a
+  clean tab pointed at another note also retires an inherited orphan
+  claim, so the next note's claim under the same id is not refused
+  (`testOpeningAnotherNoteIntoATabWithAnOrphanClaimKeepsTheNewNote`); the
+  quit, the switch and the settle-or-close fast paths read every tab now
+  (`HotExitWriter.reconcileNow`) before deciding nothing needs settling, so
+  a kept edit reverted in the same turn is retired first
+  (`testARevertQuitInTheSameTurnRetiresTheKeptCopy`,
+  `testARevertClosedInTheSameTurnRetiresTheKeptCopy`).
 
 ## Delivery record
 

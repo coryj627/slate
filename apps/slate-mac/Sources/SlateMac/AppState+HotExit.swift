@@ -505,6 +505,7 @@ extension AppState {
             postMutationAnnouncement(reason)
             return .terminateCancel
         }
+        writer.reconcileNow()
         let dirty = hotExitAnyDirty
         if writer.isInert {
             // No key, a damaged store, a vault held elsewhere: today's
@@ -675,6 +676,7 @@ extension AppState {
         guard let writer = hotExitWriter, hotExitEngaged else { return false }
         supersedeHotExitTerminationSettle()
         hotExitPromptNotice = nil
+        writer.reconcileNow()
         let dirty = hotExitAnyDirty
         if writer.isInert {
             if dirty, let reason = writer.open.reason {
@@ -740,6 +742,7 @@ extension AppState {
     /// from its task); false: close now, as today.
     func hotExitCloseAfterSettle(proceed: @escaping @MainActor () -> Void) -> Bool {
         guard let writer = hotExitWriter, !writer.isInert, !writer.detached else { return false }
+        writer.reconcileNow()
         guard writer.hasUnresolvedObligations || hotExitAnyDirty else { return false }
         supersedeHotExitTerminationSettle()
         let before = hotExitRecheck()

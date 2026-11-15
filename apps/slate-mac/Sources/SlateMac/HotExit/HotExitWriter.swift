@@ -186,6 +186,15 @@ final class HotExitWriter {
         }
     }
 
+    /// Reads every tab now rather than on the queued drain, so a close that
+    /// decides whether anything needs settling sees a buffer that turned
+    /// clean (or dirty) in this same turn (Codex adversarial review, round
+    /// 6).
+    func reconcileNow() {
+        guard open.activeKey != nil, !detached else { return }
+        drain()
+    }
+
     private func drain() {
         evaluationPosted = false
         guard !detached, let source else { return }
@@ -276,6 +285,12 @@ final class HotExitWriter {
         if let buffer = source.hotExitBuffer(for: tab) {
             if !buffer.dirty {
                 evaluate(tab, force: true)
+                // An inherited orphan claim goes too, or the next note's
+                // claim under this id is refused against it (Codex
+                // adversarial review, round 6).
+                if state.episodeLive || !state.held.isEmpty || !state.inherited.isEmpty {
+                    endByReader(state)
+                }
                 states[tab] = nil
                 return
             }

@@ -563,6 +563,86 @@ final class HotExitTests: XCTestCase {
         XCTAssertEqual(try storedEntries(key).map(\.text), ["# note\n\nedited.\n"])
     }
 
+    /// Codex adversarial review, round 6: opening another note into a clean
+    /// tab that inherited an orphan claim retires the orphan first, so the
+    /// next note's claim is never refused against it.
+    func testOpeningAnotherNoteIntoATabWithAnOrphanClaimKeepsTheNewNote() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let tab = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.saveWorkspaceLayout()
+        let key = try key(state)
+        let next = newProcess(after: host)
+        let store = try HotExitStore.open(deviceRoot: deviceRoot.path)
+        _ = try store.claimEntry(
+            key: key, epoch: try store.currentEpoch(key: key), entryId: tab.raw.uuidString,
+            expected: nil, incarnation: try newHotExitIncarnation())
+
+        let reopened = makeState(host: next)
+        await open(reopened, vault)
+        XCTAssertFalse(reopened.hasUnsavedChanges)
+        await select(reopened, "two.md")
+        reopened.updateEditorText("# two\n\nedited after the orphan.\n")
+        await settle(reopened)
+        let current = try XCTUnwrap(reopened.workspace.activeTab?.id)
+        XCTAssertTrue(reopened.hotExitWriter?.isKeptForTests(current) ?? false, "the new note is kept")
+        XCTAssertEqual(try storedEntries(key).map(\.text), ["# two\n\nedited after the orphan.\n"])
+
+        reopened.saveWorkspaceLayout()
+        let again = makeState(host: newProcess(after: next))
+        await open(again, vault)
+        XCTAssertEqual(
+            buffers(again, path: "two.md").map(\.body), ["# two\n\nedited after the orphan.\n"])
+    }
+
+    /// Codex adversarial review, round 6: a kept edit reverted and quit in
+    /// the same turn, before the writer's queued look at the buffers runs.
+    /// The quit reconciles first, so the reverted text never comes back.
+    func testARevertQuitInTheSameTurnRetiresTheKeptCopy() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        state.updateEditorText("# note\n\nreverted later.\n")
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).count, 1)
+
+        state.updateEditorText("# note\n")
+        XCTAssertFalse(state.hasUnsavedChanges)
+        let replies = ReplyRecorder()
+        XCTAssertEqual(quit(state, replies), .terminateLater, "the retirement is settled first")
+        await state.hotExitRouteTask?.value
+        XCTAssertEqual(replies.values, [true])
+        state.saveWorkspaceLayout()
+        XCTAssertTrue(try storedEntries(key).isEmpty)
+        let reopened = makeState(host: newProcess(after: host))
+        await open(reopened, vault)
+        XCTAssertFalse(reopened.hasUnsavedChanges, "the reverted text never comes back")
+    }
+
+    func testARevertClosedInTheSameTurnRetiresTheKeptCopy() async throws {
+        let host = makeHost()
+        let state = makeState(host: host)
+        let vault = try makeVault()
+        await open(state, vault)
+        await select(state, "note.md")
+        let key = try key(state)
+        state.updateEditorText("# note\n\nreverted later.\n")
+        await settle(state)
+        XCTAssertEqual(try storedEntries(key).count, 1)
+
+        state.updateEditorText("# note\n")
+        state.closeVaultFromUserAction()
+        await state.hotExitRouteTask?.value
+        XCTAssertNil(state.currentSession, "a clean vault closes")
+        XCTAssertTrue(try storedEntries(key).isEmpty, "the reverted text never comes back")
+    }
+
     // MARK: - Discards (§3, §4)
 
     func testATabsOwnDiscardRetiresItsEntry() async throws {
