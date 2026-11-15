@@ -571,16 +571,20 @@ public sealed partial class ReadingDiagramTests
     }
 
     /// <summary>WPF objects require STA; xunit runs MTA. Pumped: the
-    /// diagram stage (WB-20) lands through the dispatcher.</summary>
+    /// diagram stage (WB-20) lands through the dispatcher. A fact's two slow
+    /// decodes (#1949) fit in its deadline, with room for the rest.</summary>
     private static void RunSta(Action body) =>
-        StaThread.RunPumped(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
+        StaThread.RunPumped(
+            body, UnhurriedSvgDecodes.LandingWait(2) + TimeSpan.FromSeconds(60), "STA test body timed out.");
 
     /// <summary>Pumps until <paramref name="model"/>'s diagram stage has
     /// landed (WB-20): a fence's final shape arrives after stage 1.</summary>
     private static void AwaitDiagramStage(ReadingContentViewModel model)
     {
+        // The most a stage here decodes is two diagrams
+        // (ProjectionPoolBoundsAggregateDiagramDecoding), each maybe slow (#1949).
         Assert.True(
-            PumpedDispatcher.PumpUntil(() => !model.DiagramsPendingForTests, TimeSpan.FromSeconds(30)),
+            PumpedDispatcher.PumpUntil(() => !model.DiagramsPendingForTests, UnhurriedSvgDecodes.LandingWait(2)),
             "the diagram stage never landed");
         PumpedDispatcher.Drain();
         Assert.False(model.DiagramStageGateTimedOutForTests);

@@ -47,6 +47,124 @@ public sealed partial class ShellAccessibilityTests
             }
         });
 
+    /// <summary>#1939: a pointer resting where the menu opens doesn't take the keys. When the
+    /// popup appears under a resting pointer WPF hovers the row there, and WPF's own guard
+    /// against that lapses at Background priority, so on the job VMs the keys went to the row
+    /// under the pointer (Exit, where Enter quits). That is a race, and there is no input that
+    /// forces its losing side from outside the app (WPF drops a move that doesn't change the
+    /// pointer's place), so this opens the menu over a resting pointer until a middle row is
+    /// under it and wants the first row every time; with the guard off it fails on the first
+    /// such open on the owner's desktop. Once the pointer moves, hovering a row takes the keys,
+    /// and a click with the pointer still resting works the row under it.</summary>
+    [Fact]
+    public void AppMenu_APointerRestingWhereItOpensLeavesTheKeysOnTheFirstRow() =>
+        RunFindInNoteJourney("app-menu-resting-pointer", (process, window, automation, editor) =>
+        {
+            try
+            {
+                // A move makes hovering take the keys again.
+                editor.Focus();
+                AssertEventuallyFocused(editor, "the note didn't take the keys.");
+                PressChord(VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
+                AssertOpenOnItsFirstRow(window, automation, "FileMenu");
+                AutomationElement[] rows = RowsOf(window, "FileMenu");
+                System.Drawing.Point resting = SettledBoundsOf(rows[rows.Length / 2]).Center();
+                AutomationElement exit = rows[^1];
+                System.Drawing.Point onExit = SettledBoundsOf(exit).Center();
+                Mouse.Position = onExit with { X = onExit.X + 4 };
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+                Mouse.Position = onExit with { X = onExit.X + 8 };
+                AssertEventuallyFocused(exit, "Moving the pointer onto Exit didn't give it the keys.");
+                CloseTheAppMenu(window, automation, editor);
+                Mouse.Position = resting;
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+
+                // File's popup stops somewhere a little different each open (it's placed
+                // against File's row while the logo's popup still slides in), so the pointer
+                // stays put and the menu opens again until a middle row is under it: a
+                // separator or the first row there tests nothing, and the click below
+                // mustn't land on Exit.
+                AutomationElement? under = null;
+                for (int open = 0; open < 8 && under is null; open++)
+                {
+                    if (open > 0)
+                    {
+                        CloseTheAppMenu(window, automation, editor);
+                    }
+
+                    editor.Focus();
+                    AssertEventuallyFocused(editor, "the note didn't take the keys.");
+                    PressChord(VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
+                    AssertOpenOnItsFirstRow(window, automation, "FileMenu");
+                    rows = RowsOf(window, "FileMenu");
+                    SettledBoundsOf(rows[0]);
+                    under = rows[1..^1].FirstOrDefault(row => row.BoundingRectangle.Contains(resting));
+                }
+
+                Assert.True(
+                    under is not null,
+                    $"Eight opens never put a middle row under the pointer at {resting}; "
+                    + MenuDiagnosis(window, automation, WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(5))));
+                Assert.Equal(resting, Mouse.Position);
+                AssertItemNamesAreSpeakable(process, "app-menu-resting-pointer");
+
+                // A hovered menu's row opens its menu after the menu-show delay (Windows' 400 ms
+                // unless changed): the row under the resting pointer stays shut well past it.
+                Thread.Sleep(TimeSpan.FromMilliseconds(1500));
+                Assert.True(
+                    under!.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault != ExpandCollapseState.Expanded,
+                    $"The resting pointer opened {DescribeForDiagnosis(under)}'s menu.");
+                AssertOpenOnItsFirstRow(window, automation, "FileMenu");
+
+                // A hover that didn't take the keys could still take the menu's selection, and
+                // Down would then go on from the row under the pointer; it goes on from the first.
+                PressKey(VirtualKeyShort.DOWN);
+                AssertEventuallyFocused(rows[1], $"Down from the first row didn't reach the second, with the pointer resting on {DescribeForDiagnosis(under)}.");
+
+                // A click with the pointer still resting works the row under it: a command
+                // closes the menu, a menu's row opens its menu.
+                string clicked = DescribeForDiagnosis(under);
+                Mouse.Click();
+                Assert.True(
+                    Retry.WhileFalse(
+                        () => StateOf(window, "AppMenu") != ExpandCollapseState.Expanded
+                            || under!.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault == ExpandCollapseState.Expanded,
+                        TimeSpan.FromSeconds(5)).Success,
+                    $"A click on {clicked} with the pointer resting didn't work it.");
+            }
+            finally
+            {
+                // A pointer left over the window is how the job VMs met this.
+                Mouse.Position = new System.Drawing.Point(0, 0);
+            }
+        });
+
+    /// <summary><paramref name="row"/>'s bounds once two reads 150 ms apart agree: the popup
+    /// slides in, so a read during the slide finds it short of where it stops.</summary>
+    private static System.Drawing.Rectangle SettledBoundsOf(AutomationElement row)
+    {
+        System.Drawing.Rectangle was = row.BoundingRectangle;
+        for (int read = 0; read < 20; read++)
+        {
+            Thread.Sleep(150);
+            System.Drawing.Rectangle now = row.BoundingRectangle;
+            if (now == was)
+            {
+                return now;
+            }
+
+            was = now;
+        }
+
+        throw new Xunit.Sdk.XunitException($"{row.Name}'s bounds never settled; last at {was}.");
+    }
+
+    private static AutomationElement[] RowsOf(Window window, string menuId) =>
+        WaitForElement(window, menuId, TimeSpan.FromSeconds(5))
+            .FindAllChildren(condition => condition.ByControlType(ControlType.MenuItem));
+
+    private static AutomationElement LastRowOf(Window window, string menuId) => RowsOf(window, menuId).Last();
+
     /// <summary>With one menu open, Alt and another's letter closes it and opens the other.</summary>
     [Fact]
     public void AppMenu_AltLetterWhileOpenSwitchesMenus() =>
