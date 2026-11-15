@@ -3254,17 +3254,23 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private const int DecodeStateFinished = 2;
     private const int DecodeStateAbandoned = 3;
 
-    private static readonly AsyncLocal<int?> svgDecodeBudgetMillisecondsForTests = new();
+    [ThreadStatic]
+    private static int? svgDecodeBudgetMillisecondsForTests;
 
-    /// <summary>Test seam: the wait's budget, for the caller and the work it
-    /// starts. It flows with the caller's execution context rather than
-    /// staying on its thread, so a test reaches a decode the reading refresh
-    /// runs on its worker (#1949), and never another test's.</summary>
+    /// <summary>Test seam: the wait's budget, per caller thread.</summary>
     internal static int? SvgDecodeBudgetMillisecondsForTests
     {
-        get => svgDecodeBudgetMillisecondsForTests.Value;
-        set => svgDecodeBudgetMillisecondsForTests.Value = value;
+        get => svgDecodeBudgetMillisecondsForTests;
+        set => svgDecodeBudgetMillisecondsForTests = value;
     }
+
+    /// <summary>Test seam: the budget of every decode in this process whose
+    /// caller hasn't set <see cref="SvgDecodeBudgetMillisecondsForTests"/>,
+    /// on any thread (#1949). The unit-test host sets it as it loads, so a
+    /// slow job VM's real decode runs to its end instead of returning the
+    /// timeout sentence to a fact about something else; the facts about the
+    /// budget set their own or stub the wait. Never set by the app.</summary>
+    internal static int? SvgDecodeBudgetDefaultMillisecondsForTests { get; set; }
 
     [ThreadStatic]
     private static Func<byte[], Func<long, bool>, byte[]?>? svgDecodeBodyForTests;
@@ -3399,7 +3405,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // waiting (#1581). Any other result is a failed wait, logged, and
         // Join still keeps the results from being read before the decode
         // ends.
-        uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests ?? (SvgDecodeBudgetSeconds * 1000));
+        uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests
+            ?? SvgDecodeBudgetDefaultMillisecondsForTests
+            ?? (SvgDecodeBudgetSeconds * 1000));
         uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
             ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, budget);
         if (waited == NativeMethods.WaitTimeout)

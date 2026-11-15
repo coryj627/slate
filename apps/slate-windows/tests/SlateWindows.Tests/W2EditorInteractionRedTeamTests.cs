@@ -103,21 +103,13 @@ public sealed class W2EditorInteractionRedTeamTests
             "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><image href='file:///C:/private/secret.png'/></svg>",
             "<?xml-stylesheet href='https://example.invalid/style.css'?><svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'/>",
         ];
-        EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = UnhurriedDecodeMilliseconds;
-        try
+        foreach (string source in rejected)
         {
-            foreach (string source in rejected)
-            {
-                Assert.Null(EditorInteractionCoordinator.DecodeImage(
-                    Encoding.UTF8.GetBytes(source),
-                    "image/svg+xml",
-                    out string? reason));
-                Assert.Null(reason);
-            }
-        }
-        finally
-        {
-            EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = null;
+            Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                Encoding.UTF8.GetBytes(source),
+                "image/svg+xml",
+                out string? reason));
+            Assert.Null(reason);
         }
 
         const string safe =
@@ -158,12 +150,6 @@ public sealed class W2EditorInteractionRedTeamTests
             log.ToString(),
             StringComparison.Ordinal);
     }
-
-    /// <summary>#1949: a real decode these facts wait for runs to its end
-    /// however slow the machine. Where the budget isn't a fact's subject, the
-    /// real 5 s one could run out on a loaded job VM and return core's
-    /// timeout sentence in place of the outcome the fact is about.</summary>
-    private const int UnhurriedDecodeMilliseconds = 60_000;
 
     private const string SmallSvg =
         "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='red'/></svg>";
@@ -243,7 +229,7 @@ public sealed class W2EditorInteractionRedTeamTests
 
         WithSvgDecodeSeams(
             slots,
-            budgetMilliseconds: UnhurriedDecodeMilliseconds,
+            budgetMilliseconds: null,
             body: null,
             () =>
             {
@@ -306,7 +292,7 @@ public sealed class W2EditorInteractionRedTeamTests
         WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
         WithSvgDecodeSeams(
             slots,
-            budgetMilliseconds: UnhurriedDecodeMilliseconds,
+            budgetMilliseconds: null,
             body: null,
             () => Assert.NotNull(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _)));
     }
@@ -499,7 +485,8 @@ public sealed class W2EditorInteractionRedTeamTests
         // The budget "ends" only after the decode has finished entirely.
         EditorInteractionCoordinator.SvgDecodeWaitForTests = handle =>
         {
-            Assert.Equal(0u, WaitForSingleObject(handle, UnhurriedDecodeMilliseconds));
+            // As long as a real decode may take here (#1949).
+            Assert.Equal(0u, WaitForSingleObject(handle, UnhurriedSvgDecodes.Milliseconds));
             WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
             return 0x102;
         };
@@ -531,7 +518,7 @@ public sealed class W2EditorInteractionRedTeamTests
         var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
         WithSvgDecodeSeams(
             slots,
-            budgetMilliseconds: UnhurriedDecodeMilliseconds,
+            budgetMilliseconds: null,
             body: null,
             () =>
             {

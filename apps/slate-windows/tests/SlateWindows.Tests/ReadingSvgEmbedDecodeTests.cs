@@ -20,13 +20,6 @@ public sealed class ReadingSvgEmbedDecodeTests
         "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
         + "<rect width='8' height='8' fill='red'/></svg>";
 
-    /// <summary>#1949: a decode these facts wait for runs to its end however
-    /// slow the machine. The budget isn't their subject, and the real 5 s one
-    /// ran out on a loaded job VM, which showed the timeout sentence in place
-    /// of the image. Set inside each fact's thread, so it flows only to the
-    /// work that fact starts.</summary>
-    private const int UnhurriedDecodeMilliseconds = 60_000;
-
     [Fact]
     public void AnSvgEmbedIsDecodedOffTheDispatcherBeforeTheDocumentIsBuilt()
     {
@@ -48,8 +41,6 @@ public sealed class ReadingSvgEmbedDecodeTests
             StaThread.RunPumped(() =>
             {
                 int dispatcher = Environment.CurrentManagedThreadId;
-                // The refresh's worker inherits it.
-                EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = UnhurriedDecodeMilliseconds;
                 using VaultSession session = Scanned(fixture.Root);
                 using var tab = new WorkspaceTabViewModel(
                     session,
@@ -59,12 +50,12 @@ public sealed class ReadingSvgEmbedDecodeTests
                     startInteractionBackgroundWork: true);
                 tab.ToggleViewMode();
                 ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
-                // Longer than the decode's own allowance, so the decode's end
-                // is waited for too (Codex on #1949).
+                // Longer than a decode may take here, so a slow one is
+                // waited out too (Codex on #1949).
                 Assert.True(
                     PumpedDispatcher.PumpUntil(
                         () => !reading.IsLoading && reading.Document is not null,
-                        TimeSpan.FromMilliseconds(UnhurriedDecodeMilliseconds) + TimeSpan.FromSeconds(30)),
+                        TimeSpan.FromMilliseconds(UnhurriedSvgDecodes.Milliseconds) + TimeSpan.FromSeconds(30)),
                     "the projection never landed");
 
                 Assert.Empty(built);
@@ -102,8 +93,6 @@ public sealed class ReadingSvgEmbedDecodeTests
         File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
         StaThread.Run(() =>
         {
-            // The refresh's real decode; the first one's wait is stubbed below.
-            EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = UnhurriedDecodeMilliseconds;
             using VaultSession session = Scanned(fixture.Root);
             using var release = new ManualResetEventSlim(false);
             EditorInteractionCoordinator.SvgDecodeSlotsForTests = new EditorInteractionCoordinator.SvgDecodeSlots();
@@ -174,7 +163,6 @@ public sealed class ReadingSvgEmbedDecodeTests
         {
             StaThread.Run(() =>
             {
-                EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = UnhurriedDecodeMilliseconds;
                 using VaultSession session = Scanned(fixture.Root);
                 using var tab = new WorkspaceTabViewModel(
                     session,
@@ -223,7 +211,6 @@ public sealed class ReadingSvgEmbedDecodeTests
         {
             StaThread.Run(() =>
             {
-                EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = UnhurriedDecodeMilliseconds;
                 using VaultSession session = Scanned(fixture.Root);
                 using var tab = new WorkspaceTabViewModel(
                     session,
