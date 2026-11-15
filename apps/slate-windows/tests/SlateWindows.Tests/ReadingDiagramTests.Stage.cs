@@ -528,7 +528,7 @@ public sealed partial class ReadingDiagramTests
             ReadingDiagramElement oldPlaceholder = harness.Placeholder();
 
             harness.Gate.Set();
-            Assert.True(posted.Wait(TimeSpan.FromSeconds(10)), "the stage never posted its landing");
+            Assert.True(posted.Wait(UnhurriedSvgDecodes.LandingWait()), "the stage never posted its landing");
             posted.Reset();
             // An edit after the fence: the live fence keeps the saved
             // artifact's bytes, so the new projection's stage renders it.

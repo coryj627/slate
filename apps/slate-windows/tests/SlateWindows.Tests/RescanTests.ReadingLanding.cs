@@ -255,7 +255,9 @@ public sealed partial class RescanTests
 
             gate.Set();
             RunOutTheTornDownFetch(held.Before, release);
-            Assert.True(PumpedDispatcher.PumpUntil(() => landed == 1), "the reloaded projection's diagram stage landing");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => landed == 1, UnhurriedSvgDecodes.LandingWait()),
+                "the reloaded projection's diagram stage landing");
             PumpedDispatcher.Drain();
             PumpedDispatcher.Drain();
 
