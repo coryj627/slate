@@ -282,8 +282,9 @@ def reads(source: Source, census: list[str]) -> list[tuple[int, str]]:
         if is_census(value):
             found.append((literal.start, value))
         elif _PLAN_RELATIVE.fullmatch(value):
-            # Read under docs/plans; joined, so check_windows_docs_trigger.py's
-            # scan of this script does not take the pattern for a read.
+            # Read under docs/plans. check_windows_docs_trigger.py scans this
+            # script and reads a chain of string literals as a docs path; it
+            # skips this chain whole, because its last segment is a variable.
             plan = "/".join(("docs", "plans", value))
             if is_census(plan):
                 found.append((literal.start, plan))

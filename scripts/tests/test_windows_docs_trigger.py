@@ -35,9 +35,17 @@ WORKFLOW = textwrap.dedent(
 )
 
 
-def make_repo(root: Path, workflow: str = WORKFLOW, source: str = "") -> Path:
+def script_workflow(command: str) -> str:
+    """The fixture workflow with one step that runs scripts/reader.py."""
+    return WORKFLOW + f"    steps:\n      - name: Check\n        run: {command} scripts/reader.py --check\n"
+
+
+def make_repo(root: Path, workflow: str = WORKFLOW, source: str = "", script: str | None = None) -> Path:
     (root / ".github/workflows").mkdir(parents=True)
     (root / ".github/workflows/windows.yml").write_text(workflow, encoding="utf-8")
+    if script is not None:
+        (root / "scripts").mkdir()
+        (root / "scripts/reader.py").write_text(script, encoding="utf-8")
     port = root / "docs/plans/18_windows_port"
     port.mkdir(parents=True)
     (port / "a11y_trigger_designations.json").write_text(
@@ -195,6 +203,181 @@ class CheckFacts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             problems = trigger.check(make_repo(Path(tmp), workflow=WORKFLOW.replace("    paths:\n", "    tags:\n")))
         self.assertTrue(any("on.push.paths not found" in p for p in problems), problems)
+
+    def test_a_script_run_as_python_dash_i_is_scanned(self):
+        # #1699: the app job runs its generators as `python -I scripts/...`, and the scan read only `python3 scripts/...`.
+        script = 'DOC = "docs/plans/43_mac_backlog_delivery/x.md"\n'
+        for command in ("python3", "python", "python -I", "python3 -I", "python  -I",
+                        # Any other switch, and a versioned interpreter, run the script just the same.
+                        "python -B", "python -u -I", "python -X utf8", "python -W error -I", "python3.13"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow(command), script=script))
+                self.assertTrue(any("docs/plans/43_mac_backlog_delivery/x.md" in p and "scripts/reader.py" in p
+                                    for p in problems), problems)
+
+    def test_a_docs_path_a_script_joins_from_segments_is_a_read(self):
+        # The reconciliation generators name their documents this way.
+        for script in ('DOC = os.path.join(ROOT, "docs", "plans", "43_mac_backlog_delivery", "x.md")\n',
+                       "DOC = os.path.join(ROOT, 'docs', 'plans', '43_mac_backlog_delivery', 'x.md')\n",
+                       'DOC = os.path.join(\n    ROOT,\n    "docs",\n    "plans",\n    "43_mac_backlog_delivery",  # the folder\n    "x.md",\n)\n',
+                       'DOC = "/".join(["docs", "plans", "43_mac_backlog_delivery/x.md"])\n',
+                       'DOC = ROOT / "docs" / "plans" / "43_mac_backlog_delivery" / "x.md"\n',
+                       # A segment may hold several folders.
+                       'DOC = os.path.join(ROOT, "docs", "plans/43_mac_backlog_delivery/x.md")\n',
+                       'DOC = ROOT / "docs" / "plans/43_mac_backlog_delivery" / "x.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
+                self.assertTrue(any("docs/plans/43_mac_backlog_delivery/x.md" in p and "scripts/reader.py" in p
+                                    for p in problems), problems)
+
+    def test_a_path_that_climbs_out_of_a_covered_folder_is_checked_where_it_lands(self):
+        # docs/help/../plans/x.md is spelled under docs/help, which the fixture covers, and names a plan it does not.
+        covering = WORKFLOW.replace("      - 'docs/plans/*.md'\n", "      - 'docs/help/**'\n")
+        landed = "docs/plans/43_mac_backlog_delivery.md"
+        scripts = ('DOC = ROOT / "docs" / "help" / ".." / "plans" / "43_mac_backlog_delivery.md"\n',
+                   'DOC = os.path.join(ROOT, "docs", "help", "..", "plans", "43_mac_backlog_delivery.md")\n',
+                   'DOC = ROOT / "docs/help/../plans/43_mac_backlog_delivery.md"\n',
+                   # The app job's scripts run on Windows, where a backslash separates folders too.
+                   'DOC = os.path.join(ROOT, "docs", "help", r"..\\plans\\43_mac_backlog_delivery.md")\n',
+                   'DOC = os.path.join(ROOT, "docs", "help", "..\\\\plans\\\\43_mac_backlog_delivery.md")\n',
+                   'DOC = ROOT / r"docs\\help\\..\\plans\\43_mac_backlog_delivery.md"\n')
+        for script in scripts:
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                workflow = covering + "    steps:\n      - name: Check\n        run: python -I scripts/reader.py\n"
+                problems = trigger.check(make_repo(Path(tmp), workflow=workflow, script=script))
+                self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+        sources = ('File.ReadAllText(Path.Combine(Root, "docs", "help", "..", "plans", "43_mac_backlog_delivery.md"));',
+                   'File.ReadAllText(Path.Combine(Root, "docs/help/../plans/43_mac_backlog_delivery.md"));')
+        for source in sources:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=covering, source=source))
+                self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
+
+    def test_a_script_s_docs_path_is_read_with_either_separator_and_in_any_case(self):
+        # Windows opens docs\plans\x.md and Docs/Plans/x.md alike. Each is reported as the checkout spells it, as far
+        # as the checkout has it: the fixture has docs/plans, and no 43_mac_backlog_delivery under it.
+        landed = "docs/plans/43_mac_backlog_delivery/x.md"
+        for script in ('DOC = ROOT / r"docs\\plans\\43_mac_backlog_delivery\\x.md"\n',
+                       'DOC = os.path.join(ROOT, "docs", r"plans\\43_mac_backlog_delivery", "x.md")\n',
+                       'DOC = os.path.join(ROOT, "docs" "/plans/43_mac_backlog_delivery/x.md")\n',
+                       'DOC = os.path.join(ROOT, "Docs", "Plans", "43_mac_backlog_delivery", "x.md")\n',
+                       'DOC = ROOT / "DOCS/PLANS/43_mac_backlog_delivery/x.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
+                self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+
+    def test_a_windows_source_s_docs_path_is_read_with_either_separator_and_in_any_case(self):
+        landed = "docs/plans/43_mac_backlog_delivery/x.md"
+        for source in ('File.ReadAllText(Path.Combine(Root, @"docs\\plans\\43_mac_backlog_delivery\\x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "docs\\\\plans\\\\43_mac_backlog_delivery\\\\x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "Docs/Plans/43_mac_backlog_delivery/x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "Docs", "Plans", "43_mac_backlog_delivery", "x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "docs", "plans", @"43_mac_backlog_delivery\\x.md"));'):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), source=source))
+                self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
+
+    def test_a_sentence_that_starts_with_a_docs_path_is_not_a_read(self):
+        script = 'MESSAGE = "docs/plans/43_mac_backlog_delivery/x.md is stale; regenerate it"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
+    @unittest.skipUnless(hasattr(trigger.ast, "TemplateStr"), "template strings arrive with Python 3.14")
+    def test_a_path_built_in_a_template_string_invents_no_read(self):
+        script = 'DOC = t"docs/plans/{name}.md"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
+    def test_a_list_entry_in_another_case_does_not_cover_the_document(self):
+        # GitHub matches the list with case. A script that spells a document in another case reads it on Windows
+        # all the same, and an entry spelled the script's way would never match a change to the real file.
+        listed = WORKFLOW.replace("      - 'docs/plans/*.md'\n", "      - 'docs/plans/*.md'\n      - 'Docs/Plans/43_Backlog/Notes.md'\n")
+        workflow = listed + "    steps:\n      - name: Check\n        run: python -I scripts/reader.py\n"
+        for script in ('DOC = ROOT / "Docs" / "Plans" / "43_Backlog" / "Notes.md"\n',
+                       'DOC = ROOT / "Docs/Plans/43_Backlog/Notes.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=workflow, script=script)
+                (repo / "docs/plans/43_backlog").mkdir()
+                (repo / "docs/plans/43_backlog/notes.md").write_text("notes\n", encoding="utf-8")
+                problems = trigger.check(repo)
+                self.assertTrue(any(p.startswith("docs/plans/43_backlog/notes.md is read") and "scripts/reader.py" in p
+                                    for p in problems), problems)
+
+    def test_a_whole_path_literal_beside_other_arguments_is_read_as_itself(self):
+        # open("docs/plans/a.md", "r") reads a.md, not a folder named a.md/r.
+        script = 'TEXT = open("docs/plans/43_mac_backlog_delivery/x.md", "r", encoding="utf-8").read()\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            reads, unparsed = trigger.script_reads(repo, script_workflow("python -I"))
+        self.assertEqual(({"docs/plans/43_mac_backlog_delivery/x.md": {"scripts/reader.py"}}, []), (reads, unparsed))
+
+    def test_the_census_scans_the_three_generators_the_app_job_checks(self):
+        workflow_text = (trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8")
+        reads, unparsed = trigger.script_reads(trigger.REPO, workflow_text)
+        self.assertEqual([], unparsed)
+        for document, script in (("docs/plans/34_canvas_contracts.md", "scripts/canvas_reconciliation.py"),
+                                 ("docs/plans/35_graph_contracts.md", "scripts/graph_reconciliation.py"),
+                                 ("docs/plans/38_notification_dispatcher_contracts.md", "scripts/a11y_trigger_ledger.py")):
+            self.assertIn(script, reads.get(document, set()), reads)
+
+    def test_a_chain_with_a_non_literal_segment_is_skipped_whole(self):
+        # Read as its literal prefix, such a chain would name the folder docs/plans, which the lane's list does not
+        # cover and must not (test_the_lane_trigger_names_no_top_level_plan_glob). scripts/check_windows_census_trait.py
+        # holds two of them, and neither is a read.
+        for script in ('PLAN = os.path.join(ROOT, "docs", "plans", name)\n',
+                       'plan = "/".join(("docs", "plans", value))\n',
+                       'PLAN = os.path.join(ROOT, "docs", "plans", "43_mac_backlog_delivery", name)\n',
+                       'PLAN = os.path.join(ROOT, "docs", "plans", f"{number}_contracts.md")\n',
+                       'PLAN = os.path.join(ROOT, "docs", "plans", *parts)\n',
+                       'PLAN = os.path.join(ROOT, "docs", "plans", "43_x" + suffix)\n',
+                       'PLAN = ROOT / "docs" / "plans" / name\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+                self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+                self.assertFalse(any("scripts/reader.py" in p for p in trigger.check(repo)))
+
+    def test_a_path_in_a_script_s_docstring_or_comment_is_not_a_read(self):
+        for script in ('"""Joins like `os.path.join(root, "docs", "plans", "43_x.md")`."""\n# ("docs", "plans", "43_y.md")\n',
+                       '"""Reads "docs/plans/43_x.md" when asked."""\nX = 1  # see "docs/plans/43_y.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+                self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
+    def test_a_path_built_in_an_f_string_invents_no_read(self):
+        # The blind spot, kept honest: the scan cannot say what such a path names, so it reports neither the
+        # folder its fixed start spells nor a file named with the braces.
+        for script in ('CONTRACT = "43_mac_backlog_delivery"\nDOC = REPO / f"docs/plans/{CONTRACT}.md"\n',
+                       'DOC = os.path.join(ROOT, f"docs/plans/{number}_contracts.md")\n',
+                       'DOC = REPO / f"docs/help/{name}"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+                self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+                self.assertFalse(any("scripts/reader.py" in p for p in trigger.check(repo)))
+        # A literal inside the braces is a literal like any other.
+        script = 'TEXT = f"{read(\'docs/plans/43_mac_backlog_delivery/x.md\')}"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            reads, _ = trigger.script_reads(repo, script_workflow("python -I"))
+        self.assertEqual({"docs/plans/43_mac_backlog_delivery/x.md": {"scripts/reader.py"}}, reads)
+
+    def test_a_script_the_scan_cannot_parse_fails(self):
+        # A script the scan cannot read is a script whose docs paths nobody checked.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script="def broken(:\n")
+            problems = trigger.check(repo)
+        self.assertTrue(any("scripts/reader.py" in p and "cannot be parsed" in p for p in problems), problems)
+
+    def test_a_script_python_runs_is_a_script_the_scan_reads(self):
+        # Python reads a source file's byte-order mark and its coding line, so the scan does too.
+        document = "docs/plans/43_mac_backlog_delivery/x.md"
+        for label, source in (("a byte-order mark", b"\xef\xbb\xbf" + f'DOC = "{document}"\n'.encode("utf-8")),
+                              ("a coding line", f'# -*- coding: latin-1 -*-\nNAME = "caf\xe9"\nDOC = "{document}"\n'.encode("latin-1"))):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script="")
+                (repo / "scripts/reader.py").write_bytes(source)
+                self.assertEqual(({document: {"scripts/reader.py"}}, []), trigger.script_reads(repo, script_workflow("python -I")))
 
 
 if __name__ == "__main__":
