@@ -153,11 +153,17 @@ internal sealed class ReadingMathElement : ContentControl
         base.OnKeyDown(e);
     }
 
-    private static ControlTemplate NewDrawingTemplate()
+    /// <summary>Sealed here (#1955). WPF keeps an unsealed template with the thread that
+    /// built it, and the type's own is built once for the process, by whichever thread
+    /// first touches the type. Sealed, it belongs to no thread, so any thread's formula
+    /// takes it.</summary>
+    internal static ControlTemplate NewDrawingTemplate()
     {
         var scroller = new FrameworkElementFactory(typeof(FormulaScroller), ScrollerName);
         scroller.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter)));
-        return new ControlTemplate(typeof(ReadingMathElement)) { VisualTree = scroller };
+        var template = new ControlTemplate(typeof(ReadingMathElement)) { VisualTree = scroller };
+        template.Seal();
+        return template;
     }
 }
 
