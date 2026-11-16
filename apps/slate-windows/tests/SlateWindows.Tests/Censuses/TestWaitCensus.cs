@@ -2568,8 +2568,6 @@ public sealed class TestWaitCensus
             "no-wait-witness: none shown yet; the candidate is a count of the untracking seam's returns, zero straight after the call"),
         ("SingleInstanceCoordinatorTests.cs", "ConnectedPrimaryThatStopsReadingCannotExceedTheSendDeadline", 1,
             "no-wait-witness: none shown yet; the candidate is send.WaitAsync's bound and the refused delivery"),
-        ("SyncMarkerWatcherTests.cs", "ContinuousSubIntervalChurnStillFiresByTheCeiling", 1,
-            "no-wait-witness: none shown yet; the candidate is the fire arriving while the churn still runs"),
         ("W2EditorInteractionRedTeamTests.cs", "SvgPreview_PastTheDecodeBudgetShowsCoresSentenceAndLeavesTheDecoderRunning", 1,
             "no-wait-witness: none shown yet; the candidate is the abandoned slot and the unfinished decoder, asserted beside it"),
     ];

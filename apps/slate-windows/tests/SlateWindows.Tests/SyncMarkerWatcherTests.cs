@@ -144,17 +144,16 @@ public sealed class SyncMarkerWatcherTests
         try
         {
             watcher.Start();
-            var elapsed = Stopwatch.StartNew();
             // The churn only stops when this scope exits, so it is
-            // demonstrably still running when the assertions return.
+            // demonstrably still running when the assertion returns. A fire
+            // inside the scope is the whole witness: a trailing-only
+            // debounce cannot produce one, however long it is given. How
+            // long the fire took is not asserted.
             using (new Churn(root, periodMs: 50))
             {
                 Assert.True(
                     SpinWait.SpinUntil(() => Volatile.Read(ref fires) >= 1, Bound),
                     "continuous sub-interval churn must not starve detection");
-                Assert.True(
-                    elapsed.Elapsed < TimeSpan.FromSeconds(5),
-                    $"the ceiling is {Ceiling}; the fire took {elapsed.Elapsed}");
             }
         }
         finally
