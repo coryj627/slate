@@ -2,6 +2,8 @@
 
 Issues: #1616. Size S. Lanes: a11y-check (the PR's own run; its analysis job needs a mac runner in CI, the Studio or Namespace's), windows-runner-tests (the Pester fact), mac-runner-tests (starts for this file; pins nothing this PR changes). AT: —. Wave: C2, slot 1, after CB-3. Depends on: CB-3 merged (both edit `Workflows.Tests.ps1`). Parallel with: CB-6, CB-8. Decision: CD4, which the owner answers before C0 (plan §3); this spec encodes its recommendation (rewrite the existing comment, never create one). Interlock: `Workflows.Tests.ps1` goes CB-3, CB-5, CB-44; rebase and rerun the suite, never hand-merge. Review: a red team, then Codex adversarial-review rounds until it approves (plan §4 rule 9; the chunk changes a workflow's script and a Pester fact).
 
+*2026-11-16:* the owner answered CD4 as recommended (plan 47 §3.1): rewrite the existing comment, and never create one. The "delete" paths below stay as the record of what was offered and are not taken.
+
 ## Goal
 
 When the score job computes no score, the bot's existing score comment on the pull request is rewritten to say so, with the sentence the floor step failed with and a link to the run. Where the bot had no comment, none is created. Results that are not valid JSON, or hold no valid score, fail the floor step in one plain sentence with no stack trace. No verdict changes: every case here is already a red check.
