@@ -1502,11 +1502,10 @@ public sealed class PumpedSaveReentrancyTests
                     DisposeLifecycle();
                 }
                 SynchronizationContext.SetSynchronizationContext(_previousContext);
-                _parked.Dispose();
-                _release.Dispose();
-                // The lifecycle's teardown joined every tree read first.
-                _treeReadsOpen.Dispose();
-                TreeReadHeld.Dispose();
+                // The events are left to the collector (#1673). The
+                // lifecycle's teardown joined every save worker and tree
+                // read first, so none is still waiting here; a fixture that
+                // released a gate does not dispose it all the same.
                 TryDelete(Root);
                 TryDelete(_stateDir);
             }
