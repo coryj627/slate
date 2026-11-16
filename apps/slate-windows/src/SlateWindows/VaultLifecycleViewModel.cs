@@ -611,12 +611,13 @@ internal sealed partial class VaultLifecycleViewModel
         CloseSearchForVaultTransition();
 
         CloseSession();
-        // Whether the keys are with the welcome view for this attempt: the
-        // switch's close below handed them over, and no vault has shown
-        // since. While it is true no failure exit hands them over again
-        // (#1730): a second return would pull the keys back to the Open
-        // button from wherever the reader has moved them. It is cleared
-        // where the new vault shows.
+        // Whether this attempt has returned to the welcome view and no vault
+        // has shown since: the switch's close below raises the return, which
+        // hands the keys to the welcome view. While it is true no failure
+        // exit raises it again (#1730): a second return would pull the keys
+        // back to the Open button from wherever the reader has moved them
+        // (a recent vault's button, the menu bar). It is cleared where the
+        // new vault shows.
         bool returnedToWelcome = IsVaultOpen;
         if (IsVaultOpen)
         {
@@ -758,10 +759,11 @@ internal sealed partial class VaultLifecycleViewModel
                     // WB-9 (#1319, WD4): the welcome view holds the keys through
                     // every phase of the open, and gives way in the same turn the
                     // workspace is published, so the keys move once.
-                    IsVaultOpen = true;
-                    // The new vault shows: a failure from here on returns to
-                    // the welcome view again (#1730).
+                    // The new vault shows here: a failure from now on returns
+                    // to the welcome view again (#1730). Cleared first, so a
+                    // throw out of the show itself returns too.
                     returnedToWelcome = false;
+                    IsVaultOpen = true;
                     if (recorded is not null)
                     {
                         ReplaceRecentVaults(recorded);
@@ -786,6 +788,10 @@ internal sealed partial class VaultLifecycleViewModel
                     A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
+                // No vault is open: the one that failed leaves the window's
+                // title and the path with it, as a close's does.
+                VaultDisplayName = string.Empty;
+                VaultPath = string.Empty;
                 if (!returnedToWelcome)
                 {
                     ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
@@ -804,6 +810,10 @@ internal sealed partial class VaultLifecycleViewModel
                 ReportTerminalStatus($"Unexpected vault error: {exception.Message}", A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
+                // No vault is open: the one that failed leaves the window's
+                // title and the path with it, as a close's does.
+                VaultDisplayName = string.Empty;
+                VaultPath = string.Empty;
                 if (!returnedToWelcome)
                 {
                     ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
