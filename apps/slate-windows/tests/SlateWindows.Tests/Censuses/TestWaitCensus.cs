@@ -2542,10 +2542,6 @@ public sealed class TestWaitCensus
     /// budget or an oracle the word does not describe.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitElapsedCeilings =
     [
-        ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesTreeQueryAndDrainsAtOnce", 1,
-            "no-wait-witness: none shown yet; the candidate is observed(), read straight after Dispose"),
-        ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesGraphQueryAndDrainsAtOnce", 1,
-            "no-wait-witness: none shown yet; the candidate is observed(), read straight after Dispose"),
         ("HeldVaultStoreFileTests.cs", "ASaveThatStaysHeldFailsAfterAShortWaitAndLeavesTheFile", 1,
             "no-wait-witness: AnchoredVaultStore has no seam that observes what a held save's backoff really waited"),
         ("HotExitTests.cs", "AClosedOpenStopsWaitingForTheLastSession", 1,
