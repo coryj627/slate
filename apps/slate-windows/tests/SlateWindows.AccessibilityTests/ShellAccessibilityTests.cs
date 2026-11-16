@@ -2568,6 +2568,11 @@ public sealed partial class ShellAccessibilityTests
     /// folder is uploaded, failed run or not, in the artifact
     /// <c>slate-windows-accessibility-&lt;sha&gt;-&lt;attempt&gt;</c>, which is
     /// kept 30 days: the log is <c>&lt;testName&gt;\slate-windows.log</c> there.
+    /// <paramref name="testName"/> is whatever the caller passes. Most facts
+    /// pass their own name. A fact that runs through
+    /// <c>RunFindInNoteJourney</c> does not: the folder is named for the
+    /// journey (<c>theme-readability</c>, <c>dropdown-row</c>), the first
+    /// argument of that call, not for the fact.
     /// </summary>
     /// <remarks>
     /// The app holds <c>slate-windows.log</c> open for writing, so each
