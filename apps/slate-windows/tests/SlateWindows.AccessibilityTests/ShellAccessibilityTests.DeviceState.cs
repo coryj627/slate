@@ -55,15 +55,20 @@ public sealed partial class ShellAccessibilityTests
                     + "but this runner is executing in a non-interactive session.");
             }
 
-            // The open records the vault before the workspace is shown; a
-            // session-0 sandbox has no window to wait for, so it waits for
-            // the record itself.
+            // The open records the vault before the workspace is shown, so on
+            // a desktop the save has been made by here and the read below is
+            // the first to open the file. That order matters: the recents
+            // store saves once, and a read open at that instant would refuse
+            // the save and lose the record (GateFile). A session-0 sandbox
+            // has no window to wait for, so there the paced poll is the wait.
             string expected = Path.GetFullPath(vaultRoot);
-            bool recorded = SpinWait.SpinUntil(() => RecordsVault(recents, expected), TimeSpan.FromSeconds(30));
-            Assert.True(
-                recorded,
-                $"the launch did not record {expected} in {recents} (SLATE_LOCAL_APP_DATA did not reach it). "
-                + $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+            _ = ExpectFileText(
+                recents,
+                text => RecordsVault(text, expected),
+                $"the launch did not record {expected} in {recents} (SLATE_LOCAL_APP_DATA did not reach it).",
+                nameof(ShellGate_WritesItsRecentsUnderTheRunsOwnRoot),
+                logDirectory,
+                TimeSpan.FromSeconds(30));
         }
         finally
         {
@@ -90,23 +95,15 @@ public sealed partial class ShellAccessibilityTests
             }
         }
 
-        static bool RecordsVault(string file, string vault)
+        static bool RecordsVault(string recentsJson, string vault)
         {
             try
             {
-                using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(file));
+                using JsonDocument document = JsonDocument.Parse(recentsJson);
                 return document.RootElement.ValueKind == JsonValueKind.Array
                     && document.RootElement.EnumerateArray().Any(entry =>
                         entry.TryGetProperty("path", out JsonElement path)
                         && string.Equals(path.GetString(), vault, StringComparison.OrdinalIgnoreCase));
-            }
-            catch (IOException)
-            {
-                return false;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return false;
             }
             catch (JsonException)
             {

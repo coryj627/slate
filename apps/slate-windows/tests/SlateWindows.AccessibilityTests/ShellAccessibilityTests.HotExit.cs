@@ -40,7 +40,7 @@ public sealed partial class ShellAccessibilityTests
         string relaunchLogDirectory = Path.Combine(testRoot, "logs-relaunch");
         WriteShellFixtureVault(vaultRoot);
         string notePath = Path.Combine(vaultRoot, "note.md");
-        string onDisk = File.ReadAllText(notePath);
+        string onDisk = GateFile.ReadText(notePath);
         var heard = new ConcurrentQueue<ReceivedNotification>();
         Process? process = null;
         try
@@ -60,7 +60,7 @@ public sealed partial class ShellAccessibilityTests
                 "Slate did not exit within 15 s of WM_CLOSE with an unsaved note: a close prompt is up, "
                 + "or the close never settled. app log: "
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
-            Assert.Equal(onDisk, File.ReadAllText(notePath));
+            Assert.Equal(onDisk, GateFile.ReadText(notePath));
             process.Dispose();
             process = null;
 
@@ -93,7 +93,7 @@ public sealed partial class ShellAccessibilityTests
                 openedAt >= 0 && openedAt < Array.IndexOf(lines, restored.Text),
                 $"\"{restored.Text}\" was not heard after \"{opened.Text}\": " + string.Join(" | ", lines));
             AssertRaisedAsRendered(restored, HeardFrom(heard, slateId).First(line => line.DisplayString == restored.Text));
-            Assert.Equal(onDisk, File.ReadAllText(notePath));
+            Assert.Equal(onDisk, GateFile.ReadText(notePath));
         }
         finally
         {
@@ -116,7 +116,7 @@ public sealed partial class ShellAccessibilityTests
         string relaunchLogDirectory = Path.Combine(testRoot, "logs-relaunch");
         WriteShellFixtureVault(vaultRoot);
         string notePath = Path.Combine(vaultRoot, "note.md");
-        string onDisk = File.ReadAllText(notePath);
+        string onDisk = GateFile.ReadText(notePath);
         Process? process = null;
         try
         {
@@ -131,7 +131,7 @@ public sealed partial class ShellAccessibilityTests
             Thread.Sleep(TimeSpan.FromSeconds(3));
             process.Kill(entireProcessTree: true);
             Assert.True(process.WaitForExit(10_000), "premise: the killed process did not exit.");
-            Assert.Equal(onDisk, File.ReadAllText(notePath));
+            Assert.Equal(onDisk, GateFile.ReadText(notePath));
             process.Dispose();
             process = null;
 
@@ -142,7 +142,7 @@ public sealed partial class ShellAccessibilityTests
             AssertTheNoteCameBackDirty(window, automation, typed);
             // R-4's runtime witness at the restored, unsaved tab.
             AssertItemNamesAreSpeakable(process, "hot-exit-kill-restored");
-            Assert.Equal(onDisk, File.ReadAllText(notePath));
+            Assert.Equal(onDisk, GateFile.ReadText(notePath));
         }
         finally
         {

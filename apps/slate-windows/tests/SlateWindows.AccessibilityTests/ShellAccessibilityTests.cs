@@ -2519,6 +2519,35 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>
+    /// Waits until the file at <paramref name="path"/> reads as
+    /// <paramref name="ready"/> asks, and returns that text. The wait is
+    /// <see cref="GateFile.PollText"/>: one short read, then a pause, so a
+    /// save the app makes meanwhile finds the file free. On a miss the app's
+    /// log is kept (<see cref="PreserveEvidence"/>) and the failure says
+    /// <paramref name="what"/>, what the file holds and the log's last lines.
+    /// </summary>
+    private static string ExpectFileText(
+        string path, Func<string, bool> ready, string what, string testName, string logDirectory, TimeSpan timeout)
+    {
+        if (GateFile.PollText(path, ready, timeout) is { } text)
+        {
+            return text;
+        }
+
+        PreserveEvidence(testName, logDirectory);
+        throw new Xunit.Sdk.XunitException(
+            $"{what} After {timeout.TotalSeconds:0.#} s {Path.GetFileName(path)} reads: {DiagnosticFileHead(path)}. "
+            + $"The app log's last lines: {LogTail(Path.Combine(logDirectory, "slate-windows.log"))}");
+    }
+
+    /// <summary>The last eight lines of the app's log, for a failure
+    /// message.</summary>
+    private static string LogTail(string logFile) =>
+        GateFile.TryReadText(logFile) is { } log
+            ? string.Join(" | ", log.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(8).Select(line => line.TrimEnd('\r')))
+            : "<no app log>";
+
+    /// <summary>
     /// Whether Slate has exited, for a failure message; never throws, so
     /// it cannot replace the failure it describes.
     /// </summary>
@@ -2972,22 +3001,10 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 openRow, "the open task row never took keyboard focus before Space");
             Keyboard.Type(VirtualKeyShort.SPACE);
-            if (!SpinWait.SpinUntil(
-                () =>
-                {
-                    // Tolerant of the app's atomic temp+rename
-                    // write racing this poll.
-                    try
-                    {
-                        return File.ReadAllText(todoPath)
-                            .Contains("- [x] first open");
-                    }
-                    catch (IOException)
-                    {
-                        return false;
-                    }
-                },
-                TimeSpan.FromSeconds(20)))
+            if (GateFile.PollText(
+                    todoPath,
+                    text => text.Contains("- [x] first open", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(20)) is null)
             {
                 // A miss says where the Space went: what todo.md holds,
                 // who had the foreground and focus, and which keys the
@@ -3197,22 +3214,13 @@ public sealed partial class ShellAccessibilityTests
             titleEditor!.Patterns.Value.Pattern.SetValue("Renamed");
             titleEditor.Focus();
             Keyboard.Type(VirtualKeyShort.ENTER);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        try
-                        {
-                            return File.ReadAllText(notePath)
-                                .Contains("title: Renamed");
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(20)),
-                "the Enter commit never reached disk");
+            _ = ExpectFileText(
+                notePath,
+                text => text.Contains("title: Renamed", StringComparison.Ordinal),
+                "the Enter commit never reached disk.",
+                nameof(PropertiesHeader_RowsEditSheetsAndRenameCarryTheMacShapes),
+                logDirectory,
+                TimeSpan.FromSeconds(20));
 
             // The add sheet opens as a named UIA dialog and Cancel
             // dismisses it.
@@ -4297,28 +4305,16 @@ public sealed partial class ShellAccessibilityTests
                 "the cell editor did not take focus");
             Keyboard.Type("todo-edited");
             PressKey(VirtualKeyShort.RETURN);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the app's atomic temp+rename
-                        // write racing this poll (the CI sharing
-                        // violation this journey tripped on PR #1124).
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "status: todo-edited",
-                                    StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "the committed cell edit never reached the file");
+            // A paced read: this journey's spinning read met the app's
+            // save on PR #1124, and a read open at the instant of the app's
+            // rename refuses it (GateFile).
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("status: todo-edited", StringComparison.Ordinal),
+                "the committed cell edit never reached the file.",
+                nameof(BasesSurfaces_GridBuilderAndLeaves_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(15));
             // The committed edit's vault event re-executes every Bases
             // surface (C9): the tab grid re-binds BEHIND the right
             // pane while the journey moves on, and an axe snapshot
@@ -4673,46 +4669,22 @@ public sealed partial class ShellAccessibilityTests
             editor.Focus();
             Keyboard.Type("first revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "first revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the first in-app save never reached disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("first revision", StringComparison.Ordinal),
+                "the first in-app save never reached disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(10));
             Keyboard.Type("second revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "second revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the second in-app save never reached disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("second revision", StringComparison.Ordinal),
+                "the second in-app save never reached disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(10));
 
             // slate.history.showPanel: the chordless menu route
             // (contract H11) reveals the leaf.
@@ -4914,25 +4886,13 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(15)),
                 "the restore confirmation dialog with its pinned "
                 + "Cancel/Restore buttons never appeared");
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return !File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "second revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "the restore never landed on disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => !text.Contains("second revision", StringComparison.Ordinal),
+                "the restore never landed on disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(15));
             // Success returns focus to the NEW HEAD row — exactly
             // HistoryRow0, not the anchor row or its buttons, whose
             // ids also start with "HistoryRow" (H7 / WCAG 2.4.3;
@@ -6553,23 +6513,13 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
 
             string createdPath = Path.Combine(vaultRoot, "Journey Note.md");
-            string saved = string.Empty;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        try
-                        {
-                            saved = File.ReadAllText(createdPath);
-                            return saved.Contains("MARK", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the typed caret marker never reached the note on disk.");
+            string saved = ExpectFileText(
+                createdPath,
+                text => text.Contains("MARK", StringComparison.Ordinal),
+                "the typed caret marker never reached the note on disk.",
+                nameof(Templates_PickerPromptsCreateAndCancel_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(10));
             // The template's own frontmatter renders through into the
             // note (that is how template frontmatter seeds properties;
             // mac-identical), and MARK sits exactly where {{cursor}}
@@ -7001,7 +6951,7 @@ public sealed partial class ShellAccessibilityTests
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CancelTrash")) is null,
                 TimeSpan.FromSeconds(10)), "Cancellation waited for the external structural lock to release.");
             AssertTrashProgressAbsent(window, automation);
-            Assert.Equal("# Keep\n", File.ReadAllText(Path.Combine(vaultRoot, "keep.md")));
+            Assert.Equal("# Keep\n", GateFile.ReadText(Path.Combine(vaultRoot, "keep.md")));
             blocker.Unlock(0, long.MaxValue);
         }
         finally
@@ -7185,7 +7135,7 @@ public sealed partial class ShellAccessibilityTests
                 .Replace('\\', '/')
                 .Contains("/.slate/", StringComparison.Ordinal))
             .OrderBy(path => path, StringComparer.Ordinal)
-            .Select(path => $"{path}|{File.ReadAllText(path)}")];
+            .Select(path => $"{path}|{GateFile.ReadText(path)}")];
 
     /// <summary>
     /// Whether a chord can actually be delivered to the app, or is held
@@ -7445,7 +7395,7 @@ public sealed partial class ShellAccessibilityTests
                 + string.Join(
                     " / ",
                     Directory.EnumerateFiles(vaultRoot, "*.canvas")
-                        .Select(f => Path.GetFileName(f) + "=" + File.ReadAllText(f)))
+                        .Select(f => Path.GetFileName(f) + "=" + (GateFile.TryReadText(f) ?? "<unreadable>")))
                 + "; log: "
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
 
@@ -10580,23 +10530,18 @@ public sealed partial class ShellAccessibilityTests
         };
         string ExpectedFile(uniffi.slate_uniffi.GraphConfig config) =>
             uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigEncode(config, null);
-        string ReadFile()
-        {
-            try
-            {
-                return File.Exists(configPath) ? File.ReadAllText(configPath) : string.Empty;
-            }
-            catch (IOException)
-            {
-                return string.Empty;
-            }
-        }
+        string ReadFile() => GateFile.TryReadText(configPath) ?? string.Empty;
         void ExpectFile(uniffi.slate_uniffi.GraphConfig config, string what)
         {
+            // A paced read. This wait used to spin on File.ReadAllText, and a
+            // read open at the instant of the app's rename refuses the save:
+            // that is how the gate lost a graph.json write (#1865, #1788).
             string expected = ExpectedFile(config);
-            Assert.True(
-                SpinWait.SpinUntil(() => ReadFile() == expected, TimeSpan.FromSeconds(10)),
-                $"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
+            if (GateFile.PollText(configPath, text => text == expected, TimeSpan.FromSeconds(10)) is null)
+            {
+                PreserveEvidence(nameof(GraphInspector_FiltersGroupsAndForces_AreClean), logDirectory);
+                Assert.Fail($"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
+            }
         }
 
         Process? process = null;
@@ -12285,21 +12230,8 @@ public sealed partial class ShellAccessibilityTests
         return WaitForElement(window, itemAutomationId, timeout);
     }
 
-    private static string ReadSharedLog(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return "<no app log>";
-        }
-
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
-    }
+    private static string ReadSharedLog(string path) =>
+        GateFile.TryReadText(path) ?? (File.Exists(path) ? "<the app log could not be read>" : "<no app log>");
 
     private static AutomationElement? TryWaitForElement(
         Window window,

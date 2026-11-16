@@ -30,9 +30,9 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             Choose(root, device, logs, "Light", VirtualKeyShort.HOME, expectLight: true);
-            Assert.Contains("\"theme\": \"light\"", File.ReadAllText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
+            Assert.Contains("\"theme\": \"light\"", GateFile.ReadText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
             AssertFirstPaint(device, logs, expectLight: true, thenChoose: VirtualKeyShort.DOWN);
-            Assert.Contains("\"theme\": \"dark\"", File.ReadAllText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
+            Assert.Contains("\"theme\": \"dark\"", GateFile.ReadText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
             AssertFirstPaint(device, logs, expectLight: false, thenChoose: null);
         }
         finally
@@ -104,7 +104,7 @@ public sealed partial class ShellAccessibilityTests
             WaitForGold(window, expected: false);
             AssertEventuallyFocused(combo, "the accent's change took focus off the combo.");
             AssertAxeClean(process!, "settings-sheet-accent");
-            Assert.Contains("\"accentColor\": \"windows\"", File.ReadAllText(preferences), StringComparison.Ordinal);
+            Assert.Contains("\"accentColor\": \"windows\"", GateFile.ReadText(preferences), StringComparison.Ordinal);
             process!.Kill(entireProcessTree: true);
             process.WaitForExit(10_000);
 
@@ -191,12 +191,22 @@ public sealed partial class ShellAccessibilityTests
             if (thenChoose is VirtualKeyShort key)
             {
                 ChooseThemeByKeys(window, key);
-                DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-                string preferences = Path.Combine(device, "preferences.json");
-                while (!File.ReadAllText(preferences).Contains("\"theme\": \"dark\"", StringComparison.Ordinal) && DateTime.UtcNow < deadline)
-                {
-                    Thread.Sleep(100);
-                }
+                // The preference is saved once, and a read open at that instant would
+                // refuse the save and lose it (GateFile). So the file is not opened until
+                // the app shows what follows the save: the combo reads the choice and the
+                // window is drawn in it (DevicePreference.Choose saves, then applies).
+                AutomationElement combo = WaitForElement(window, "SettingsTheme", TimeSpan.FromSeconds(5));
+                Assert.True(
+                    SpinWait.SpinUntil(() => ComboValue(combo) == "Dark", TimeSpan.FromSeconds(10)),
+                    $"the key did not choose Dark; the theme reads '{ComboValue(combo)}'.");
+                WaitForAppliedTheme(window.Properties.NativeWindowHandle.Value, light: false);
+                _ = ExpectFileText(
+                    Path.Combine(device, "preferences.json"),
+                    text => text.Contains("\"theme\": \"dark\"", StringComparison.Ordinal),
+                    "the Dark choice never reached preferences.json.",
+                    nameof(ThemePreference_ChoosingLightStaysLightAcrossARestart),
+                    logs,
+                    TimeSpan.FromSeconds(10));
             }
         }
         finally
@@ -204,6 +214,35 @@ public sealed partial class ShellAccessibilityTests
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             process?.WaitForExit(10_000);
         }
+    }
+
+    /// <summary>Waits until the window's own pixels are the chosen theme's. The app applies
+    /// a choice after it has saved it, so this is what a journey waits for before it reads
+    /// the preferences file. Pure black is the window before its first render, not a
+    /// theme.</summary>
+    private static void WaitForAppliedTheme(IntPtr handle, bool light)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        int color;
+        while (true)
+        {
+            (int[] pixels, Size size) = OwnPixels(handle);
+            color = CommonestColor(pixels, size);
+            double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
+            if (color != 0x000000 && (light ? brightness > 180 : brightness < 80))
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            Thread.Sleep(GateFile.PollInterval);
+        }
+
+        Assert.Fail($"the window never drew the {(light ? "light" : "dark")} theme; its commonest colour is #{color:X6}.");
     }
 
     /// <summary>What a reader hears as a closed combo box's value: a combo that can't be
