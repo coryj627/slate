@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Windows.Threading;
 using SlateWindows.Bases;
 using SlateWindows.Panels;
@@ -25,6 +26,7 @@ public sealed class SaveChainAdmissionTests
     private const string Edit = "v3 the reader's edit\n";
     private const string Note = "---\nstatus: draft\n---\n\nBody.\n";
     private const string NoteEdited = "---\nstatus: draft\n---\n\nBody.\nAn edit on its way to disk.\n";
+    private const string Gone = "# Gone\n\nSaved before it was deleted.\n";
     private static readonly TimeSpan Hold = TimeSpan.FromSeconds(10);
     private const string TaskNote = "---\nstatus: draft\n---\n\n- [ ] the task\n";
     private const string TaskNoteEdited = "---\nstatus: draft\n---\n\n- [ ] the task\nAn edit on its way to disk.\n";
@@ -1216,6 +1218,188 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    // ---- A deleted file's recovery (plan 47 CB-9a, #1889; CD5(c)) -------------
+
+    /// <summary>A recover asked while another operation is admitted for the
+    /// path takes a ticket behind it: nothing is created until that
+    /// operation ends, and then the file is recovered once.</summary>
+    [Fact]
+    public void ARecoverStartedUnderAnAdmittedOperationWaitsThenRecoversOnce() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("recover-behind-op", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("gone.md", _ => ahead.Task);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")), "the recover created the file beside the operation admitted before it");
+            Assert.Empty(answers);
+
+            ahead.SetResult();
+            h.PumpUntil(() => !answers.IsEmpty && h.Workspace.SavesIdle, "the recover after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal([(true, false)], answers);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RestoredFile);
+            Assert.Equal(Gone, h.Read("gone.md"));
+            Assert.Empty(alerts);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>A tab that names the deleted path saves by create. Its save
+    /// is held before its write when the recover is asked, so the recover
+    /// waits; the save then creates the file, and core's exclusive create
+    /// answers the recover that the path is taken: the row opens Restore As,
+    /// nothing is spoken for the recover, and the file keeps the tab's
+    /// text.</summary>
+    [Fact]
+    public void ARecoverBehindAGhostTabsSaveAnswersDestinationExistsAndOverwritesNothing() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("recover-behind-ghost-save", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        WorkspaceTabViewModel ghost = h.Open("gone.md");
+        Assert.Null(ghost.SavedContentHash);
+        var held = new HeldWork(hook => ghost.SaveWriteHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            ghost.Text = Edit;
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")), "the recover created the file beside the save admitted before it");
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && h.Workspace.SavesIdle, "the save and then the recover's answer");
+            Assert.True(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            Assert.Equal([(false, true)], answers);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RestoredFile);
+            Assert.Empty(alerts);
+            Assert.Equal(Edit, h.Read("gone.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ghost.SaveWriteHookForTests = null;
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The other direction: the recover is held before its create
+    /// when a tab on the path asks to save. The save waits for the recover's
+    /// publication, then finds the recovered file and is blocked, so the
+    /// recovered bytes are kept and the tab keeps its edits.</summary>
+    [Fact]
+    public void ASaveStartedUnderAnAdmittedRecoverWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("save-behind-recover", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        WorkspaceTabViewModel ghost = h.Open("gone.md");
+        var held = new HeldWork(hook => h.Workspace.HistoryCreateHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            h.Events.Clear();
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            h.PumpUntil(() => held.Entered, "premise: the recover reaching its hold before its create");
+
+            ghost.Text = Edit;
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the recover");
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && h.Workspace.SavesIdle, "the recover and then the save");
+            Assert.Equal([(true, false)], answers);
+            Assert.False(save.Result, "the save overwrote the recovered file");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RestoredFile);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveBlocked);
+            Assert.True(
+                h.Events.FindIndex(e => e is A11yEvent.RestoredFile) < h.Events.FindIndex(e => e is A11yEvent.NoteSaveBlocked),
+                "the save spoke before the recover it waited for");
+            Assert.Empty(alerts);
+            Assert.Equal(Gone, h.Read("gone.md"));
+            Assert.Equal(Edit, ghost.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Found and fixed with the recover: a Restore As whose worker
+    /// meets a fault outside VaultException (a core panic) still answers its
+    /// row. It is a failed create, the existing "Can't restore" alert with
+    /// the fault's message, and nothing is created.</summary>
+    [Theory]
+    [InlineData("version")]
+    [InlineData("deleted")]
+    public void ARestoreAsWhoseWorkerFaultsStillAnswersItsRow(string what) => RunSta(() =>
+    {
+        const string Destination = "restored copy.md";
+        using Vault h = what == "version"
+            ? new Vault("restore-as-faults-version", ("a.md", "v0\n"))
+            : Vault.WithADeletedNote("restore-as-faults-deleted", "gone.md", Gone);
+        var alerts = new ConcurrentQueue<string>();
+        var answers = new ConcurrentQueue<(bool Ok, string? Refusal)>();
+        HistoryVersionRow? version = what == "version" ? RestoreSetup(h).V1 : null;
+        h.Workspace.HistoryAlert = (title, message) => alerts.Enqueue($"{title}: {message}");
+        h.Workspace.HistoryCreateHookForTests = () =>
+            throw new InvalidOperationException("the create's core call panicked (test seam)");
+        try
+        {
+            if (version is not null)
+            {
+                h.Workspace.CommitRestoreAsVersion(
+                    version.ContentHashAfter, version.AbsoluteDate, Destination, (ok, refusal) => answers.Enqueue((ok, refusal)));
+            }
+            else
+            {
+                h.Workspace.CommitRestoreAsDeleted("gone.md", Destination, (ok, refusal) => answers.Enqueue((ok, refusal)));
+            }
+            h.PumpUntil(() => !answers.IsEmpty, "the faulted Restore As answering its row");
+            Assert.Equal([(false, null)], answers);
+            Assert.Equal(["Can't restore: the create's core call panicked (test seam)"], alerts);
+            Assert.False(File.Exists(Path.Combine(h.Root, Destination)));
+        }
+        finally
+        {
+            h.Workspace.HistoryCreateHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The deleted note's row, loaded, and the alerts the workspace
+    /// raises from here on.</summary>
+    private static (HistoryDeletedRow Row, ConcurrentQueue<string> Alerts) RecoverSetup(Vault h)
+    {
+        var alerts = new ConcurrentQueue<string>();
+        h.Workspace.HistoryAlert = (title, message) => alerts.Enqueue($"{title}: {message}");
+        h.Workspace.History.LoadDeletedFiles();
+        h.PumpUntil(
+            () => h.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"),
+            "the deleted files list");
+        HistoryDeletedRow row = h.Workspace.History.DeletedRows.Single(candidate => candidate.Path == "gone.md");
+        Assert.True(row.Recoverable, "premise: the deleted note is not recoverable");
+        h.Events.Clear();
+        return (row, alerts);
+    }
+
     // ---- Teardown -------------------------------------------------------------
 
     /// <summary>Contract 35 A-1: teardown joins an admitted restore's worker
@@ -1376,6 +1560,28 @@ public sealed class SaveChainAdmissionTests
         private readonly VaultSession _session;
 
         public Vault(string label, params (string Path, string Text)[] files)
+            : this(label, earlierSession: null, files)
+        {
+        }
+
+        /// <summary>A vault whose note at <paramref name="path"/> was saved
+        /// and then deleted in an earlier session. Core builds the deleted
+        /// list when a session opens, so the note is listed, and can be
+        /// recovered, in this one (the two-session shape of
+        /// <c>HistoryPanelTests</c>).</summary>
+        public static Vault WithADeletedNote(string label, string path, string text, params (string Path, string Text)[] files) =>
+            new(
+                label,
+                earlier =>
+                {
+                    _ = earlier.SaveText(path, text, expectedContentHash: null);
+                    // The delete goes through the system trash, whose COM
+                    // apartment is a thread of its own.
+                    StaThread.Run(() => earlier.DeleteFile(path));
+                },
+                files);
+
+        private Vault(string label, Action<VaultSession>? earlierSession, (string Path, string Text)[] files)
         {
             _fixture = FixtureVault.Create(0, label);
             foreach ((string path, string text) in files)
@@ -1383,6 +1589,15 @@ public sealed class SaveChainAdmissionTests
                 string full = Path.Combine(_fixture.Root, path);
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
                 File.WriteAllText(full, text);
+            }
+            if (earlierSession is not null)
+            {
+                using VaultSession earlier = VaultSession.OpenFilesystem(_fixture.Root);
+                using (var scan = new CancelToken())
+                {
+                    earlier.ScanInitial(scan);
+                }
+                earlierSession(earlier);
             }
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
@@ -1419,6 +1634,22 @@ public sealed class SaveChainAdmissionTests
 
         public void Wait(ManualResetEventSlim signal, string failure) =>
             Assert.True(PumpedDispatcher.PumpUntil(() => signal.IsSet, Hold), failure);
+
+        /// <summary>For a fact's <c>finally</c>: let held work go and pump
+        /// until every admitted operation has ended and the workspace's
+        /// tracked workers have finished, so a failed fact tears down with
+        /// nothing still on its way to the session. It asserts nothing: a
+        /// failure here would hide the fact's own.</summary>
+        public void ReleaseAndDrain(params HeldWork[] held)
+        {
+            foreach (HeldWork work in held)
+            {
+                work.Release();
+            }
+            _ = PumpedDispatcher.PumpUntil(
+                () => Workspace.SavesIdle && Workspace.RetiredBasesDrains.All(drain => drain.IsCompleted),
+                TimeSpan.FromSeconds(30));
+        }
 
         /// <summary>The documents re-sync of a rescan whose index holds
         /// <paramref name="path"/>'s current bytes, run to its end.</summary>

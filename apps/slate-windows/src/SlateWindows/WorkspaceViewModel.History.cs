@@ -177,6 +177,11 @@ internal sealed partial class WorkspaceViewModel
     /// restore's core write — a fact parks the restore there.</summary>
     internal Action? HistoryRestoreHookForTests { get; set; }
 
+    /// <summary>Plan 47 CB-9a test seam: runs on the history worker before a
+    /// create's core call (a deleted file's recovery, and both Restore As
+    /// creates). A fact holds the create there, or throws.</summary>
+    internal Action? HistoryCreateHookForTests { get; set; }
+
     /// <summary>WB-2 (#1322; contract 38 D-10): a restore IS a save of the
     /// note, so it joins the file's chain. It never writes beside a save
     /// admitted before it, and a save requested after it waits for its
@@ -221,7 +226,7 @@ internal sealed partial class WorkspaceViewModel
             : request.ExpectedContentHash;
         var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Action? hook = HistoryRestoreHookForTests;
-        RunAdmittedHistoryWork(() =>
+        _ = RunAdmittedHistoryWork(() =>
         {
             string? failure = null;
             bool conflict = false;
@@ -316,17 +321,18 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The admitted restore's worker: tracked by the save
     /// coordinator, so teardown joins it before the session goes, and by
     /// the bounded drain as any history work is. Inline in synchronous test
-    /// mode.</summary>
-    private void RunAdmittedHistoryWork(Action body)
+    /// mode. Returns the worker, already finished when it ran inline.</summary>
+    private Task RunAdmittedHistoryWork(Action body)
     {
         if (!_startInteractionBackgroundWork)
         {
             body();
-            return;
+            return Task.CompletedTask;
         }
         Task worker = Task.Run(body);
         _saves.TrackWorker(worker);
         TrackRetiredBasesWork(worker);
+        return worker;
     }
 
     /// <summary>Run on the dispatcher the save chain completes on (the
@@ -448,6 +454,7 @@ internal sealed partial class WorkspaceViewModel
             completed(false, "Enter a destination path.");
             return;
         }
+        Action? hook = HistoryCreateHookForTests;
         RunHistoryWork(() =>
         {
             string? refusal = null;
@@ -455,6 +462,7 @@ internal sealed partial class WorkspaceViewModel
             string? caveat = null;
             try
             {
+                hook?.Invoke();
                 string content = _session.VersionContent(path, versionHash);
                 // #1123: a post-publish failure is a LANDED restore —
                 // the bytes are at the destination and readable; only
@@ -469,6 +477,16 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
+                failure = exception.Message;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // Plan 47 CB-9a: a fault outside VaultException (a core
+                // panic) is a failed create, so the row still gets its
+                // answer.
                 failure = exception.Message;
             }
             RunOnDispatcher(() =>
@@ -511,6 +529,13 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Recovery to the ORIGINAL path is primary; a
     /// DestinationExists routes into the inline Restore As… row (the
     /// view drives that through the completion).</summary>
+    /// <remarks>Plan 47 CB-9a (#1889; CD5(c)): the recovery creates the
+    /// note's file, so it joins the file's save chain. It waits for every
+    /// save and operation admitted for the path before it (a tab that names
+    /// the path saves by create), and a save asked for after it waits for
+    /// its publication. <paramref name="completed"/> answers the row once,
+    /// whatever happens: a recover that never ran, because the chain closed
+    /// first, answers <c>(false, false)</c>.</remarks>
     internal void RecoverDeletedFile(
         HistoryDeletedRow row, Action<bool, bool> completed)
     {
@@ -520,12 +545,55 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         string path = row.Path;
-        RunHistoryWork(() =>
+        AdmitPropertyWrite(
+            path,
+            () => RecoverAdmitted(path, completed),
+            abandoned: () => completed(false, false));
+    }
+
+    /// <summary>The admitted recover: its create and its publication, as one
+    /// operation whose Task ends when the publication has run. Nothing is
+    /// re-checked on the host at its turn: the target is a path, and core's
+    /// exclusive create is the check, so a file a save ahead of it created
+    /// answers DestinationExists.</summary>
+    private Task RecoverAdmitted(string path, Action<bool, bool> completed)
+    {
+        if (_workspaceDisposed)
+        {
+            completed(false, false);
+            return Task.CompletedTask;
+        }
+        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Publish(bool destinationExists, string? failure, Exception? fault)
+        {
+            try
+            {
+                FinishRecover(path, completed, destinationExists, failure);
+            }
+            catch (Exception exception)
+            {
+                // A sentence or a callback that throws still ends the
+                // operation; the coordinator logs the fault once.
+                _ = recovered.TrySetException(exception);
+                return;
+            }
+            if (fault is null)
+            {
+                _ = recovered.TrySetResult();
+            }
+            else
+            {
+                _ = recovered.TrySetException(fault);
+            }
+        }
+        Action? hook = HistoryCreateHookForTests;
+        Task worker = RunAdmittedHistoryWork(() =>
         {
             bool destinationExists = false;
             string? failure = null;
             try
             {
+                hook?.Invoke();
                 _ = _session.RecoverDeletedFile(path);
             }
             catch (VaultException.DestinationExists)
@@ -536,35 +604,61 @@ internal sealed partial class WorkspaceViewModel
             {
                 failure = exception.Message;
             }
-            RunOnDispatcher(() =>
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
             {
-                if (_workspaceDisposed)
-                {
-                    completed(false, false);
-                    return;
-                }
-                if (destinationExists)
-                {
-                    completed(false, true);
-                    return;
-                }
-                if (failure is not null)
-                {
-                    HistoryAlert("Can't restore", failure);
-                    completed(false, false);
-                    return;
-                }
-                _announce(new A11yEvent.RestoredFile(
-                    System.IO.Path.GetFileName(path)));
-                // Announce + refresh ONLY (the mac shape): recovery
-                // deliberately does NOT navigate — selection stays in
-                // the Deleted list so recovering several files in a
-                // row is not disruptive (red team round 1). Restore
-                // As… is the flow that opens the new file (H9).
-                History.ReloadDeletedFilesIfLoaded();
-                completed(true, false);
-            });
+                // An admitted recover always ends: a fault outside
+                // VaultException (a core panic) is a failed recover, never a
+                // ticket left holding the path's chain.
+                failure = exception.Message;
+            }
+            RunOnSaveDispatcher(() => Publish(destinationExists, failure, fault: null));
         });
+        // The worker faulted outside its catch, so its publication was never
+        // posted: the recover still fails aloud and ends, and its Task
+        // carries the fault.
+        _ = worker.ContinueWith(
+            faulted =>
+            {
+                Exception fault = faulted.Exception!.GetBaseException();
+                RunOnSaveDispatcher(() => Publish(destinationExists: false, fault.Message, fault));
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
+        return recovered.Task;
+    }
+
+    private void FinishRecover(
+        string path, Action<bool, bool> completed, bool destinationExists, string? failure)
+    {
+        if (_workspaceDisposed)
+        {
+            completed(false, false);
+            return;
+        }
+        if (destinationExists)
+        {
+            completed(false, true);
+            return;
+        }
+        if (failure is not null)
+        {
+            HistoryAlert("Can't restore", failure);
+            completed(false, false);
+            return;
+        }
+        _announce(new A11yEvent.RestoredFile(
+            System.IO.Path.GetFileName(path)));
+        // Announce + refresh ONLY (the mac shape): recovery
+        // deliberately does NOT navigate — selection stays in
+        // the Deleted list so recovering several files in a
+        // row is not disruptive (red team round 1). Restore
+        // As… is the flow that opens the new file (H9).
+        History.ReloadDeletedFilesIfLoaded();
+        completed(true, false);
     }
 
     /// <summary>Recover a deleted file to a caller-chosen destination
@@ -584,12 +678,14 @@ internal sealed partial class WorkspaceViewModel
             completed(false, "Enter a destination path.");
             return;
         }
+        Action? hook = HistoryCreateHookForTests;
         RunHistoryWork(() =>
         {
             string? refusal = null;
             string? failure = null;
             try
             {
+                hook?.Invoke();
                 _ = _session.RecoverDeletedFileAs(sourcePath, trimmed);
             }
             catch (VaultException.DestinationExists)
@@ -599,6 +695,14 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
+                failure = exception.Message;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // Plan 47 CB-9a: as for Restore As a version, above.
                 failure = exception.Message;
             }
             RunOnDispatcher(() =>

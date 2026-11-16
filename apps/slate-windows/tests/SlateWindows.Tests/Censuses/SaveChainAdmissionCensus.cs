@@ -190,13 +190,6 @@ public sealed class SaveChainAdmissionCensus
     private static readonly Row[] OutsideTheChain =
     [
         new(
-            "WorkspaceViewModel.History.cs",
-            "RecoverDeletedFile",
-            ["RecoverDeletedFile"],
-            "a deleted file's recovery creates the file on the history worker, beside a save admitted for the path",
-            "2026-11-16",
-            "CB-9a"),
-        new(
             "WorkspaceViewModel.Bases.cs",
             "BasesTablessWriteBody",
             ["DeleteProperty", "SetProperty"],
