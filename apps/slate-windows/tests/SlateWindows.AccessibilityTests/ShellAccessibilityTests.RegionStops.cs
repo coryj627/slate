@@ -332,6 +332,9 @@ public sealed partial class ShellAccessibilityTests
         var focused = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var heard = new System.Collections.Concurrent.ConcurrentQueue<string>();
         int slate = process.Id;
+        string choiceId = choice.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+        string filterSet = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+            new uniffi.slate_uniffi.A11yEvent.TasksFilterSet(filterName)).Text;
         var recorder = automation.RegisterFocusChangedEvent(element =>
         {
             try
@@ -365,7 +368,13 @@ public sealed partial class ShellAccessibilityTests
 
             AssertEventuallyFocused(choice, $"a click on the {filterName} filter did not give it the keys");
             Assert.True(SpinWait.SpinUntil(() => IsChosen(choice), TimeSpan.FromSeconds(10)), $"the click did not choose {filterName}");
-            // The focus events and the click's line arrive.
+            // The click's own focus event and line arrive: the wait for
+            // what must come. A miss fails below, where what was seen is
+            // named.
+            _ = SpinWait.SpinUntil(
+                () => focused.LastOrDefault() == choiceId && heard.Contains(filterSet), TimeSpan.FromSeconds(10));
+            // Then the window in which a further focus event or line, which
+            // must not come, would arrive.
             Thread.Sleep(TimeSpan.FromMilliseconds(1500));
         }
         finally
@@ -374,12 +383,9 @@ public sealed partial class ShellAccessibilityTests
         }
 
         string[] order = [.. focused];
-        string choiceId = choice.Properties.AutomationId.ValueOrDefault ?? string.Empty;
         Assert.True(
             order.Length > 0 && order[^1] == choiceId && !order.Any(neverFocused.Contains),
             $"the click's UIA focus events went [{string.Join(", ", order)}], not straight to {choiceId}");
-        string filterSet = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
-            new uniffi.slate_uniffi.A11yEvent.TasksFilterSet(filterName)).Text;
         Assert.Equal([filterSet], heard.ToArray());
     }
 
@@ -540,29 +546,30 @@ public sealed partial class ShellAccessibilityTests
         return Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
     }
 
-    /// <summary>After a key that must not move focus. Directional
-    /// navigation runs inside the key's own input processing, which
-    /// <see cref="PressKey"/> already waits out; the settle absorbs the UIA
-    /// focus event's delivery before the focused element is read.</summary>
+    /// <summary>After a key that must not move focus: focus is on the
+    /// element with <paramref name="element"/>'s automation id and stays
+    /// there for <see cref="FocusSettle"/>, counted in reads that saw it
+    /// there (<see cref="FocusSettleWatch"/>). A UI Automation fault, or no
+    /// focused element, is no observation either way.</summary>
     private static void AssertFocusStays(UIA3Automation automation, AutomationElement element, string message)
     {
-        Thread.Sleep(300);
         string id = element.Properties.AutomationId.ValueOrDefault ?? string.Empty;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
+        AssertFocusStays(
+            automation,
+            () =>
+            {
+                try
                 {
-                    try
-                    {
-                        return automation.FocusedElement()?.Properties.AutomationId.ValueOrDefault == id;
-                    }
-                    catch (Exception exception) when (IsTransientUiaFault(exception))
-                    {
-                        return false;
-                    }
-                },
-                TimeSpan.FromSeconds(2)),
-            $"{message}: focus is on {DescribeFocusedElement(automation)}. {FocusDiagnosis()}");
+                    return automation.FocusedElement() is { } focused
+                        ? focused.Properties.AutomationId.ValueOrDefault == id
+                        : null;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    return null;
+                }
+            },
+            message + ".");
     }
 
     /// <summary>The focused element is a ROW of <paramref name="list"/>

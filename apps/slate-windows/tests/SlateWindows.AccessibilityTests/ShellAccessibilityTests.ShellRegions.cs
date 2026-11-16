@@ -347,16 +347,43 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    /// <summary>A press that must move nothing: once the input is processed
-    /// and a moment has passed for a landing to arrive, focus is still on
-    /// <paramref name="element"/>.</summary>
-    private static void AssertKeepsFocus(UIA3Automation automation, AutomationElement element, string message)
+    /// <summary>A press that must move nothing: focus is on
+    /// <paramref name="element"/> and stays there for
+    /// <see cref="FocusSettle"/>, the time a landing would take to arrive,
+    /// counted in reads that saw it there (<see cref="FocusSettleWatch"/>).</summary>
+    private static void AssertKeepsFocus(UIA3Automation automation, AutomationElement element, string message) =>
+        AssertFocusStays(automation, () => FocusIsOn(automation, element), message);
+
+    /// <summary>Whether focus is on <paramref name="element"/>: true, false,
+    /// or null when UI Automation faulted or answered no element, which is
+    /// no observation either way.</summary>
+    private static bool? FocusIsOn(UIA3Automation automation, AutomationElement element)
     {
-        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-        Thread.Sleep(750);
-        Assert.True(
-            automation.FocusedElement() is { } focused && focused.Equals(element),
-            $"{message} {FocusDiagnosis()}");
+        try
+        {
+            return automation.FocusedElement() is { } focused ? focused.Equals(element) : null;
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Whether focus is on <paramref name="container"/> or inside
+    /// it: true, false, or null when UI Automation faulted or answered no
+    /// element.</summary>
+    private static bool? FocusIsWithin(UIA3Automation automation, AutomationElement container)
+    {
+        try
+        {
+            return automation.FocusedElement() is { } focused
+                ? focused.Equals(container) || IsDescendantOf(focused, container)
+                : null;
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
     }
 
     /// <summary>Focuses the Files tree row starting with <paramref

@@ -11535,11 +11535,33 @@ public sealed partial class ShellAccessibilityTests
             // Right from INSIDE the tree is the boundary's terminal: the
             // shell posts its line and focus stays in the tree — it never
             // falls through to the editor-geometry route.
-            ReassertForegroundForAChord(window);
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
-            Assert.False(
-                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && !focused.Equals(tree) && !IsDescendantOf(focused, tree), TimeSpan.FromSeconds(2)),
-                $"Right from inside the tree moved focus out of the leaf; focus is {DescribeFocusedElement(automation)}");
+            // The line is the witness that the chord arrived: with the keys
+            // in a side pane and no pane further that way, the window posts
+            // its terminal line (MainWindow's AnnounceNoPaneInDirection, the
+            // shell's own words), heard on the desktop root as a reader hears
+            // it. Then focus is watched staying in the tree, in reads that
+            // saw it there.
+            string edgeLine = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                new uniffi.slate_uniffi.A11yEvent.HostComposed(
+                    "No pane in that direction.", uniffi.slate_uniffi.A11yPriority.Medium)).Text;
+            var edgeHeard = new ConcurrentQueue<ReceivedNotification>();
+            using (ListenOnTheDesktop(automation, edgeHeard))
+            {
+                int edgeMark = QuietMark(edgeHeard, process.Id);
+                ReassertForegroundForAChord(window);
+                PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => HeardFrom(edgeHeard, process.Id).Skip(edgeMark).Any(line => line.DisplayString == edgeLine),
+                        TimeSpan.FromSeconds(10)),
+                    $"Right from inside the tree did not post \"{edgeLine}\"; heard: "
+                    + string.Join(" | ", HeardFrom(edgeHeard, process.Id).Skip(edgeMark).Select(line => line.DisplayString)));
+            }
+
+            AssertFocusStays(
+                automation,
+                () => FocusIsWithin(automation, tree),
+                "Right from inside the tree moved focus out of the leaf.");
 
             // ---- W6-2 PR B2 (B2-9): the continuation ----------------------------
             // Show connections on the healed incoming row (the leaf's own
@@ -11601,12 +11623,30 @@ public sealed partial class ShellAccessibilityTests
                 $"the popped leaf did not keep focus; focus is {DescribeFocusedElement(automation)}");
             ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4);
-            Assert.False(
-                SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault != Path.GetFileName(ghostPath)
-                        || !(automation.FocusedElement() is { } focused && (focused.Equals(returnedTree) || IsDescendantOf(focused, returnedTree))),
-                    TimeSpan.FromSeconds(2)),
-                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus");
+            // Nothing to pop leaves nothing to wait for, so the heading and
+            // focus are watched staying: a read that cannot see the heading or
+            // the focused element is no observation, and one that sees either
+            // changed fails at once.
+            AssertFocusStays(
+                automation,
+                () =>
+                {
+                    try
+                    {
+                        if (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))
+                                ?.Properties.Name.ValueOrDefault is not { } heading)
+                        {
+                            return null;
+                        }
+
+                        return heading == Path.GetFileName(ghostPath) ? FocusIsWithin(automation, returnedTree) : false;
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        return null;
+                    }
+                },
+                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus.");
 
             // The table's Show connections from the graph tab (B2-3, IGI-4):
             // the graph's group is focused first, then the leaf re-roots on

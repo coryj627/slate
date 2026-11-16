@@ -689,7 +689,12 @@ public sealed partial class ShellAccessibilityTests
                             && (focused.Properties.Name.ValueOrDefault ?? string.Empty).StartsWith("c.md", StringComparison.Ordinal),
                         TimeSpan.FromSeconds(10)),
                     $"the keys did not land on c.md's row; they are on {DescribeFocus(automation)}.");
-                // Any focus event the publication raised arrives.
+                // The landing's own focus event arrives: the wait for what
+                // must come. A miss fails below, where the moves are named.
+                _ = SpinWait.SpinUntil(
+                    () => focusMoves.Any(move => move.Contains("'c.md", StringComparison.Ordinal)), TimeSpan.FromSeconds(10));
+                // Then the window in which a further focus event, which must
+                // not come, would arrive.
                 Thread.Sleep(FocusSettle);
             }
             finally
