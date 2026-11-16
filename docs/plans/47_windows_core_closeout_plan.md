@@ -1,10 +1,10 @@
 # 47 — Windows and core close-out: delivery plan
 
-Status: draft for the owner's review, 2026-11-13; corrected 2026-11-14
-and 2026-11-15 for twelve merges that landed around it (§2.6). Delivery
-started on 2026-11-15 with the drift check §2.6 ends on; the owner's
-answers to §3 are being recorded and no chunk has started. Written from the requirements brief the owner
-approved the same day
+Status: adopted by the owner's delivery instruction of 2026-11-15.
+Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
+merges that landed around it (§2.6). The owner's answers to §3 are
+recorded in §3.1 as they are given. No chunk has started. Written from
+the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
 (#1926); the one commit between them adds `ExitWatch` and its tests and
@@ -136,7 +136,7 @@ table is answered.
 - **#1890 is misdescribed both ways.** Two files it names need nothing;
   about twenty sites in files it does not name are missed (§2.3).
 - **#1660's run-on sentence is half of #1395.** #1660's is in
-  `vault_error_detail` (`a11y.rs:3608-3610`); #1395's other half is the
+  `vault_error_detail` (`a11y.rs:3613-3615`); #1395's other half is the
   `CreatePublishedUnindexed` arm of the announcement renderer
   (`a11y.rs:2243-2252`). One helper and one test serve both (CD8).
 - **#1628 is caused upstream.** MathCAT 0.7.7's Nemeth table has a
@@ -170,7 +170,7 @@ The brief's six classes held up, with different sizes than expected.
 | A control disabled while it holds the keys | #1866 | Fourteen sheet triggers on the menu, and the launcher's rows; neither has been heard under NVDA yet. Four sites were fixed by #1867. Six further groups (about twenty buttons that go unavailable when the reader activates them) are instances by mechanism and have never been heard either (CD11). The focus manifest's census does not scrape `Command=`, so 249 bindings can disable through `CanExecute` unseen. |
 | An open dropdown's rows with no place in their set | #1783 #1836 | Eleven combo box sites, one defect. |
 | An embedded reading element spoken as "grouping" | #1708 | One live member, the diagram, in three states. Math is fixed. A thematic break and an embed image each sit alone on a line with no name; what NVDA says there needs one pass. Tab onto a diagram still reads its whole source as HelpText, which #1591 removed for math; nobody had filed it (CD12). |
-| A test that waits on the clock, or a fixture that tears down under in-flight work | six issues | Only #1673 is the class as worded. The unit project has 81 fixed waits that stand as statements of their own (28 sleeps, 13 delays, 40 fixed pumps) and the gate has 30; 19 elapsed-time oracles; nine fixtures that release a gate or dispose an event under work still running; and ten gate polls that hold a file the app replaces by rename (the mirror of #1788). Most of the unit project's fixed waits prove that nothing happened, and replacing one needs a product seam, so CB-6 fixes the few it can and pins the rest with reasons. |
+| A test that waits on the clock, or a fixture that tears down under in-flight work | six issues | Only #1673 is the class as worded. The unit project has 81 fixed waits that stand as statements of their own (28 sleeps, 13 delays, 40 fixed pumps) and the gate has 30; 20 elapsed-time oracles (19 in the unit project, one in the gate); nine fixtures that release a gate or dispose an event under work still running; and ten gate polls that hold a file the app replaces by rename (the mirror of #1788). Most of the unit project's fixed waits prove that nothing happened, and replacing one needs a product seam, so CB-6 fixes the few it can and pins the rest with reasons. |
 
 The reading also found the palette seal's route table has two rows in no
 register (drag and drop, and UIA `SetFocus`), and five more search
@@ -276,28 +276,41 @@ delivered elsewhere. What moved:
 
 | Chunk | What the check found | What changes here |
 |---|---|---|
-| CB-0 | Every line it edits still holds. The #1395 comment's `a11y.rs:3608` is `:3613` since #1936. Two audit drafts (#1370, #940) said no plan 43 PR after 22a had merged, which #1936 and #1942 made false. The new plan 43 row said the queue had not restarted. crates.io now lists `notify` 9.0.0-rc.9 (2026-11-15) and `mathcat` 0.7.8-alpha.1. The deferred-finds issue starts with four lines, not three | The spec and the two drafts are corrected. #1493's comment names rc.9 |
+| CB-0 | Every line it edits still holds. The #1395 comment's `a11y.rs:3608` is `:3613` since #1936. Two audit drafts (#1370, #940) said no plan 43 PR after 22a had merged, which #1936 and #1942 made false. The new plan 43 row said the queue had not restarted. crates.io now lists `notify` 9.0.0-rc.9 (2026-11-15) and `mathcat` 0.7.8-alpha.1. The deferred-finds issue starts with four lines, not three | The spec and the two drafts are corrected. #1493's comment names the newest listed (rc.9 on 2026-11-15) |
 | CB-1, CB-2 | Every cited line holds. `TestHostCrashDumpCensus`'s failure message names the `windows` job in words, so CB-2's theory passes the job name in. A highest-priority heartbeat cannot tell a starved fact thread from a healthy one | CB-1's PR says so in its "not delivered" line; a second beat at normal priority is a find for the red team to size |
-| CB-3 | Design 1 cited `windows.yml:981`; the line is `:1024`. Design 6's chain scan would read `check_windows_census_trait.py`'s two joins as the folder `docs/plans` and turn the census red | The spec is corrected: a chain with a non-literal segment is skipped whole, with a fact |
+| CB-3 | Design 1 cited `windows.yml:981`; the line is `:1024`. Design 6's chain scan would read `check_windows_census_trait.py`'s two chains (a docstring example at `:23` and a join at `:287`) as the folder `docs/plans` and turn the census red | The spec is corrected: a chain with a non-literal segment is skipped whole, with a fact |
 | CB-4 | All nine fixtures hold. `ParkedFetch` has eighteen users, not eight. The teardown drain's default 10-second bound is shorter than the 20-second decode #1950 allows, so the reading fixtures' drains need the longer bound | The spec is corrected; `PumpedDispatcher.cs` may join the chunk's files |
 | CB-5 | Every cited line holds. The existing Pester fact's consecutive-lines pin breaks under the new skipped-analysis branch and is rewritten, and new pin 2 is scoped to the ten `noScore(` calls | The spec is corrected |
 | CB-6 | The 81 sites reproduce. There is a nineteenth unit ceiling the spec missed, `SingleInstanceCoordinatorTests.cs:66` | The spec is corrected; the ceiling goes |
-| CB-8 | Every `session.rs` line in the reading moved by about 254 with #1936. Three migrations (026, 034, 038) write the same `size_bytes = -1` on every row, so a cache upgraded across one, holding a file the scan cannot read, fails its folder's listing with no quarantine involved. `get_file_metadata` wraps the -1 to 2^64-1 and the canvas pass purges a quarantined board's rows. Once the row lists, both hosts show its `mtime_ms = -1` as a 1969 or 1970 date | CB-8's spec is written from this at C2's start: the decoder absorbs the sentinel, and the two other readers stop wrapping it. The date is CD41. Its Windows twin fact goes in `RescanTests.ChangeFeed.cs`, because CB-6 edits `RescanTests.cs` |
+| CB-8 | Every `session.rs` line in the reading moved by 248 to 254 with #1936. Three migrations (026, 034, 038) write the same `size_bytes = -1` on every row, so a cache upgraded across one, holding a file the scan cannot read, fails its folder's listing with no quarantine involved. `get_file_metadata` wraps the -1 to 2^64-1 and the canvas pass purges a quarantined board's rows. Only the quarantine also writes `mtime_ms = -1` (`session.rs:8166`, `:8920`, `:8980`); a row a migration left keeps its real modified time. Once a quarantined row lists, Windows never shows that time as a date: it reads `MtimeMs` only to put the row in a date group, where it lands in the oldest, and to sort it (`FilesSidebarViewModel.cs:1380`, `:1417-1418`). The Mac shows and speaks it: `SidebarFileRow.swift` puts "Modified" and the date in the row's accessibility value, so VoiceOver would say a 1969 or 1970 date. A base with a `file.mtime` column shows that date on both hosts | CB-8's spec is written from this at C2's start: the decoder absorbs the sentinel, and the two other readers stop wrapping it. The date is CD41. It changes what the Mac's row says, so §4 rule 5 puts `not delivered: VoiceOver pass` on CB-8's PR, with a ledger line (§8). Its Windows twin fact goes in `RescanTests.ChangeFeed.cs`, because CB-6 edits `RescanTests.cs` |
 
 The lanes, as read the same day: `WINDOWS_RUNNER_MODE` is `namespace`,
 and the home pool reports serving with two slots and nothing running.
 The one ruleset requires `pr gate` and an up-to-date branch; no lane is
 required. `main` is green at 798cdaae, the newest commit that ran a
-lane. The shell gate's three red runs of 2026-11-14 and 2026-11-15 were
-the app-menu and theme facts that #1944 and #1951 then fixed.
+lane. The shell gate's three red runs on `main` of 2026-11-14 and
+2026-11-15 were the app-menu and theme facts that #1944 and #1951 then
+fixed.
 
-This session's review and merge process, the owner's instruction of
-2026-11-15, replaces §4 rule 9 for delivery: a PR that changes only
-documents or comments, or a small configuration change with no product
-code and no test logic, gets one red team; every other PR gets a red
-team and then Codex rounds until it approves. §6's "at most three agents
-at once" becomes up to two principal engineers a wave, each with up to
-three workers, and never more than eight agents at once.
+From 2026-11-15, by the owner's instruction, every plan 47 PR is
+reviewed and merged by the rule below. It replaces the rule 9 this plan
+was written with, and §4 rule 9 and the first-wave specs now carry it.
+
+- A light PR changes only documents or comments, or makes a small
+  configuration change with no product code and no test logic. It gets
+  one red team: a fresh Claude agent with `24_red_team_protocol.md`, the
+  diff and the spec. Nothing more.
+- Every other PR gets that red team, then Codex adversarial-review
+  rounds until it says approve. At 14 rounds without approval an
+  independent agent judges the churn. The PR body records both.
+- After the push, Codoki must report "Safe to merge" at confidence 3/5
+  or higher, or be bypassed on an independent agent's recorded
+  judgement, and every check must be green. The merge is
+  `gh pr merge N --squash --match-head-commit <sha>`, one at a time,
+  with `main` green on each merge commit before the next.
+- Up to two principal engineers work a wave, each directing up to three
+  workers, and never more than eight agents run at once. This replaces
+  §6's "at most three agents at once".
 
 ## 3. Decisions for the owner (CD1 to CD41)
 
@@ -352,7 +365,7 @@ answers the method now, and the result is put to them in the chunk's PR
 | CD38 | — | The reading listed about nine families of sentences the host composes that `AGENTS.md` says core should own (the sidebar's failure leads, the panel error leads, the status-line copy and others). Each move is an FFI addition with Mac adoption. | Not in this plan. CB-0 files one issue for Milestone W that holds the catalogue. | CB-0 |
 | CD39 | — | The brief's order is sweeps before code-area chunks. With three slots and shared files, §6 fills free slots with code-area chunks from C2 on, ahead of the later reader-facing sweeps. | Accept §6's order. | §6 |
 | CD40 | #1835 | Close on the control's removal, with no fact? There is no toggle left to measure. | Yes. CB-0's comment names #1856 and quotes the search that finds only the menu row. | CB-0 |
-| CD41 | #1900 | Added 2026-11-15 (§2.6). Once an unreadable note lists again, its row carries no real modified time: core holds -1, and both hosts would show a 1969 or 1970 date and sort it oldest. Accept that, or mark the row as unreadable over the FFI? | Accept it here: the row lists with size 0 and the odd date until the file reads again, and the ledger line says so. A marked row (an optional time, or an `unreadable` flag, with a sentence on both hosts) is an FFI change with new speech; CB-8 files it for Milestone W. | CB-8 |
+| CD41 | #1900 | Added 2026-11-15 (§2.6). Once a quarantined note lists again, its row carries no real modified time: core holds -1. (A row that migration 026, 034 or 038 left keeps its real time and is not in question.) Windows shows no date for it: the row lands in the oldest date group and sorts as the oldest. The Mac's row says "Modified" with a 1969 or 1970 date, in its accessibility value too, so VoiceOver speaks it. A base with a `file.mtime` column shows that date on both hosts. Accept that, or mark the row as unreadable over the FFI? | Accept it here: the row lists with size 0 and the odd date until the file reads again, and the ledger line says so. The Mac's row speech changes, so CB-8's PR writes `not delivered: VoiceOver pass` (§4 rule 5). A marked row (an optional time, or an `unreadable` flag, with a sentence on both hosts) is an FFI change with new speech; CB-8 files it for Milestone W. | CB-8 |
 
 ## 4. Rules (every chunk)
 
@@ -412,11 +425,22 @@ already pins the step) and proved on the lane. Added for this plan:
    without a fix; CD40 closes #1835 on the removal of its control.
 8. **Every PR body ends with the count:** found on the way, fixed here,
    deferred, filed.
-9. **Review.** A fresh Claude red team on every chunk before its PR
-   opens, with `24_red_team_protocol.md`. Codex also reviews CB-9a,
-   CB-9b, CB-12, CB-17a, CB-17b, CB-31, CB-34, CB-38, CB-39, CB-40,
-   CB-41 and CB-45's design. A chunk that only changes CI config, tests
-   or comments goes on its tests alone.
+9. **Review and merge.** From 2026-11-15, by the owner's instruction.
+   This replaces the rule the plan was written with: a red team on every
+   chunk, Codex on twelve named chunks, and a chunk that only changed CI
+   config, tests or comments on its tests alone.
+   - A light PR changes only documents or comments, or makes a small
+     configuration change with no product code and no test logic. It
+     gets one red team: a fresh Claude agent with
+     `24_red_team_protocol.md`, the diff and the spec. Nothing more.
+   - Every other PR gets that red team, then Codex adversarial-review
+     rounds until it says approve. At 14 rounds without approval an
+     independent agent judges the churn. The PR body records both.
+   - After the push, Codoki must report "Safe to merge" at confidence
+     3/5 or higher, or be bypassed on an independent agent's recorded
+     judgement, and every check must be green. The merge is
+     `gh pr merge N --squash --match-head-commit <sha>`, one at a time,
+     with `main` green on each merge commit before the next.
 10. **A deferral is one line on "Plan 47 deferred finds",** an issue CB-0
     opens: the file, what is wrong, and the failing test that would show
     it. CB-46 works that list.
@@ -438,7 +462,7 @@ work the chunk carries.
 | CB-5 | a11y-check rewrites its comment when no score is computed, and malformed results fail in one sentence | #1616 | S | a11y, runner | — | CD4 |
 | CB-6 | The unit project's fixed waits can only shrink: `TestWaitCensus` rules 1 and 2 pin all 81 and the elapsed-time oracles with a reason each; the cold wall-clock budgets go through `WallClockBudget`; the waits that have a condition today become condition waits (at least five) | — (the class) | M | windows | — | — |
 | CB-7 | The gate's journeys wait on conditions and read app files with delete sharing; rule 4; the graph settle-and-save pin; the app log joins the gate's uploaded evidence | #1788 | M | windows (gate) | — | CD3 |
-| CB-8 | A quarantined note still lists, so an unreadable note no longer fails the Files tree; the two stale mac comments are corrected | #1900 #1709 | S | rust, windows, swift | — | — |
+| CB-8 | A quarantined note still lists, so an unreadable note no longer fails the Files tree; the two stale mac comments are corrected | #1900 #1709 | S | rust, windows, swift | — | CD41 |
 | CB-9a | `SaveChainAdmissionCensus` with dated exceptions; the single-path routes join (the reload guard, `RecoverDeletedFile`, the two tabless writes); the create-class fact | Refs #1889 | M | windows | — | CD5 |
 | CB-9b | A bulk rename and a tag edit are admitted over their notes; the saved-query export cannot name a note; the only exceptions left are the two CD5 accepts (link rewrites, the Bases export) | #1889 | M–L | windows, rust, swift | NVDA spot if a refusal is new | CD5 |
 | CB-10 | A failed vault switch returns to the welcome view once | #1730 | S | windows | NVDA spot | — |
@@ -510,7 +534,10 @@ Only rows where something beyond the chunk's merge must happen.
 
 ## 6. Delivery order
 
-At most three agents at once. Chunks in one wave share no files. The
+Up to two principal engineers work a wave, each directing up to three
+workers, and never more than eight agents run at once (from 2026-11-15,
+by the owner's instruction; it replaces "at most three agents at once").
+Chunks in one wave share no files. The
 decision table is answered before C0; the Gate column names the rows
 each wave relies on. Each chunk is re-checked against `main` when it
 starts, and the slotting of waves C3 onward is confirmed when each
@@ -625,10 +652,12 @@ today:
   (snippets); #1834 (section order; the selection rule in
   `CommandPaletteModel.swift`); #1631 (the session-long sentence goes;
   the panic sentence); #1775 (a callout's first line); CB-20b (the
-  diagram source event); the import sentences' move to core (CD10).
+  diagram source event); the import sentences' move to core (CD10);
+  #1900 (an unreadable note lists, and on the Mac its row says a 1969 or
+  1970 modified date until the file reads again, CD41).
 - Behaviour, with nothing new to hear: #1683 (one event stops arriving);
   #1889 (the export's refusal); #1704 and #1705 (links that used to stay
-  unresolved now resolve); #1900 (an unreadable note lists).
+  unresolved now resolve).
 - Checks: the Mac reading view for #1708's gap; a note on #1527 that the
   Mac's two copies of the save sentence carry #1660's run-on, and that
   Windows keeps four search and graph error arms worded apart from core.
@@ -703,7 +732,8 @@ the fallback named. A chunk with a spike (CB-20) or a design step
 
 Specs for the first wave, written 2026-11-13 against c2377210. CB-1's
 was rewritten on 2026-11-14, and every line number re-read on
-2026-11-15 at 798cdaae:
+2026-11-15 at 798cdaae. CB-0 to CB-6 were read again at 5b060297
+(§2.6), and CB-7 is re-read when wave C3 starts:
 
 | Chunk | Spec |
 |---|---|
@@ -732,7 +762,7 @@ against that day's `main`.
 - **Forty decisions come before any work** (CD1 is overtaken; CD41 was added on 2026-11-15).
   Each has a recommendation, and the brief asks for them up front. If
   that is too much to answer at once, the smallest safe change is to
-  answer C0 to C2's rows first (CD2, CD4, CD8, CD13, CD35 to CD40) and
+  answer C0 to C2's rows first (CD2, CD4, CD8, CD13, CD35 to CD41) and
   the rest before C3; that is the owner's call, not the plan's.
 - **Inline fixes can swell a PR.** Rule 2's cap and the red team's read
   are the guard; rule 8's count shows it happening.
