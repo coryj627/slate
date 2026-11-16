@@ -1,5 +1,4 @@
 # SwiftUI accessibility analysis on every PR that touches Swift sources.
-# Probe A (plan 47 CB-5): one comment line, on main's workflow. Never merged.
 #
 # Runs cvs-health/ios-swiftui-accessibility-techniques' `a11y-check`
 # static analyzer over the Mac app's SwiftUI code. 34 rules across 19
@@ -11,8 +10,8 @@
 # controller's heartbeat is fresh, and Namespace's Tahoe runner otherwise.
 # The Studio image bakes the analyzer at the pinned commit; Namespace builds
 # it from source and caches the binary. The analysis job holds a read-only
-# token (plan §3.2 control 9); the SARIF upload, the PR comment and the
-# score floor run afterwards on hosted Linux, where the write permissions
+# token (plan §3.2 control 9); the SARIF upload, the score floor and the
+# PR comment run afterwards on hosted Linux, where the write permissions
 # never reach a self-hosted machine.
 
 name: Accessibility Check
@@ -207,9 +206,14 @@ jobs:
     name: Report and enforce the floor
     needs: [changes, analyze]
     # Runs after the analysis whether it passed or failed, so a drop below
-    # the floor still gets its comment and its red check; only a cancelled
-    # run, or a pull request that touches none of the lane's paths, skips it.
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.analyze.result != 'skipped' }}
+    # the floor still gets its comment and its red check. It also runs when
+    # a same-repo pull request's analysis was skipped, which means a job
+    # before it failed (the routing, or the lane decision): the floor then
+    # fails in a sentence and the score comment is rewritten (#1616). A
+    # cancelled run, a pull request that touches none of the lane's paths,
+    # and a skipped analysis on a fork's pull request or on a push to main
+    # skip it.
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && (needs.analyze.result != 'skipped' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # actions: read is only needed by codeql-action/upload-sarif within
@@ -237,10 +241,13 @@ jobs:
       # download-artifact extracts first and checks the digest after, so a
       # mismatch fails the step with the unverified files still on disk
       # (#1575). Nothing below may read them: with the files gone, the
-      # SARIF upload and the PR comment skip on their hashFiles guards, and
-      # the floor step (which runs unconditionally) fails. A missing artifact
-      # or a download that failed before extracting anything fails the step
-      # too, with nothing on disk; `discarded` tells the floor step which.
+      # SARIF upload skips on its hashFiles guard, the floor step (which
+      # runs unconditionally) fails, and the PR comment step, which reads
+      # the results only when the floor computed a score from them,
+      # rewrites the comment it left before, if any, to say that none was
+      # computed. A missing artifact or a download that failed before
+      # extracting anything fails the step too, with nothing on disk;
+      # `discarded` tells the floor step which.
       - name: Discard results the download did not verify
         id: discard
         if: steps.results.outcome != 'success'
@@ -263,72 +270,8 @@ jobs:
           sarif_file: a11y-results.sarif
         continue-on-error: true
 
-      - name: Post score summary on PR
-        if: github.event_name == 'pull_request' && hashFiles('a11y-results.json') != ''
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
-        with:
-          script: |
-            const fs = require('fs');
-            const results = JSON.parse(fs.readFileSync('a11y-results.json', 'utf8'));
-            const s = results.score || {};
-            const score = (s.score ?? 0).toFixed(1);
-            const grade = s.grade || 'F';
-            const errors = s.totalErrors ?? 0;
-            const warnings = s.totalWarnings ?? 0;
-            const min = parseFloat(process.env.MIN_SCORE);
-            const passed = parseFloat(score) >= min && errors === 0;
-            const emoji = passed ? '✅' : '❌';
-
-            const failed = (s.failedCriteria || [])
-              .map(c => `- \`${c.criterion}\` ${c.name} (${c.errors} errors, ${c.warnings} warnings)`)
-              .join('\n');
-            const failedBlock = failed.length
-              ? `### Failed WCAG criteria\n${failed}`
-              : '_All WCAG criteria pass._';
-
-            const body = [
-              `## ${emoji} Accessibility score: ${score} / 100 (${grade})`,
-              ``,
-              `**Issues:** ${errors} error(s), ${warnings} warning(s)`,
-              `**Minimum required:** ${min}`,
-              ``,
-              failedBlock,
-              ``,
-              `---`,
-              `Checked by [a11y-check](https://github.com/cvs-health/ios-swiftui-accessibility-techniques) against \`${process.env.A11Y_PATHS}\`.`,
-            ].join('\n');
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const tag = '## ✅ Accessibility score';
-            const altTag = '## ❌ Accessibility score';
-            const existing = comments.find(c =>
-              c.user.type === 'Bot' &&
-              (c.body.startsWith(tag) || c.body.startsWith(altTag))
-            );
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-        # Reporting is best-effort. A GitHub API outage must not suppress or
-        # replace the local score-floor result below.
-        continue-on-error: true
-
       - name: Enforce score floor
+        id: floor
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           MIN_SCORE: ${{ env.MIN_SCORE }}
@@ -338,12 +281,29 @@ jobs:
         with:
           # Parsing in Node sidesteps any "is jq installed on this
           # runner image" question — github-script always has Node.
+          #
+          # Every outcome with no score goes through noScore (#1616): it
+          # fails the step and hands the comment step the same sentence.
+          # A sentence can quote the results file or a value from it, so
+          # it is made one line of 500 characters at most, with no
+          # backtick, before anything reads it. `computed` is set to true
+          # only after every check on the score and on MIN_SCORE has
+          # passed, so the comment step never reads results the floor did
+          # not accept.
           script: |
+            const noScore = (said) => {
+              const reason = Array.from(
+                String(said).replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/`/g, "'").trim()
+              ).slice(0, 500).join('');
+              core.setOutput('computed', 'false');
+              core.setOutput('reason', reason);
+              core.setFailed(reason);
+            };
             const fs = require('fs');
             const resultsPath = 'a11y-results.json';
             if (!fs.existsSync(resultsPath)) {
               if (process.env.RESULTS_DISCARDED === 'true') {
-                core.setFailed(
+                noScore(
                   `The analysis results were extracted, but the download step failed (a digest mismatch ` +
                   `or an interrupted download), so they were discarded and no score was computed. See ` +
                   `the "Download the analysis results" step.`
@@ -351,20 +311,34 @@ jobs:
                 return;
               }
               if (process.env.RESULTS_DOWNLOAD === 'failure' && process.env.ANALYZE_RESULT === 'success') {
-                core.setFailed(
+                noScore(
                   `The analysis job succeeded, but its results could not be downloaded, so no score was ` +
                   `computed. See the "Download the analysis results" step.`
                 );
                 return;
               }
-              core.setFailed(
+              if (process.env.ANALYZE_RESULT === 'skipped') {
+                noScore(
+                  `The analysis did not run, so no score was computed. See the jobs before it: "changes" and "Route mac jobs".`
+                );
+                return;
+              }
+              noScore(
                 `${resultsPath} was not produced — a11y-check likely crashed, or the analysis job ` +
                 `never reached it. See the "SwiftUI Accessibility Check" job.`
               );
               return;
             }
-            const results = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
-            const s = results.score || {};
+            let results;
+            try {
+              results = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
+            } catch (error) {
+              noScore(
+                `${resultsPath} could not be read as JSON (${error.message}); no score was computed. See the analysis job.`
+              );
+              return;
+            }
+            const s = (results && results.score) || {};
             const score = s.score;
             const errors = s.totalErrors;
             if (
@@ -373,14 +347,14 @@ jobs:
               score < 0 ||
               score > 100
             ) {
-              core.setFailed(
+              noScore(
                 `a11y-check score must be a finite number from 0 through 100; ` +
                 `got ${JSON.stringify(score)}`
               );
               return;
             }
             if (!Number.isInteger(errors) || errors < 0) {
-              core.setFailed(
+              noScore(
                 `a11y-check totalErrors must be a non-negative integer; ` +
                 `got ${JSON.stringify(errors)}`
               );
@@ -394,20 +368,21 @@ jobs:
             // reject them explicitly.
             const rawMin = (process.env.MIN_SCORE ?? '').trim();
             if (rawMin === '') {
-              core.setFailed('MIN_SCORE is unset or empty');
+              noScore('MIN_SCORE is unset or empty');
               return;
             }
             const min = Number(rawMin);
             if (!Number.isFinite(min)) {
-              core.setFailed(
+              noScore(
                 `MIN_SCORE must be a number; got ${JSON.stringify(process.env.MIN_SCORE)}`
               );
               return;
             }
             if (min < 0 || min > 100) {
-              core.setFailed(`MIN_SCORE must be from 0 through 100; got ${min}`);
+              noScore(`MIN_SCORE must be from 0 through 100; got ${min}`);
               return;
             }
+            core.setOutput('computed', 'true');
             core.info(`Score: ${score} / Minimum: ${min} / Errors: ${errors}`);
             if (errors > 0) {
               core.setFailed(
@@ -421,12 +396,145 @@ jobs:
               );
             }
 
-  # The check main's ruleset can require for this lane (#1565). A job above
-  # is skipped when the one before it failed (route, then the analysis), and
-  # a skipped job reports as passed; this one reports on every pull request
-  # that touches the lane, and fails unless the lane ran and passed. A
-  # fork's pull request is the one skip it accepts: its head never runs on
-  # the mac runners (analyze's if:).
+      # After the floor, so the comment says what the floor found (#1616).
+      # With a score, it posts it. With none, it rewrites the comment this
+      # workflow left on an earlier run, if there is one, to say so in the
+      # floor's sentence, so that comment does not go on showing an old
+      # score beside this run's red check; where there is no such comment
+      # it creates none (plan 47, CD4). It runs whatever the floor's
+      # outcome, and when a failed step before the floor skipped it. A
+      # cancelled run, or a call to GitHub that fails here, leaves the
+      # comment as it was.
+      - name: Post score summary on PR
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          SCORE_COMPUTED: ${{ steps.floor.outputs.computed }}
+          NO_SCORE_REASON: ${{ steps.floor.outputs.reason }}
+        with:
+          script: |
+            const marker = '<!-- slate-a11y-score -->';
+            const computed = process.env.SCORE_COMPUTED === 'true';
+            const tag = '## ✅ Accessibility score';
+            const altTag = '## ❌ Accessibility score';
+            let body;
+            if (computed) {
+              // The floor accepted these results, so the score in them is
+              // a number from 0 through 100 and MIN_SCORE is a number.
+              const fs = require('fs');
+              const results = JSON.parse(fs.readFileSync('a11y-results.json', 'utf8'));
+              const s = results.score || {};
+              const grade = s.grade || 'F';
+              const errors = s.totalErrors ?? 0;
+              const warnings = s.totalWarnings ?? 0;
+              const min = Number(process.env.MIN_SCORE);
+              // The floor's own test, on the score as it is and not as it
+              // prints. One decimal, unless rounding would print a score
+              // below the minimum as the minimum or more (99.96 as 100.0).
+              const passed = s.score >= min && errors === 0;
+              const emoji = passed ? '✅' : '❌';
+              const rounded = s.score.toFixed(1);
+              const score = s.score < min && Number(rounded) >= min ? String(s.score) : rounded;
+
+              // The floor checks the score and the error count, not this
+              // list: anything in it that is not a criterion is left out,
+              // so the comment is still written.
+              const criteria = Array.isArray(s.failedCriteria)
+                ? s.failedCriteria.filter(c => c && typeof c === 'object')
+                : [];
+              const failed = criteria
+                .map(c => `- \`${c.criterion}\` ${c.name} (${c.errors} errors, ${c.warnings} warnings)`)
+                .join('\n');
+              const failedBlock = failed.length
+                ? `### Failed WCAG criteria\n${failed}`
+                : '_All WCAG criteria pass._';
+
+              body = [
+                `## ${emoji} Accessibility score: ${score} / 100 (${grade})`,
+                ``,
+                `**Issues:** ${errors} error(s), ${warnings} warning(s)`,
+                `**Minimum required:** ${min}`,
+                ``,
+                failedBlock,
+                ``,
+                `---`,
+                `Checked by [a11y-check](https://github.com/cvs-health/ios-swiftui-accessibility-techniques) against \`${process.env.A11Y_PATHS}\`.`,
+                ``,
+                marker,
+              ].join('\n');
+            } else {
+              // The floor's sentence can quote the results file, so it is
+              // data: one line, no backtick, 500 characters at most (the
+              // floor cleans it, and it is cleaned again here, where it
+              // arrives through the environment), in a code fence, where
+              // it cannot render or mention anyone. With no sentence, the
+              // floor did not run or stopped before it reported.
+              const said = (process.env.NO_SCORE_REASON || '')
+                .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ')
+                .replace(/`/g, "'")
+                .trim();
+              const reason = Array.from(said || 'The score floor step did not report a result.')
+                .slice(0, 500)
+                .join('');
+              const run = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+              body = [
+                `${altTag}: not computed`,
+                ``,
+                '```text',
+                reason,
+                '```',
+                ``,
+                `No score was computed in [this run](${run}), so its check is red. Any score this comment showed before is out of date.`,
+                ``,
+                marker,
+              ].join('\n');
+            }
+
+            // Every page: past the first, a comment that is not found is
+            // posted a second time. The workflow's own comment is the one
+            // github-actions[bot] wrote under either heading (a comment
+            // from before the marker existed) or with the marker.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => {
+              const text = c.body || '';
+              return c.user?.login === 'github-actions[bot]' &&
+                (text.startsWith(tag) || text.startsWith(altTag) || text.includes(marker));
+            });
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`Rewrote score comment ${existing.id}.`);
+            } else if (computed) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            } else {
+              core.info('No score was computed and this pull request has no score comment; none is created.');
+            }
+        # Reporting is best-effort. A GitHub API outage must not suppress or
+        # replace the local score-floor result above.
+        continue-on-error: true
+
+  # The check main's ruleset can require for this lane (#1565). The
+  # analysis is skipped when the routing failed, and a skipped job reports
+  # as passed. The score job is skipped with it on a push to main and on a
+  # fork's pull request; on a same-repo pull request it runs and fails
+  # (#1616). This one reports on every pull request that touches the lane,
+  # and fails unless the lane ran and passed. A fork's pull request is the
+  # one skip it accepts: its head never runs on the mac runners (analyze's
+  # if:).
   gate:
     name: accessibility check (mac)
     needs: [changes, route, analyze, a11y-check]
