@@ -234,7 +234,11 @@ class CheckFacts(unittest.TestCase):
         landed = "docs/plans/43_mac_backlog_delivery.md"
         scripts = ('DOC = ROOT / "docs" / "help" / ".." / "plans" / "43_mac_backlog_delivery.md"\n',
                    'DOC = os.path.join(ROOT, "docs", "help", "..", "plans", "43_mac_backlog_delivery.md")\n',
-                   'DOC = ROOT / "docs/help/../plans/43_mac_backlog_delivery.md"\n')
+                   'DOC = ROOT / "docs/help/../plans/43_mac_backlog_delivery.md"\n',
+                   # The app job's scripts run on Windows, where a backslash separates folders too.
+                   'DOC = os.path.join(ROOT, "docs", "help", r"..\\plans\\43_mac_backlog_delivery.md")\n',
+                   'DOC = os.path.join(ROOT, "docs", "help", "..\\\\plans\\\\43_mac_backlog_delivery.md")\n',
+                   'DOC = ROOT / r"docs\\help\\..\\plans\\43_mac_backlog_delivery.md"\n')
         for script in scripts:
             with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
                 workflow = covering + "    steps:\n      - name: Check\n        run: python -I scripts/reader.py\n"
@@ -246,6 +250,27 @@ class CheckFacts(unittest.TestCase):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
                 problems = trigger.check(make_repo(Path(tmp), workflow=covering, source=source))
                 self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
+
+    def test_a_script_s_docs_path_is_read_with_either_separator_and_in_any_case(self):
+        # Windows opens docs\plans\x.md and Docs/Plans/x.md alike. Each is reported as it lands, and the list, which
+        # GitHub matches by case, covers neither spelling here.
+        for script, landed in (
+                ('DOC = ROOT / r"docs\\plans\\43_mac_backlog_delivery\\x.md"\n', "docs/plans/43_mac_backlog_delivery/x.md"),
+                ('DOC = os.path.join(ROOT, "docs", r"plans\\43_mac_backlog_delivery", "x.md")\n', "docs/plans/43_mac_backlog_delivery/x.md"),
+                ('DOC = os.path.join(ROOT, "docs" "/plans/43_mac_backlog_delivery/x.md")\n', "docs/plans/43_mac_backlog_delivery/x.md"),
+                ('DOC = os.path.join(ROOT, "Docs", "Plans", "43_mac_backlog_delivery", "x.md")\n', "Docs/Plans/43_mac_backlog_delivery/x.md"),
+                ('DOC = ROOT / "DOCS/PLANS/43_mac_backlog_delivery/x.md"\n', "DOCS/PLANS/43_mac_backlog_delivery/x.md")):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
+                self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+
+    def test_a_whole_path_literal_beside_other_arguments_is_read_as_itself(self):
+        # open("docs/plans/a.md", "r") reads a.md, not a folder named a.md/r.
+        script = 'TEXT = open("docs/plans/43_mac_backlog_delivery/x.md", "r", encoding="utf-8").read()\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            reads, unparsed = trigger.script_reads(repo, script_workflow("python -I"))
+        self.assertEqual(({"docs/plans/43_mac_backlog_delivery/x.md": {"scripts/reader.py"}}, []), (reads, unparsed))
 
     def test_the_census_scans_the_three_generators_the_app_job_checks(self):
         workflow_text = (trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8")

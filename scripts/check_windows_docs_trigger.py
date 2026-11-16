@@ -23,30 +23,31 @@ not match a path, or if `on.pull_request` carries a list of its own. It reads:
   census checks for existence;
 * the checklist and contract links in `at_navigation_map.md`, which the AT
   navigation map census opens relative to its folder;
-* `docs/...` literals in the scripts the workflow runs, as `python` or
-  `python3`, with or without `-I`, and the paths such a script joins from
-  string literals segment by segment (`os.path.join(ROOT, "docs", "plans",
+* the docs paths in the string literals of the scripts the workflow runs, as
+  `python` or `python3`, with or without `-I`: a whole path
+  (`"docs/plans/38_notification_dispatcher_contracts.md"`), or one a script
+  joins segment by segment (`os.path.join(ROOT, "docs", "plans",
   "34_canvas_contracts.md")`, the same as a tuple, a list or `/` operands).
 
 A directory path (no file extension) requires the whole folder to be covered.
-A path is checked where it lands, with each `..` resolved, not as it is
-spelled. A path built from a helper's parameter is resolved through every call of
-that helper in the same file; a call whose argument is not a string literal
-or same-file constant, or a helper with no call, fails the check, naming the
-file, so a new kind of dynamic read is reviewed rather than silently missed.
+A path is checked where it lands, with each `..` resolved and either
+separator read, not as it is spelled. A path built from a helper's parameter
+is resolved through every call of that helper in the same file; a call whose
+argument is not a string literal or same-file constant, or a helper with no
+call, fails the check, naming the file, so a new kind of dynamic read is
+reviewed rather than silently missed.
 
 That holds for the Windows sources only. The scan of a script reads two
-shapes and no other: a quoted `docs/plans...` or `docs/help...` literal
-anywhere in its text, and a run of string literals that starts `"docs"`,
-then `"plans"` or `"help"`, and runs to the end of its call, tuple, list or
-`/` expression. A docs path a script builds any other way is not seen:
+shapes and no other: a string literal that starts `docs/plans` or
+`docs/help`, and a run of string literals that starts `"docs"`, then one
+that starts `plans` or `help`, and runs to the end of its call, tuple, list
+or `/` expression. A docs path a script builds any other way is not seen:
 through a variable, an f-string or a concatenation, through nested joins or
 `Path("docs") / ...`, or in a call that takes another argument after the
-path. A chain with a segment that is not a string literal is skipped whole,
+chain. A chain with a segment that is not a string literal is skipped whole,
 never read as its literal prefix, because `"docs", "plans", name` is not a
 read of the folder docs/plans. A script the scan cannot parse fails the
 check.
-
 Exit 0 when every path is covered by the one list; exit 1 with the problems
 otherwise.
 """
@@ -227,8 +228,18 @@ def at_map_reads(repo: Path) -> dict[str, set[str]]:
     return reads
 
 
-def _literal(node: ast.expr) -> str | None:
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+def _segments(node: ast.expr) -> list[str] | None:
+    """A string literal as the path segments it holds, split at either
+    separator (the app job's scripts run on Windows); None for anything else."""
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+        return None
+    return [segment for segment in node.value.replace("\\", "/").split("/") if segment not in ("", ".")]
+
+
+def _under_docs(first: str, second: str) -> bool:
+    # Without case, as Windows opens it. The path is reported as it is spelled,
+    # and the list, which GitHub matches with case, decides whether it is covered.
+    return first.lower() == "docs" and second.lower() in ("plans", "help")
 
 
 def _division_operands(node: ast.expr) -> list[ast.expr]:
@@ -238,19 +249,27 @@ def _division_operands(node: ast.expr) -> list[ast.expr]:
     return [node]
 
 
-def segment_chains(tree: ast.AST) -> list[str]:
-    """The docs paths a script names segment by segment: `"docs", "plans"` or
-    `"docs", "help"` and the string literals after them, as the arguments of a
-    call, the items of a tuple or list, or the operands of `/`.
+def script_paths(tree: ast.AST) -> list[str]:
+    """The docs paths a script names in its string literals, in two shapes.
 
-    A chain is read only when every item from it to the end of its sequence is
-    a string literal. One that goes on with anything else is skipped whole:
-    its literal prefix is not the path it names (`"docs", "plans", name` is
-    not a read of the folder docs/plans).
+    A whole path: one literal that starts `docs/plans` or `docs/help`, with
+    either separator and no white space (`"docs/help"`, or the same path
+    written with backslashes). It is read as itself, whatever stands beside it.
+
+    A chain: the literal `"docs"`, then one that starts `plans` or `help`, and
+    the string literals after it, as the arguments of a call, the items of a
+    tuple or list, or the operands of `/`. A chain is read only when every item
+    from it to the end of its sequence is a string literal. One that goes on
+    with anything else is skipped whole: its literal prefix is not the path it
+    names (`"docs", "plans", name` is not a read of the folder docs/plans).
     """
+    paths: list[str] = []
     sequences: list[list[ast.expr]] = []
     inner: set[int] = set()
     for node in ast.walk(tree):
+        whole = _segments(node)
+        if whole is not None and len(whole) >= 2 and _under_docs(whole[0], whole[1]) and not re.search(r"\s", node.value):
+            paths.append("/".join(whole))
         if isinstance(node, ast.Call):
             sequences.append(node.args)
         elif isinstance(node, (ast.Tuple, ast.List)):
@@ -262,19 +281,17 @@ def segment_chains(tree: ast.AST) -> list[str]:
                 inner.add(id(below))
                 below = below.left
             sequences.append(_division_operands(node))
-    paths: list[str] = []
     for items in sequences:
         at = 0
         while at + 1 < len(items):
-            # The segment after "docs" may hold several folders: "plans/18_windows_port".
-            following = [segment for segment in (_literal(items[at + 1]) or "").split("/") if segment]
-            if _literal(items[at]) != "docs" or not following or following[0] not in ("plans", "help"):
+            first, second = _segments(items[at]), _segments(items[at + 1])
+            if not first or len(first) != 1 or not second or not _under_docs(first[0], second[0]):
                 at += 1
                 continue
-            parts = ["docs"]
+            parts = list(first)
             at += 1
-            while at < len(items) and _literal(items[at]) is not None:
-                parts.extend(segment for segment in _literal(items[at]).split("/") if segment)
+            while at < len(items) and _segments(items[at]) is not None:
+                parts.extend(_segments(items[at]))
                 at += 1
             if at == len(items):
                 paths.append("/".join(parts))
@@ -302,7 +319,7 @@ def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], l
                 "segments were not checked; the docs census job's Python must be able to read every script the workflow runs"
             )
             continue
-        for found in segment_chains(tree):
+        for found in script_paths(tree):
             reads.setdefault(found, set()).add(script)
     return reads, unparsed
 
@@ -322,12 +339,12 @@ def check(repo: Path = REPO) -> list[str]:
 
     from_sources, unresolved = source_reads(repo)
     from_scripts, unparsed = script_reads(repo, workflow_text)
-    # A path is checked where it lands, not as it is spelled: docs/help/../plans/x.md
-    # is a plan document, whatever the list says about docs/help.
+    # A path is checked where it lands, not as it is spelled: docs/help/../plans/x.md,
+    # with either separator, is a plan document, whatever the list says about docs/help.
     reads: dict[str, set[str]] = {}
     for extra in (from_sources, designation_reads(repo), at_map_reads(repo), from_scripts):
         for path, sources in extra.items():
-            reads.setdefault(posixpath.normpath(path), set()).update(sources)
+            reads.setdefault(posixpath.normpath(path.replace("\\", "/")), set()).update(sources)
     problems.extend(unresolved)
     problems.extend(unparsed)
 
