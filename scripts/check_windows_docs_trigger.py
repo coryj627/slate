@@ -85,7 +85,6 @@ _DOCS_LITERAL = re.compile(r'"(docs/(?:plans|help)/[^"\\\s]+)"')
 _PLAN_RELATIVE = re.compile(r'"(\d\d_[A-Za-z0-9_-]+(?:\.md|/[^"\\\s]+))"')
 _MAP_LINK = re.compile(r'(?<![\w/.])((?:\.\./)?(?:reports|specs)/[A-Za-z0-9_./-]+\.md|\.\./\d\d_[A-Za-z0-9_-]+\.md)')
 _SCRIPT_RUN = re.compile(r'python3?(?:\s+-I)?\s+(scripts/[A-Za-z0-9_./-]+\.py)')
-_SCRIPT_DOCS = re.compile(r'["\'](docs/(?:plans|help)(?:/[^"\'\s]*)?)["\']')
 
 
 _METHOD = re.compile(r"(\w+)\s*\(([^()]*)\)\s*(?:=>|\{)")
@@ -257,6 +256,8 @@ def script_paths(tree: ast.AST) -> list[str]:
     A whole path: one literal that starts `docs/plans` or `docs/help`, with
     either separator and no white space (`"docs/help"`, or the same path
     written with backslashes). It is read as itself, whatever stands beside it.
+    The fixed text of an f-string is not one: `f"docs/plans/{name}.md"` names
+    neither the folder docs/plans nor any file the scan can know.
 
     A chain: the literal `"docs"`, then one that starts `plans` or `help`, and
     the string literals after it, as the arguments of a call, the items of a
@@ -268,8 +269,12 @@ def script_paths(tree: ast.AST) -> list[str]:
     paths: list[str] = []
     sequences: list[list[ast.expr]] = []
     inner: set[int] = set()
-    for node in ast.walk(tree):
-        whole = _segments(node)
+    fragments: set[int] = set()
+    for node in ast.walk(tree):  # a parent before its children
+        if isinstance(node, ast.JoinedStr):
+            # The fixed text of an f-string is part of a path the scan cannot name, not a path.
+            fragments.update(id(value) for value in node.values)
+        whole = None if id(node) in fragments else _segments(node)
         if whole is not None and len(whole) >= 2 and _under_docs(whole[0], whole[1]) and not re.search(r"\s", node.value):
             paths.append("/".join(whole))
         if isinstance(node, ast.Call):
@@ -310,15 +315,13 @@ def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], l
         path = repo / script
         if not path.is_file() or path.name == Path(__file__).name:
             continue
-        text = path.read_text(encoding="utf-8")
-        for found in _SCRIPT_DOCS.findall(text):
-            reads.setdefault(found.rstrip("/"), set()).add(script)
+        # The parsed script, not its text: a path in a comment or a docstring is not a read.
         try:
-            tree = ast.parse(text)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError as error:
             unparsed.append(
-                f"{script}: cannot be parsed (line {error.lineno}: {error.msg}), so the docs paths it joins from "
-                "segments were not checked; the docs census job's Python must be able to read every script the workflow runs"
+                f"{script}: cannot be parsed (line {error.lineno}: {error.msg}), so the docs paths it names were "
+                "not checked; the docs census job's Python must be able to read every script the workflow runs"
             )
             continue
         for found in script_paths(tree):

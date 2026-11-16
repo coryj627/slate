@@ -312,11 +312,29 @@ class CheckFacts(unittest.TestCase):
                 self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
                 self.assertFalse(any("scripts/reader.py" in p for p in trigger.check(repo)))
 
-    def test_a_chain_in_a_script_s_docstring_or_comment_is_not_a_read(self):
-        script = '"""Joins like `os.path.join(root, "docs", "plans", "43_x.md")`."""\n# ("docs", "plans", "43_y.md")\n'
+    def test_a_path_in_a_script_s_docstring_or_comment_is_not_a_read(self):
+        for script in ('"""Joins like `os.path.join(root, "docs", "plans", "43_x.md")`."""\n# ("docs", "plans", "43_y.md")\n',
+                       '"""Reads "docs/plans/43_x.md" when asked."""\nX = 1  # see "docs/plans/43_y.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+                self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
+    def test_a_path_built_in_an_f_string_invents_no_read(self):
+        # The blind spot, kept honest: the scan cannot say what such a path names, so it reports neither the
+        # folder its fixed start spells nor a file named with the braces.
+        for script in ('CONTRACT = "43_mac_backlog_delivery"\nDOC = REPO / f"docs/plans/{CONTRACT}.md"\n',
+                       'DOC = os.path.join(ROOT, f"docs/plans/{number}_contracts.md")\n',
+                       'DOC = REPO / f"docs/help/{name}"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+                self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+                self.assertFalse(any("scripts/reader.py" in p for p in trigger.check(repo)))
+        # A literal inside the braces is a literal like any other.
+        script = 'TEXT = f"{read(\'docs/plans/43_mac_backlog_delivery/x.md\')}"\n'
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
-            self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+            reads, _ = trigger.script_reads(repo, script_workflow("python -I"))
+        self.assertEqual({"docs/plans/43_mac_backlog_delivery/x.md": {"scripts/reader.py"}}, reads)
 
     def test_a_script_the_scan_cannot_parse_fails(self):
         # A script the scan cannot read is a script whose docs paths nobody checked.
