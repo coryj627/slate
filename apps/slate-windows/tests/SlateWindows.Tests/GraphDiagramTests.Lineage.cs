@@ -920,6 +920,80 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>#1788 (plan 47 CB-7): a forces edit is saved while the diagram
+    /// it re-heated is still settling. The issue's theory was that the save's
+    /// Background timer starves under the settle's Render cadence when each
+    /// layout step outlasts that cadence. Here every compute is held for 40 ms,
+    /// more than twice the cadence, and the settle is restarted whenever it
+    /// converges, so steps keep coming for as long as the fact waits. The
+    /// workspace, the driver and the preferences are the real ones: the save's
+    /// timer runs at its production priority and window, and nothing fires its
+    /// tick by hand. The save lands while the settle still runs. No duration
+    /// is asserted, and the file is read once, after the writer has drained.</summary>
+    [Fact]
+    public void AForcesEditIsSavedWhileTheDiagramIsStillSettling()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-save-while-settling");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            GraphLayoutDriver driver = model.Driver;
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            // The switch to Diagram saved the mode. That save lands first, so
+            // the only save the wait below can see is the edit's.
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !preferences.HasPendingForTests && preferences.OutstandingForTests == 0),
+                "premise: the mode switch's own save never landed");
+            PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
+            GraphForcesConfig before = preferences.CurrentConfig.Forces;
+            // The shell gate's step: Right on the Repel slider, one SmallChange.
+            GraphForcesConfig stepped = before with { Repel = before.Repel + 0.01 };
+
+            TimeSpan hold = TimeSpan.FromMilliseconds(40);
+            Assert.True(hold > GraphLayoutDriver.Cadence * 2, $"premise: a {hold.TotalMilliseconds} ms compute does not outlast the cadence");
+            model.InsideGateForTests = () => Thread.Sleep(hold);
+            host.Workspace.Inspector.SetForces(stepped);
+            Assert.True(driver.IsSettling, "premise: the edit did not restart the settle");
+            int steps = driver.StepsForTests;
+
+            // The wait ends when the save has left the preferences (no pending
+            // pair, no outstanding write) and the settle has issued a step
+            // since the edit. A step is part of the wait, not a later
+            // assertion: a save that lands before the first held compute's
+            // apply is pumped says nothing about the settle either way.
+            bool saved = PumpedDispatcher.PumpUntil(
+                () =>
+                {
+                    if (!driver.IsSettling)
+                    {
+                        driver.StartSettle();
+                    }
+                    return !preferences.HasPendingForTests
+                        && preferences.OutstandingForTests == 0
+                        && driver.StepsForTests > steps;
+                },
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                saved,
+                "the forces edit was not saved while the diagram kept settling. "
+                + $"Pending pair: {preferences.HasPendingForTests}; save timer running: {preferences.TimerEnabledForTests}; "
+                + $"outstanding writes: {preferences.OutstandingForTests}; layout steps since the edit: {driver.StepsForTests - steps}; "
+                + $"settling: {driver.IsSettling}.");
+            Assert.True(driver.IsSettling, "the settle had ended when the save landed, so the save did not land under it");
+
+            PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
+            double onDisk = new GraphConfigStore(host.Vault.Root).Read().Config.Forces.Repel;
+            Assert.True(
+                Math.Abs(onDisk - stepped.Repel) < 1e-9,
+                $"graph.json carries repel {onDisk} after the edit to {stepped.Repel}: the edit was not saved");
+
+            model.InsideGateForTests = null;
+            WaitForTheSettle(host, document, model);
+        });
+    }
+
     [Fact]
     public void ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns()
     {
