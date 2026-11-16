@@ -318,10 +318,13 @@ public sealed partial class ShellAccessibilityTests
             // Whatever opening the popover raised has arrived; the presses
             // below must add nothing.
             int mark = QuietMark(heard, process.Id);
-            PressKey(VirtualKeyShort.F6);
-            AssertKeepsFocus(automation, close, "F6 inside the popover moved focus (W7-6 §4, #1281).");
-            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertKeepsFocus(automation, close, "Shift+F6 inside the popover moved focus (W7-6 §4, #1281).");
+            AssertAKeyKeepsFocus(
+                automation, close, () => PressKey(VirtualKeyShort.F6), "F6 inside the popover moved focus (W7-6 §4, #1281).");
+            AssertAKeyKeepsFocus(
+                automation,
+                close,
+                () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6),
+                "Shift+F6 inside the popover moved focus (W7-6 §4, #1281).");
             AwaitHeard(
                 () => [.. HeardFrom(heard, process.Id).Skip(mark).Select(notification => notification.DisplayString)],
                 [],
@@ -352,12 +355,26 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    /// <summary>A press that must move nothing: focus is on
-    /// <paramref name="element"/> and stays there for
+    /// <summary>A press that must move nothing. Focus is read on
+    /// <paramref name="element"/> once before <paramref name="press"/> (the
+    /// premise), the key is pressed, and from the press on every read for
     /// <see cref="FocusSettle"/>, the time a landing would take to arrive,
-    /// counted in reads that saw it there (<see cref="FocusSettleWatch"/>).</summary>
-    private static void AssertKeepsFocus(UIA3Automation automation, AutomationElement element, string message) =>
-        AssertFocusStays(automation, () => FocusIsOn(automation, element), message);
+    /// must see it there: the first that sees it gone fails
+    /// (<see cref="FocusSettleWatch.WatchAcrossAKey"/>).</summary>
+    private static void AssertAKeyKeepsFocus(UIA3Automation automation, AutomationElement element, Action press, string message) =>
+        AssertAKeyMovesNothing(automation, () => FocusIsOn(automation, element), press, message, FocusSettle);
+
+    /// <summary>A key that must move nothing, for any state a journey can
+    /// read as in place, gone or unreadable: read once before the key,
+    /// watched from the press on for <paramref name="window"/>. No wait for
+    /// a read in place stands between the key and the watch, so a key that
+    /// moved the state away and let it come back fails.</summary>
+    private static void AssertAKeyMovesNothing(
+        UIA3Automation automation, Func<bool?> inPlace, Action press, string message, TimeSpan window)
+    {
+        string? why = FocusSettleWatch.WatchAcrossAKey(inPlace, press, window);
+        Assert.True(why is null, $"{message} {why} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+    }
 
     /// <summary>Whether focus is on <paramref name="element"/>: true, false,
     /// or null when UI Automation faulted or answered no element, which is

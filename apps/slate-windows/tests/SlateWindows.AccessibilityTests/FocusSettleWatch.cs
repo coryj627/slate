@@ -68,4 +68,29 @@ internal static class FocusSettleWatch
 
         return null;
     }
+
+    /// <summary>A key that must move nothing. The state is read in place
+    /// once before the key: that is the premise, and a read that sees the
+    /// state elsewhere, or cannot see it, fails there in its own words, with
+    /// the key not pressed. Then the key is pressed and <see cref="Watch"/>
+    /// runs from the press on, so the first read that sees the state gone
+    /// fails, whatever a later read would see. A check that first waited
+    /// after the key for a read in place would pass a key that moved focus
+    /// away and let it come back: it would prove recovery, not that nothing
+    /// moved.</summary>
+    internal static string? WatchAcrossAKey(
+        Func<bool?> inPlace, Action press, TimeSpan window, TimeSpan? cap = null, TimeSpan? poll = null)
+    {
+        switch (inPlace())
+        {
+            case null:
+                return "Premise: the state could not be read before the key (UI Automation faulted or answered no element), "
+                    + "so the key was not pressed.";
+            case false:
+                return "Premise: the state was not in place before the key, so the key was not pressed.";
+        }
+
+        press();
+        return Watch(inPlace, window, cap, poll);
+    }
 }

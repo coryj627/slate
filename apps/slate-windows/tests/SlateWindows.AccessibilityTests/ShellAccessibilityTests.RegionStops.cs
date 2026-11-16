@@ -74,8 +74,8 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(contentPane, "F6 from Files with no tab did not land on the empty editor pane.");
             foreach (VirtualKeyShort arrow in new[] { VirtualKeyShort.DOWN, VirtualKeyShort.UP, VirtualKeyShort.LEFT, VirtualKeyShort.RIGHT })
             {
-                PressKey(arrow);
-                AssertFocusStays(automation, contentPane, $"{arrow} on the empty editor stop moved focus off it");
+                AssertAKeyKeepsFocusById(
+                    automation, contentPane, () => PressKey(arrow), $"{arrow} on the empty editor stop moved focus off it");
             }
 
             //    The bar closed to arrows still wraps its OWN: Left on File
@@ -551,15 +551,17 @@ public sealed partial class ShellAccessibilityTests
         return Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
     }
 
-    /// <summary>After a key that must not move focus: focus is on the
-    /// element with <paramref name="element"/>'s automation id and stays
-    /// there for <see cref="FocusSettle"/>, counted in reads that saw it
-    /// there (<see cref="FocusSettleWatch"/>). A UI Automation fault, or no
-    /// focused element, is no observation either way.</summary>
-    private static void AssertFocusStays(UIA3Automation automation, AutomationElement element, string message)
+    /// <summary>A key that must not move focus. Focus is read on the
+    /// element with <paramref name="element"/>'s automation id once before
+    /// <paramref name="press"/> (the premise), the key is pressed, and from
+    /// the press on every read for <see cref="FocusSettle"/> must see it
+    /// there (<see cref="AssertAKeyMovesNothing"/>). After the key a UI
+    /// Automation fault, or no focused element, is no observation either
+    /// way.</summary>
+    private static void AssertAKeyKeepsFocusById(UIA3Automation automation, AutomationElement element, Action press, string message)
     {
         string id = element.Properties.AutomationId.ValueOrDefault ?? string.Empty;
-        AssertFocusStays(
+        AssertAKeyMovesNothing(
             automation,
             () =>
             {
@@ -574,7 +576,9 @@ public sealed partial class ShellAccessibilityTests
                     return null;
                 }
             },
-            message + ".");
+            press,
+            message + ".",
+            FocusSettle);
     }
 
     /// <summary>The focused element is a ROW of <paramref name="list"/>

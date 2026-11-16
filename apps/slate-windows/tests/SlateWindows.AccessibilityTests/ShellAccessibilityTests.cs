@@ -11563,11 +11563,13 @@ public sealed partial class ShellAccessibilityTests
             // Right from INSIDE the tree is the boundary's terminal: the
             // shell posts its line and focus stays in the tree — it never
             // falls through to the editor-geometry route.
-            // Focus is read in the tree before the press (the premise), and
-            // from the press on every read must see it there, for two
+            // Focus is read in the tree once before the press (the premise),
+            // and from the press on every read must see it there, for two
             // seconds: a read that sees it gone fails at once, whatever was
-            // read before it, and a read UI Automation faulted on is no
-            // observation. The line is the witness that the chord arrived:
+            // read before it, and after the press a read UI Automation
+            // faulted on is no observation
+            // (FocusSettleWatch.WatchAcrossAKey). The line is the witness
+            // that the chord arrived:
             // with the keys in a side pane and no pane further that way, the
             // window posts its terminal line (MainWindow's
             // AnnounceNoPaneInDirection, the shell's own words), heard on the
@@ -11583,11 +11585,10 @@ public sealed partial class ShellAccessibilityTests
                 int edgeMark = QuietMark(edgeHeard, process.Id);
                 bool EdgeLineHeard() => HeardFrom(edgeHeard, process.Id).Skip(edgeMark).Any(line => line.DisplayString == edgeLine);
                 ReassertForegroundForAChord(window);
-                Assert.True(
-                    SpinWait.SpinUntil(() => FocusIsWithin(automation, tree) == true, TimeSpan.FromSeconds(10)),
-                    $"premise: focus is not in the leaf's tree before Right is pressed inside it; focus is {DescribeFocusedElement(automation)}");
-                PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
-                string? edgeMoved = FocusSettleWatch.Watch(() => FocusIsWithin(automation, tree), TimeSpan.FromSeconds(2));
+                string? edgeMoved = FocusSettleWatch.WatchAcrossAKey(
+                    () => FocusIsWithin(automation, tree),
+                    () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT),
+                    TimeSpan.FromSeconds(2));
                 Assert.True(
                     edgeMoved is null,
                     $"Right from inside the tree moved focus out of the leaf. {edgeMoved} Focus is {DescribeFocusedElement(automation)}");
@@ -11666,13 +11667,13 @@ public sealed partial class ShellAccessibilityTests
                 $"the popped leaf did not keep focus; focus is {DescribeFocusedElement(automation)}");
             ReassertForegroundForAChord(window);
             // Nothing to pop leaves nothing to wait for. So the leaf is read
-            // in place before the press (the premise), and from the press on
-            // it is watched for two seconds, the window this check had on
-            // main: every read must see the heading still naming the note and
-            // focus still in the tree. A read that sees the heading changed
-            // or gone, or focus elsewhere, fails at once, whatever was read
-            // before it; only a read UI Automation faulted on is no
-            // observation.
+            // in place once before the press (the premise), and from the
+            // press on it is watched for two seconds, the window this check
+            // had on main: every read must see the heading still naming the
+            // note and focus still in the tree. A read that sees the heading
+            // changed or gone, or focus elsewhere, fails at once, whatever
+            // was read before it; after the press only a read UI Automation
+            // faulted on is no observation (FocusSettleWatch.WatchAcrossAKey).
             string? HeadingNow() =>
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault;
             bool? NothingChanged()
@@ -11687,12 +11688,8 @@ public sealed partial class ShellAccessibilityTests
                 }
             }
 
-            Assert.True(
-                SpinWait.SpinUntil(() => NothingChanged() == true, TimeSpan.FromSeconds(10)),
-                "premise: before the second Ctrl+[ the leaf does not show the note it returned to with focus in its tree; "
-                + $"focus is {DescribeFocusedElement(automation)}");
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4);
-            string? popChanged = FocusSettleWatch.Watch(NothingChanged, TimeSpan.FromSeconds(2));
+            string? popChanged = FocusSettleWatch.WatchAcrossAKey(
+                NothingChanged, () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4), TimeSpan.FromSeconds(2));
             Assert.True(
                 popChanged is null,
                 $"a second Ctrl+[ with nothing to pop changed the leaf or moved focus. {popChanged} "
