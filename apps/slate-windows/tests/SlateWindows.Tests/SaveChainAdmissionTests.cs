@@ -1187,7 +1187,7 @@ public sealed class SaveChainAdmissionTests
     {
         const string Outside = "written outside Slate\n";
         using var h = new Vault("rescan-under-admitted", ("a.md", "v0\n"));
-        WorkspaceTabViewModel tab = h.Open("a.md");
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
         var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
         try
@@ -1391,6 +1391,77 @@ public sealed class SaveChainAdmissionTests
         Assert.NotEqual(document, tab.ItemIdentity);
         Assert.NotNull(tab.FileIdentity);
         Assert.NotEqual(identity, tab.FileIdentity);
+    });
+
+    /// <summary>The red team's F4: the reload stands INSIDE the recover's
+    /// ticket. The recover is held before its create; the clean missing
+    /// tab asks to save, which queues behind the recover; the save records
+    /// what the tab shows when it runs. It runs against the recovered
+    /// text, on a document that has already moved. The row's answer is the
+    /// sharper witness: it is given inside the ticket, with both tickets
+    /// still counted, and the tab is reloaded by then. A reload posted to
+    /// run after the operation would not have run yet.</summary>
+    [Fact]
+    public void ASaveQueuedBehindARecoverRunsAgainstTheTabTheRecoverReloaded() => RunSta(() =>
+    {
+        using var v = new OpenedVault("recover-reloads-inside-ticket", "gone.md", Gone);
+        v.Workspace.OpenPath("gone.md", WorkspaceOpenTarget.NewTab);
+        v.Workspace.InvalidatePath("gone.md");
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = v.Workspace.Groups.SelectMany(group => group.Tabs).Single(candidate => candidate.Path == "gone.md");
+        Assert.True(tab.IsMissingFromDisk, "premise: the tab on the deleted path does not report its file missing");
+        Assert.False(tab.IsDirty);
+        int document = tab.ItemIdentity;
+        v.Workspace.History.LoadDeletedFiles();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(30)),
+            "the deleted files list never loaded");
+        HistoryDeletedRow deleted = v.Workspace.History.DeletedRows.Single(row => row.Path == "gone.md");
+        var held = new HeldWork(hook => v.Workspace.HistoryCreateHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            string? textAtTheAnswer = null;
+            int documentAtTheAnswer = -1;
+            int admittedAtTheAnswer = -1;
+            v.Workspace.RecoverDeletedFile(deleted, (ok, collision) =>
+            {
+                textAtTheAnswer = tab.Text;
+                documentAtTheAnswer = tab.ItemIdentity;
+                admittedAtTheAnswer = v.Workspace.SavesForTests.AdmittedForTests;
+                answers.Enqueue((ok, collision));
+            });
+            Assert.True(PumpedDispatcher.PumpUntil(() => held.Entered, TimeSpan.FromSeconds(30)), "premise: the recover never reached its hold");
+
+            string? textAtTheSave = null;
+            int documentAtTheSave = -1;
+            Task<bool> save = tab.SaveAsync(onSaved: () =>
+            {
+                textAtTheSave = tab.Text;
+                documentAtTheSave = tab.ItemIdentity;
+            });
+            Assert.Equal(2, v.Workspace.SavesForTests.AdmittedForTests);
+
+            held.Release();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && v.Workspace.SavesIdle, TimeSpan.FromSeconds(30)),
+                "the recover and then the save never ended");
+            Assert.Equal([(true, false)], answers);
+            Assert.True(save.Result);
+            Assert.Equal(2, admittedAtTheAnswer);
+            Assert.Equal(Gone, textAtTheAnswer);
+            Assert.NotEqual(document, documentAtTheAnswer);
+            Assert.Equal(Gone, textAtTheSave);
+            Assert.NotEqual(document, documentAtTheSave);
+            Assert.Equal(tab.ItemIdentity, documentAtTheSave);
+        }
+        finally
+        {
+            held.Release();
+            _ = PumpedDispatcher.PumpUntil(() => v.Workspace.SavesIdle, TimeSpan.FromSeconds(30));
+        }
+        held.AssertHeldUntilReleased();
     });
 
     /// <summary>A vault opened through the vault lifecycle, as the app opens
