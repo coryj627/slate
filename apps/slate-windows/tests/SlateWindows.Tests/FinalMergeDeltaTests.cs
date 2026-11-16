@@ -217,6 +217,29 @@ public sealed class FinalMergeDeltaTests
         CloseWhileTheRerunIsParked(host, loads.ReleaseSecond);
     }
 
+    /// <summary>#1673's sibling: a tab built while the park stood keeps
+    /// the park's hook for its later cache loads, so a load can reach the
+    /// park after it is disposed. Such a load passes through: the park
+    /// released both gates and left them to the collector, so there is no
+    /// disposed event for the load to wait on. The two calls here are the
+    /// first and second loads, the ones the park holds.</summary>
+    [Fact]
+    public void ALoadThatReachesTheParkAfterItsDisposalPassesThrough()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        var loads = new ParkedLoads(host);
+        Func<EditorInteractionWorkerKind, Exception?> hook = host.Workspace.InteractionBackgroundFaultForTests
+            ?? throw new InvalidOperationException("the park installed no hook");
+        loads.Dispose();
+
+        Assert.Null(hook(EditorInteractionWorkerKind.Artifact));
+        Assert.Null(hook(EditorInteractionWorkerKind.Artifact));
+
+        // Both calls went through the park, not round it.
+        Assert.True(loads.First.IsSet, "premise: the first call was the park's first load");
+        Assert.True(loads.Second.IsSet, "premise: the second call was the park's second load");
+    }
+
     /// <summary>Finding 3, the gap itself: the load's worker has ended but
     /// its publication — the one that starts the rerun the rescan's
     /// invalidation asked for — is still queued when the run completes and
@@ -451,16 +474,16 @@ public sealed class FinalMergeDeltaTests
             return tab.EditorInteractions!;
         }
 
+        /// <summary>Releases both parks and takes the hook off the
+        /// workspace; the events are left to the collector (#1673). A tab
+        /// built while the park stood keeps the hook, and a load still
+        /// waking on a release, or reaching the park after this, must not
+        /// meet a disposed event.</summary>
         public void Dispose()
         {
-            // Release first: a worker still parked wakes before its event goes.
             ReleaseFirst.Set();
             ReleaseSecond.Set();
             _host.Workspace.InteractionBackgroundFaultForTests = null;
-            First.Dispose();
-            ReleaseFirst.Dispose();
-            Second.Dispose();
-            ReleaseSecond.Dispose();
         }
     }
 

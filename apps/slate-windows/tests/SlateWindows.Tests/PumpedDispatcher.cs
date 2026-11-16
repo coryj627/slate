@@ -124,9 +124,14 @@ internal static class PumpedDispatcher
     /// OBSERVE it (IPA-8): a faulted or cancelled drain is complete too,
     /// and a fact that only waited would hide a scheduler or receiver
     /// failure behind assertions that need no publication.</summary>
-    public static void PumpUntilDrained(Task drain)
+    public static void PumpUntilDrained(Task drain) => PumpUntilDrained(drain, TimeSpan.FromSeconds(10));
+
+    /// <summary><see cref="PumpUntilDrained(Task)"/> with an explicit bound,
+    /// for a drain that waits on work the default ten seconds does not cover
+    /// (a real SVG decode may take <see cref="UnhurriedSvgDecodes.Milliseconds"/>).</summary>
+    public static void PumpUntilDrained(Task drain, TimeSpan budget)
     {
-        Xunit.Assert.True(PumpUntil(() => drain.IsCompleted), "the drain never completed");
+        Xunit.Assert.True(PumpUntil(() => drain.IsCompleted, budget), "the drain never completed");
         drain.GetAwaiter().GetResult();
     }
 }

@@ -44,11 +44,27 @@ public sealed partial class ConnectionsLeafTests
             reached = Reached;
         }
 
-        public void Dispose()
-        {
-            Gate.Dispose();
-            Reached.Dispose();
-        }
+        /// <summary>Releases the park; the events are left to the
+        /// collector (#1673). A fact that fails before its own release
+        /// still disposes the park, and a fetch parked on the gate, or one
+        /// yet to reach it, must not meet a disposed event.</summary>
+        public void Dispose() => Gate.Set();
+    }
+
+    /// <summary>#1673's sibling: a fetch can reach the park's hold after
+    /// the park is disposed (a fact that failed before its own release).
+    /// Such a fetch passes through: the park released its gate and left it
+    /// to the collector, so there is no disposed event to wait on.</summary>
+    [Fact]
+    public void AHoldAfterTheParksDisposalPassesThrough()
+    {
+        var parked = new ParkedFetch();
+        parked.Dispose();
+
+        parked.Hold();
+
+        Assert.False(parked.TimedOut);
+        Assert.True(parked.Reached.IsSet, "premise: the hold ran");
     }
 
     /// <summary>Park the leaf's NEXT fetch after both crossings — armed

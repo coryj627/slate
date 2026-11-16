@@ -48,12 +48,11 @@ public sealed partial class GraphTableTests
 
         public void Release() => _release.Set();
 
-        public void Dispose()
-        {
-            _release.Set();
-            _release.Dispose();
-            _reached.Dispose();
-        }
+        /// <summary>Releases the park; the events are left to the
+        /// collector (#1673). The hook stays on the document's seam, and a
+        /// fetch still waking on the release, or reaching the park after
+        /// this, must not meet a disposed event.</summary>
+        public void Dispose() => _release.Set();
     }
 
     private static WorkspaceTabViewModel GraphTabOf(Host host) =>
@@ -72,6 +71,29 @@ public sealed partial class GraphTableTests
             () => { }, System.Windows.Threading.DispatcherPriority.Loaded);
 
     private static bool GridHasTheKeys(GraphSurfaceView view) => view.TableForTests.GridForTests.Grid.IsKeyboardFocusWithin;
+
+    /// <summary>#1673's sibling: the park's hook stays on the document's
+    /// seam after the park is disposed, so a fetch can still reach it. Such
+    /// a fetch passes through: the park released its gate and left it to the
+    /// collector, so there is no disposed event for the fetch to wait on.
+    /// The call here is the park's first fetch, the one it holds.</summary>
+    [Fact]
+    public void AFetchThatReachesTheParkAfterItsDisposalPassesThrough()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-park-after-disposal");
+            GraphDocumentViewModel document = host.Open();
+            var park = new ParkedFetch(document, 1);
+            park.Dispose();
+
+            document.FetchGateForTests!();
+
+            // The call went through the park, not round it: it was the fetch
+            // the park counts as its own.
+            park.WaitReached();
+        });
+    }
 
     // --- The arms (Term F4) and the at-once delivery (Term F2) -------------------
 
