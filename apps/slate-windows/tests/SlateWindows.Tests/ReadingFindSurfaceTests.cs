@@ -31,6 +31,7 @@ public sealed class ReadingFindSurfaceTests
         private readonly FixtureVault _fixture;
         private readonly CancelToken _cancel;
         private readonly Window _window;
+        private readonly List<ReadingContentViewModel> _models = [];
 
         public Harness(string name, string markdown, bool gated = false, int notes = 1, string? live = null)
         {
@@ -46,10 +47,14 @@ public sealed class ReadingFindSurfaceTests
                     new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
                 announce: Heard.Add,
                 startInteractionBackgroundWork: false);
-            if (gated)
+            Tab.ReadingCreatedForTests = model =>
             {
-                Tab.ReadingCreatedForTests = model => model.DiagramStageGateForTests = Gate;
-            }
+                _models.Add(model);
+                if (gated)
+                {
+                    model.DiagramStageGateForTests = Gate;
+                }
+            };
             if (live is not null)
             {
                 // An unsaved edit: the saved file's math artifacts no longer
@@ -89,6 +94,19 @@ public sealed class ReadingFindSurfaceTests
 
         public ReadingContentViewModel Model => Tab.Reading!;
 
+        /// <summary>#1673: what this harness's teardown did for the stage it
+        /// let go.</summary>
+        public TeardownWitness Teardown { get; } = new();
+
+        /// <summary>#1673: the stage, once released, stands in its fault
+        /// seam (past its token check, before its session call) until this
+        /// harness's teardown waits for it or its session is gone. Let
+        /// through late, it stops there: the seam answers a fault.</summary>
+        public void HoldTheStageAtTeardown() =>
+            Model.DiagramFaultForTests = () => Teardown.Hold()
+                ? new VaultException.Io("the stage ran after the harness's session was gone")
+                : null;
+
         public string IndexText => Find.Text.Text;
 
         public List<(int Offset, int Length)> Matches(string query) => SearchStrategyFactory
@@ -122,12 +140,29 @@ public sealed class ReadingFindSurfaceTests
         public void Dispose()
         {
             Gate.Set();
-            Find.Detach();
-            _window.Close();
-            Tab.Dispose();
-            Session.Dispose();
-            _cancel.Dispose();
-            _fixture.Dispose();
+            try
+            {
+                Find.Detach();
+                _window.Close();
+                Tab.Dispose();
+                // #1673: a stage the gate just let go ends before the session
+                // goes. It checks its token and then calls the session, so
+                // one already past the check when the tab retired it would
+                // call a disposed session. The tab's Dispose drops its
+                // reading model, so the drain is over the models recorded as
+                // they were created; a decode in flight may take its whole
+                // tolerance (#1949), and no note here holds two diagrams.
+                Teardown.DrainBeforeTheSessionGoes(
+                    () => Task.WhenAll(_models.Select(model => model.WhenRefreshWorkDrained())),
+                    UnhurriedSvgDecodes.LandingWait());
+            }
+            finally
+            {
+                Session.Dispose();
+                Teardown.SessionGone();
+                _cancel.Dispose();
+                _fixture.Dispose();
+            }
         }
     }
 
@@ -512,6 +547,33 @@ public sealed class ReadingFindSurfaceTests
         find.AttachSurface(null);
         harness.Surface.Model = null;
         tab.Dispose();
+    });
+
+    /// <summary>#1673: the harness's teardown waits for the stage its gate
+    /// let go. The stage is released first and stands in its fault seam,
+    /// past its token check and before its session call, until the teardown
+    /// says it is waiting or says the session is gone; the witness counts a
+    /// stage let through only by the second.</summary>
+    [Fact]
+    public void DisposingTheHarnessWaitsForAStageItReleased() => RunSta(() =>
+    {
+        var harness = new Harness("reading-find-teardown", MathAndDiagramNote, gated: true);
+        TeardownWitness teardown = harness.Teardown;
+        try
+        {
+            Assert.True(harness.Model.DiagramsPendingForTests, "premise: the stage is parked at its gate");
+            harness.HoldTheStageAtTeardown();
+            harness.Gate.Set();
+            teardown.WaitUntilEntered();
+        }
+        finally
+        {
+            harness.Dispose();
+        }
+
+        teardown.WaitUntilPassed();
+        Assert.Equal(0, teardown.LateRuns);
+        Assert.True(teardown.DrainedBeforeGone, "the harness's session went before the stage it released had ended");
     });
 
     private const string MathAndDiagramNote =
