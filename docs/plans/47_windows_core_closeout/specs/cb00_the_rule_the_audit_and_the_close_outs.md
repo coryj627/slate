@@ -2,6 +2,10 @@
 
 Issues: #1835 (closed by hand, with a comment); comments on the 24 audited issues still open (#998 closed on 2026-11-14 with #1937, and #1525 on 2026-11-15 with #1942) and on #1653, #1733, #1842, #1848; three new issues (the ledger, the deferred finds, CD38's catalogue). Size S. Lanes: none (the docs PR touches no lane's path list, so each lane's `lane paths` job and `pr gate` run and every other job skips). AT: —. Wave: C0. Depends on: plan 47's documents being on `main`, and the owner's answers to plan §3. Parallel with: nothing (C0 has one slot). Decision: the `AGENTS.md` PR waits on no row. CD35, CD36, CD37 and CD38 gate the issue edits and the catalogue issue; CD40 gates #1835's close; CD8 and CD13 each gate one comment. All are answered before C0 (plan 47 §3). Interlock: CB-3 adds one line to `AGENTS.md` beside the parity-matrix gotcha, after this chunk's PR has merged. Review: one red team (plan §4 rule 9; the PR changes only documents).
 
+*2026-11-16, delivered:* CB-0 was delivered on 2026-11-16 by #1957 (97b94ddc), with the tag pushed and every comment posted, so no step below is run again. Plan 47 §12 has the record.
+
+*2026-11-16:* the owner answered every row this chunk relies on as recommended: CD8, CD13, CD35 (with the tag, the repository's first), CD36, CD37, CD38 and CD40 (plan 47 §3.1). So each "yes" path below is the one to take, and `<date>` for a decision is 2026-11-16. The "no" paths stay as the record of what was offered. Item 8's ledger lines and the catalogue issue carry the owner's other answers of that day (CD9, CD10, CD15, CD17, CD22, CD24, CD34).
+
 ## Goal
 
 Every later chunk works under one written rule for a defect found on the way. Each issue another plan or the owner holds carries a dated comment saying what is done, what remains and who owns it. The one issue already fixed is closed. The two design follow-ups sit in Milestone W with their starting code kept. Plan 43's queue can see what plan 47 leaves it.
@@ -141,39 +145,42 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    The row goes at the end of the PR table in `00_program.md` §11.4, after `:470` (row 53). That table is the queue, and its rows already carry pointers to other plans.
 
    ```markdown
-   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plans 44 and 45 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
+   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plan 44 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
    ```
 
    Add to its Title cell, each only under its "yes": "PR 52 is retired and 22b's fact goes with #1513 (plan 47 CD36)."; "#1395 is plan 47's CB-14, and PR 39 keeps #1394 (CD8)."
 
-8. **The ledger issue.** Open it before the docs PR: `gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y --body-file <file>`. Write its number into the three places marked `<ledger>` and into plan 47 §8 (one clause, in the docs PR).
+8. **The ledger issue.** Open it before the docs PR: `gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y --body-file <file>`. Write its number into the three places marked `<ledger>` and into plan 47 §8 (one clause, in the docs PR). The issue exists as #1954, and its body is the live text: the lines quoted below are what it was opened with, and it is edited there, not here.
    > Plan 47 (`docs/plans/47_windows_core_closeout_plan.md`) is delivered on a Windows machine, with no Mac available to it. Some of its core changes alter what a Mac user hears or sees. Each merges on Windows evidence, with `not delivered: VoiceOver pass` in its PR body and one line here. This issue is the list of what the Mac is then owed.
    >
    > **Who clears it.** Plan 43's queue, on the owner's Mac. A line is cleared by a comment naming the VoiceOver pass, with its phrases, or the mac PR that adopted the change. This issue ends when every line is cleared.
    >
    > **How a line is added.** The plan 47 PR that makes the change adds one comment here before it merges: the chunk, the issue, the PR, what a Mac user hears or sees differently, and what is owed (a VoiceOver pass, a mac adoption, or both). Nothing else is discussed here.
    >
-   > **Lines expected** (plan 47 §8, 2026-11-13; none is owed until its PR merges):
+   > **Lines expected** (plan 47 §8, as the owner's answers of 2026-11-16 left it; none is owed until its PR merges):
    > - #1628, #1629 (CB-30): math speech and braille for a scripted function and for three or more primes.
    > - #1660, #1395 (CB-14): the new toggle event's adoption on the mac; the create sentence.
    > - #1782 (CB-32): a link snippet starts and ends on a word.
    > - #1834 (CB-34): the palette's section order; the selection rule in `CommandPaletteModel.swift`.
    > - #1631 (CB-27): the session-long diagram sentence goes; the panic sentence is reworded.
-   > - #1775 (CB-26): a callout's first line reads as its label.
+   > - #1775 (CB-26): a callout is a structured element over the FFI, with its type, its title and its fold. The mac adopts it; until then the mac shows what the compile-keeping edit gives (CD17).
    > - #1683 (CB-12): one `Deleted` event stops arriving.
    > - #1889 (CB-9b): the saved-query export's refusal.
    > - CB-20b: the diagram source event.
-   > - #1830 (CB-16): the import summary and cancel sentences move to core on both hosts (CD10).
+   > - #1830 (CB-16): the import summary and cancel sentences are new core events, spoken on Windows. The mac adopts them in place of its own sentences (CD10).
    > - #1900 (CB-8): an unreadable note lists, and on the Mac its row says a 1969 or 1970 modified date until the file reads again (CD41).
-   > - Behaviour, with nothing new to hear: #1704 (CB-31) and #1705 (CB-32), links that used to stay unresolved now resolve.
+   > - Behaviour, with nothing new to hear: #1704 (CB-31) and #1705 (CB-32), links that used to stay unresolved now resolve. #1705's new fold rebuilds each vault's index once on upgrade, on the mac too (CD22).
    > - #1708 (CB-20): a check of the Mac reading view for the same gap.
-   > - A note on #1527: the Mac's two copies of the save sentence carry #1660's run-on, and Windows keeps four search and graph error arms worded apart from core (CD9).
+   > - A note on #1527: the Mac's two copies of the save sentence carry #1660's run-on.
+   > - #1800 (CB-23): core owns the three empty-panel lines. A check only: the mac has bodies for those panels and uses none of the lines (CD15).
+   > - #1718 (CB-45b and the phases after it): a check of Quick Open during a rescan on the mac (CD34).
+   > - #1721 (CB-36): a line only if the chips change core. The mac already draws edge-label chips (CD24).
 
-   Drop a line whose decision row was answered the other way. The rule for later chunks is plan 47 §4 rule 5: the comment is added in the same PR as the change, and the PR body cites this issue's number.
+   The lines above follow the owner's answers of 2026-11-16 (plan 47 §3.1): #1775, #1830 and #1705 are reworded, #1527's note no longer says Windows keeps four search and graph error arms worded apart from core (CD9 rewords them to core's sentences), and #1800, #1718 and #1721 are added. The rule for later chunks is plan 47 §4 rule 5: the comment is added in the same PR as the change, and the PR body cites this issue's number.
 
    **The deferred-finds issue** (plan 47 §4 rule 10). Open it with the ledger: `gh issue create --title "Plan 47 deferred finds" --label windows --body-file <file>`. Its body says what it is (the one list of defects a plan 47 PR found and did not fix, each as one comment: the file, what is wrong, the failing test that would show it, and the PR that found it), who clears it (CB-46), and the lines it starts with, from plan 47 §9's table: the canvas and graph trigger ledgers have no `--check` and `test_canvas_trigger_ledger.py` runs in no workflow; the device stores do not retry a refused rename; whether blame's mini dumps lack managed frames; the gate's facts, other than the ones CB-7 edits, delete their app log on failure. Write its number into plan 47 §8 in the docs PR.
 
-   **CD38's catalogue issue**, only under CD38 "as recommended": `gh issue create --title "core: the sentences the Windows host still composes" --label windows --label a11y --milestone "Milestone W — Windows Version" --body-file <file>`, with the table from `reading/05_spoken_failures.md` ("Sentences the host composes that the rule says core should own"), and one line that each move is an FFI addition with Mac adoption.
+   **CD38's catalogue issue**, only under CD38 "as recommended": `gh issue create --title "core: the sentences the Windows host still composes" --label windows --label a11y --milestone "Milestone W — Windows Version" --body-file <file>`, with the table from `reading/05_spoken_failures.md` ("Sentences the host composes that the rule says core should own"), and one line that each move is an FFI addition with Mac adoption. Three of the table's rows are delivered in plan 47 by the owner's answers of 2026-11-16, and the issue marks each with its chunk: the import sentences (CB-16, CD10), the two `HumanReadable` copies in graph and search (CB-15b, CD9) and the right-pane placeholder (CB-23, CD15).
 
 9. **CD37: the release lists.** The agent that opens a wave reads three lists before its first PR. CB-0 does the first reading.
 
