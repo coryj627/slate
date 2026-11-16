@@ -4,10 +4,10 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0 and C1 are delivered (CB-0, CB-1, CB-2 and
-CB-4, all merged on 2026-11-16), and wave C2 is under way. §12 keeps
-the delivery record. Written from the requirements brief the owner
-approved on 2026-11-13
+recommendation. Waves C0, C1 and C2 are delivered (CB-0 to CB-6 and
+CB-8, all merged on 2026-11-16), and wave C3 (CB-7, CB-9a and CB-10) is
+under way. §12 keeps the delivery record. Written from the
+requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
 (#1926); the one commit between them adds `ExitWatch` and its tests and
@@ -182,6 +182,18 @@ The brief's six classes held up, with different sizes than expected.
 | An open dropdown's rows with no place in their set | #1783 #1836 | Eleven combo box sites, one defect. |
 | An embedded reading element spoken as "grouping" | #1708 | One live member, the diagram, in three states. Math is fixed. A thematic break and an embed image each sit alone on a line with no name; what NVDA says there needs one pass. Tab onto a diagram still reads its whole source as HelpText, which #1591 removed for math; nobody had filed it (CD12). |
 | A test that waits on the clock, or a fixture that tears down under in-flight work | six issues | Only #1673 is the class as worded. The unit project has 81 fixed waits that stand as statements of their own (28 sleeps, 13 delays, 40 fixed pumps) and the gate has 30; 20 elapsed-time oracles (19 in the unit project, one in the gate); nine fixtures that release a gate or dispose an event under work still running; and ten gate polls that hold a file the app replaces by rename (the mirror of #1788). Most of the unit project's fixed waits prove that nothing happened, and replacing one needs a product seam, so CB-6 fixes the few it can and pins the rest with reasons. |
+
+Corrected on 2026-11-16 by CB-9a's spec, read at 80925d72: the first
+row's eleven are routes, not call sites. A census that binds calls sees
+six creator call sites, and one helper (`CreateOutcomes.cs:42`) stands
+behind eight of the eleven routes. Two of the six are handled apart
+from the class: a tab's own save when it holds no hash is already in
+the chain, and a deleted file's recovery is CB-9a's to admit. The
+export that row cites is at `session.rs:19886-19895` on that commit.
+
+Corrected on 2026-11-16 by CB-6's census (#1971): the last row's gate
+count is 31 fixed waits, not 30. The thirty-first is a sleep in
+`FocusSettleWatchTests.cs` (§12).
 
 The reading also found the palette seal's route table has two rows in no
 register (drag and drop, and UIA `SetFocus`), and five more search
@@ -513,7 +525,7 @@ work the chunk carries.
 | CB-7 | The gate's journeys wait on conditions and read app files with delete sharing; rule 4; the graph settle-and-save pin; the app log joins the gate's uploaded evidence | #1788 | M | windows (gate) | — | CD3 |
 | CB-8 | A quarantined note still lists, so an unreadable note no longer fails the Files tree; the two stale mac comments are corrected | #1900 #1709 | S | rust, windows, swift | — | CD41 |
 | CB-9a | `SaveChainAdmissionCensus` with dated exceptions; the single-path routes join (the reload guard, `RecoverDeletedFile`, the two tabless writes); the create-class fact | Refs #1889 | M | windows | — | CD5 |
-| CB-9b | A bulk rename and a tag edit are admitted over their notes; the saved-query export cannot name a note; two accepted exceptions are left, and the census names both: the link rewrites (CD5 part b) and the Bases export, which is not one of CD5's four parts but the reading's exemption (W11, `reading/03_save_chain_lifecycle.md`); both are put to the owner in CB-46's table | #1889 | M–L | windows, rust, swift | NVDA spot if a refusal is new | CD5 |
+| CB-9b | A bulk rename and a tag edit are admitted over their notes; the saved-query export cannot name a note; two accepted exceptions are left, and the census names both: the link rewrites (CD5 part b) and the Bases export, which is not one of CD5's four parts but the reading's exemption (W11, `reading/03_save_chain_lifecycle.md`); both are put to the owner in CB-46's table. In the census the two are five rows (the link rewrites sit in four members, and the Bases export is the fifth), beside one standing row for navigation's tab replacement, which is not this class (CB-9a's spec, 2026-11-16) | #1889 | M–L | windows, rust, swift | NVDA spot if a refusal is new | CD5 |
 | CB-10 | A failed vault switch returns to the welcome view once | #1730 | S | windows | NVDA spot | — |
 | CB-11 | A parked citation summary press follows its note's rename | #1714 | S | windows | NVDA spot | — |
 | CB-12 | A repair announces only what it changed, so an own rename after another session's does not say the old path is missing | #1683 | S | rust, windows, swift | NVDA spot (two sessions) | CD6 |
@@ -565,7 +577,7 @@ Only rows where something beyond the chunk's merge must happen.
 | Issue | Chunk | Closes or Refs | What else must happen before close |
 |---|---|---|---|
 | #1788 | CB-7 | closes (CD3) | the pin passes on `main` |
-| #1889 | CB-9a, CB-9b | Refs, then closes | CB-9b; the two accepted exceptions named in CB-46's table |
+| #1889 | CB-9a, CB-9b | Refs, then closes | CB-9b; the two accepted exceptions (five census rows, CB-9b's row in §5) named in CB-46's table |
 | #1890 | CB-15a to CB-15c | Refs, Refs, closes | the census over the whole shell |
 | #1866 | CB-17a, CB-17b | Refs, then closes | CB-17b: every self-disabling button the scrape finds moves the keys first; no accepted exception is left (CD11) |
 | #1846 | CB-24 | closes by comment (CD16) | the recorded NVDA run |
@@ -642,6 +654,17 @@ members joined the rows below, with the same result. As before, the
 slotting of waves C3 onward is confirmed when each wave's specs are
 written.
 
+Wave C3 was checked again on 2026-11-16, when the specs for CB-9a and
+CB-10 were written. CB-7 shares no file with either: it edits the gate
+project and `TestWaitCensus.cs`, and its spec says it does not edit
+`windows.yml`. CB-9a and CB-10 are a fourth allowed same-wave pair:
+each adds one addendum to contract 40, CB-10 after R-5 and CB-9a after
+R-9, in different rows of one document. The second to merge rebases and
+keeps both. CB-10 moves no `A11yEvent` construction, so contract 38's
+ledger is CB-9a's alone in this wave. CB-9a's spec edits neither
+`VaultLifecycleViewModel.cs` nor `Panels/BulkRenameViewModel.cs`, and
+CB-10's edits `OpenVaultAsync` in the first; the rows below say so.
+
 Why this order:
 
 - **C0 is a morning,** and every later chunk works under its rule. Its
@@ -678,8 +701,12 @@ Sequenced on purpose, because they share files:
 | `AGENTS.md` | CB-0, then CB-3 (one line beside the parity-matrix gotcha) |
 | `.github/workflows/windows.yml` | CB-2 (model step), CB-3 (app job), CB-13 (the weak-volume job's skip), CB-43 (the dump steps), CB-44 (the setup steps) |
 | `Workflows.Tests.ps1` | CB-2, CB-3, CB-5, CB-13, CB-43, CB-44; each rebases and reruns the suite, never hand-merging |
-| `38_notification_dispatcher_contracts.md` (the generated ledger, a lane gate after CB-3) | every chunk that adds or moves an `A11yEvent` construction; same-wave pairs rebase and rerun `--write`, never hand-merging |
+| `38_notification_dispatcher_contracts.md` (the generated ledger, a lane gate after CB-3) | every chunk that adds or moves an `A11yEvent` construction, CB-9a among them (it moves up to four construction sites); same-wave pairs rebase and rerun `--write`, never hand-merging |
 | `TestWaitCensus.cs` | CB-4, CB-6, CB-7 |
+| `Censuses/SaveChainAdmissionCensus.cs` | CB-9a creates it; CB-9b deletes its rows. From CB-9a's merge, any chunk that adds a first Windows call to a `VaultSession` method classifies it there |
+| `docs/plans/40_nvda_matrix_remediation_contracts.md` (contract 40's R rows) | CB-10 (an addendum after R-5) and CB-9a (an addendum after R-9), same wave, different rows; the second to merge rebases and keeps both. Contract 40 is also in the palette row below, for CB-34, CB-38 and CB-38b |
+| `WorkspaceSaveCoordinator.cs` | CB-9a (`AdmittedForTests` and `INoteSaveChain`), then CB-9b |
+| `Panels/PanelWorkScheduler.cs` | CB-9a (`StartTrackedWork`), then any chunk that adds panel work; no later chunk is named for it yet |
 | `Support/StaThread.cs` | CB-1 only; CB-2's stall dump goes through the runtime's own dump path |
 | `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-26 (only if its design adds a journey), CB-40, CB-18; never two in a wave that edit the same partial file |
 | `crates/slate-core/src/session.rs` | CB-8, CB-9b, CB-12, CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
@@ -689,12 +716,12 @@ Sequenced on purpose, because they share files:
 | `diagram.rs`, `EditorInteractions.cs` | CB-27, CB-28, CB-29, then CB-15c and CB-22 |
 | `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-9b, CB-11, CB-14, CB-15c, CB-22 |
 | `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-9b, CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
-| `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-9a, CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them |
+| `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-10 (`OpenVaultAsync` in `VaultLifecycleViewModel.cs` only), then CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them. CB-9a's spec edits none of them |
 | `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-17a, CB-17b (the sheets, and the property-row and launcher buttons), CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
 | `Reading/` (`ReadingDocumentBuilder`, `ReadingSurface`, `ReadingContentViewModel`) | CB-28, CB-15c, CB-20, CB-21, CB-20b, CB-26 |
 | `links_db.rs` | CB-32, then CB-33 |
-| `CommandPaletteViewModel.cs`, `28_palette_contracts.md`, contract 40 | CB-34, then CB-38, then CB-38b (with `ModalSurfaces.cs` and its tests) |
+| `CommandPaletteViewModel.cs`, `28_palette_contracts.md`, contract 40 | CB-34, then CB-38, then CB-38b (with `ModalSurfaces.cs` and its tests). Contract 40's R rows are in a row of their own above, for CB-10 and CB-9a |
 | `Canvas/CanvasRendererView.cs`, `CanvasRendererPeers.cs`, `CanvasRendererPeerTests.cs` | CB-36, then CB-37 |
 | `chords.json`, `ChordTable.cs`, the parity matrix | CB-20b; CB-26, if its design gives folding a chord |
 | the golden image (`provision-guest.ps1`, `versions.json`, `Golden.Tests.ps1`) | CB-43 only |
@@ -841,8 +868,10 @@ on the design.
 Specs for the first wave, written 2026-11-13 against c2377210. CB-1's
 was rewritten on 2026-11-14, and every line number re-read on
 2026-11-15 at 798cdaae. CB-0 to CB-6 were read again at 5b060297
-(§2.6), and CB-7 is re-read when wave C3 starts. CB-8's spec was
-written on 2026-11-16, when its wave started:
+(§2.6). CB-7's spec is re-read against `main` by its principal before
+any code. CB-8's spec was written on 2026-11-16, when its wave started.
+CB-9a's and CB-10's were written the same day at 80925d72, when wave C3
+started:
 
 | Chunk | Spec |
 |---|---|
@@ -855,6 +884,8 @@ written on 2026-11-16, when its wave started:
 | CB-6 | `specs/cb06_unit_facts_wait_on_conditions.md` |
 | CB-7 | `specs/cb07_gate_journeys_wait_on_conditions.md` |
 | CB-8 | `specs/cb08_a_quarantined_note_still_lists.md` |
+| CB-9a | `specs/cb09a_save_chain_admission_census_and_single_path_routes.md` |
+| CB-10 | `specs/cb10_a_failed_vault_switch_returns_to_the_welcome_view_once.md` |
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -929,7 +960,12 @@ against that day's `main`.
   from the diff.
 - **CB-9b's many-path admission can hang Close Vault** if an admitted
   apply is not cancelled before teardown settles. #1888's first two
-  review rounds were exactly this.
+  review rounds found the same symptom by another cause: a ticket left
+  open on a fault (a worker exception outside its catch, then a refusal
+  whose sentence throws), so a settle never returned. That half holds
+  for every admitted route, CB-9a's among them. The cancel before the
+  settle is CB-9b's alone (corrected on 2026-11-16 from #1888's PR
+  body).
 - **CB-28 reverses a fact pinned two days before the baseline.** If the
   owner prefers the retry, the memory needs an expiry and a clock seam.
 - **CB-43 cannot be finished by an agent:** it needs the owner's rebuild,
@@ -958,10 +994,14 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | Chunk | PR | Merged | Closed | Found / fixed here / deferred / filed | Owed |
 |---|---|---|---|---|---|
 | CB-0 | #1957 | 2026-11-16 (97b94ddc) | #1835, #940 | 2 / 1 / 1 / 0 | One line on #1955 (below). The owner's call on the subsystem definition's two gaps (below) |
-| CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | One line on #1955: a math element's drawing template is tied to the first thread that touches it. It is taken in #1965 (open on 2026-11-16, next to merge), because it can redden the unit lane |
+| CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | One line on #1955: a math element's drawing template is tied to the first thread that touches it. It was delivered by #1965 (merged as 5afe7455; the math template row below) |
 | CB-1 | #1961 | 2026-11-16 (fcc7b5f6) | #1843 (CD2) | 7 / 3 / 3 / 1 | Three lines on #1955. Filed #1959 (the licence-header script rewrites line endings). CB-6's sleep rules list `Support/Heartbeat.cs` and the planted sleeps in `StaThreadTests` |
 | CB-2 | #1962 | 2026-11-16 (b62d5729) | #1624 | 5 / 2 / 2 / 1 | Filed #1963 (a core property test drew the reserved name `aux`), which CB-8's PR takes. One new line on #1955 (the pilot workflow's model step inherits the stall rule with no dump variables) and one already on its opening list (the blame dump type) |
 | CB-8 | #1966 | 2026-11-16 (70e97ba0) | #1900, #1709, #1963 | 1 / 1 / 0 / 0 | Nothing deferred. `not delivered: VoiceOver pass` on #1954: on the Mac a quarantined row says a 1969 or 1970 modified date (CD41). Filed for Milestone W as CD41 said: #1964, a marked row and the other surfaces that read the sentinel |
+| math template (not a chunk: CB-4's deferred find, taken early) | #1965 | 2026-11-16 (5afe7455) | none (Refs #1955) | 0 / 0 / 0 / 0 | Nothing. A user cannot hit it: the app builds reading documents on its one UI thread |
+| CB-3 | #1968 | 2026-11-16 (7c2b2655) | #1647, #1699 | 5 / 4 / 1 / 0 | One line on #1955: the canvas and graph trigger ledgers have no `--check`, and no workflow runs `test_canvas_trigger_ledger.py`. Not verified on a lane: a census-tier run of the ledger step, and a gate-only rerun after the first day |
+| CB-5 | #1970 | 2026-11-16 (80925d72) | #1616 (CD4: rewrite) | 5 / 4 / 1 / 0 | One line on #1955: the computed-score comment prints `grade`, `criterion` and `name` unescaped |
+| CB-6 | #1971 | 2026-11-16 (ecf7f551) | none (the class) | 5 / 0 / 5 / 0 | Five lines on #1955: three product seams the remaining waits need, one `HotExitTests` fact whose count cannot see a second claim, and the pinned sites Design 1 may still reach |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1000,3 +1040,38 @@ configured effort, high, where the protocol's step 3 asks for xhigh;
 the round is recorded as run below that tier, and the PR body says so.
 It also took #1963 at the lead's request: the property test's name
 generator now leaves out the 22 stems core refuses on Windows.
+
+Wave C2, 2026-11-16. Each chunk had a fresh Opus red team and Codex
+rounds to an approve: CB-8 one round, the math template one, CB-3
+seven, CB-5 one and CB-6 five. The configured effort was high
+throughout, below the protocol's xhigh, as in wave C1: the config file
+was not changed during the run. Only #1966's and #1970's bodies state
+it. CB-3's rounds
+1 to 5 each found one gap in how the docs census reads a script (a
+path that climbs with `..`, a backslash separator, letter case, an
+f-string, a byte-order mark), and round 1 also found a default shell on
+the docs census job that passed the parity fact. Round 6 approved, a
+second Opus read came next, and round 7 approved the one commit it
+caused. CB-6's rounds 1 to 4 made eleven findings, nine of them
+spellings the census did not recognise. Codoki reported Safe to merge
+at 5/5 on all five.
+
+CB-6's census: the unit project's fixed waits were 81 on the spec's
+base, 80 on its first commit once CB-1 was under it, and are 68 at the
+merge, and its elapsed-time ceilings went from
+19 to 2. The gate's 31 sites and its one ceiling are pinned `unswept`
+for CB-7. §2.3 read 30 gate sites; the thirty-first is a sleep in
+`FocusSettleWatchTests.cs`. CB-6 also corrected contract 34: H1's
+bullet for the large canvas fact and TH-2 now say the fact asserts warm
+medians. The PR H section is not frozen.
+
+CB-3's probe ran on a scratch branch (run 43858767321). The contract 38
+step went red 14 seconds after the step started, about two minutes
+twenty into the app job, and the row it printed equalled `main`'s. The committed ledger already equalled the
+generator's output, so nothing was regenerated.
+
+CB-5's seven probe pushes ran on a throwaway PR, #1969, since closed.
+They used most of an hour's Codoki quota, which is ten reviews an hour
+for the account, and CB-6's PR met the limit and waited sixteen minutes
+for its review. Later probes run on a branch through
+`workflow_dispatch`, with no PR open.
