@@ -4,8 +4,8 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. CB-0 is delivered (#1957, 97b94ddc, 2026-11-16), and
-wave C1 (CB-1, CB-2, CB-4) started the same day. §12 keeps the delivery
+recommendation. Waves C0 and C1 are delivered (CB-0, CB-1, CB-2 and CB-4, all merged
+on 2026-11-16), and wave C2 is under way. §12 keeps the delivery
 record. Written from
 the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
@@ -956,6 +956,9 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | Chunk | PR | Merged | Closed | Found / fixed here / deferred / filed | Owed |
 |---|---|---|---|---|---|
 | CB-0 | #1957 | 2026-11-16 (97b94ddc) | #1835, #940 | 2 / 1 / 1 / 0 | The owner's call on the subsystem definition's two gaps (below). Nothing else |
+| CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | The deferred find (a math element's drawing template is tied to the first thread that touches it) is taken at once as #1965, because it can redden the unit lane |
+| CB-1 | #1961 | 2026-11-16 (fcc7b5f6) | #1843 (CD2) | 7 / 3 / 3 / 1 | Filed #1959 (the licence-header script rewrites line endings). CB-6's sleep rules list `Support/Heartbeat.cs` and the planted sleeps in `StaThreadTests` |
+| CB-2 | #1962 | 2026-11-16 (b62d5729) | #1624 | 5 / 2 / 2 / 1 | Filed #1963 (a core property test drew the reserved name `aux`), which CB-8's PR takes. Deferred: the pilot workflow's model step inherits the stall rule with no dump variables |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -971,3 +974,12 @@ whether a Swift type's extensions count as a partial class. Its one
 deferred find, a line on #1955, was that §9 and the CB-0 spec said
 plans 44 and 45 filed the mac follow-ups. Plan 44 alone did, and both
 places were corrected on 2026-11-16.
+
+Wave C1, 2026-11-16. Each chunk had a fresh Opus red team and Codex
+rounds to an approve: CB-4 two rounds, CB-1 three, CB-2 three. Codoki
+reported Safe to merge at 5/5 on all three. CB-2's lane probe ran on a
+scratch branch (run 43829430401): a planted stall turned both model
+shards red five minutes into the test step, the log named the stalled
+case, and a failed-jobs rerun kept both attempts' evidence side by
+side. Not verified on a lane: a run that reaches the 70-minute blame
+timer, and the routes and reroot families under a planted stall.
