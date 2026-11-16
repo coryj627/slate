@@ -1678,7 +1678,9 @@ public sealed class TestWaitCensus
     /// <summary>What every planted fact stands in: a class with a flag, a
     /// seam, a pump and a helper of each kind the rules name.</summary>
     private const string PlantedClockOpening =
-        "using System.Diagnostics;\nnamespace SlateWindows.Tests.Planted;\n"
+        "using System.Diagnostics;\nusing static System.DateTime;\nusing static System.Diagnostics.Stopwatch;\n"
+        + "using static System.Environment;\nusing static System.Threading.Tasks.Task;\nusing static System.Threading.Thread;\n"
+        + "namespace SlateWindows.Tests.Planted;\n"
         + "sealed class PlantedSeam { public Action? BeforeForTests; public Func<Task>? PublicationForTests; "
         + "public event Action? Fired; public PlantedSeam Context => this; public void Await(Task work, string what) { } "
         + "public Task AwaitAsync(Task work) => work; "
@@ -1720,6 +1722,53 @@ public sealed class TestWaitCensus
             "async Task F() { Task settled = h.AwaitAsync(Task.Delay(50)); await settled; Assert.True(done); }",
             "F: not a statement"
         },
+        {
+            "a delay under WaitAsync with a token",
+            "async Task F(CancellationToken token) { await Task.Delay(500).WaitAsync(token); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay under WaitAsync with a timeout, keeping no context",
+            "async Task F() { await Task.Delay(500).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay under WaitAsync with a timeout and a token",
+            "async Task F(CancellationToken token) { await Task.Delay(500).WaitAsync(TimeSpan.FromSeconds(5), token); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay under WaitAsync with a time provider, blocked on",
+            "void F() { Task.Delay(500).WaitAsync(TimeSpan.FromSeconds(5), TimeProvider.System).Wait(); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay with a continuation, awaited",
+            "async Task F() { await Task.Delay(500).ContinueWith(_ => Drain()); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay with a continuation nobody waits on",
+            "void F() { _ = Task.Delay(500).ContinueWith(_ => Drain()); Assert.True(done); }",
+            "F: not a delay"
+        },
+        {
+            "a delay handed to Task.WhenAll and awaited",
+            "async Task F() { await Task.WhenAll(Task.Delay(500)); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay handed to Task.WaitAll",
+            "void F() { Task.WaitAll(Task.Delay(500)); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay raced against nothing",
+            "async Task F() { await Task.WhenAny(Task.Delay(500)); Assert.True(done); }",
+            "F: site"
+        },
+        { "a sleep by its bare name", "void F() { Sleep(100); Assert.True(done); }", "F: site" },
+        { "a delay by its bare name", "async Task F() { await Delay(50); Assert.True(done); }", "F: site" },
         { "a fixed pump", "void F() { host.PumpFor(span); Assert.True(done); }", "F: site" },
         { "the other fixed pump, by its bare name", "void F() { RunDispatcherFor(span); Assert.True(done); }", "F: site" },
         { "a fixed pump on a seam that may be absent", "void F(PlantedSeam? maybe) { maybe?.PumpFor(span); Assert.True(done); }", "F: site" },
@@ -1825,7 +1874,7 @@ public sealed class TestWaitCensus
         // Rule 1: wait conditions and holds.
         {
             "a sleep in a SpinUntil lambda",
-            "void F() { _ = SpinWait.SpinUntil(() => { Thread.Sleep(5); return done; }, 1000); }",
+            "void F() { _ = System.Threading.SpinWait.SpinUntil(() => { Thread.Sleep(5); return done; }, 1000); }",
             "F: wait condition"
         },
         {
@@ -2009,6 +2058,82 @@ public sealed class TestWaitCensus
             "F: ceiling"
         },
         {
+            "Stopwatch's clock by its bare names",
+            "void F() { long began = GetTimestamp(); Drain(); Assert.True(GetElapsedTime(began) < limit); }",
+            "F: ceiling"
+        },
+        {
+            "raw timestamps by their bare name",
+            "void F() { long began = GetTimestamp(); Drain(); long ticks = GetTimestamp() - began; Assert.True(ticks < 5_000_000); }",
+            "F: ceiling"
+        },
+        {
+            "the wall clock by its bare name",
+            "void F() { DateTime began = UtcNow; Drain(); Assert.True(Now - began < limit); }",
+            "F: ceiling"
+        },
+        {
+            "the tick count by its bare name",
+            "void F() { long began = TickCount64; Drain(); Assert.True(TickCount - began < 500); }",
+            "F: ceiling"
+        },
+        {
+            "the wall clock by its full name",
+            "void F() { System.DateTime began = System.DateTime.UtcNow; Drain(); Assert.True(global::System.DateTime.UtcNow - began < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a time provider's timestamps",
+            "void F() { long began = TimeProvider.System.GetTimestamp(); Drain(); Assert.True(TimeProvider.System.GetElapsedTime(began) < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a time provider's wall clock",
+            "void F() { DateTimeOffset began = TimeProvider.System.GetUtcNow(); Drain(); "
+            + "Assert.True(TimeProvider.System.GetUtcNow() - began < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling kept in a bool beside another condition",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; Assert.True(done && fast); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling kept in a bool and handed on to another",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; bool ok = fast; Assert.True(ok); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling kept in a bool and compared with true",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; Assert.True(fast == true); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and negated beside another condition",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.True(done && !slow); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and compared with false",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.True(slow == false); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and not true",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.True(slow != true); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and matched against false",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.True(slow is false); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and refused beside another condition",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.False(done || slow); }",
+            "F: ceiling"
+        },
+        {
             "a reading from a seam's own Elapsed()",
             "void F() { TimeSpan sinceFirstFrame = x.Elapsed(); Assert.True(sinceFirstFrame < limit); }",
             "F: ceiling"
@@ -2101,12 +2226,27 @@ public sealed class TestWaitCensus
         {
             "a wait's own condition on a reading, asserted to have held",
             "void F() { long pressed = Stopwatch.GetTimestamp(); long heard = 0; Drain(); "
-            + "Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref heard) > pressed, 2000)); }",
+            + "Assert.True(System.Threading.SpinWait.SpinUntil(() => Volatile.Read(ref heard) > pressed, 2000)); }",
             "clean"
         },
         {
             "a wait's own condition kept in a bool",
             "void F() { var clock = Stopwatch.StartNew(); bool quiet = WaitUntil(() => clock.Elapsed < limit); Assert.True(quiet); }",
+            "clean"
+        },
+        {
+            "a floor kept in a bool beside another condition",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slowEnough = clock.Elapsed >= limit; Assert.True(done && slowEnough); }",
+            "clean"
+        },
+        {
+            "a ceiling kept in a bool and negated, which is a floor",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; Assert.True(done && !fast); }",
+            "clean"
+        },
+        {
+            "a bool given two values, which is not followed",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; fast = fast && done; Assert.True(fast); }",
             "clean"
         },
         {
@@ -2156,6 +2296,8 @@ public sealed class TestWaitCensus
     // on (.Wait(), .GetAwaiter().GetResult()) or handed as a direct argument
     // to any call but Task.WhenAny; or a call to a method named PumpFor or
     // RunDispatcherFor. A fixed pump is a fixed sleep on a dispatcher thread.
+    // A WaitAsync, a ContinueWith or a ConfigureAwait on the delay does not
+    // hide it, and a Task.WhenAny handed the delay alone is no race.
     //
     // A delay is a site when it is the whole of an expression statement and
     // is none of these:
@@ -2192,6 +2334,8 @@ public sealed class TestWaitCensus
     //   a foreach over a fixed list, which it reads as a poll;
     //   a pump helper with another name;
     //   a Task.Delay kept in a local or a field and awaited later;
+    //   a wait that cannot succeed (SpinWait.SpinUntil(() => false, 500)) and
+    //     a join on the running thread (Thread.CurrentThread.Join(500));
     //   a wait on a gate nobody sets (gate.Wait(500)), which sleeps under
     //     another name;
     //   how often a delay runs: one in a helper is one site, however many
@@ -2523,7 +2667,10 @@ public sealed class TestWaitCensus
                 case MemberAccessExpressionSyntax { Parent: InvocationExpressionSyntax made } access when access.Expression == waits:
                     switch (access.Name.Identifier.ValueText)
                     {
+                        // A wrapper that hands the delay's time on: the
+                        // delay still waits under it.
                         case "ConfigureAwait":
+                        case "WaitAsync" or "ContinueWith" when ClockSyntax.IsMemberOf(made, model, "Task", "System.Threading.Tasks"):
                             waits = made;
                             continue;
                         case "Wait":
@@ -2541,7 +2688,10 @@ public sealed class TestWaitCensus
                     }
                     break;
                 case ArgumentSyntax when !handedOn && ClockSyntax.TakenBy(waits) is InvocationExpressionSyntax taking:
+                    // A race with other work bounds that work. A race with
+                    // nothing is the delay itself.
                     if (ClockSyntax.NameCalled(taking.Expression) == "WhenAny"
+                        && taking.ArgumentList.Arguments.Count > 1
                         && ClockSyntax.IsMemberOf(taking, model, "Task", "System.Threading.Tasks"))
                     {
                         return Standing.NotADelay;
@@ -2631,7 +2781,9 @@ public sealed class TestWaitCensus
     // A reading matched against a relational pattern is read the same way:
     // elapsed is < x is a ceiling, elapsed is >= x a floor, not turns the
     // pattern round, and is >= 0 and < x is a ceiling. A bool local given
-    // one value and asserted by name is judged by that value. What stands
+    // one value stands for that value wherever the condition names it:
+    // beside another condition, under !, == false or is false, and through
+    // another bool it was handed to. What stands
     // inside a wait condition (a lambda handed to SpinUntil and its kin) is
     // what the wait keeps asking, not a ceiling the fact asserts.
     // Not a ceiling: a floor (elapsed >= x; load only lengthens a
@@ -2741,31 +2893,10 @@ public sealed class TestWaitCensus
                         continue;
                     }
                     ExpressionSyntax first = assertion.ArgumentList.Arguments[0].Expression;
-                    // Assert.False refuses its condition, and a ! over the
-                    // whole condition refuses it once more.
-                    bool turned = name == "False";
-                    while (first is ParenthesizedExpressionSyntax or PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression })
-                    {
-                        if (first is PrefixUnaryExpressionSyntax negated)
-                        {
-                            turned = !turned;
-                            first = negated.Operand;
-                        }
-                        else
-                        {
-                            first = ((ParenthesizedExpressionSyntax)first).Expression;
-                        }
-                    }
-                    // A condition kept in a bool is judged where it was written.
-                    ExpressionSyntax condition = name == "InRange" ? first : readings.ConditionBehind(first);
+                    // Assert.False refuses its condition.
                     int count = name == "InRange"
                         ? (readings.Holds(first) ? 1 : 0)
-                        : condition.DescendantNodesAndSelf(inner => !ClockSyntax.IsAWaitCondition(inner)).Count(node => node switch
-                        {
-                            BinaryExpressionSyntax comparison => readings.IsACeiling(comparison, turned),
-                            IsPatternExpressionSyntax matched => readings.IsACeiling(matched, turned),
-                            _ => false,
-                        });
+                        : readings.Ceilings(first, turned: name == "False");
                     // An assertion inside a wait's loop is the wait's bound.
                     // A foreach is no wait here: a ceiling on each case of a
                     // list is a ceiling.
@@ -2790,6 +2921,8 @@ public sealed class TestWaitCensus
         "ElapsedTicks",
         "GetElapsedTime",
         "GetTimestamp",
+        "GetUtcNow",
+        "GetLocalNow",
         "UtcNow",
         "Now",
         "TickCount",
@@ -2912,25 +3045,84 @@ public sealed class TestWaitCensus
             _ => false,
         };
 
-        /// <summary>The condition an assertion's first argument stands for:
-        /// a bool local given one value (<c>bool fast = elapsed &lt; x;</c>)
-        /// is judged by that value's expression. A bool assigned more than
-        /// once is not followed.</summary>
-        public ExpressionSyntax ConditionBehind(ExpressionSyntax first)
+        /// <summary>The ceilings an asserted condition holds, each read in
+        /// the sense it is asserted in: <c>!</c>, <c>== false</c>,
+        /// <c>!= true</c> and <c>is false</c> turn what they cover round. A
+        /// bool local given one value (<c>bool fast = elapsed &lt; x;</c>)
+        /// stands for that value wherever it is named, another bool it was
+        /// handed to included. A bool assigned more than once is not
+        /// followed, and a wait condition is not read.</summary>
+        public int Ceilings(SyntaxNode condition, bool turned) => Ceilings(condition, turned, new(SymbolEqualityComparer.Default));
+
+        private int Ceilings(SyntaxNode node, bool turned, HashSet<ISymbol> following)
         {
-            if (first is IdentifierNameSyntax name
-                && _model.GetSymbolInfo(name).Symbol is ILocalSymbol { Type.SpecialType: SpecialType.System_Boolean } local)
+            switch (node)
             {
-                ExpressionSyntax[] values = [.. _flows
-                    .Where(flow => SymbolEqualityComparer.Default.Equals(flow.Local, local))
-                    .Select(flow => flow.Value)];
-                if (values.Length == 1)
-                {
-                    return values[0];
-                }
+                case AnonymousFunctionExpressionSyntax when ClockSyntax.IsAWaitCondition(node):
+                    return 0;
+                case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } negated:
+                    return Ceilings(negated.Operand, !turned, following);
+                case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.EqualsExpression or (int)SyntaxKind.NotEqualsExpression } compared
+                    when (BoolLiteral(compared.Left) ?? BoolLiteral(compared.Right)) is { } literal:
+                    {
+                        // x == false and x != true refuse x.
+                        ExpressionSyntax other = BoolLiteral(compared.Left) is null ? compared.Left : compared.Right;
+                        bool refuses = compared.IsKind(SyntaxKind.EqualsExpression) != literal;
+                        return Ceilings(other, turned != refuses, following);
+                    }
+                case IsPatternExpressionSyntax matched when BoolPattern(matched.Pattern) is { } expected:
+                    return Ceilings(matched.Expression, turned == expected, following);
+                case IdentifierNameSyntax name
+                    when _model.GetSymbolInfo(name).Symbol is ILocalSymbol { Type.SpecialType: SpecialType.System_Boolean } local:
+                    {
+                        ExpressionSyntax[] values = [.. _flows
+                            .Where(flow => SymbolEqualityComparer.Default.Equals(flow.Local, local))
+                            .Select(flow => flow.Value)];
+                        if (values.Length != 1 || !following.Add(local))
+                        {
+                            return 0;
+                        }
+                        int behind = Ceilings(values[0], turned, following);
+                        _ = following.Remove(local);
+                        return behind;
+                    }
             }
-            return first;
+            int count = node switch
+            {
+                BinaryExpressionSyntax comparison when IsACeiling(comparison, turned) => 1,
+                IsPatternExpressionSyntax matched when IsACeiling(matched, turned) => 1,
+                _ => 0,
+            };
+            foreach (SyntaxNode child in node.ChildNodes())
+            {
+                count += Ceilings(child, turned, following);
+            }
+            return count;
         }
+
+        private static bool? BoolLiteral(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+            return expression.Kind() switch
+            {
+                SyntaxKind.TrueLiteralExpression => true,
+                SyntaxKind.FalseLiteralExpression => false,
+                _ => null,
+            };
+        }
+
+        /// <summary>What a pattern asks of a bool: <c>is true</c>,
+        /// <c>is false</c>, and either under <c>not</c>.</summary>
+        private static bool? BoolPattern(PatternSyntax pattern) => pattern switch
+        {
+            ParenthesizedPatternSyntax inner => BoolPattern(inner.Pattern),
+            UnaryPatternSyntax negated => !BoolPattern(negated.Pattern),
+            ConstantPatternSyntax constant => BoolLiteral(constant.Expression),
+            _ => null,
+        };
 
         /// <summary>Whether an expression holds a reading or a timed local.
         /// What a <c>WallClockBudget</c> call is handed carries nothing: the
@@ -2979,21 +3171,31 @@ public sealed class TestWaitCensus
                 case MemberBindingExpressionSyntax binding:
                     return binding.Name.Identifier.ValueText is "Elapsed" or "ElapsedMilliseconds" or "ElapsedTicks";
                 case MemberAccessExpressionSyntax access:
-                    return access.Name.Identifier.ValueText switch
-                    {
-                        "Elapsed" or "ElapsedMilliseconds" or "ElapsedTicks" => true,
-                        "GetElapsedTime" => ClockSyntax.IsMemberOf(access, _model, "Stopwatch", "System.Diagnostics"),
-                        "UtcNow" => ClockSyntax.IsMemberOf(access, _model, "DateTime", "System")
-                            || ClockSyntax.IsMemberOf(access, _model, "DateTimeOffset", "System"),
-                        "GetTimestamp" => ClockSyntax.IsMemberOf(access, _model, "Stopwatch", "System.Diagnostics"),
-                        "Now" => ClockSyntax.IsMemberOf(access, _model, "DateTime", "System")
-                            || ClockSyntax.IsMemberOf(access, _model, "DateTimeOffset", "System"),
-                        "TickCount" or "TickCount64" => ClockSyntax.IsMemberOf(access, _model, "Environment", "System"),
-                        _ => false,
-                    };
+                    return access.Name.Identifier.ValueText is "Elapsed" or "ElapsedMilliseconds" or "ElapsedTicks"
+                        || IsAClock(access, access.Name.Identifier.ValueText);
+                // A clock reached without its type's name (using static):
+                // GetElapsedTime(began), UtcNow. Bound, or it is no clock.
+                case IdentifierNameSyntax bare
+                    when bare.Parent is not MemberBindingExpressionSyntax
+                        && !(bare.Parent is MemberAccessExpressionSyntax owner && owner.Name == bare):
+                    return _model.GetSymbolInfo(bare).Symbol is IMethodSymbol or IPropertySymbol
+                        && IsAClock(bare, bare.Identifier.ValueText);
                 default:
                     return false;
             }
         }
+
+        /// <summary>The framework's clocks, by the type that owns each.</summary>
+        private static readonly (string Type, string Namespace, string[] Members)[] Clocks =
+        [
+            ("Stopwatch", "System.Diagnostics", ["GetElapsedTime", "GetTimestamp"]),
+            ("DateTime", "System", ["UtcNow", "Now"]),
+            ("DateTimeOffset", "System", ["UtcNow", "Now"]),
+            ("Environment", "System", ["TickCount", "TickCount64"]),
+            ("TimeProvider", "System", ["GetUtcNow", "GetLocalNow", "GetTimestamp", "GetElapsedTime"]),
+        ];
+
+        private bool IsAClock(SyntaxNode node, string member) => Clocks.Any(clock =>
+            clock.Members.Contains(member) && ClockSyntax.IsMemberOf(node, _model, clock.Type, clock.Namespace));
     }
 }
