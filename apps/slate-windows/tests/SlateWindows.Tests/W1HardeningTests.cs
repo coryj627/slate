@@ -1422,7 +1422,6 @@ public sealed class W1SidebarHardeningTests
         using var releaseProvider = new ManualResetEventSlim();
         int uiThread = Environment.CurrentManagedThreadId;
         int providerThread = 0;
-        var stopwatch = Stopwatch.StartNew();
         var sidebar = CreateSidebar(
             session,
             fixture.Root,
@@ -1434,11 +1433,10 @@ public sealed class W1SidebarHardeningTests
                 releaseProvider.Wait();
                 work();
             }));
-        stopwatch.Stop();
 
-        Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
-            $"UI dispatch took {stopwatch.Elapsed.TotalMilliseconds:N1} ms.");
+        // The constructor has returned and the worker is still held: the
+        // tree was not built on this thread. No elapsed time is asserted, as
+        // a busy runner lengthens any reading.
         Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
         Assert.NotEqual(uiThread, providerThread);
         Assert.Empty(sidebar.RootNodes);

@@ -2570,8 +2570,6 @@ public sealed class TestWaitCensus
             "no-wait-witness: none shown yet; the candidate is send.WaitAsync's bound and the refused delivery"),
         ("SyncMarkerWatcherTests.cs", "ContinuousSubIntervalChurnStillFiresByTheCeiling", 1,
             "no-wait-witness: none shown yet; the candidate is the fire arriving while the churn still runs"),
-        ("W1HardeningTests.cs", "FiveThousandItemRefreshReturnsWithinTheUiDispatchBudget", 1,
-            "no-wait-witness: none shown yet; the candidate is the held worker, the other thread and the empty tree, asserted beside it"),
         ("W2EditorInteractionRedTeamTests.cs", "SvgPreview_PastTheDecodeBudgetShowsCoresSentenceAndLeavesTheDecoderRunning", 1,
             "no-wait-witness: none shown yet; the candidate is the abandoned slot and the unfinished decoder, asserted beside it"),
     ];
