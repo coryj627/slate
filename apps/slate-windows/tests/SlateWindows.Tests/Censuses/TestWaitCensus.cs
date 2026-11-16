@@ -2196,8 +2196,6 @@ public sealed class TestWaitCensus
             "quiesce: the shown editor finishes loading before its coordinator is read; a wait on the coordinator would do"),
         ("Censuses/CanonicalHighlightCensus.cs", "LoadedCoordinatorQuiescesAndRefreshesForEditScrollAndResize", 2,
             "late-arrival: 160 ms after a refresh settles no further refresh comes"),
-        ("Censuses/EventKindsCensus.cs", "AllThreeEventKinds_DeliverInOneSession", 1,
-            "late-arrival: 400 ms after the unregistered save the sealed count has not moved"),
         ("CitationAsyncInterleavingTests.cs", "QuiesceAsync", 1, "quiesce: 40 drains of the seed and both leaves"),
         ("CitationAsyncInterleavingTests.cs", "AReloadMidJumpRetargetsTheParkedPressInsteadOfSilencingIt", 1, "quiesce: 40 drains of the leaf"),
         ("CitationAsyncInterleavingTests.cs", "AFailedSeedStopsBothLeavesReadingCoreNotJustTheBibliography", 1, "quiesce: 40 drains of the leaf"),
