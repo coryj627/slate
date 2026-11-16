@@ -1571,7 +1571,9 @@ public sealed class TestWaitCensus
         public static ExpressionSyntax Outermost(ExpressionSyntax expression)
         {
             while (expression.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax
-                or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+                or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or ConditionalExpressionSyntax
+                or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression })
             {
                 expression = (ExpressionSyntax)expression.Parent;
             }
@@ -1626,8 +1628,12 @@ public sealed class TestWaitCensus
         /// SpinUntil, PumpUntil, RunUntil, WaitFor or WaitUntil: what a wait
         /// keeps asking, not what a fact asserts.</summary>
         public static bool IsAWaitCondition(SyntaxNode node) =>
-            node is AnonymousFunctionExpressionSyntax lambda
-            && TakenBy(Outermost(lambda)) is InvocationExpressionSyntax wait
+            node is AnonymousFunctionExpressionSyntax lambda && IsHandedToAWait(Outermost(lambda));
+
+        /// <summary>Whether an expression is an argument of a call named
+        /// SpinUntil, PumpUntil, RunUntil, WaitFor or WaitUntil.</summary>
+        public static bool IsHandedToAWait(ExpressionSyntax handed) =>
+            TakenBy(handed) is InvocationExpressionSyntax wait
             && NameCalled(wait.Expression) is "SpinUntil" or "PumpUntil" or "RunUntil" or "WaitFor" or "WaitUntil";
 
         /// <summary>The call or creation an expression is a direct argument
@@ -1894,6 +1900,101 @@ public sealed class TestWaitCensus
             "a delay raced by Task.WhenAny, both handed by name",
             "async Task F() { Task work = Task.CompletedTask; _ = await Task.WhenAny(task2: Task.Delay(5000), task1: work); }",
             "F: not a delay"
+        },
+        {
+            "a delay inside a call handed to another call, awaited",
+            "async Task F() { Task work = Task.CompletedTask; await h.AwaitAsync(Task.WhenAll(work, Task.Delay(500))); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay inside a blocked WhenAll an assertion is handed",
+            "void F() { Task work = Task.CompletedTask; Assert.True(Task.WhenAll(work, Task.Delay(500)).Wait(1000)); }",
+            "F: site"
+        },
+        {
+            "a delay inside a call handed to a creation, awaited",
+            "async Task F() { Task work = Task.CompletedTask; await new ValueTask(Task.WhenAll(work, Task.Delay(500))); }",
+            "F: site"
+        },
+        {
+            "a delay in a collection expression handed to WhenAll",
+            "async Task F() { Task work = Task.CompletedTask; await Task.WhenAll([work, Task.Delay(500)]); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay in a new array handed to WhenAll and blocked on",
+            "void F() { Task work = Task.CompletedTask; Task.WhenAll(new[] { work, Task.Delay(500) }).Wait(); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay in a new list handed to WhenAll",
+            "async Task F() { Task work = Task.CompletedTask; await Task.WhenAll(new List<Task> { work, Task.Delay(500) }); }",
+            "F: site"
+        },
+        {
+            "a delay three calls deep",
+            "async Task F() { Task work = Task.CompletedTask; await h.AwaitAsync(Task.WhenAll(work, h.AwaitAsync(Task.Delay(500)))); }",
+            "F: site"
+        },
+        {
+            "two delays raced with each other and nothing else",
+            "async Task F() { await Task.WhenAny(Task.Delay(100), Task.Delay(200)); Assert.True(done); }",
+            "F: site; F: site"
+        },
+        {
+            "a delay alone in a collection handed to WhenAny",
+            "async Task F() { await Task.WhenAny([Task.Delay(500)]); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay as one branch of a conditional, awaited",
+            "async Task F() { await (done ? Task.Delay(500) : Task.CompletedTask); Assert.True(done); }",
+            "F: site"
+        },
+        {
+            "a delay raced with other work at an outer level",
+            "async Task F() { Task work = Task.CompletedTask; _ = await Task.WhenAny(work, Task.WhenAll(work, Task.Delay(500))); }",
+            "F: not a delay"
+        },
+        {
+            "a delay raced with other work at an inner level",
+            "async Task F() { Task work = Task.CompletedTask; await Task.WhenAll(work, Task.WhenAny(work, Task.Delay(500))); }",
+            "F: not a delay"
+        },
+        {
+            "a delay raced with other work in a collection",
+            "async Task F() { Task work = Task.CompletedTask; _ = await Task.WhenAny([work, Task.Delay(500)]); }",
+            "F: not a delay"
+        },
+        {
+            "a taken delay as an if's condition, which is no statement",
+            "void F() { Task work = Task.CompletedTask; if (Task.WhenAll(work, Task.Delay(500)).Wait(1000)) { Drain(); } }",
+            "F: not a statement"
+        },
+        {
+            "a taken delay returned",
+            "Task F() { return h.AwaitAsync(Task.Delay(500)); }",
+            "F: not a statement"
+        },
+        {
+            "a sleep in a new thread's lambda under a delegate made for it",
+            "void F() { new Thread(new ThreadStart(() => { Thread.Sleep(300); release.Set(); })).Start(); }",
+            "F: hold"
+        },
+        {
+            "a sleep in Task.Run's lambda under a delegate made for it",
+            "void F() { _ = Task.Run(new Action(() => { Thread.Sleep(300); release.Set(); })); }",
+            "F: hold"
+        },
+        {
+            "a sleep in a WaitUntil lambda under a delegate made for it",
+            "void F() { _ = WaitUntil(new Func<bool>(() => { Thread.Sleep(5); return done; })); }",
+            "F: wait condition"
+        },
+        {
+            "a sleep in a lambda a seam is given on one branch",
+            "void F() { x.BeforeForTests = done ? () => { Thread.Sleep(600); } : null; }",
+            "F: hold"
         },
         { "a fixed pump", "void F() { host.PumpFor(span); Assert.True(done); }", "F: site" },
         { "the other fixed pump, by its bare name", "void F() { RunDispatcherFor(span); Assert.True(done); }", "F: site" },
@@ -2522,11 +2623,17 @@ public sealed class TestWaitCensus
     // on (.Wait(), .GetAwaiter().GetResult()) or handed as a direct argument
     // to any call but Task.WhenAny; or a call to a method named PumpFor or
     // RunDispatcherFor. A fixed pump is a fixed sleep on a dispatcher thread.
-    // Whatever chain a Task.Delay is the receiver of is followed to its end
-    // (WaitAsync, ContinueWith, Unwrap, ConfigureAwait, an extension method,
-    // a Result), a creation it is handed to counts as a call, a
-    // Task.WhenAny handed the delay alone is no race, and
-    // _ = <a delay something took>; is a statement of its own.
+    // A Task.Delay is followed up to its statement through whatever it
+    // stands in, in any order and to any depth: a chain it is the receiver
+    // of (WaitAsync, ContinueWith, Unwrap, ConfigureAwait, an extension
+    // method, a Result), a call or a creation it is handed to, a collection
+    // or an array it is an element of, a branch of a conditional. So
+    // Assert.True(Task.WhenAll(work, Task.Delay(500)).Wait(bound)); is a
+    // site. A Task.WhenAny that races it against other work, at any level
+    // on the way up, makes it a bound and no delay; a Task.WhenAny of
+    // delays only is a delay. _ = <a delay something took>; is a statement
+    // of its own. A lambda under a delegate made for it, or on one branch
+    // of a conditional, is handed on as it is.
     //
     // A delay is a site when it is the whole of an expression statement and
     // is none of these:
@@ -2567,6 +2674,11 @@ public sealed class TestWaitCensus
     //     a join on the running thread (Thread.CurrentThread.Join(500));
     //   a delay a local declaration takes (var _ = Task.Delay(500).Wait(1000);)
     //     and Thread.Sleep taken as a method group;
+    //   a delay something took inside a larger expression that is no
+    //     statement: the condition of an if or a while, a returned value,
+    //     an initialiser, a switch expression's arm;
+    //   a delay made in a lambda handed to a query
+    //     (tasks.Select(_ => Task.Delay(5))), which is the lambda's value;
     //   a hold in a timer's callback or in work a dispatcher is posted,
     //     which reads as a site like any callback;
     //   a member read from a delay's chain that is no Result
@@ -2880,23 +2992,30 @@ public sealed class TestWaitCensus
     private static Standing StandingOf(InvocationExpressionSyntax call, DelayKind kind, SemanticModel model)
     {
         // What waits: the call itself for a sleep or a pump. A Task.Delay
-        // waits only where something takes its time. Whatever chain it is
-        // the receiver of (WaitAsync, ContinueWith, Unwrap, an extension,
-        // a member read) is followed to its end: an await, a Wait, a
-        // GetResult or a Result takes it, and so does a call or a creation
-        // it is handed to. One raced by Task.WhenAny against other work
-        // bounds that work, and one returned or kept in a local is not
-        // followed.
+        // waits only where something takes its time, so it is followed up
+        // to its statement through whatever it stands in, in any order and
+        // to any depth: a chain it is the receiver of (WaitAsync,
+        // ContinueWith, Unwrap, an extension, a member read), a call or a
+        // creation it is handed to, a collection or an array it is an
+        // element of, a branch of a conditional. An await, a Wait, a
+        // GetResult or a Result takes it, and so does being handed on. One
+        // raced by Task.WhenAny against other work, at any level on the way
+        // up, bounds that work. One returned, kept in a local or a field, or
+        // made in a lambda is not followed past it.
         ExpressionSyntax waits = call;
+        ExpressionSyntax cameFrom = call;
         bool taken = kind != DelayKind.TaskDelay;
-        bool handedOn = false;
         while (true)
         {
             switch (waits.Parent)
             {
                 case ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax
-                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }:
+                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                    or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression }:
                     waits = (ExpressionSyntax)waits.Parent;
+                    continue;
+                case ConditionalExpressionSyntax choice when choice.Condition != waits:
+                    waits = choice;
                     continue;
                 case AwaitExpressionSyntax awaited:
                     waits = awaited;
@@ -2909,19 +3028,30 @@ public sealed class TestWaitCensus
                     taken |= access.Name.Identifier.ValueText is "Wait" or "GetResult" or "Result";
                     waits = access.Parent is InvocationExpressionSyntax made && made.Expression == access ? made : access;
                     continue;
-                case ArgumentSyntax when !handedOn && ClockSyntax.TakenBy(waits) is { } taking:
+                // A collection or an array the chain is an element of goes
+                // where the element would.
+                case ExpressionElementSyntax { Parent: CollectionExpressionSyntax collection }:
+                    cameFrom = waits;
+                    waits = collection;
+                    continue;
+                case InitializerExpressionSyntax { Parent: ExpressionSyntax holder } elements
+                    when elements.Kind() is SyntaxKind.ArrayInitializerExpression or SyntaxKind.CollectionInitializerExpression:
+                    cameFrom = waits;
+                    waits = holder;
+                    continue;
+                case ArgumentSyntax when ClockSyntax.TakenBy(waits) is { } taking:
                     // A race with other work bounds that work. A race with
-                    // nothing is the delay itself.
+                    // nothing, or with other delays only, is a delay.
                     if (taking is InvocationExpressionSyntax race
                         && ClockSyntax.NameCalled(race.Expression) == "WhenAny"
-                        && race.ArgumentList.Arguments.Count > 1
-                        && ClockSyntax.IsMemberOf(race, model, "Task", "System.Threading.Tasks"))
+                        && ClockSyntax.IsMemberOf(race, model, "Task", "System.Threading.Tasks")
+                        && RacesOtherWork(race, waits, cameFrom, model))
                     {
                         return Standing.NotADelay;
                     }
+                    cameFrom = waits;
                     waits = taking;
                     taken = true;
-                    handedOn = true;
                     continue;
                 // _ = <a delay something took>; is that delay's own statement.
                 case AssignmentExpressionSyntax { Left: IdentifierNameSyntax { Identifier.ValueText: "_" } } discarded
@@ -2937,7 +3067,8 @@ public sealed class TestWaitCensus
         }
         // A statement of its own, or the arrow body of a method, a local
         // function or an accessor, which is that member's one statement. A
-        // lambda's whole body is neither.
+        // lambda's whole body is neither, and neither is a condition, a
+        // returned value or an initialiser the delay stands in.
         SyntaxNode? statement = waits.Parent switch
         {
             ExpressionStatementSyntax whole => whole,
@@ -2957,11 +3088,18 @@ public sealed class TestWaitCensus
         }
         if (ClockSyntax.FunctionAround(statement) is AnonymousFunctionExpressionSyntax lambda)
         {
-            if (ClockSyntax.IsAWaitCondition(lambda))
+            // A delegate made around the lambda (new Action(...), new
+            // ThreadStart(...)) hands it on as it is.
+            ExpressionSyntax handed = ClockSyntax.Outermost(lambda);
+            while (ClockSyntax.TakenBy(handed) is BaseObjectCreationExpressionSyntax wrapper
+                && model.GetTypeInfo(wrapper).Type?.TypeKind == TypeKind.Delegate)
+            {
+                handed = ClockSyntax.Outermost(wrapper);
+            }
+            if (ClockSyntax.IsHandedToAWait(handed))
             {
                 return Standing.WaitCondition;
             }
-            ExpressionSyntax handed = ClockSyntax.Outermost(lambda);
             if (handed.Parent is AssignmentExpressionSyntax assignment && assignment.Right == handed && IsASeam(assignment, model))
             {
                 return Standing.Hold;
@@ -2984,6 +3122,33 @@ public sealed class TestWaitCensus
             }
         }
         return Standing.Site;
+    }
+
+    /// <summary>Whether a <c>Task.WhenAny</c> races the chain that reached it
+    /// against work that is no fixed delay: its other arguments, or the other
+    /// elements of the one collection or array it is handed. A spread element
+    /// is other work.</summary>
+    private static bool RacesOtherWork(
+        InvocationExpressionSyntax race, ExpressionSyntax arrived, ExpressionSyntax cameFrom, SemanticModel model)
+    {
+        IEnumerable<ExpressionSyntax?> tasks = race.ArgumentList.Arguments.Select(argument => (ExpressionSyntax?)argument.Expression);
+        if (race.ArgumentList.Arguments is [{ Expression: var only }])
+        {
+            tasks = ClockSyntax.Bare(only) switch
+            {
+                CollectionExpressionSyntax collection => collection.Elements.Select(element => (element as ExpressionElementSyntax)?.Expression),
+                ArrayCreationExpressionSyntax { Initializer: { } elements } => elements.Expressions,
+                ImplicitArrayCreationExpressionSyntax { Initializer: { } elements } => elements.Expressions,
+                BaseObjectCreationExpressionSyntax { Initializer: { } elements } => elements.Expressions,
+                _ => tasks,
+            };
+        }
+        return tasks.Any(task => task is null
+            || (task != arrived
+                && task != cameFrom
+                && !(ClockSyntax.Bare(task) is InvocationExpressionSyntax other
+                    && ClockSyntax.NameCalled(other.Expression) == "Delay"
+                    && ClockSyntax.IsMemberOf(other, model, "Task", "System.Threading.Tasks"))));
     }
 
     // ---- Rule 2: an elapsed ceiling goes through WallClockBudget or is a benchmark ----
