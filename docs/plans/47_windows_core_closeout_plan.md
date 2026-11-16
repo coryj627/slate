@@ -547,7 +547,7 @@ work the chunk carries.
 | CB-24 | One NVDA session records #1846 and #1849; the note header's menu keeps its first row under a resting pointer, by #1944's remedy | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
 | CB-25 | A `LayoutItemsControl` drops a removed item's raw-view peer | #1860 | S | windows | — | — |
 | CB-26 | A callout is an element with its type and title over the FFI, and on Windows a reader can move to it and fold or unfold it; it opens with a short design the owner reads (the plan lead's call, 2026-11-16) | #1775 | L | rust, windows, swift | NVDA full, Narrator | CD17 |
-| CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (no known input reaches it) | CD18 |
+| CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (no known input reaches the panic sentence; the session-long sentences are reached without it) | CD18 |
 | CB-28 | A timed-out SVG decode is remembered, and a projection's decodes have a deadline | #1635 | M | windows, rust, swift | NVDA spot | CD19 |
 | CB-29 | The SVG guard refuses the documents that decode slowly, from recorded limits | #1610 | M | windows, rust, swift | NVDA spot | CD20 |
 | CB-30 | A scripted function after an ordinary atom is spoken as math; three or more primes are spoken as primes | #1629 #1628 | M | rust, swift | NVDA spot, speech and braille | CD21 |
@@ -766,7 +766,7 @@ today:
 - Speech or text: #1628 and #1629 (math speech and braille); #1660 and
   #1395 (the new toggle event's adoption; the create sentence); #1782
   (snippets); #1834 (section order; the selection rule in
-  `CommandPaletteModel.swift`); #1631 (the session-long sentence goes;
+  `CommandPaletteModel.swift`); #1631 (the session-long sentence no longer follows a panic;
   the panic sentence); #1775 (the adoption of the structured callout,
   with its fold; until then the Mac shows what the compile-keeping edit
   gives, CD17); CB-20b (the diagram source event); #1830 (the adoption
@@ -1002,6 +1002,7 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-3 | #1968 | 2026-11-16 (7c2b2655) | #1647, #1699 | 5 / 4 / 1 / 0 | One line on #1955: the canvas and graph trigger ledgers have no `--check`, and no workflow runs `test_canvas_trigger_ledger.py`. Not verified on a lane: a census-tier run of the ledger step, and a gate-only rerun after the first day |
 | CB-5 | #1970 | 2026-11-16 (80925d72) | #1616 (CD4: rewrite) | 5 / 4 / 1 / 0 | One line on #1955: the computed-score comment prints `grade`, `criterion` and `name` unescaped |
 | CB-6 | #1971 | 2026-11-16 (ecf7f551) | none (the class) | 5 / 0 / 5 / 0 | Five lines on #1955: three product seams the remaining waits need, one `HotExitTests` fact whose count cannot see a second claim, and the pinned sites Design 1 may still reach |
+| CB-10 | #1972 | 2026-11-16 (48df4543) | #1730 | 2 / 1 / 1 / 0 | One line on #1955. The owner's ear on the failed first open, which is left as built. NVDA phrases are in the PR body |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in

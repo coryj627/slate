@@ -123,7 +123,11 @@ No product code is written until these three are recorded on #1727. The first co
   - What a reader gets: each task of the note twice in the vault-wide task list, until the next full scan removes the row.
   - The plan lead's call: #1975's fix merges first as its own PR (branch `claude/1975-one-row-after-case-rename`), the two facts move to that PR, and CB-13's PR waits for it.
   - Not run: APFS, a folder, FAT32 or exFAT.
-- **M1 and M2: PENDING.** They are being measured on a scratch branch, run 43935566159, with no PR open. **Placeholder: the result goes here, one line per volume and case with the runner's Windows build, before the product commit.**
+- **M1 and M2, measured 2026-11-16** on a scratch branch, run 43935566159, with no PR open. The runner is Windows Server 10.0.20348.5761.
+  - FAT32: a case-only rename reports success and the directory keeps the old spelling, for each of five file shapes and for a folder.
+  - exFAT: the same, for the same six cases.
+  - `FILE_ID_INFO` is not available on either volume: the call answers Win32 87. The read-back therefore compares the name the directory lists, not a file identity.
+  - A second run, 43943403456, reads the name with the renamed handle still open and records what the watcher sees around an ignored rename. Its result goes in the PR body and in this plan's delivery record.
 - If M1 differs between machines, record the registry value `MaximumTunnelEntries` with `cmd /c ver` for each (the red team's correction 9).
 - From the principal's own step 0: the weak-volume job's two fact steps run in sequence, so a red provider fact skips the session step and one run cannot report both. The workflow edit below changes that.
 
