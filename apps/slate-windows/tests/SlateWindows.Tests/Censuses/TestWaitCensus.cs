@@ -1996,6 +1996,21 @@ public sealed class TestWaitCensus
             "void F() { x.BeforeForTests = done ? () => { Thread.Sleep(600); } : null; }",
             "F: hold"
         },
+        {
+            "two delays raced with each other, one under a continuation",
+            "async Task F() { await Task.WhenAny(Task.Delay(100).ContinueWith(_ => { }), Task.Delay(200)); Assert.True(done); }",
+            "F: site; F: site"
+        },
+        {
+            "two delays raced with each other, one inside a WhenAll",
+            "async Task F() { await Task.WhenAny(Task.WhenAll(Task.Delay(100)), Task.Delay(200)); Assert.True(done); }",
+            "F: site; F: site"
+        },
+        {
+            "a delay raced with work whose continuation makes a delay",
+            "async Task F() { Task work = Task.CompletedTask; _ = await Task.WhenAny(work.ContinueWith(_ => Task.Delay(1)), Task.Delay(500)); }",
+            "F: not a delay; F: not a delay"
+        },
         { "a fixed pump", "void F() { host.PumpFor(span); Assert.True(done); }", "F: site" },
         { "the other fixed pump, by its bare name", "void F() { RunDispatcherFor(span); Assert.True(done); }", "F: site" },
         { "a fixed pump on a seam that may be absent", "void F(PlantedSeam? maybe) { maybe?.PumpFor(span); Assert.True(done); }", "F: site" },
@@ -2446,6 +2461,77 @@ public sealed class TestWaitCensus
             "F: ceiling"
         },
         {
+            "a ceiling on a reading named by a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { ElapsedMilliseconds: < 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on a member of a reading, by a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.Elapsed is { TotalMilliseconds: < 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on a reading named by an extended property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { Elapsed.TotalMilliseconds: < 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on a reading named by a nested property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { Elapsed: { TotalMilliseconds: < 500 } }); }",
+            "F: ceiling"
+        },
+        {
+            "a negated floor in a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is not { ElapsedMilliseconds: >= 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a refused floor in a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.False(clock is { ElapsedMilliseconds: > 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on a timed local's member, by a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); TimeSpan took = clock.Elapsed; Assert.True(took is { TotalMilliseconds: < 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling beside an untimed property in one pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { IsRunning: true, ElapsedMilliseconds: < 500 }); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling as one branch of an or pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { ElapsedMilliseconds: < 500 or > 100_000 }); }",
+            "F: ceiling"
+        },
+        {
+            "a reading bound by a var pattern, then held under a ceiling",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.Elapsed is var took && took < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a reading bound by a property pattern's variable, then held under a ceiling",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { Elapsed: var took } && took < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling asked through a conditional",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.Elapsed < limit ? true : false); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on a reading reached through ?.",
+            "void F(Stopwatch? maybe) { Drain(); Assert.True(maybe?.Elapsed < limit); }",
+            "F: ceiling"
+        },
+        {
+            "a timed local under a cast as Assert.InRange's actual, by name",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); TimeSpan took = clock.Elapsed; "
+            + "Assert.InRange(actual: (long)took.TotalMilliseconds, low: 0, high: 500); }",
+            "F: ceiling"
+        },
+        {
             "a reading from a seam's own Elapsed()",
             "void F() { TimeSpan sinceFirstFrame = x.Elapsed(); Assert.True(sinceFirstFrame < limit); }",
             "F: ceiling"
@@ -2577,6 +2663,31 @@ public sealed class TestWaitCensus
             "clean"
         },
         {
+            "a relational property pattern on a value that is not timed",
+            "void F() { Assert.True(limit is { TotalMilliseconds: < 5000 }); }",
+            "clean"
+        },
+        {
+            "a property pattern that asks nothing of time",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { IsRunning: true }); }",
+            "clean"
+        },
+        {
+            "a floor in a property pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is { ElapsedMilliseconds: >= 100 }); }",
+            "clean"
+        },
+        {
+            "a negated ceiling in a property pattern, which is a floor",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock is not { ElapsedMilliseconds: < 500 }); }",
+            "clean"
+        },
+        {
+            "a nullable bool's HasValue, which says nothing of time",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool? fast = clock.Elapsed < limit; Assert.True(fast.HasValue); }",
+            "clean"
+        },
+        {
             "two timed values compared",
             "void F() { var clock = Stopwatch.StartNew(); TimeSpan first = clock.Elapsed; Drain(); TimeSpan second = clock.Elapsed; "
             + "Assert.True(first < second); }",
@@ -2677,6 +2788,7 @@ public sealed class TestWaitCensus
     //   a delay something took inside a larger expression that is no
     //     statement: the condition of an if or a while, a returned value,
     //     an initialiser, a switch expression's arm;
+    //   a delay that is a for's incrementor;
     //   a delay made in a lambda handed to a query
     //     (tasks.Select(_ => Task.Delay(5))), which is the lambda's value;
     //   a hold in a timer's callback or in work a dispatcher is posted,
@@ -3143,12 +3255,43 @@ public sealed class TestWaitCensus
                 _ => tasks,
             };
         }
-        return tasks.Any(task => task is null
-            || (task != arrived
-                && task != cameFrom
-                && !(ClockSyntax.Bare(task) is InvocationExpressionSyntax other
-                    && ClockSyntax.NameCalled(other.Expression) == "Delay"
-                    && ClockSyntax.IsMemberOf(other, model, "Task", "System.Threading.Tasks"))));
+        return tasks.Any(task => task is null || (task != arrived && task != cameFrom && !HoldsOnlyDelays(task, model)));
+    }
+
+    /// <summary>Whether a task handed to a race is fixed delays and nothing
+    /// else, however wrapped: a <c>Task.Delay</c>, a chain one is the
+    /// receiver of, or a call, a creation, a collection or an array handed
+    /// such tasks only. Work whose continuation makes a delay is other
+    /// work.</summary>
+    private static bool HoldsOnlyDelays(ExpressionSyntax task, SemanticModel model)
+    {
+        switch (ClockSyntax.Bare(task))
+        {
+            case InvocationExpressionSyntax made:
+                if (ClockSyntax.NameCalled(made.Expression) == "Delay" && ClockSyntax.IsMemberOf(made, model, "Task", "System.Threading.Tasks"))
+                {
+                    return true;
+                }
+                if (made.Expression is MemberAccessExpressionSyntax { Expression: var receiver } && HoldsOnlyDelays(receiver, model))
+                {
+                    return true;
+                }
+                return made.ArgumentList.Arguments.Count > 0
+                    && made.ArgumentList.Arguments.All(argument => HoldsOnlyDelays(argument.Expression, model));
+            case CollectionExpressionSyntax collection:
+                return collection.Elements.Count > 0
+                    && collection.Elements.All(element => element is ExpressionElementSyntax one && HoldsOnlyDelays(one.Expression, model));
+            case ArrayCreationExpressionSyntax { Initializer: { } elements }:
+                return elements.Expressions.Count > 0 && elements.Expressions.All(element => HoldsOnlyDelays(element, model));
+            case ImplicitArrayCreationExpressionSyntax { Initializer: { } elements }:
+                return elements.Expressions.Count > 0 && elements.Expressions.All(element => HoldsOnlyDelays(element, model));
+            case BaseObjectCreationExpressionSyntax { Initializer: { } elements }:
+                return elements.Expressions.Count > 0 && elements.Expressions.All(element => HoldsOnlyDelays(element, model));
+            case BaseObjectCreationExpressionSyntax { ArgumentList.Arguments: { Count: > 0 } handed }:
+                return handed.All(argument => HoldsOnlyDelays(argument.Expression, model));
+            default:
+                return false;
+        }
     }
 
     // ---- Rule 2: an elapsed ceiling goes through WallClockBudget or is a benchmark ----
@@ -3170,6 +3313,14 @@ public sealed class TestWaitCensus
     // Assert.False the comparison is turned round: a > b and a >= b are the
     // ceiling, and a < b is a floor. A ! over the whole first argument turns
     // it round once more, under either assertion.
+    // A pattern is walked whole. What a relational pattern is matched
+    // against is timed when the input is, or when the property path that
+    // leads to it names a reading: clock is { ElapsedMilliseconds: < x },
+    // clock is { Elapsed.TotalMilliseconds: < x } and
+    // took is { TotalMilliseconds: < x } are ceilings, to any depth of
+    // nesting. An untimed property in the same pattern counts for nothing,
+    // an or that holds a ceiling is one, and a variable a pattern binds is
+    // timed when what it was matched against is.
     // A reading matched against a relational pattern is read the same way:
     // elapsed is < x is a ceiling, elapsed is >= x a floor, not turns the
     // pattern round, and is >= 0 and < x is a ceiling. A bool local given
@@ -3213,7 +3364,12 @@ public sealed class TestWaitCensus
     //   a reading as Assert.InRange's low or high: only what is asserted
     //     (actual) is judged, so a timed bound is neither ceiling nor floor
     //     here;
-    //   a benchmark trait a base class carries.
+    //   a benchmark trait a base class carries;
+    //   a list pattern, and a switch expression's arms: a comparison in an
+    //     arm is read in the assertion's sense, a relational pattern in one
+    //     is not read;
+    //   a member of a bool local other than Value and GetValueOrDefault
+    //     (HasValue), which is read as saying nothing.
 
     /// <summary>The unit project's elapsed-time ceilings as they stand. The
     /// census first read 19 here, on 2026-11-16; the sweep that followed
@@ -3363,6 +3519,23 @@ public sealed class TestWaitCensus
                         when model.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol local:
                         flows.Add((local, assignment.Right));
                         break;
+                    // A pattern's variable holds what it was matched against:
+                    // a reading where its property path names one, and
+                    // otherwise the input or a member of it.
+                    case SingleVariableDesignationSyntax designation
+                        when designation.Ancestors().OfType<IsPatternExpressionSyntax>().FirstOrDefault() is { } matched
+                            && matched.Pattern.Span.Contains(designation.Span)
+                            && model.GetDeclaredSymbol(designation) is ILocalSymbol local:
+                        if (designation.Ancestors().TakeWhile(ancestor => ancestor != matched).OfType<SubpatternSyntax>().Any(NamesAReading))
+                        {
+                            _ = _timed.Add(local);
+                            _ = _timedNames.Add(local.Name);
+                        }
+                        else
+                        {
+                            flows.Add((local, matched.Expression));
+                        }
+                        break;
                 }
             }
             bool grew = true;
@@ -3432,22 +3605,40 @@ public sealed class TestWaitCensus
         /// <c>elapsed is &gt;= x</c> a floor, <c>not</c> turns the pattern
         /// round, and a ceiling joined to a floor (<c>is &gt;= 0 and &lt; x</c>)
         /// is a ceiling.</summary>
-        public bool IsACeiling(IsPatternExpressionSyntax matched, bool turned) =>
-            Holds(matched.Expression) && IsACeiling(matched.Pattern, turned);
+        public int Ceilings(IsPatternExpressionSyntax matched, bool turned) =>
+            Ceilings(matched.Pattern, Holds(matched.Expression), turned);
 
-        private static bool IsACeiling(PatternSyntax pattern, bool turned) => pattern switch
+        /// <summary>The ceilings a pattern holds, walked whole. What a
+        /// relational pattern is matched against is timed when the input
+        /// is, or when the property path that leads to it names a reading
+        /// (<c>{ ElapsedMilliseconds: &lt; x }</c>,
+        /// <c>{ Elapsed.TotalMilliseconds: &lt; x }</c>), to any depth. An
+        /// untimed property beside it counts for nothing, and an <c>or</c>
+        /// that holds a ceiling is one.</summary>
+        private static int Ceilings(PatternSyntax pattern, bool timed, bool turned) => pattern switch
         {
-            ParenthesizedPatternSyntax inner => IsACeiling(inner.Pattern, turned),
-            UnaryPatternSyntax negated => IsACeiling(negated.Pattern, !turned),
-            BinaryPatternSyntax both => IsACeiling(both.Left, turned) || IsACeiling(both.Right, turned),
-            RelationalPatternSyntax relational => relational.OperatorToken.Kind() switch
+            ParenthesizedPatternSyntax inner => Ceilings(inner.Pattern, timed, turned),
+            UnaryPatternSyntax negated => Ceilings(negated.Pattern, timed, !turned),
+            BinaryPatternSyntax both => Ceilings(both.Left, timed, turned) + Ceilings(both.Right, timed, turned),
+            RecursivePatternSyntax recursive =>
+                (recursive.PropertyPatternClause?.Subpatterns.Sum(part => Ceilings(part.Pattern, timed || NamesAReading(part), turned)) ?? 0)
+                + (recursive.PositionalPatternClause?.Subpatterns.Sum(part => Ceilings(part.Pattern, timed, turned)) ?? 0),
+            RelationalPatternSyntax relational when timed => relational.OperatorToken.Kind() switch
             {
-                SyntaxKind.LessThanToken or SyntaxKind.LessThanEqualsToken => !turned,
-                SyntaxKind.GreaterThanToken or SyntaxKind.GreaterThanEqualsToken => turned,
-                _ => false,
+                SyntaxKind.LessThanToken or SyntaxKind.LessThanEqualsToken => turned ? 0 : 1,
+                SyntaxKind.GreaterThanToken or SyntaxKind.GreaterThanEqualsToken => turned ? 1 : 0,
+                _ => 0,
             },
-            _ => false,
+            _ => 0,
         };
+
+        /// <summary>Whether a property subpattern's path (<c>Name:</c> or
+        /// <c>A.B:</c>) names <c>Elapsed</c>, <c>ElapsedMilliseconds</c> or
+        /// <c>ElapsedTicks</c>, read as spelled like any member of those
+        /// names.</summary>
+        private static bool NamesAReading(SubpatternSyntax part) =>
+            ((SyntaxNode?)part.NameColon ?? part.ExpressionColon)?.DescendantNodes().OfType<IdentifierNameSyntax>()
+                .Any(name => name.Identifier.ValueText is "Elapsed" or "ElapsedMilliseconds" or "ElapsedTicks") ?? false;
 
         /// <summary>The ceilings an asserted condition holds, each read in
         /// the sense it is asserted in: <c>!</c>, <c>== false</c>,
@@ -3476,6 +3667,16 @@ public sealed class TestWaitCensus
                     }
                 case IsPatternExpressionSyntax matched when BoolPattern(matched.Pattern) is { } expected:
                     return Ceilings(matched.Expression, turned == expected, following);
+                // A member of a bool local: Value and GetValueOrDefault are
+                // the bool itself; any other (HasValue, ToString) says
+                // nothing the bool's value said.
+                case MemberAccessExpressionSyntax { Expression: var owner } member
+                    when ClockSyntax.Bare(owner) is IdentifierNameSyntax named
+                        && _model.GetSymbolInfo(named).Symbol is ILocalSymbol owned
+                        && IsABool(owned.Type):
+                    return member.Name.Identifier.ValueText is "Value" or "GetValueOrDefault"
+                        ? Ceilings(owner, turned, following)
+                        : 0;
                 case IdentifierNameSyntax name
                     when _model.GetSymbolInfo(name).Symbol is ILocalSymbol local && IsABool(local.Type):
                     {
@@ -3494,7 +3695,7 @@ public sealed class TestWaitCensus
             int count = node switch
             {
                 BinaryExpressionSyntax comparison when IsACeiling(comparison, turned) => 1,
-                IsPatternExpressionSyntax matched when IsACeiling(matched, turned) => 1,
+                IsPatternExpressionSyntax matched => Ceilings(matched, turned),
                 _ => 0,
             };
             foreach (SyntaxNode child in node.ChildNodes())
