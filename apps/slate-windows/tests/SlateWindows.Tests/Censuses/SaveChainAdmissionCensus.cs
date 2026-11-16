@@ -32,19 +32,73 @@
 // belongs to the node that holds the call: a call in the operation argument
 // (a factory that returns the operation), a conditional's condition, a method
 // group's receiver, a property read for a delegate, any lambda inside one of
-// those, the receiver of the admission call, and its other arguments. An edge
-// from A to B is a
-// call of B, a creation through B, or a reference to B as a method group, in
-// A. The admitted set is the least set that holds every admission node and
+// those, the receiver of the admission call, and its other arguments.
+//
+// The edges. They are drawn from the bound operation tree of every body,
+// initialiser and attribute (SemanticModel.GetOperation), never from syntax
+// kinds, so a call the language makes with no invocation expression is an
+// edge all the same. An edge from A to B stands for each of these in A:
+//   - a call of B: IInvocationOperation, written or implicit (a collection
+//     initialiser's Add, a query clause's method, an interpolated string
+//     handler's appends, a `this(...)` or `base(...)` initialiser, a reduced
+//     extension call);
+//   - a creation through B: IObjectCreationOperation, and a collection
+//     expression's ICollectionExpressionOperation.ConstructMethod;
+//   - a reference to B as a method group: IMethodReferenceOperation;
+//   - a use of a property, an indexer or an event whose accessor B has code:
+//     IPropertyReferenceOperation and IEventReferenceOperation, by the
+//     accessor used (get, set, add or remove), and both where the tree does
+//     not say which;
+//   - a user-defined operator or conversion B: IBinaryOperation,
+//     IUnaryOperation, IIncrementOrDecrementOperation,
+//     ICompoundAssignmentOperation, IConversionOperation, ICoalesceOperation,
+//     IArgumentOperation and ISpreadOperation;
+//   - a member a pattern form uses: IImplicitIndexerReferenceOperation (an
+//     index or a range), IListPatternOperation, ISlicePatternOperation,
+//     IRecursivePatternOperation (Deconstruct), IWithOperation and
+//     IRangeOperation;
+//   - and, asked of the semantic model because the operation carries no
+//     symbol: the GetEnumerator, MoveNext, Current and Dispose of a
+//     `foreach`, the GetAwaiter, IsCompleted and GetResult of an `await`,
+//     and the Deconstruct of a deconstruction.
+// The sites (a call to a session method, a reload of a tab) are found from
+// the same operations, so one reached as a method group is a site too.
+// Syntax is read for three things only. To find the admission calls and what
+// stands as their operation. For shape (B) and rule 3's "asked before". And
+// as a fallback where no operation stands, which is source that does not
+// compile: such a call is weighed by its candidates, and one spelled as a
+// session method that binds to nothing fails rule 1. A fact holds the shell
+// to none of these (TheShellsCallsAreAllReadFromOperations).
+//
+// The admitted set is the least set that holds every admission node and
 // every node that has a caller and whose callers are all in the set. A call
 // is admitted when either holds:
-//   (A) its node is in the admitted set. A node that implements an interface
-//       member (implicitly or explicitly), that overrides, or that is virtual
-//       or abstract is never admitted this way: a call through the interface
-//       or the base binds to another symbol, so the graph does not hold all
-//       of its callers. Nor is a method shaped like an event handler (a
-//       sender and arguments derived from EventArgs): XAML wires such a
-//       method in generated code this census does not read; or
+//   (A) its node is in the admitted set. Some nodes are never admitted this
+//       way, because the graph may not hold all of their callers:
+//       - one that implements an interface member (implicitly or
+//         explicitly), that overrides, or that is virtual or abstract: a
+//         call through the interface or the base binds to another symbol;
+//       - a method shaped like an event handler (a sender and arguments
+//         derived from EventArgs): XAML wires such a method in generated
+//         code this census does not read;
+//       - a member the language, the runtime or the binding engine can call
+//         with no operation that names it. By kind: every constructor (a
+//         derived type's constructor chains to it unwritten; XAML and a
+//         `new()` constraint construct with no call here), a static
+//         constructor, a finaliser, a user-defined operator or conversion (a
+//         tuple comparison and `&&` on a user type name none), and every
+//         accessor (a binding reads and sets a property, generated code
+//         subscribes an event, and `foreach`, `await`, a range and a pattern
+//         read Current, IsCompleted, Length, Count and an indexer). By
+//         attribute: a module initialiser. By name and shape, where no kind
+//         exists: Dispose and DisposeAsync (`using`), GetEnumerator,
+//         GetAsyncEnumerator, MoveNext and MoveNextAsync (`foreach`),
+//         GetAwaiter, GetResult, OnCompleted and UnsafeOnCompleted
+//         (`await`), Deconstruct with only `out` parameters,
+//         GetPinnableReference (`fixed`), Slice(int, int) (a range), and Add
+//         on a type that is enumerable (a collection initialiser or
+//         expression). The edges above are drawn for these all the same;
+//         this is the floor under them; or
 //   (B) it stands in a lambda assigned to a local, and every read of that
 //       local in the member is handed to an admission call as its operation
 //       or stands in an admission lambda (the property write's shape: the
@@ -56,6 +110,9 @@
 // a field, a property, a call, an element of a collection or a delegate
 // creation, and a local function passed by name. A write there counts as its
 // maker's, so the rule names it even where it does run inside the ticket.
+// The same cost falls on the members (A) never admits: a write in a
+// constructor, an accessor, an operator or a pattern member is named even
+// where its every call stands inside a ticket.
 //
 // What the census does not prove. That the path admitted is the path
 // written. That the worker is handed to TrackWorker. That the ticket settles
@@ -64,21 +121,28 @@
 // fact and are for review. A call through a delegate kept in a field or a
 // property, or through any interface other than INoteSaveChain. That a lambda
 // or a method group created inside an admitted node runs before the operation
-// ends: one kept and run later counts as admitted and is not. For rule 3,
-// that the answer of HasAdmittedSaveFor gates the reload, or that it was
-// asked about the path that is reloaded: the rule sees only a call standing
-// before the reload. That a method does what its name says: every table
-// classifies by name. A write made through reflection or a dynamic call, and
-// a direct System.IO write to a vault note, are not seen. A method XAML
-// wires that has no event handler's shape is not seen as wired. A call
-// inside an
-// accessor or an operator has no caller here, so it is never admitted, and
-// the rule names it.
+// ends: one kept and run later counts as admitted and is not, and so does the
+// rest of an iterator or an async method after it first yields or awaits. For
+// rule 3, that the answer of HasAdmittedSaveFor gates the reload, or that it
+// was asked about the path that is reloaded: the rule sees only a call
+// standing before the reload. That a method does what its name says: every
+// table classifies by name. Not seen at all: a write made through reflection
+// or a dynamic call, and a direct System.IO write to a vault note. Not seen
+// as a caller: generated code (XAML's code-behind, a source generator), so an
+// ordinary method that such code calls, that has no event handler's shape and
+// that an admitted node also calls counts as admitted. Not an edge, and held
+// by the open rule alone: the Dispose of a `using`, the Add calls of a
+// collection expression, the operators of a tuple comparison, the `true` and
+// `false` operators of `&&` and `||`, a construction through a type
+// parameter, and the awaiter of an `await foreach` or an `await using`. A
+// static field's initialiser and a module initialiser are nodes with no
+// caller, so what they call has a caller outside the chain.
 
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests.Censuses;
@@ -368,14 +432,24 @@ public sealed class SaveChainAdmissionCensus
         /// <summary>A calling node, as <c>File (Member)</c>.</summary>
         public Dictionary<string, string> NodeNames { get; } = new(StringComparer.Ordinal);
 
-        /// <summary>The methods a call can reach through another symbol: one
-        /// that implements an interface member, overrides, or is virtual or
-        /// abstract. Rule (A) never admits them.</summary>
+        /// <summary>The members whose callers the graph may not all hold: one
+        /// a call can reach through another symbol (it implements an
+        /// interface member, overrides, or is virtual or abstract), one
+        /// shaped like an event handler, and one the language, the runtime
+        /// or the binding engine can call with no operation that names it.
+        /// Rule (A) never admits them.</summary>
         public HashSet<string> Open { get; } = new(StringComparer.Ordinal);
 
         public List<Violation> Unbound { get; } = [];
 
         public List<string> ChainImplementers { get; } = [];
+
+        /// <summary>How many bound operation trees were walked.</summary>
+        public int TreesWalked { get; set; }
+
+        /// <summary>Each call the syntax fallback read because no operation
+        /// stood for it. A source that compiles has none.</summary>
+        public List<string> ReadFromSyntax { get; } = [];
 
         public Reading With(Reading other)
         {
@@ -388,6 +462,8 @@ public sealed class SaveChainAdmissionCensus
                 joined.Edges.AddRange(part.Edges);
                 joined.Unbound.AddRange(part.Unbound);
                 joined.ChainImplementers.AddRange(part.ChainImplementers);
+                joined.TreesWalked += part.TreesWalked;
+                joined.ReadFromSyntax.AddRange(part.ReadFromSyntax);
                 joined.Open.UnionWith(part.Open);
                 foreach ((string node, string name) in part.NodeNames)
                 {
@@ -458,6 +534,18 @@ public sealed class SaveChainAdmissionCensus
         private readonly HashSet<SyntaxNode> _localsHandedOver = [];
         private readonly HashSet<ITypeSymbol> _sessionTypes = SessionTypes(model.Compilation);
 
+        /// <summary>The top of every operation tree walked, by its syntax.</summary>
+        private readonly HashSet<SyntaxNode> _walked = [];
+
+        /// <summary>The syntax of every call, creation and method group an
+        /// operation showed, so the fallback reads only what none did.</summary>
+        private readonly HashSet<SyntaxNode> _seen = [];
+
+        /// <summary>Where a site was counted, so no call is counted twice.</summary>
+        private readonly HashSet<(int Start, string Name)> _sited = [];
+
+        private readonly Dictionary<ISymbol, string> _ids = new(SymbolEqualityComparer.Default);
+
         public void Read(SyntaxNode root)
         {
             // The admission arguments first: every node below is placed
@@ -482,25 +570,300 @@ public sealed class SaveChainAdmissionCensus
                 }
             }
 
+            // The calls, from the bound operation tree of every body,
+            // initialiser and attribute: a call the language makes with no
+            // invocation expression is an operation there all the same.
             foreach (SyntaxNode node in root.DescendantNodes())
             {
+                if (node is BaseTypeDeclarationSyntax type)
+                {
+                    ReadType(type);
+                }
+                else if (HoldsAnOperationTree(node))
+                {
+                    WalkTheTreeOf(node);
+                }
+            }
+
+            // The syntax, only where no operation stood: a call or a creation
+            // in a place the pass above did not start from is walked from its
+            // own tree, and one that binds to no operation (it does not
+            // compile) is weighed by its candidates, as is a name that could
+            // be a method group. Fail closed.
+            foreach (SyntaxNode node in root.DescendantNodes())
+            {
+                if (_seen.Contains(node))
+                {
+                    continue;
+                }
                 switch (node)
                 {
-                    case InvocationExpressionSyntax invocation:
-                        Weigh(invocation, Bound(invocation), CalleeName(invocation));
-                        break;
-                    case BaseObjectCreationExpressionSyntax or ConstructorInitializerSyntax:
-                        Weigh(node, Bound(node), null);
+                    case InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax or ConstructorInitializerSyntax:
+                        WalkTheTreeOf(node);
+                        if (!_seen.Contains(node)
+                            && Weigh(node, Bound(node), node is InvocationExpressionSyntax invocation ? CalleeName(invocation) : null))
+                        {
+                            reading.ReadFromSyntax.Add($"{file}:{LineOf(node)}: {node}");
+                        }
                         break;
                     case SimpleNameSyntax name when IsMethodGroupCandidate(name):
-                        Weigh(name, Bound(name), name.Identifier.ValueText);
-                        break;
-                    case BaseTypeDeclarationSyntax type:
-                        ReadType(type);
+                        if (Weigh(name, Bound(name), name.Identifier.ValueText))
+                        {
+                            reading.ReadFromSyntax.Add($"{file}:{LineOf(name)}: {name.Parent}");
+                        }
                         break;
                 }
             }
         }
+
+        /// <summary>The syntax a bound operation tree hangs from: a body, an
+        /// expression body, an initialiser, an attribute.</summary>
+        private static bool HoldsAnOperationTree(SyntaxNode node) => node is
+            BaseMethodDeclarationSyntax
+            or AccessorDeclarationSyntax
+            or AttributeSyntax
+            or GlobalStatementSyntax
+            or PrimaryConstructorBaseTypeSyntax
+            or ArrowExpressionClauseSyntax { Parent: BasePropertyDeclarationSyntax }
+            or EqualsValueClauseSyntax
+            {
+                Parent: VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax }
+                    or PropertyDeclarationSyntax
+                    or ParameterSyntax
+                    or EnumMemberDeclarationSyntax,
+            };
+
+        /// <summary>Walk the whole operation tree <paramref name="node"/>
+        /// stands in, once, from its top.</summary>
+        private void WalkTheTreeOf(SyntaxNode node)
+        {
+            IOperation? top = model.GetOperation(node);
+            if (top is null && node is ArrowExpressionClauseSyntax arrow)
+            {
+                top = model.GetOperation(arrow.Expression);
+            }
+            if (top is null)
+            {
+                return;
+            }
+            while (top.Parent is { } parent)
+            {
+                top = parent;
+            }
+            if (!_walked.Add(top.Syntax))
+            {
+                return;
+            }
+            reading.TreesWalked++;
+            var pending = new Stack<IOperation>();
+            pending.Push(top);
+            while (pending.Count > 0)
+            {
+                IOperation operation = pending.Pop();
+                ReadOperation(operation);
+                if (operation is INameOfOperation)
+                {
+                    // A name, not a call: nothing under it runs.
+                    continue;
+                }
+                foreach (IOperation child in operation.ChildOperations)
+                {
+                    pending.Push(child);
+                }
+            }
+        }
+
+        /// <summary>The members one operation calls. Every kind of operation
+        /// that carries a member the shell could declare is here; the
+        /// header lists them.</summary>
+        private void ReadOperation(IOperation operation)
+        {
+            SyntaxNode at = operation.Syntax;
+            switch (operation)
+            {
+                case INameOfOperation:
+                    _ = _seen.Add(at);
+                    break;
+                case IInvocationOperation invocation:
+                    _ = _seen.Add(at);
+                    Weigh(at, [invocation.TargetMethod], null);
+                    break;
+                case IObjectCreationOperation creation:
+                    _ = _seen.Add(at);
+                    Call(at, creation.Constructor);
+                    break;
+                case IMethodReferenceOperation reference:
+                    SyntaxNode name = NamePart(at);
+                    _ = _seen.Add(name);
+                    Weigh(name, [reference.Method], null);
+                    break;
+                case IPropertyReferenceOperation property:
+                    (bool reads, bool writes) = UseOf(property);
+                    if (reads)
+                    {
+                        Accessor(at, property.Property.GetMethod);
+                    }
+                    if (writes)
+                    {
+                        Accessor(at, property.Property.SetMethod);
+                    }
+                    break;
+                case IEventReferenceOperation raised:
+                    // Subscribed or unsubscribed; anything else, both.
+                    bool? adds = raised.Parent is IEventAssignmentOperation assignment && assignment.EventReference == raised
+                        ? assignment.Adds
+                        : null;
+                    if (adds != false)
+                    {
+                        Accessor(at, raised.Event.AddMethod);
+                    }
+                    if (adds != true)
+                    {
+                        Accessor(at, raised.Event.RemoveMethod);
+                    }
+                    break;
+                case IImplicitIndexerReferenceOperation indexed:
+                    Member(at, indexed.IndexerSymbol);
+                    Member(at, indexed.LengthSymbol);
+                    break;
+                case IListPatternOperation list:
+                    Member(at, list.IndexerSymbol);
+                    Member(at, list.LengthSymbol);
+                    break;
+                case ISlicePatternOperation slice:
+                    Member(at, slice.SliceSymbol);
+                    break;
+                case IRecursivePatternOperation recursive:
+                    Member(at, recursive.DeconstructSymbol);
+                    break;
+                case IBinaryOperation binary:
+                    Call(at, binary.OperatorMethod);
+                    break;
+                case IUnaryOperation unary:
+                    Call(at, unary.OperatorMethod);
+                    break;
+                case IIncrementOrDecrementOperation step:
+                    Call(at, step.OperatorMethod);
+                    break;
+                case ICompoundAssignmentOperation compound:
+                    Call(at, compound.OperatorMethod);
+                    Call(at, compound.InConversion.MethodSymbol);
+                    Call(at, compound.OutConversion.MethodSymbol);
+                    break;
+                case IConversionOperation conversion:
+                    Call(at, conversion.OperatorMethod);
+                    break;
+                case ICoalesceOperation coalesce:
+                    Call(at, coalesce.ValueConversion.MethodSymbol);
+                    break;
+                case IArgumentOperation argument:
+                    Call(at, argument.InConversion.MethodSymbol);
+                    Call(at, argument.OutConversion.MethodSymbol);
+                    break;
+                case ICollectionExpressionOperation collection:
+                    Call(at, collection.ConstructMethod);
+                    break;
+                case ISpreadOperation spread:
+                    Call(at, spread.ElementConversion.MethodSymbol);
+                    break;
+                case IWithOperation with:
+                    Call(at, with.CloneMethod);
+                    break;
+                case IRangeOperation range:
+                    Call(at, range.Method);
+                    break;
+                case IForEachLoopOperation when at is CommonForEachStatementSyntax loop:
+                    ForEachStatementInfo each = model.GetForEachStatementInfo(loop);
+                    Call(at, each.GetEnumeratorMethod);
+                    Call(at, each.MoveNextMethod);
+                    Accessor(at, each.CurrentProperty?.GetMethod);
+                    Call(at, each.DisposeMethod);
+                    Call(at, each.ElementConversion.MethodSymbol);
+                    Call(at, each.CurrentConversion.MethodSymbol);
+                    if (loop is ForEachVariableStatementSyntax variables)
+                    {
+                        Deconstruction(at, model.GetDeconstructionInfo(variables));
+                    }
+                    break;
+                case IAwaitOperation when at is AwaitExpressionSyntax awaited:
+                    AwaitExpressionInfo awaiter = model.GetAwaitExpressionInfo(awaited);
+                    Call(at, awaiter.GetAwaiterMethod);
+                    Accessor(at, awaiter.IsCompletedProperty?.GetMethod);
+                    Call(at, awaiter.GetResultMethod);
+                    break;
+                case IDeconstructionAssignmentOperation when at is AssignmentExpressionSyntax assigned:
+                    Deconstruction(at, model.GetDeconstructionInfo(assigned));
+                    break;
+            }
+        }
+
+        private void Call(SyntaxNode at, IMethodSymbol? method)
+        {
+            if (method is not null)
+            {
+                Weigh(at, [method], null);
+            }
+        }
+
+        /// <summary>An accessor, when it has code: an auto-property's holds
+        /// no call and no site.</summary>
+        private void Accessor(SyntaxNode at, IMethodSymbol? accessor)
+        {
+            if (accessor is not null
+                && accessor.OriginalDefinition.DeclaringSyntaxReferences.Any(reference => reference.GetSyntax() is
+                    AccessorDeclarationSyntax { Body: not null }
+                    or AccessorDeclarationSyntax { ExpressionBody: not null }
+                    or ArrowExpressionClauseSyntax))
+            {
+                Weigh(at, [accessor], null);
+            }
+        }
+
+        private void Member(SyntaxNode at, ISymbol? member)
+        {
+            switch (member)
+            {
+                case IMethodSymbol method:
+                    Call(at, method);
+                    break;
+                case IPropertySymbol property:
+                    Accessor(at, property.GetMethod);
+                    break;
+            }
+        }
+
+        private void Deconstruction(SyntaxNode at, DeconstructionInfo info)
+        {
+            Call(at, info.Method);
+            Call(at, info.Conversion?.MethodSymbol);
+            foreach (DeconstructionInfo nested in info.Nested)
+            {
+                Deconstruction(at, nested);
+            }
+        }
+
+        /// <summary>Whether a reference to a property reads it, writes it or
+        /// both. Where the tree does not say, both.</summary>
+        private static (bool Reads, bool Writes) UseOf(IOperation reference) => reference.Parent switch
+        {
+            ISimpleAssignmentOperation assignment when assignment.Target == reference => (false, true),
+            ICompoundAssignmentOperation or ICoalesceAssignmentOperation or IIncrementOrDecrementOperation
+                or IDeconstructionAssignmentOperation or ITupleOperation => (true, true),
+            IArgumentOperation { Parameter.RefKind: not RefKind.None } => (true, true),
+            _ => (true, false),
+        };
+
+        /// <summary>The name a method group is written with: the node an
+        /// admission is registered on, and the one the fallback would
+        /// otherwise read again.</summary>
+        private static SyntaxNode NamePart(SyntaxNode written) => written switch
+        {
+            MemberAccessExpressionSyntax access => access.Name,
+            MemberBindingExpressionSyntax binding => binding.Name,
+            AliasQualifiedNameSyntax alias => alias.Name,
+            QualifiedNameSyntax qualified => qualified.Right,
+            _ => written,
+        };
 
         /// <summary>What an operation argument admits. A lambda: its body is
         /// the operation. A method group: its target is, and the name is the
@@ -605,8 +968,11 @@ public sealed class SaveChainAdmissionCensus
                 .Any(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" });
         }
 
-        private void Weigh(SyntaxNode node, IMethodSymbol[] methods, string? spelled)
+        /// <summary>Add the edge and the site a call makes; true when it
+        /// made either.</summary>
+        private bool Weigh(SyntaxNode node, IMethodSymbol[] methods, string? spelled)
         {
+            bool read = false;
             if (methods.Length == 0)
             {
                 // Fail closed: a call spelled as a session method that binds
@@ -620,7 +986,7 @@ public sealed class SaveChainAdmissionCensus
                         $"`{spelled}` is the name of a session method and does not bind here, so the census cannot "
                         + "say what it calls"));
                 }
-                return;
+                return read;
             }
             foreach (IMethodSymbol bound in methods)
             {
@@ -632,22 +998,29 @@ public sealed class SaveChainAdmissionCensus
                 if (!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
                 {
                     string caller = NodeOf(node);
-                    reading.Edges.Add((caller, Id(method)));
-                    reading.NodeNames[caller] = $"{file} ({MemberOf(node).Name})";
+                    reading.Edges.Add((caller, IdOf(method)));
+                    if (!reading.NodeNames.ContainsKey(caller))
+                    {
+                        reading.NodeNames[caller] = $"{file} ({MemberOf(node).Name})";
+                    }
+                    read = true;
                 }
-                if (method.ContainingType is { } owner
+                SiteKind? kind = method.ContainingType is { } owner
                     && _sessionTypes.Contains(owner.OriginalDefinition)
-                    && sessionMethods.Contains(method.Name))
+                    && sessionMethods.Contains(method.Name)
+                        ? SiteKind.Session
+                        : IsShellType(method.ContainingType, "WorkspaceTabViewModel")
+                            && ReloadMethods.Contains(method.Name)
+                            && !InsideTheTab(node)
+                                ? SiteKind.Reload
+                                : null;
+                if (kind is { } site && _sited.Add((node.SpanStart, method.Name)))
                 {
-                    reading.Sites.Add(SiteAt(SiteKind.Session, node, method.Name));
-                }
-                else if (IsShellType(method.ContainingType, "WorkspaceTabViewModel")
-                    && ReloadMethods.Contains(method.Name)
-                    && !InsideTheTab(node))
-                {
-                    reading.Sites.Add(SiteAt(SiteKind.Reload, node, method.Name));
+                    reading.Sites.Add(SiteAt(site, node, method.Name));
+                    read = true;
                 }
             }
+            return read;
         }
 
         private Site SiteAt(SiteKind kind, SyntaxNode node, string name)
@@ -742,10 +1115,20 @@ public sealed class SaveChainAdmissionCensus
                 }
                 if (Declared(current) is { } symbol)
                 {
-                    return Id(symbol);
+                    return IdOf(symbol);
                 }
             }
             return "(no member)";
+        }
+
+        private string IdOf(ISymbol symbol)
+        {
+            if (!_ids.TryGetValue(symbol, out string? id))
+            {
+                id = Id(symbol);
+                _ids[symbol] = id;
+            }
+            return id;
         }
 
         private (string Name, SyntaxNode? Declaration) MemberOf(SyntaxNode node)
@@ -776,8 +1159,8 @@ public sealed class SaveChainAdmissionCensus
             _ => null,
         };
 
-        /// <summary>Which methods of a type a call can reach through another
-        /// symbol, and whether the type is a save chain.</summary>
+        /// <summary>Which members of a type rule (A) never admits, and
+        /// whether the type is a save chain.</summary>
         private void ReadType(BaseTypeDeclarationSyntax declaration)
         {
             if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !typesRead.Add(Id(type)))
@@ -795,6 +1178,7 @@ public sealed class SaveChainAdmissionCensus
                     || method.IsOverride
                     || !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty
                     || IsShapedLikeAnEventHandler(method)
+                    || IsCalledWithNoOperation(method, type)
                     || type.AllInterfaces.Any(contract => contract.GetMembers(method.Name).OfType<IMethodSymbol>().Any(member =>
                         SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method))))
                 {
@@ -821,6 +1205,60 @@ public sealed class SaveChainAdmissionCensus
                 }
             }
             return false;
+        }
+
+        /// <summary>A member the language, the runtime or the binding engine
+        /// can call with no operation that names it, so the graph may not
+        /// hold all of its callers. By kind: a constructor (a derived type's
+        /// constructor chains to it unwritten, and XAML and a `new()`
+        /// constraint construct with no call here), a static constructor, a
+        /// finaliser, a user-defined operator or conversion (a tuple
+        /// comparison names none), and every accessor (a binding reads and
+        /// sets a property, generated code subscribes an event, and
+        /// `foreach`, `await`, ranges and patterns read `Current`,
+        /// `IsCompleted`, `Length`, `Count` and an indexer). By attribute: a
+        /// module initialiser. By name and shape, where no kind exists: the
+        /// methods `using`, `foreach`, `await`, a deconstruction, `fixed`, a
+        /// range and a collection initialiser or expression call.</summary>
+        private static bool IsCalledWithNoOperation(IMethodSymbol method, INamedTypeSymbol type)
+        {
+            switch (method.MethodKind)
+            {
+                case MethodKind.Constructor
+                    or MethodKind.StaticConstructor
+                    or MethodKind.Destructor
+                    or MethodKind.UserDefinedOperator
+                    or MethodKind.Conversion
+                    or MethodKind.PropertyGet
+                    or MethodKind.PropertySet
+                    or MethodKind.EventAdd
+                    or MethodKind.EventRemove:
+                    return true;
+                case MethodKind.Ordinary:
+                    break;
+                default:
+                    return false;
+            }
+            if (method.GetAttributes().Any(attribute => attribute.AttributeClass is { Name: "ModuleInitializerAttribute" } initialiser
+                && initialiser.ContainingNamespace?.ToDisplayString() == "System.Runtime.CompilerServices"))
+            {
+                return true;
+            }
+            IParameterSymbol[] own = [.. method.Parameters.Skip(method.IsExtensionMethod ? 1 : 0)];
+            ITypeSymbol receiver = method.IsExtensionMethod ? method.Parameters[0].Type : type;
+            return method.Name switch
+            {
+                "Dispose" or "DisposeAsync" or "GetEnumerator" or "MoveNext" or "MoveNextAsync" or "GetAwaiter" or "GetResult"
+                    or "GetPinnableReference" => own.Length == 0,
+                "GetAsyncEnumerator" => own.Length <= 1,
+                "OnCompleted" or "UnsafeOnCompleted" => own.Length == 1,
+                "Deconstruct" => own.Length > 0 && own.All(parameter => parameter.RefKind == RefKind.Out),
+                "Slice" => own.Length == 2 && own.All(parameter => parameter.Type.SpecialType == SpecialType.System_Int32),
+                "Add" => own.Length > 0
+                    && (receiver.SpecialType == SpecialType.System_Collections_IEnumerable
+                        || receiver.AllInterfaces.Any(contract => contract.SpecialType == SpecialType.System_Collections_IEnumerable)),
+                _ => false,
+            };
         }
 
         private static int LineOf(SyntaxNode node) => node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
@@ -1211,22 +1649,42 @@ public sealed class SaveChainAdmissionCensus
     private static bool IsWeighed(string sessionMethod) =>
         NoteWriters.Any(writer => writer.Name == sessionMethod) || ExclusiveCreators.Contains(sessionMethod);
 
-    /// <summary>The walk as it stood on 2026-11-16: 308 sources, 31 calls to
-    /// a note writer, 6 to an exclusive creator, 9 reloads of a tab from
-    /// outside it and, once the recover, the tabless cell write and the
-    /// tabless review toggle were admitted, 15 admission calls. Fewer means
-    /// the walk missed files or calls, not that the shell writes less.</summary>
+    /// <summary>The shell's calls are all read from bound operations. The
+    /// syntax fallback reads a call only where no operation stands for it,
+    /// which is source that does not compile. In the shell it reads
+    /// none.</summary>
+    [Fact]
+    public void TheShellsCallsAreAllReadFromOperations()
+    {
+        List<string> fallback = Shell.Value.Reading.ReadFromSyntax;
+        Assert.True(
+            fallback.Count == 0,
+            $"The syntax fallback read {fallback.Count} call(s), so the operation walk does not cover a form the shell "
+            + "uses. Teach ReadOperation the form:\n" + string.Join("\n", fallback.Take(40)));
+    }
+
+    /// <summary>The walk as it stood on 2026-11-16, read from bound
+    /// operations: 308 sources, 31 calls to a note writer, 6 to an exclusive
+    /// creator, 11 reloads of a tab from outside it, 15 admission calls, and
+    /// 9,239 operation trees, 17,153 edges and 9,206 members no caller
+    /// admits. The walk from syntax
+    /// kinds, which this replaced, found the same sources, calls, reloads
+    /// and admission calls. Fewer means the walk missed files or calls, not
+    /// that the shell writes less.</summary>
     [Fact]
     public void TheWalkReadsTheShell()
     {
         Reading reading = Shell.Value.Reading;
         (string What, int Found, int AtLeast)[] floors =
         [
-            ("sources", Shell.Value.Trees.Count, 290),
-            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 28),
+            ("sources", Shell.Value.Trees.Count, 300),
+            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 30),
             ("calls to an exclusive creator", reading.Sites.Count(site => site.Kind == SiteKind.Session && ExclusiveCreators.Contains(site.Name)), 5),
-            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 8),
+            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 10),
             ("admission calls", reading.AdmissionCalls.Count, 14),
+            ("operation trees walked", reading.TreesWalked, 9000),
+            ("edges between members", reading.Edges.Count, 16500),
+            ("members no caller admits", reading.Open.Count, 9000),
         ];
         string[] missing = [.. floors.Where(floor => floor.Found < floor.AtLeast)
             .Select(floor => $"{floor.What}: the walk found {floor.Found}; it held at least {floor.AtLeast} when the census was written")];
@@ -1277,6 +1735,7 @@ public sealed class SaveChainAdmissionCensus
     /// alone, by both rules.</summary>
     [Theory]
     [MemberData(nameof(PlantedRoutes))]
+    [MemberData(nameof(LanguageCalls))]
     public void TheRulesSeeAPlantedRoute(string form, string planted, string expected)
     {
         Reading read = Planted(planted);
@@ -1725,6 +2184,363 @@ public sealed class SaveChainAdmissionCensus
         Assert.True(
             problems.Any(problem => problem.StartsWith(expected, StringComparison.Ordinal)),
             $"{form}: the rows answered it. Problems found:\n" + string.Join("\n", problems));
+    }
+
+    // ---- The calls the language makes -------------------------------------
+
+    private const string StaticWrite = "_ = Session!.SaveText(\"a.md\", \"text\", null);";
+
+    /// <summary>Helper types with one member that writes, and a class that
+    /// reaches the member inside an admission lambda and, when
+    /// <paramref name="outside"/> is given, from members no admission
+    /// holds.</summary>
+    private static string Reached(string helpers, string inside, string outside = "") =>
+        PlantedPrelude + helpers
+        + "internal sealed class Planted(VaultSession session, INoteSaveChain chain)\n{\n"
+        + "void PlantedInside() { _ = chain.Admit(\"a.md\", () => { _ = session; " + inside + " return Task.CompletedTask; }); }\n"
+        + outside + "\n}\n";
+
+    private const string Writer =
+        "internal sealed class PlantedWriter(VaultSession session) : System.Collections.IEnumerable\n{\n"
+        + "public void Add(int item) { " + AWrite + " _ = item; }\n"
+        + "public System.Collections.IEnumerator GetEnumerator() => throw new NotSupportedException();\n}\n";
+
+    private const string ListOfNumbers =
+        "internal sealed class PlantedList : System.Collections.Generic.IEnumerable<int>\n{\n"
+        + "public static VaultSession? Session;\n"
+        + "public void Add(int item) { " + StaticWrite + " _ = item; }\n"
+        + "public System.Collections.Generic.IEnumerator<int> GetEnumerator() => throw new NotSupportedException();\n"
+        + "System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => throw new NotSupportedException();\n}\n";
+
+    private static string Holder(string member) =>
+        "internal sealed class PlantedHolder(VaultSession session)\n{\n"
+        + "public readonly VaultSession Session = session;\n" + member + "\n}\n";
+
+    private const string HolderWithASetter = "public int Value { get => 0; set { " + AWrite + " _ = value; } }";
+
+    private const string HolderWithAGetter = "public int Value { get { " + AWrite + " return 0; } }";
+
+    private const string HolderWithAnIndexer = "public int this[int index] { get { " + AWrite + " return index; } }";
+
+    private const string HolderWithAnEvent = "public event EventHandler Changed { add { " + AWrite + " _ = value; } remove { } }";
+
+    private const string HolderWithAnOperator =
+        "public static PlantedHolder operator +(PlantedHolder left, PlantedHolder right) "
+        + "{ _ = left.Session.SaveText(\"a.md\", \"text\", null); return right; }";
+
+    private const string HolderWithAConversion =
+        "public static implicit operator int(PlantedHolder holder) { _ = holder.Session.SaveText(\"a.md\", \"text\", null); return 0; }";
+
+    private const string Scope =
+        "internal ref struct PlantedScope(VaultSession session)\n{\npublic void Dispose() { " + AWrite + " }\n}\n";
+
+    private const string AsyncScope =
+        "internal sealed class PlantedAsyncScope(VaultSession session)\n{\n"
+        + "public ValueTask DisposeAsync() { " + AWrite + " return default; }\n}\n";
+
+    private static string Bag(string writer) =>
+        "internal sealed class PlantedBag(VaultSession session)\n{\n"
+        + "public PlantedBag GetEnumerator() { " + (writer == "GetEnumerator" ? AWrite : "_ = session;") + " return this; }\n"
+        + "public bool MoveNext() { " + (writer == "MoveNext" ? AWrite : "_ = session;") + " return false; }\n"
+        + "public int Current => 0;\n}\n";
+
+    private static string Awaitable(string writer) =>
+        "internal sealed class PlantedAwaitable(VaultSession session)\n{\n"
+        + "public PlantedAwaiter GetAwaiter() { " + (writer == "GetAwaiter" ? AWrite : string.Empty) + " return new PlantedAwaiter(session); }\n}\n"
+        + "internal sealed class PlantedAwaiter(VaultSession session) : System.Runtime.CompilerServices.INotifyCompletion\n{\n"
+        + "public bool IsCompleted => true;\n"
+        + "public void GetResult() { " + (writer == "GetResult" ? AWrite : "_ = session;") + " }\n"
+        + "public void OnCompleted(Action continuation) { }\n}\n";
+
+    private const string Pair =
+        "internal sealed class PlantedPair(VaultSession session)\n{\n"
+        + "public void Deconstruct(out int left, out int right) { " + AWrite + " left = 0; right = 0; }\n}\n";
+
+    private const string BaseAndDerived =
+        "internal class PlantedBase\n{\npublic static VaultSession? Session;\npublic PlantedBase() { " + StaticWrite + " }\n}\n"
+        + "internal sealed class PlantedDerived : PlantedBase { }\n";
+
+    private const string Maker =
+        "internal sealed class PlantedMaker\n{\n"
+        + "public PlantedMaker(VaultSession session) { " + AWrite + " }\n"
+        + "public PlantedMaker(VaultSession session, int more) : this(session) { _ = more; }\n}\n";
+
+    private const string LoneMaker =
+        "internal sealed class PlantedLoneMaker\n{\npublic PlantedLoneMaker(VaultSession session) { " + AWrite + " }\n}\n";
+
+    private const string Source =
+        "internal sealed class PlantedSource(VaultSession session)\n{\n"
+        + "public PlantedSource Select(Func<int, int> selector) { " + AWrite + " _ = selector; return this; }\n}\n";
+
+    private const string Handler =
+        "[System.Runtime.CompilerServices.InterpolatedStringHandler]\n"
+        + "internal ref struct PlantedHandler(int literalLength, int formattedCount)\n{\n"
+        + "public static VaultSession? Session;\n"
+        + "public void AppendLiteral(string text) { " + StaticWrite + " _ = text.Length + literalLength + formattedCount; }\n"
+        + "public void AppendFormatted<T>(T value) { _ = value; }\n}\n"
+        + "internal static class PlantedLog { public static void Write(PlantedHandler handler) { _ = handler; } }\n";
+
+    private const string Sliced =
+        "internal sealed class PlantedSpan(VaultSession session)\n{\n"
+        + "public int Length => 0;\n"
+        + "public PlantedSpan Slice(int start, int length) { " + AWrite + " _ = start + length; return this; }\n}\n";
+
+    private const string Printed =
+        "internal sealed class PlantedText(VaultSession session)\n{\n"
+        + "public override string ToString() { " + AWrite + " return string.Empty; }\n}\n";
+
+    private const string RuntimeStart =
+        "internal static class PlantedModule\n{\npublic static VaultSession? Session;\n"
+        + "[System.Runtime.CompilerServices.ModuleInitializer]\n"
+        + "internal static void Start() { _ = Session?.SaveText(\"a.md\", \"text\", null); }\n}\n";
+
+    // Each `outside` below is a member of the planted class that no
+    // admission holds, in which the language makes the call.
+    private const string InitialiserOutside = "void PlantedOutside() { _ = new PlantedWriter(session) { 1 }; }";
+
+    private const string SetOutside = "void PlantedOutside() { new PlantedHolder(session).Value = 2; }";
+
+    private const string GetOutside = "void PlantedOutside() { _ = new PlantedHolder(session).Value; }";
+
+    private const string IndexOutside = "void PlantedOutside() { _ = new PlantedHolder(session)[0]; }";
+
+    private const string SubscribeOutside =
+        "void PlantedHandle(object? sender, EventArgs e) { }\n"
+        + "void PlantedOutside() { new PlantedHolder(session).Changed += PlantedHandle; }";
+
+    private const string AddOutside = "void PlantedOutside() { PlantedHolder one = new(session); _ = one + one; }";
+
+    private const string ConvertOutside = "void PlantedOutside() { int number = new PlantedHolder(session); _ = number; }";
+
+    private const string ForeachOutside = "void PlantedOutside() { foreach (int item in new PlantedBag(session)) { _ = item; } }";
+
+    private const string AwaitOutside = "async Task PlantedOutside() { await new PlantedAwaitable(session); }";
+
+    private const string DeconstructOutside = "void PlantedOutside() { var (left, right) = new PlantedPair(session); _ = left + right; }";
+
+    private const string QueryOutside = "void PlantedOutside() { _ = from x in new PlantedSource(session) select x + 1; }";
+
+    private const string InterpolateOutside = "void PlantedOutside() { PlantedLog.Write($\"a{1}\"); }";
+
+    private const string RangeOutside = "void PlantedOutside() { _ = new PlantedSpan(session)[..]; }";
+
+    /// <summary>Codex round 2, as a class: a call the language makes with
+    /// no invocation expression. In each unjoined row the member that
+    /// writes is called once inside an admission lambda and once more, by
+    /// the language, from a member no admission holds.</summary>
+    public static TheoryData<string, string, string> LanguageCalls() => new()
+    {
+        {
+            "Add, called by a collection initialiser outside the chain",
+            Reached(Writer, "new PlantedWriter(session).Add(1);", InitialiserOutside),
+            "unjoined"
+        },
+        {
+            "Add, called by a collection expression outside the chain",
+            Reached(ListOfNumbers, "new PlantedList().Add(1);", "void PlantedOutside() { PlantedList list = [1]; _ = list; }"),
+            "unjoined"
+        },
+        {
+            "a setter that writes, set outside the chain",
+            Reached(Holder(HolderWithASetter), "new PlantedHolder(session).Value = 1;", SetOutside),
+            "unjoined"
+        },
+        {
+            "a getter that writes, read outside the chain",
+            Reached(Holder(HolderWithAGetter), "_ = new PlantedHolder(session).Value;", GetOutside),
+            "unjoined"
+        },
+        {
+            "an indexer that writes, read outside the chain",
+            Reached(Holder(HolderWithAnIndexer), "_ = new PlantedHolder(session)[0];", IndexOutside),
+            "unjoined"
+        },
+        {
+            "an event's add accessor that writes, subscribed outside the chain",
+            Reached(Holder(HolderWithAnEvent), "new PlantedHolder(session).Changed += PlantedHandle;", SubscribeOutside),
+            "unjoined"
+        },
+        {
+            "a user-defined operator that writes, used outside the chain",
+            Reached(Holder(HolderWithAnOperator), "PlantedHolder one = new(session); _ = one + one;", AddOutside),
+            "unjoined"
+        },
+        {
+            "an implicit conversion that writes, used outside the chain",
+            Reached(Holder(HolderWithAConversion), "int number = new PlantedHolder(session); _ = number;", ConvertOutside),
+            "unjoined"
+        },
+        {
+            "Dispose, called by a using declaration outside the chain",
+            Reached(
+                Scope,
+                "var scope = new PlantedScope(session); scope.Dispose();",
+                "void PlantedOutside() { using var scope = new PlantedScope(session); }"),
+            "unjoined"
+        },
+        {
+            "DisposeAsync, called by an await using outside the chain",
+            Reached(
+                AsyncScope,
+                "_ = new PlantedAsyncScope(session).DisposeAsync();",
+                "async Task PlantedOutside() { await using var scope = new PlantedAsyncScope(session); }"),
+            "unjoined"
+        },
+        {
+            "GetEnumerator, called by a foreach outside the chain",
+            Reached(Bag("GetEnumerator"), "_ = new PlantedBag(session).GetEnumerator();", ForeachOutside),
+            "unjoined"
+        },
+        {
+            "MoveNext, called by a foreach outside the chain",
+            Reached(Bag("MoveNext"), "_ = new PlantedBag(session).MoveNext();", ForeachOutside),
+            "unjoined"
+        },
+        {
+            "GetAwaiter, called by an await outside the chain",
+            Reached(Awaitable("GetAwaiter"), "_ = new PlantedAwaitable(session).GetAwaiter();", AwaitOutside),
+            "unjoined"
+        },
+        {
+            "GetResult, called by an await outside the chain",
+            Reached(Awaitable("GetResult"), "new PlantedAwaiter(session).GetResult();", AwaitOutside),
+            "unjoined"
+        },
+        {
+            "Deconstruct, called by a deconstruction outside the chain",
+            Reached(Pair, "new PlantedPair(session).Deconstruct(out _, out _);", DeconstructOutside),
+            "unjoined"
+        },
+        {
+            "a base constructor that writes, reached by a derived type's implicit constructor outside the chain",
+            Reached(BaseAndDerived, "_ = new PlantedBase();", "void PlantedOutside() { _ = new PlantedDerived(); }"),
+            "unjoined"
+        },
+        {
+            "a constructor that writes, reached through this() outside the chain",
+            Reached(Maker, "_ = new PlantedMaker(session);", "void PlantedOutside() { _ = new PlantedMaker(session, 1); }"),
+            "unjoined"
+        },
+        {
+            "a constructor that writes, reached from a field initialiser",
+            Reached(Maker, "_ = new PlantedMaker(session);", "private readonly PlantedMaker _made = new(session);"),
+            "unjoined"
+        },
+        {
+            "Select, called by a query outside the chain",
+            Reached(Source, "_ = new PlantedSource(session).Select(x => x);", QueryOutside),
+            "unjoined"
+        },
+        {
+            "an interpolated string handler's AppendLiteral, called by an interpolated string outside the chain",
+            Reached(Handler, "var handler = new PlantedHandler(0, 0); handler.AppendLiteral(\"x\");", InterpolateOutside),
+            "unjoined"
+        },
+        {
+            "Slice, called by a range outside the chain",
+            Reached(Sliced, "_ = new PlantedSpan(session).Slice(0, 0);", RangeOutside),
+            "unjoined"
+        },
+        {
+            "a ToString override, called by an interpolated string outside the chain",
+            Reached(Printed, "_ = new PlantedText(session).ToString();", "void PlantedOutside() { _ = $\"{new PlantedText(session)}\"; }"),
+            "unjoined"
+        },
+        {
+            "a module initialiser, which the runtime calls",
+            Reached(RuntimeStart, "PlantedModule.Start();"),
+            "unjoined"
+        },
+
+        // Joined: the language's call stands inside the admission lambda
+        // and nowhere else, and the graph holds its edge.
+        {
+            "Select, called by a query inside an admission lambda only",
+            Reached(Source, "_ = from x in new PlantedSource(session) select x + 1;"),
+            "joined"
+        },
+        {
+            "an interpolated string handler's AppendLiteral, called by an interpolated string inside an admission lambda only",
+            Reached(Handler, "PlantedLog.Write($\"a{1}\");"),
+            "joined"
+        },
+
+        // Unjoined all the same, though the only call stands inside an
+        // admission lambda: the open rule's cost. No operation need name
+        // these members, so their callers are never taken for all of them.
+        {
+            "Add, called by a collection initialiser inside an admission lambda only",
+            Reached(Writer, "_ = new PlantedWriter(session) { 1 };"),
+            "unjoined"
+        },
+        {
+            "Dispose, called by a using declaration inside an admission lambda only",
+            Reached(Scope, "using var scope = new PlantedScope(session);"),
+            "unjoined"
+        },
+        {
+            "GetEnumerator, called by a foreach inside an admission lambda only",
+            Reached(Bag("GetEnumerator"), "foreach (int item in new PlantedBag(session)) { _ = item; }"),
+            "unjoined"
+        },
+        {
+            "Deconstruct, called by a deconstruction inside an admission lambda only",
+            Reached(Pair, "var (left, right) = new PlantedPair(session); _ = left + right;"),
+            "unjoined"
+        },
+        {
+            "a constructor that writes, called inside an admission lambda only",
+            Reached(LoneMaker, "_ = new PlantedLoneMaker(session);"),
+            "unjoined"
+        },
+        {
+            "a setter that writes, set inside an admission lambda only",
+            Reached(Holder(HolderWithASetter), "new PlantedHolder(session).Value = 1;"),
+            "unjoined"
+        },
+    };
+
+    /// <summary>Layer one alone: the graph holds an edge from the member
+    /// that holds a call the language makes to each member that call
+    /// reaches, whatever the open rule then says of that member.</summary>
+    [Theory]
+    [InlineData("a collection initialiser", Writer, InitialiserOutside, "PlantedWriter.Add(")]
+    [InlineData("a query", Source, QueryOutside, "PlantedSource.Select(")]
+    [InlineData("an interpolated string", Handler, InterpolateOutside, "PlantedHandler.AppendLiteral(|PlantedHandler.#ctor(")]
+    [InlineData("a range", Sliced, RangeOutside, "PlantedSpan.Slice(|PlantedSpan.get_Length")]
+    [InlineData("a deconstruction", Pair, DeconstructOutside, "PlantedPair.Deconstruct(")]
+    public void TheGraphHoldsAnEdgeForACallTheLanguageMakes(string form, string helpers, string outside, string callees) =>
+        AssertEdges(form, helpers, outside, callees);
+
+    [Theory]
+    [InlineData("a property set", HolderWithASetter, SetOutside, "PlantedHolder.set_Value(")]
+    [InlineData("a property read", HolderWithAGetter, GetOutside, "PlantedHolder.get_Value")]
+    [InlineData("an indexer read", HolderWithAnIndexer, IndexOutside, "PlantedHolder.get_Item(")]
+    [InlineData("an event subscription", HolderWithAnEvent, SubscribeOutside, "PlantedHolder.add_Changed(")]
+    [InlineData("a user-defined operator", HolderWithAnOperator, AddOutside, "PlantedHolder.op_Addition(")]
+    [InlineData("an implicit conversion", HolderWithAConversion, ConvertOutside, "PlantedHolder.op_Implicit(")]
+    public void TheGraphHoldsAnEdgeForAnAccessorAndAnOperator(string form, string member, string outside, string callees) =>
+        AssertEdges(form, Holder(member), outside, callees);
+
+    [Theory]
+    [InlineData("a foreach", "GetEnumerator", "PlantedBag.GetEnumerator|PlantedBag.MoveNext|PlantedBag.get_Current")]
+    [InlineData("an await", "GetAwaiter", "PlantedAwaitable.GetAwaiter|PlantedAwaiter.GetResult|PlantedAwaiter.get_IsCompleted")]
+    public void TheGraphHoldsAnEdgeForEachMemberOfAPattern(string form, string writer, string callees) =>
+        AssertEdges(
+            form,
+            form == "a foreach" ? Bag(writer) : Awaitable(writer),
+            form == "a foreach" ? ForeachOutside : AwaitOutside,
+            callees);
+
+    private static void AssertEdges(string form, string helpers, string outside, string callees)
+    {
+        Reading read = Planted(Reached(helpers, string.Empty, outside));
+        string[] missing = [.. callees.Split('|').Where(callee => !read.Edges.Any(edge =>
+            edge.Caller.Contains(".PlantedOutside", StringComparison.Ordinal) && edge.Callee.Contains(callee, StringComparison.Ordinal)))];
+        Assert.True(
+            missing.Length == 0,
+            $"{form}: the graph holds no edge from PlantedOutside to [{string.Join(", ", missing)}]. Its edges from there:\n"
+            + string.Join("\n", read.Edges.Where(edge => edge.Caller.Contains(".PlantedOutside", StringComparison.Ordinal)).Select(edge => edge.Callee).Distinct()));
     }
 
     private const string PlantedWriter =
