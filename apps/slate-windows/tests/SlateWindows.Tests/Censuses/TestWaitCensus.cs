@@ -26,7 +26,8 @@ namespace SlateWindows.Tests.Censuses;
 /// </para>
 /// <para>
 /// Rule 3 (#1673) is the first. A later rule is appended as a block of its
-/// own at the end of the file: rules 1 and 2 (plan 47 CB-6) stand after it.
+/// own at the end of the file: rules 1 and 2 (plan 47 CB-6) stand after it,
+/// and rule 4 (plan 47 CB-7) after them.
 /// </para>
 /// </remarks>
 [Trait("census", "test-wait")]
@@ -1368,9 +1369,12 @@ public sealed class TestWaitCensus
         "watchdog",
     ];
 
-    /// <summary>The gate's own words: a listener's registration settles, and
-    /// an entry as it stood when the census first read the gate.</summary>
-    private static readonly string[] GateOnlyReasons = ["registration", "unswept"];
+    /// <summary>The gate's own word: a listener registered on the desktop
+    /// settles before its queue is cleared, and no signal says it has. Too
+    /// short a settle fails red, never green. The word "unswept", which held
+    /// the gate's entries until plan 47 CB-7 weighed each, is no reason any
+    /// more.</summary>
+    private static readonly string[] GateOnlyReasons = ["registration"];
 
     /// <summary>Rule 2's own word: an elapsed ceiling kept because no seam
     /// observes what the call really waited. Its entry names the seam that
@@ -1680,9 +1684,12 @@ public sealed class TestWaitCensus
         Assert.StartsWith("reason: A.cs (Waits)", unknown);
         Assert.Contains("flaky", unknown);
 
-        string unswept = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, "unswept"), holds], UnitDelayReasons));
+        string gateOnly = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, "registration"), holds], UnitDelayReasons));
+        Assert.StartsWith("reason: A.cs (Waits)", gateOnly);
+        Assert.Empty(PinnedListFaults(found, [("A.cs", "Waits", 2, "registration"), holds], GateDelayReasons));
+
+        string unswept = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, "unswept"), holds], GateDelayReasons));
         Assert.StartsWith("reason: A.cs (Waits)", unswept);
-        Assert.Empty(PinnedListFaults(found, [("A.cs", "Waits", 2, "unswept"), holds], GateDelayReasons));
 
         string otherRule = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, NoWaitWitness + ": a seam"), holds], UnitDelayReasons));
         Assert.StartsWith("reason: A.cs (Waits)", otherRule);
@@ -2811,8 +2818,12 @@ public sealed class TestWaitCensus
     //     property and called by the fact reads as a hold, and so does a
     //     body the fact awaits at once
     //     (await Task.Run(() => { Thread.Sleep(500); }));
-    //   FlaUI's Wait.UntilInputIsProcessed in the gate, which plan 47 CB-7
-    //     weighs.
+    //   FlaUI's Wait.UntilInputIsProcessed in the gate. It is a fixed
+    //     sleep: FlaUI 5.0.0 sleeps for the span it is handed. The gate
+    //     called it 77 times in 11 files on 2026-11-16, most of them
+    //     after a key or a click and before a wait on a condition. Plan 47
+    //     CB-7 weighed it and did not sweep it: a recorded deferral, on
+    //     "Plan 47 deferred finds".
 
     /// <summary>How rule 1 reads one call to a delay's name.</summary>
     internal enum Standing
@@ -2850,16 +2861,17 @@ public sealed class TestWaitCensus
     /// <summary>A floor for each name a project calls, sites or not. Counted
     /// on 2026-11-16, after the unit project's sweep (plan 47 CB-6): 64
     /// Thread.Sleep, 42 Task.Delay, 32 PumpFor and 5 RunDispatcherFor in the
-    /// unit project, and 51 Thread.Sleep in the gate's, which calls none of
-    /// the other three. Fewer means the rule lost sight of that name, not
-    /// that the project waits less.</summary>
+    /// unit project. The gate's project calls none of the other three; it
+    /// held 51 Thread.Sleep then and 36 after its own sweep (plan 47 CB-7),
+    /// most of them the pause of a poll. Fewer means the rule lost sight of
+    /// that name, not that the project waits less.</summary>
     private static readonly (string Project, string Name, int Calls)[] DelayCallsAtLeast =
     [
         (UnitProject, "Thread.Sleep", 60),
         (UnitProject, "Task.Delay", 39),
         (UnitProject, "PumpFor", 30),
         (UnitProject, "RunDispatcherFor", 4),
-        (GateProject, "Thread.Sleep", 46),
+        (GateProject, "Thread.Sleep", 33),
     ];
 
     /// <summary>The unit project's fixed delays as they stand, each with the
@@ -2981,32 +2993,37 @@ public sealed class TestWaitCensus
             "deliberate-hold: the progress callback is still running when the budget ends"),
     ];
 
-    /// <summary>The gate's fixed delays as the census first read them: 31
-    /// sites on 2026-11-16, none weighed yet. Plan 47 CB-7 fixes or names
-    /// each.</summary>
+    /// <summary>The gate's fixed delays as they stand, each with the word
+    /// that says why it is not a wait on a condition and, after the colon,
+    /// what it holds. The census first read 31 sites here, on 2026-11-16.
+    /// Plan 47 CB-7 gave 19 of them a state to wait on, a settled frame or a
+    /// watch that counts reads, and left these twelve.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] GateFixedDelays =
     [
-        ("FocusSettleWatchTests.cs", "SlowReadsThatAllSeeTheRowPass", 1, "unswept"),
-        ("ShellAccessibilityTests.Announcements.cs", "Announcements_ReachADesktopScopedListenerFromLaunch", 1, "unswept"),
-        ("ShellAccessibilityTests.Announcements.cs", "AwaitHeard", 1, "unswept"),
-        ("ShellAccessibilityTests.AppMenu.cs", "AppMenu_APointerRestingWhereItOpensLeavesTheKeysOnTheFirstRow", 1, "unswept"),
-        ("ShellAccessibilityTests.HotExit.cs", "HotExit_ClosingAndReopeningKeepsAnUnsavedNote", 1, "unswept"),
-        ("ShellAccessibilityTests.HotExit.cs", "HotExit_AKilledProcessKeepsAnUnsavedNote", 1, "unswept"),
-        ("ShellAccessibilityTests.Palette.cs", "AssertHeardOneCountAndOnlyTheFinalSelection", 1, "unswept"),
-        ("ShellAccessibilityTests.ReadingSelection.cs", "ReadingView_ASelectionStandsOutAndKeepsItsText", 2, "unswept"),
-        ("ShellAccessibilityTests.RegionStops.cs", "ClickFilterFromOutsideTheGroup", 2, "unswept"),
-        ("ShellAccessibilityTests.RegionStops.cs", "AssertFocusStays", 1, "unswept"),
-        ("ShellAccessibilityTests.Rescan.cs", "ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside", 2, "unswept"),
-        ("ShellAccessibilityTests.Rescan.cs", "AssertAWatcherRunKeepsTheReadersRow", 2, "unswept"),
-        ("ShellAccessibilityTests.ShellRegions.cs", "AssertKeepsFocus", 1, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_TheMenuBarAndTheOpenTabAreReadable", 3, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_APalettesTextKeepsItsClearType", 1, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_TheEditorSelectionStandsOutAndKeepsItsText", 2, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_TheCommandPaletteListIsReadable", 1, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_AFocusedPanelRowShowsItsWholeRing", 1, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_ADisabledGridStaysOnItsSurface", 3, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_AnEmptyFieldShowsItsPurpose", 1, "unswept"),
-        ("ShellAccessibilityTests.ThemeReadability.cs", "ThemedShell_TheSelectedDropdownRowIsNotBlue", 2, "unswept"),
+        ("FocusSettleWatchTests.cs", "SlowReadsThatAllSeeTheRowPass", 1,
+            "deliberate-hold: each read takes 300 ms, as a loaded VM's UI Automation read did (#1611)"),
+        ("ShellAccessibilityTests.Announcements.cs", "Announcements_ReachADesktopScopedListenerFromLaunch", 1,
+            "deliberate-hold: the window stays untouched for three seconds while the launch lines queue"),
+        ("ShellAccessibilityTests.Announcements.cs", "AwaitHeard", 1,
+            "late-arrival: 500 ms past the last expected line, so a late duplicate shows"),
+        ("ShellAccessibilityTests.AppMenu.cs", "AppMenu_APointerRestingWhereItOpensLeavesTheKeysOnTheFirstRow", 1,
+            "late-arrival: the menu-show delay passes and the row under the resting pointer stays shut"),
+        ("ShellAccessibilityTests.HotExit.cs", "HotExit_ClosingAndReopeningKeepsAnUnsavedNote", 1,
+            "late-arrival: two seconds past the restored line, so a late duplicate shows"),
+        ("ShellAccessibilityTests.Palette.cs", "AssertHeardOneCountAndOnlyTheFinalSelection", 1,
+            "late-arrival: 500 ms past the count, so a late duplicate or a stray line shows"),
+        ("ShellAccessibilityTests.RegionStops.cs", "ClickFilterFromOutsideTheGroup", 1,
+            "registration: the focus and notification listeners settle before their queues are cleared"),
+        ("ShellAccessibilityTests.RegionStops.cs", "ClickFilterFromOutsideTheGroup", 1,
+            "late-arrival: after the click's own focus event and line, no further one comes"),
+        ("ShellAccessibilityTests.Rescan.cs", "ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside", 1,
+            "registration: the focus listener settles before its queue is cleared"),
+        ("ShellAccessibilityTests.Rescan.cs", "ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside", 1,
+            "late-arrival: after the landing's own focus event, no further one comes"),
+        ("ShellAccessibilityTests.Rescan.cs", "AssertAWatcherRunKeepsTheReadersRow", 1,
+            "registration: the focus listener settles before its queue is cleared"),
+        ("ShellAccessibilityTests.Rescan.cs", "AssertAWatcherRunKeepsTheReadersRow", 1,
+            "late-arrival: after the watcher's run reaches the tree, no focus event comes"),
     ];
 
     [Fact]
@@ -3385,12 +3402,11 @@ public sealed class TestWaitCensus
             + "HotExitReopenWait ran out; a seam that says which ended the wait would be the witness"),
     ];
 
-    /// <summary>The gate's one elapsed-time ceiling, as it stands. Plan 47
-    /// CB-7 weighs it.</summary>
-    private static readonly (string File, string Member, int Count, string Reason)[] GateElapsedCeilings =
-    [
-        ("FocusSettleWatchTests.cs", "AReadThatSeesFocusLeaveFailsAtOnce", 1, "unswept"),
-    ];
+    /// <summary>The gate's elapsed-time ceilings: none. The one the census
+    /// first read, in FocusSettleWatchTests, asserted that a watch ended
+    /// inside its window; it now asserts the reads the watch made (plan 47
+    /// CB-7).</summary>
+    private static readonly (string File, string Member, int Count, string Reason)[] GateElapsedCeilings = [];
 
     [Fact]
     public void AnElapsedCeilingGoesThroughWallClockBudgetOrIsABenchmark()

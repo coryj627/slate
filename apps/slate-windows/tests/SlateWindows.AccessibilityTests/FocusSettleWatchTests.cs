@@ -45,13 +45,14 @@ public sealed class FocusSettleWatchTests
     public void AReadThatSeesFocusLeaveFailsAtOnce()
     {
         int reads = 0;
-        var clock = Stopwatch.StartNew();
 
         string? why = FocusSettleWatch.Watch(() => ++reads < 3, Window);
 
         Assert.NotNull(why);
         Assert.Contains("left the row", why, StringComparison.Ordinal);
-        Assert.True(clock.Elapsed < Window, $"the watch read on for {clock.ElapsedMilliseconds} ms after focus left");
+        // The third read saw focus leave, and the watch made no fourth: it
+        // stopped at once, whatever the clock read.
+        Assert.Equal(3, reads);
     }
 
     /// <summary>Reads that never see anything fail at the cap, and say how
