@@ -136,7 +136,6 @@ public sealed class TestWaitCensus
     /// that change merges.</summary>
     private static readonly (string File, string Type, string Reason, string Dated)[] GatesStillDisposed =
     [
-        ("SlateWindows.Tests/GraphTableTests.Landing.cs", "ParkedFetch", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/FinalMergeDeltaTests.cs", "ParkedLoads", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/SaveChainAdmissionTests.cs", "Peers", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/CommandPaletteTests.Shell.cs", "PaletteShellHost", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
