@@ -499,6 +499,170 @@ const CASE_ONLY_CASES: [(&str, &str, bool); 6] = [
     ("Docs", "docs", true),
 ];
 
+/// The read-back, where production makes it (plan 47 CB-13, step 0's second
+/// measurement): each case-only rename made by hand on a source handle
+/// opened under the old spelling, as `rename_beneath_root` makes it, and the
+/// stored name read while that handle is still open. One line per case
+/// records the kernel's answer, the read production makes
+/// (`windows_entry::stored_name`), the listing read kept ready to replace it
+/// (`stored_name_by_listing`), the test's own listing, and production's read
+/// again once the handle has closed. Production's read disagreeing with the
+/// listing is a breach: the refusal rests on it.
+fn observe_the_read_back_by_hand(kind: VolumeKind, scratch: &Scratch, breaches: &mut Vec<String>) {
+    use super::windows_entry;
+    use std::ffi::OsStr;
+
+    let hand = scratch.0.join("hand");
+    std::fs::create_dir(&hand).unwrap_or_else(|error| panic!("{}: {error}", hand.display()));
+    let folder = open_folder(&hand).unwrap_or_else(|error| panic!("{}: {error}", hand.display()));
+    for (from, to, is_folder) in CASE_ONLY_CASES {
+        let case = format!("{kind:?} read-back by hand {from} -> {to}");
+        if is_folder {
+            std::fs::create_dir(hand.join(from)).unwrap_or_else(|error| panic!("{case}: {error}"));
+            std::fs::write(hand.join(from).join("Inner.md"), b"inner")
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+        } else {
+            std::fs::write(hand.join(from), from.as_bytes())
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+        }
+        let source = match windows_entry::open_for_rename(&folder, OsStr::new(from)) {
+            Ok(source) => source,
+            Err(error) => {
+                observed!("OBSERVED {case}: the source did not open: {error:?}");
+                breaches.push(format!("{case}: the source did not open: {error:?}"));
+                continue;
+            }
+        };
+        // The provider's two calls: without replacement, then with it only
+        // where the volume reports the source's own alias as occupied.
+        let kernel = match windows_entry::rename_into(&source, &folder, OsStr::new(to), false) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                windows_entry::rename_into(&source, &folder, OsStr::new(to), true)
+                    .map(|()| "done with replacement")
+            }
+            other => other.map(|()| "done"),
+        };
+        let held_open = windows_entry::stored_name(&folder, OsStr::new(to));
+        let by_listing = windows_entry::stored_name_by_listing(&folder, OsStr::new(to));
+        let listed: Vec<String> = std::fs::read_dir(&hand)
+            .unwrap_or_else(|error| panic!("{case}: {error}"))
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|listed| listed.eq_ignore_ascii_case(to))
+            .collect();
+        drop(source);
+        let closed = windows_entry::stored_name(&folder, OsStr::new(to));
+        observed!(
+            "OBSERVED {case}: kernel {kernel:?}; with the source handle open, the final-path read {held_open:?} and the listing read {by_listing:?}; the test's listing {listed:?}; the final-path read after the handle closed {closed:?}"
+        );
+        let truth = (listed.len() == 1).then(|| std::ffi::OsString::from(&listed[0]));
+        if truth.is_none() || held_open.as_ref().ok() != truth.as_ref() {
+            breaches.push(format!(
+                "{case}: the read production makes answered {held_open:?}, the listing shows {listed:?}"
+            ));
+        }
+    }
+}
+
+/// What the vault watcher hears around a case-only rename on this volume
+/// (plan 47 CB-13): a volume that reports the rename as done and keeps the
+/// old spelling may still raise change events for it. A refusal records both
+/// spellings as the provider's own echo, so such events start no catch-up
+/// scan. This records what arrives; it asserts nothing. A file made before
+/// the rename shows the watch is live, and one made after it bounds the
+/// wait: every event the rename raised is ahead of that file's own.
+fn observe_the_watcher_around_a_rename(kind: VolumeKind, scratch: &Scratch) {
+    use super::provider::{FileEvent, FileEventSink};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct Heard {
+        events: Mutex<Vec<FileEvent>>,
+        wake: Condvar,
+    }
+    impl FileEventSink for Heard {
+        fn on_event(&self, event: FileEvent) {
+            self.events.lock().unwrap().push(event);
+            self.wake.notify_all();
+        }
+    }
+    fn names(event: &FileEvent) -> Vec<&str> {
+        match event {
+            FileEvent::Created { relative }
+            | FileEvent::Modified { relative }
+            | FileEvent::Deleted { relative } => vec![relative],
+            FileEvent::Renamed { from, to } => vec![from, to],
+            _ => Vec::new(),
+        }
+    }
+    impl Heard {
+        /// Whether an event naming `name` arrives within the ceiling.
+        fn hears(&self, name: &str) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut events = self.events.lock().unwrap();
+            loop {
+                if events.iter().any(|event| names(event).contains(&name)) {
+                    return true;
+                }
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return false;
+                }
+                events = self.wake.wait_timeout(events, left).unwrap().0;
+            }
+        }
+    }
+
+    let watched = scratch.0.join("watched");
+    std::fs::create_dir(&watched).unwrap_or_else(|error| panic!("{}: {error}", watched.display()));
+    std::fs::write(watched.join("Watch.md"), b"watch").unwrap();
+    let provider = FsVaultProvider::new(watched.clone());
+    let heard = Arc::new(Heard::default());
+    let _watch = match provider.watch(heard.clone()) {
+        Ok(Some(watch)) => watch,
+        Ok(None) => {
+            observed!("OBSERVED {kind:?} watcher: the provider gave no watch on this volume");
+            return;
+        }
+        Err(error) => {
+            observed!("OBSERVED {kind:?} watcher: the watch did not start: {error:?}");
+            return;
+        }
+    };
+    std::fs::write(watched.join("before.md"), b"before").unwrap();
+    if !heard.hears("before.md") {
+        observed!(
+            "OBSERVED {kind:?} watcher: no event for a new file within 10 s, so nothing is recorded about the rename"
+        );
+        return;
+    }
+    let outcome = match provider.rename("Watch.md", "watch.md") {
+        Ok(()) => "renamed".to_string(),
+        Err(VaultError::InvalidArgument { message }) => format!("refused: {message}"),
+        Err(error) => format!("failed: {error:?}"),
+    };
+    let echoes = (
+        provider.is_own_echo("Watch.md"),
+        provider.is_own_echo("watch.md"),
+    );
+    std::fs::write(watched.join("after.md"), b"after").unwrap();
+    let bounded = heard.hears("after.md");
+    let events = heard.events.lock().unwrap();
+    let about: Vec<&FileEvent> = events
+        .iter()
+        .filter(|event| {
+            names(event)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("watch.md"))
+        })
+        .collect();
+    observed!(
+        "OBSERVED {kind:?} watcher around a case-only rename ({outcome}): events for the renamed name {about:?}; the provider's own echo: Watch.md {}, watch.md {}; the later file's event arrived: {bounded}",
+        echoes.0,
+        echoes.1
+    );
+}
+
 /// Plan 47 CB-13 (#1727): each case-only rename either lands, with the
 /// listing holding the requested spelling, or is refused in core's sentence
 /// with the listing holding the old one. A reported success that kept the
@@ -599,6 +763,8 @@ fn case_only_rename_keeps_the_entry(volumes: &[(VolumeKind, PathBuf)]) {
                 the_identity_inverse_applies = renamed && before.is_some();
             }
         }
+        observe_the_read_back_by_hand(*kind, &scratch, &mut breaches);
+        observe_the_watcher_around_a_rename(*kind, &scratch);
         if !the_identity_inverse_applies {
             continue;
         }
