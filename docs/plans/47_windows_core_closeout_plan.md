@@ -4,10 +4,10 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0 and C1 are delivered (CB-0, CB-1, CB-2 and CB-4, all merged
-on 2026-11-16), and wave C2 is under way. §12 keeps the delivery
-record. Written from
-the requirements brief the owner approved on 2026-11-13
+recommendation. Waves C0 and C1 are delivered (CB-0, CB-1, CB-2 and
+CB-4, all merged on 2026-11-16), and wave C2 is under way. §12 keeps
+the delivery record. Written from the requirements brief the owner
+approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
 (#1926); the one commit between them adds `ExitWatch` and its tests and
@@ -841,7 +841,8 @@ on the design.
 Specs for the first wave, written 2026-11-13 against c2377210. CB-1's
 was rewritten on 2026-11-14, and every line number re-read on
 2026-11-15 at 798cdaae. CB-0 to CB-6 were read again at 5b060297
-(§2.6), and CB-7 is re-read when wave C3 starts:
+(§2.6), and CB-7 is re-read when wave C3 starts. CB-8's spec was
+written on 2026-11-16, when its wave started:
 
 | Chunk | Spec |
 |---|---|
@@ -853,6 +854,7 @@ was rewritten on 2026-11-14, and every line number re-read on
 | CB-5 | `specs/cb05_a11y_check_says_when_no_score_was_computed.md` |
 | CB-6 | `specs/cb06_unit_facts_wait_on_conditions.md` |
 | CB-7 | `specs/cb07_gate_journeys_wait_on_conditions.md` |
+| CB-8 | `specs/cb08_a_quarantined_note_still_lists.md` |
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -955,11 +957,11 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 
 | Chunk | PR | Merged | Closed | Found / fixed here / deferred / filed | Owed |
 |---|---|---|---|---|---|
-| CB-0 | #1957 | 2026-11-16 (97b94ddc) | #1835, #940 | 2 / 1 / 1 / 0 | The owner's call on the subsystem definition's two gaps (below). Nothing else |
-| CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | The deferred find (a math element's drawing template is tied to the first thread that touches it) is taken at once as #1965, because it can redden the unit lane |
-| CB-1 | #1961 | 2026-11-16 (fcc7b5f6) | #1843 (CD2) | 7 / 3 / 3 / 1 | Filed #1959 (the licence-header script rewrites line endings). CB-6's sleep rules list `Support/Heartbeat.cs` and the planted sleeps in `StaThreadTests` |
-| CB-2 | #1962 | 2026-11-16 (b62d5729) | #1624 | 5 / 2 / 2 / 1 | Filed #1963 (a core property test drew the reserved name `aux`), which CB-8's PR takes. Deferred: the pilot workflow's model step inherits the stall rule with no dump variables |
-| CB-8 | #1966 | 2026-11-16 (70e97ba0) | #1900, #1709, #1963 | 1 / 1 / 0 / 0 | `not delivered: VoiceOver pass` on #1954: on the Mac a quarantined row says a 1969 or 1970 modified date (CD41). Filed for Milestone W as CD41 said: #1964, a marked row and the other surfaces that read the sentinel |
+| CB-0 | #1957 | 2026-11-16 (97b94ddc) | #1835, #940 | 2 / 1 / 1 / 0 | One line on #1955 (below). The owner's call on the subsystem definition's two gaps (below) |
+| CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | One line on #1955: a math element's drawing template is tied to the first thread that touches it. It is taken in #1965 (open on 2026-11-16, next to merge), because it can redden the unit lane |
+| CB-1 | #1961 | 2026-11-16 (fcc7b5f6) | #1843 (CD2) | 7 / 3 / 3 / 1 | Three lines on #1955. Filed #1959 (the licence-header script rewrites line endings). CB-6's sleep rules list `Support/Heartbeat.cs` and the planted sleeps in `StaThreadTests` |
+| CB-2 | #1962 | 2026-11-16 (b62d5729) | #1624 | 5 / 2 / 2 / 1 | Filed #1963 (a core property test drew the reserved name `aux`), which CB-8's PR takes. One new line on #1955 (the pilot workflow's model step inherits the stall rule with no dump variables) and one already on its opening list (the blame dump type) |
+| CB-8 | #1966 | 2026-11-16 (70e97ba0) | #1900, #1709, #1963 | 1 / 1 / 0 / 0 | Nothing deferred. `not delivered: VoiceOver pass` on #1954: on the Mac a quarantined row says a 1969 or 1970 modified date (CD41). Filed for Milestone W as CD41 said: #1964, a marked row and the other surfaces that read the sentinel |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -977,17 +979,24 @@ plans 44 and 45 filed the mac follow-ups. Plan 44 alone did, and both
 places were corrected on 2026-11-16.
 
 Wave C1, 2026-11-16. Each chunk had a fresh Opus red team and Codex
-rounds to an approve: CB-4 two rounds, CB-1 three, CB-2 three. Codoki
-reported Safe to merge at 5/5 on all three. CB-2's lane probe ran on a
-scratch branch (run 43829430401): a planted stall turned both model
-shards red five minutes into the test step, the log named the stalled
-case, and a failed-jobs rerun kept both attempts' evidence side by
-side. Not verified on a lane: a run that reaches the 70-minute blame
-timer, and the routes and reroot families under a planted stall.
+rounds to an approve: CB-4 two rounds, CB-1 three, CB-2 three. Every
+Codex round ran at the configured effort, high, where the protocol's
+step 3 asks for xhigh; the findings stand and the rounds are recorded
+as run below that tier. Codoki reported Safe to merge at 5/5 on all
+three. CB-2's lane probe ran on a scratch branch (run 43829430401): a
+planted stall turned both model shards red five minutes into the test
+step, the log named the stalled case, and a failed-jobs rerun kept both
+attempts' evidence side by side. Not verified on a lane: a run that
+reaches the 70-minute blame timer, `cancelled()` after the job's
+90-minute limit, and a stall in a family other than composed (the probe
+planted it in the composed case body).
 
-CB-8, 2026-11-16. Its spec was written at wave C2's start and corrected
-from its delivery. A red team found no blocker and four notes, all
-taken. Codex approved in one round, run at effort high where the
-protocol asks for xhigh; the PR body records that. It also took #1963
-at the lead's request: the property test's name generator now leaves
-out the 22 stems core refuses.
+CB-8, 2026-11-16. Its spec was written at wave C2's start and, after
+the merge, rewritten as a record of what merged. A red team found no
+blocker and four notes, all taken. Its third note (the 1970 dates older
+migrations leave, and the graph table and sidebar filter surfaces) went
+into #1964. Codex approved in one round, run like wave C1's at the
+configured effort, high, where the protocol's step 3 asks for xhigh;
+the round is recorded as run below that tier, and the PR body says so.
+It also took #1963 at the lead's request: the property test's name
+generator now leaves out the 22 stems core refuses on Windows.
