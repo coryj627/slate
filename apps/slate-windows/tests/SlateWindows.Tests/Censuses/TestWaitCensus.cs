@@ -2190,8 +2190,6 @@ public sealed class TestWaitCensus
             "timeout-under-test: the pump outlasts the 300 ms integrity delay, whose check must leave the tab dirty"),
         ("Censuses/CallbackConcurrencyCensus.cs", "RegisterUnregisterOnce", 1,
             "deliberate-hold: a millisecond for events to land between the register and the unregister"),
-        ("Censuses/CallbackConcurrencyCensus.cs", "RunSurvivorCheck", 1,
-            "late-arrival: 400 ms after the unregistered save the sealed count has not moved"),
         ("Censuses/CanonicalHighlightCensus.cs", "LoadedCoordinatorQuiescesAndRefreshesForEditScrollAndResize", 1,
             "quiesce: the shown editor finishes loading before its coordinator is read; a wait on the coordinator would do"),
         ("Censuses/CanonicalHighlightCensus.cs", "LoadedCoordinatorQuiescesAndRefreshesForEditScrollAndResize", 2,

@@ -267,10 +267,21 @@ public class CallbackConcurrencyCensus
         Assert.True(
             Waiting.WaitFor(() => survivor.Locked(r => r.FileChanges.Count) > 0, 5000),
             "freshly registered listener received nothing after the churn");
+        // A second listener stays registered through the silent save and
+        // hears a sentinel saved after it: saves fan out in order, so once
+        // the sentinel's change has arrived the silent save's fan-out is
+        // over, and the sealed count is read after it, not after a fixed
+        // sleep.
+        var stillListening = new EventRecorder();
+        ulong stillRegistered = session.RegisterEventListener(stillListening);
         session.UnregisterEventListener(survivorReg);
         int sealedCount = survivor.TotalCount;
         session.SaveText("post-unregister.md", "silent\n", null);
-        Thread.Sleep(400);
+        session.SaveText("sentinel.md", "heard\n", null);
+        Assert.True(
+            Waiting.WaitFor(() => stillListening.Locked(r => r.FileChanges.Any(change => change.Path == "sentinel.md")), 10_000),
+            "the listener still registered never heard the sentinel save");
         Assert.Equal(sealedCount, survivor.TotalCount);
+        session.UnregisterEventListener(stillRegistered);
     }
 }
