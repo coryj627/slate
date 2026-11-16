@@ -368,7 +368,9 @@ pub(super) fn assert_a_sentinel_size_lists_as_zero(
 /// A filesystem provider whose reads of the denied paths fail with
 /// `PermissionDenied` while their listing and stat still succeed: a file a
 /// scan can see and cannot read (an ACL, another program's exclusive
-/// lock).
+/// lock). It is for scans and listings: every read reaches the denial
+/// through the trait's defaults, and the filesystem provider's own
+/// overrides for writes, renames, the trash and identity are not forwarded.
 pub(super) struct UnreadableProvider {
     inner: FsVaultProvider,
     denied: std::sync::Mutex<std::collections::HashSet<String>>,

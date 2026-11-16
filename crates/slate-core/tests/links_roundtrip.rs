@@ -36,12 +36,13 @@ enum LinkSpec {
     External,
 }
 
-/// The stems Windows reserves for devices, as the note-name pattern can
-/// spell them. `FsVaultProvider::write_file` refuses `aux.md` and the rest
-/// on Windows, and it is right to (#1963).
-const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 24] = [
-    "con", "prn", "aux", "nul", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
-    "com8", "com9", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+/// The device stems `FsVaultProvider::write_file` refuses on Windows, as
+/// the note-name pattern can spell them: it refuses `aux.md` and the rest,
+/// and it is right to (#1963). `com0` and `lpt0` are not here because the
+/// provider accepts them (`windows_path_validator_accepts_device_name_near_misses`).
+const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
 /// Strategy for one note name, which the properties below write as
