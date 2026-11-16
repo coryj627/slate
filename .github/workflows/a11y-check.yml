@@ -207,11 +207,12 @@ jobs:
     needs: [changes, analyze]
     # Runs after the analysis whether it passed or failed, so a drop below
     # the floor still gets its comment and its red check. It also runs when
-    # a same-repo pull request's analysis was skipped, which means the
-    # routing failed: the floor then fails in a sentence and the score
-    # comment is rewritten (#1616). A cancelled run, a pull request that
-    # touches none of the lane's paths, and a skipped analysis on a fork's
-    # pull request or on a push to main skip it.
+    # a same-repo pull request's analysis was skipped, which means a job
+    # before it failed (the routing, or the lane decision): the floor then
+    # fails in a sentence and the score comment is rewritten (#1616). A
+    # cancelled run, a pull request that touches none of the lane's paths,
+    # and a skipped analysis on a fork's pull request or on a push to main
+    # skip it.
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && (needs.analyze.result != 'skipped' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -241,11 +242,12 @@ jobs:
       # mismatch fails the step with the unverified files still on disk
       # (#1575). Nothing below may read them: with the files gone, the
       # SARIF upload skips on its hashFiles guard, the floor step (which
-      # runs unconditionally) fails, and the PR comment, which reads the
-      # results only when the floor computed a score from them, says that
-      # none was computed. A missing artifact or a download that failed
-      # before extracting anything fails the step too, with nothing on
-      # disk; `discarded` tells the floor step which.
+      # runs unconditionally) fails, and the PR comment step, which reads
+      # the results only when the floor computed a score from them,
+      # rewrites the comment it left before, if any, to say that none was
+      # computed. A missing artifact or a download that failed before
+      # extracting anything fails the step too, with nothing on disk;
+      # `discarded` tells the floor step which.
       - name: Discard results the download did not verify
         id: discard
         if: steps.results.outcome != 'success'
@@ -279,11 +281,17 @@ jobs:
           #
           # Every outcome with no score goes through noScore (#1616): it
           # fails the step and hands the comment step the same sentence.
-          # `computed` is set to true only after every check on the score
-          # and on MIN_SCORE has passed, so the comment step never reads
-          # results the floor did not accept.
+          # A sentence can quote the results file or a value from it, so
+          # it is made one line of 500 characters at most, with no
+          # backtick, before anything reads it. `computed` is set to true
+          # only after every check on the score and on MIN_SCORE has
+          # passed, so the comment step never reads results the floor did
+          # not accept.
           script: |
-            const noScore = (reason) => {
+            const noScore = (said) => {
+              const reason = Array.from(
+                String(said).replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/`/g, "'").trim()
+              ).slice(0, 500).join('');
               core.setOutput('computed', 'false');
               core.setOutput('reason', reason);
               core.setFailed(reason);
@@ -308,7 +316,7 @@ jobs:
               }
               if (process.env.ANALYZE_RESULT === 'skipped') {
                 noScore(
-                  `The analysis did not run, so no score was computed. See the "Route mac jobs" job.`
+                  `The analysis did not run, so no score was computed. See the jobs before it: "changes" and "Route mac jobs".`
                 );
                 return;
               }
@@ -387,10 +395,13 @@ jobs:
 
       # After the floor, so the comment says what the floor found (#1616).
       # With a score, it posts it. With none, it rewrites the comment this
-      # workflow left on an earlier run to say so, in the floor's sentence,
-      # so an old score never stands beside a red check; where there is no
-      # such comment it creates none (plan 47, CD4). It runs whatever the
-      # floor's outcome, and when a failed step before the floor skipped it.
+      # workflow left on an earlier run, if there is one, to say so in the
+      # floor's sentence, so that comment does not go on showing an old
+      # score beside this run's red check; where there is no such comment
+      # it creates none (plan 47, CD4). It runs whatever the floor's
+      # outcome, and when a failed step before the floor skipped it. A
+      # cancelled run, or a call to GitHub that fails here, leaves the
+      # comment as it was.
       - name: Post score summary on PR
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
@@ -410,17 +421,25 @@ jobs:
               const fs = require('fs');
               const results = JSON.parse(fs.readFileSync('a11y-results.json', 'utf8'));
               const s = results.score || {};
-              const score = (s.score ?? 0).toFixed(1);
               const grade = s.grade || 'F';
               const errors = s.totalErrors ?? 0;
               const warnings = s.totalWarnings ?? 0;
               const min = Number(process.env.MIN_SCORE);
               // The floor's own test, on the score as it is and not as it
-              // prints: 99.96 prints as 100.0 and is still below 100.
+              // prints. One decimal, unless rounding would print a score
+              // below the minimum as the minimum or more (99.96 as 100.0).
               const passed = s.score >= min && errors === 0;
               const emoji = passed ? '✅' : '❌';
+              const rounded = s.score.toFixed(1);
+              const score = s.score < min && Number(rounded) >= min ? String(s.score) : rounded;
 
-              const failed = (s.failedCriteria || [])
+              // The floor checks the score and the error count, not this
+              // list: anything in it that is not a criterion is left out,
+              // so the comment is still written.
+              const criteria = Array.isArray(s.failedCriteria)
+                ? s.failedCriteria.filter(c => c && typeof c === 'object')
+                : [];
+              const failed = criteria
                 .map(c => `- \`${c.criterion}\` ${c.name} (${c.errors} errors, ${c.warnings} warnings)`)
                 .join('\n');
               const failedBlock = failed.length
@@ -442,10 +461,11 @@ jobs:
               ].join('\n');
             } else {
               // The floor's sentence can quote the results file, so it is
-              // data: one line, no backtick, 500 characters at most, in a
-              // code fence, where it cannot render or mention anyone. With
-              // no sentence, the floor did not run or stopped before it
-              // reported.
+              // data: one line, no backtick, 500 characters at most (the
+              // floor cleans it, and it is cleaned again here, where it
+              // arrives through the environment), in a code fence, where
+              // it cannot render or mention anyone. With no sentence, the
+              // floor did not run or stopped before it reported.
               const said = (process.env.NO_SCORE_REASON || '')
                 .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ')
                 .replace(/`/g, "'")
@@ -461,7 +481,7 @@ jobs:
                 reason,
                 '```',
                 ``,
-                `The check is red, and any score this comment showed before is out of date. See [the run](${run}).`,
+                `No score was computed in [this run](${run}), so its check is red. Any score this comment showed before is out of date.`,
                 ``,
                 marker,
               ].join('\n');

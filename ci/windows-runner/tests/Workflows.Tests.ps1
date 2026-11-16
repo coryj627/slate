@@ -679,7 +679,7 @@ Describe 'a11y-check.yml' {
             "              if (process.env.ANALYZE_RESULT === 'skipped') {",
             '                noScore('))
         $floor[0] | Should -MatchExactly (Get-Lines @(
-            '                  `The analysis did not run, so no score was computed. See the "Route mac jobs" job.`',
+            '                  `The analysis did not run, so no score was computed. See the jobs before it: "changes" and "Route mac jobs".`',
             '                );',
             '                return;',
             '              }',
@@ -708,11 +708,14 @@ Describe 'a11y-check.yml' {
         $floor.Count | Should -Be 1
         $floorAt = [array]::IndexOf($steps, $floor[0])
         $floor = $floor[0]
-        # 1. The floor has an id, and one helper sets both outputs and fails the step with the same sentence.
+        # 1. The floor has an id, and one helper makes the sentence one bounded line, sets both outputs and fails
+        # the step, all with the same text.
         $floor | Should -MatchExactly (Get-Lines @('      - name: Enforce score floor', '        id: floor'))
         $floor | Should -MatchExactly (Get-Lines @(
             '          script: |',
-            '            const noScore = (reason) => {',
+            '            const noScore = (said) => {',
+            '              const reason = Array.from('))
+        $floor | Should -MatchExactly (Get-Lines @(
             "              core.setOutput('computed', 'false');",
             "              core.setOutput('reason', reason);",
             '              core.setFailed(reason);',
@@ -750,11 +753,13 @@ Describe 'a11y-check.yml' {
         $floor | Should -MatchExactly (Get-Lines @(
             "              if (process.env.ANALYZE_RESULT === 'skipped') {",
             '                noScore(',
-            '                  `The analysis did not run, so no score was computed. See the "Route mac jobs" job.`',
+            '                  `The analysis did not run, so no score was computed. See the jobs before it: "changes" and "Route mac jobs".`',
             '                );',
             '                return;',
             '              }'))
+        # The analysis is skipped when either job before it failed, so the sentence names both.
         (Get-JobBlock $a11y 'route') | Should -MatchExactly (Get-JobLine 'name: Route mac jobs')
+        (Get-JobBlock $a11y 'changes') | Should -MatchExactly (Get-JobLine 'name: changes')
         # 6. The comment step runs after the floor, on every pull request run that is not cancelled, and reads
         # the floor's two outputs through env: and nowhere else.
         $comment = @($steps | Where-Object { $_ -match '(?m)^      - name: Post score summary on PR' })
@@ -923,7 +928,7 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
             $cases = @(
                 @{ Expect = 'were discarded and no score was computed'; env = @{ MIN_SCORE = '100'; RESULTS_DISCARDED = 'true'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'success' } },
                 @{ Expect = 'results could not be downloaded, so no score was computed'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'success' } },
-                @{ Expect = '^The analysis did not run, so no score was computed\. See the "Route mac jobs" job\.$'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'skipped' } },
+                @{ Expect = '^The analysis did not run, so no score was computed\. See the jobs before it: "changes" and "Route mac jobs"\.$'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'skipped' } },
                 @{ Expect = '^a11y-results\.json was not produced'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'failure' } })
             $runs = Invoke-StepScript 'Enforce score floor' $cases
             $runs.Count | Should -Be $cases.Count
@@ -944,6 +949,11 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
                 @{ file = 'garbage'; Expect = $notJson },
                 @{ file = ''; Expect = $notJson },
                 @{ file = "{`n  `"score`": {`n"; Expect = $notJson },
+                # Node quotes the text it could not read: a line break, a backtick, a control character.
+                @{ file = "{`"score`":`n x}"; Expect = $notJson },
+                @{ file = ([string][char]96 + 'x' + [char]96 + [char]0x1b + '[31m'); Expect = $notJson },
+                # A value the sentence quotes can be any size; the sentence is not.
+                @{ file = ('{"score":{"score":[' + ((1..400) -join ',') + '],"totalErrors":0}}'); Expect = $noNumber },
                 @{ file = 'null'; Expect = $noNumber },
                 @{ file = '[]'; Expect = $noNumber },
                 @{ file = '"text"'; Expect = $noNumber },
@@ -966,7 +976,9 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
                 $runs[$i].thrown | Should -BeNullOrEmpty -Because $because
                 $runs[$i].outputs.computed | Should -BeExactly 'false' -Because $because
                 $runs[$i].outputs.reason | Should -MatchExactly $cases[$i].Expect -Because $because
-                $runs[$i].outputs.reason | Should -Not -Match '[\r\n]' -Because $because
+                # One line, no backtick, 500 characters at most: the annotation, the output and the comment agree.
+                $runs[$i].outputs.reason | Should -Not -Match ('[\x00-\x1f\x7f-\x9f' + [char]0x2028 + [char]0x2029 + [char]96 + ']') -Because $because
+                [Globalization.StringInfo]::new($runs[$i].outputs.reason).LengthInTextElements | Should -BeLessOrEqual 500 -Because $because
                 @($runs[$i].failed).Count | Should -Be 1 -Because $because
                 $runs[$i].failed[0] | Should -BeExactly $runs[$i].outputs.reason -Because $because
             }
@@ -1003,8 +1015,17 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
                 @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $notComputed) },
                 @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $byMarker) },
                 @{ file = (New-Results 100 2); env = $computed; comments = @($old) },
-                # 99.96 prints as 100.0; the heading still says what the floor said.
-                @{ file = (New-Results 99.96 0); env = $computed; comments = @($old) })
+                # 99.96 rounds to 100.0, which would read as a pass: the heading says what the floor said, with
+                # the score as it is. 99.94 rounds to a number below the minimum and prints rounded.
+                @{ file = (New-Results 99.96 0); env = $computed; comments = @($old) },
+                @{ file = (New-Results 99.94 0); env = $computed; comments = @($old) },
+                # Two of the workflow's own comments (the paging defect made some): the older one is the one kept current.
+                @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $old + $notComputed + $byMarker) },
+                # Results the floor accepted can still hold a list of failed criteria that is no list, or has
+                # entries that are no objects: the comment is still rewritten.
+                @{ file = '{"score":{"score":50,"grade":"F","totalErrors":0,"totalWarnings":3,"failedCriteria":"x"}}'; env = $computed; comments = @($old) },
+                @{ file = '{"score":{"score":50,"grade":"F","totalErrors":0,"totalWarnings":3,"failedCriteria":{"a":1}}}'; env = $computed; comments = @($old) },
+                @{ file = '{"score":{"score":50,"grade":"F","totalErrors":0,"totalWarnings":3,"failedCriteria":[null,"x",7,{"criterion":"1.1.1","name":"Non-text Content","errors":1,"warnings":2}]}}'; env = $computed; comments = @($old) })
             $runs = Invoke-StepScript 'Post score summary on PR' $cases
             foreach ($run in $runs) {
                 $run.thrown | Should -BeNullOrEmpty
@@ -1017,20 +1038,26 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
             $runs[0].created[0].issue_number | Should -Be 7
             $runs[0].created[0].body | Should -MatchExactly "^## $pass Accessibility score: 100\.0 / 100 \(A\+\)\n"
             $runs[0].created[0].body.EndsWith("`n`n$marker", [StringComparison]::Ordinal) | Should -BeTrue
-            foreach ($i in 1..5) {
+            foreach ($i in 1..10) {
                 @($runs[$i].created).Count | Should -Be 0 -Because "case $i has a comment to rewrite"
                 @($runs[$i].updated).Count | Should -Be 1 -Because "case $i has a comment to rewrite"
-                $runs[$i].updated[0].comment_id | Should -Be (900, 901, 902, 900, 900)[$i - 1]
+                $runs[$i].updated[0].comment_id | Should -Be (900, 901, 902, 900, 900, 900, 900, 900, 900, 900)[$i - 1] -Because "case $i"
                 $runs[$i].updated[0].body.EndsWith("`n`n$marker", [StringComparison]::Ordinal) | Should -BeTrue
             }
-            foreach ($i in 1..3) { $runs[$i].updated[0].body | Should -MatchExactly "^## $pass Accessibility score: 100\.0 / 100 \(A\+\)\n" }
+            foreach ($i in 1, 2, 3, 7) { $runs[$i].updated[0].body | Should -MatchExactly "^## $pass Accessibility score: 100\.0 / 100 \(A\+\)\n" }
             $runs[4].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 100\.0 / 100 \(A\+\)\n"
-            $runs[5].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 100\.0 / 100 \(A\+\)\n" -Because 'the floor failed 99.96, so the heading does not show a pass'
+            $runs[5].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 99\.96 / 100 \(A\+\)\n" -Because 'the floor failed 99.96, so the heading shows neither a pass nor 100.0'
+            $runs[6].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 99\.9 / 100 \(A\+\)\n"
+            foreach ($i in 8, 9) {
+                $runs[$i].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 50\.0 / 100 \(F\)\n"
+                $runs[$i].updated[0].body | Should -MatchExactly '\n_All WCAG criteria pass\._\n'
+            }
+            $runs[10].updated[0].body | Should -MatchExactly ('\n### Failed WCAG criteria\n- ' + [char]96 + '1\.1\.1' + [char]96 + ' Non-text Content \(1 errors, 2 warnings\)\n\n---\n')
         }
         It 'no score rewrites the workflow''s own comment with the floor''s sentence and a link to the run, and reads no results' {
             if (Skip-WithoutNode) { return }
             $old = New-Comment 900 'github-actions[bot]' 'Bot' "## $pass Accessibility score: 100.0 / 100 (A+)"
-            $sentence = 'The analysis did not run, so no score was computed. See the "Route mac jobs" job.'
+            $sentence = 'The analysis did not run, so no score was computed. See the jobs before it: "changes" and "Route mac jobs".'
             $cases = @(
                 # Results on disk that would throw if they were read, and would read as a pass if they were trusted.
                 @{ file = 'garbage'; env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = $sentence }; comments = @($fillers + $old) },
@@ -1054,7 +1081,7 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
                         $said,
                         '```',
                         '',
-                        'The check is red, and any score this comment showed before is out of date. See [the run](https://github.example/o/r/actions/runs/42).',
+                        'No score was computed in [this run](https://github.example/o/r/actions/runs/42), so its check is red. Any score this comment showed before is out of date.',
                         '',
                         $marker) -join "`n") -Because $because
             }
@@ -1091,7 +1118,7 @@ const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RE
                 $lines[2] | Should -BeExactly '```text'
                 $lines[4] | Should -BeExactly '```'
                 $lines[3] | Should -Not -Match $tick
-                $lines[3] | Should -Not -Match '[\x00-\x1f\x7f-\x9f  ]'
+                $lines[3] | Should -Not -Match ('[\x00-\x1f\x7f-\x9f' + [char]0x2028 + [char]0x2029 + ']')
                 [Globalization.StringInfo]::new($lines[3]).LengthInTextElements | Should -BeLessOrEqual 500
                 @($lines | Where-Object { $_ -match "^\s*$tick$tick$tick" }).Count | Should -Be 2
                 $lines[8] | Should -BeExactly $marker
@@ -1525,6 +1552,8 @@ Describe 'lane change detection' {
             foreach ($case in @(
                     @(0, 'success', 'success', 'success', 'false'),
                     @(1, 'failure', 'skipped', 'skipped', 'false'),
+                    # On a same-repo pull request the score job runs when the analysis was skipped, and fails (#1616).
+                    @(1, 'failure', 'skipped', 'failure', 'false'),
                     @(1, 'failure', 'skipped', 'skipped', 'true'),
                     @(0, 'success', 'skipped', 'skipped', 'true'),
                     @(1, 'success', 'skipped', 'skipped', 'false'),
