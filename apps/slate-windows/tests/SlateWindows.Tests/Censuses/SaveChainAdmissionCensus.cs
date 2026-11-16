@@ -15,19 +15,29 @@
 // How a call is shown admitted. The shell's calls between members are read
 // once. A node is a method, a constructor, an accessor, or the initialiser of
 // a field or a property. A lambda or a local function belongs to the
-// innermost admission argument or member that holds it, and an admission
-// argument is a node of its own, admitted whatever holds it. Nodes and edges
+// innermost admission node or member that holds it. Nodes and edges
 // are named by the symbol's original definition, so a generic method is one
 // node however it is constructed, and a reduced extension call is taken back
 // to the method it calls. An
 // admission call is a bound call to WorkspaceSaveCoordinator.Admit or Enqueue,
 // to INoteSaveChain.Admit, or to WorkspaceViewModel.AdmitPropertyWrite, and
-// its admission argument is the argument for `operation` (`start` for
-// Enqueue), never `abandoned`. An edge from A to B is a call of B, a creation
-// through B, or a reference to B as a method group, in A. The admitted set is
-// the least set that holds every admission argument and every node that has a
-// caller and whose callers are all in the set. A call is admitted when either
-// holds:
+// its operation argument is the argument for `operation` (`start` for
+// Enqueue), never `abandoned`. An admission node is a node of its own,
+// admitted whatever holds it, and only two things make one: a lambda that
+// stands as the operation argument (its body is the operation), and a method
+// group that does (its target is the node's one callee). Parentheses, casts
+// and a null-forgiving mark are looked through, and each result of a
+// conditional is read the same way. Everything else in or around an admission
+// call runs, or may run, where the call stands, before any ticket exists, and
+// belongs to the node that holds the call: a call in the operation argument
+// (a factory that returns the operation), a conditional's condition, a method
+// group's receiver, a property read for a delegate, any lambda inside one of
+// those, the receiver of the admission call, and its other arguments. An edge
+// from A to B is a
+// call of B, a creation through B, or a reference to B as a method group, in
+// A. The admitted set is the least set that holds every admission node and
+// every node that has a caller and whose callers are all in the set. A call
+// is admitted when either holds:
 //   (A) its node is in the admitted set. A node that implements an interface
 //       member (implicitly or explicitly), that overrides, or that is virtual
 //       or abstract is never admitted this way: a call through the interface
@@ -36,9 +46,16 @@
 //       sender and arguments derived from EventArgs): XAML wires such a
 //       method in generated code this census does not read; or
 //   (B) it stands in a lambda assigned to a local, and every read of that
-//       local in the member stands in an admission argument (the property
-//       write's shape: the write is built first and handed to the admitted
-//       operation).
+//       local in the member is handed to an admission call as its operation
+//       or stands in an admission lambda (the property write's shape: the
+//       write is built first and handed to the admitted operation). The
+//       lambda is assigned in the local's declaration or in a statement of
+//       its own, never in an expression whose value is used.
+// A delegate that reaches an admission call any other way is not followed
+// back to the code it was made from: one that arrives as a parameter, or from
+// a field, a property, a call, an element of a collection or a delegate
+// creation, and a local function passed by name. A write there counts as its
+// maker's, so the rule names it even where it does run inside the ticket.
 //
 // What the census does not prove. That the path admitted is the path
 // written. That the worker is handed to TrackWorker. That the ticket settles
@@ -432,7 +449,13 @@ public sealed class SaveChainAdmissionCensus
         Reading reading,
         HashSet<string> typesRead)
     {
+        /// <summary>The admission nodes: each lambda that stands as an
+        /// operation, and the name of each method group that does.</summary>
         private readonly Dictionary<SyntaxNode, string> _admissionArguments = [];
+
+        /// <summary>Each read of a local handed to an admission call as its
+        /// operation, for shape (B).</summary>
+        private readonly HashSet<SyntaxNode> _localsHandedOver = [];
         private readonly HashSet<ITypeSymbol> _sessionTypes = SessionTypes(model.Compilation);
 
         public void Read(SyntaxNode root)
@@ -455,13 +478,7 @@ public sealed class SaveChainAdmissionCensus
                             $"the census cannot find the argument this admission call hands to `{parameter}`"));
                         continue;
                     }
-                    if (!_admissionArguments.ContainsKey(argument))
-                    {
-                        FileLinePositionSpan at = argument.GetLocation().GetLineSpan();
-                        string node = $"admission:{file}:{at.StartLinePosition.Line + 1}:{at.StartLinePosition.Character + 1}";
-                        _admissionArguments[argument] = node;
-                        _ = reading.AdmissionNodes.Add(node);
-                    }
+                    AdmitWhatStandsIn(argument);
                 }
             }
 
@@ -483,6 +500,65 @@ public sealed class SaveChainAdmissionCensus
                         break;
                 }
             }
+        }
+
+        /// <summary>What an operation argument admits. A lambda: its body is
+        /// the operation. A method group: its target is, and the name is the
+        /// node that calls it. A local: the lambda assigned to it is weighed
+        /// by shape (B). Parentheses, casts and a null-forgiving mark are
+        /// looked through, and each result of a conditional is read this
+        /// way. Everything else in the argument runs, or may run, where the
+        /// admission call stands, before any ticket exists, and so stays
+        /// with the node that holds the call: a call (a factory that returns
+        /// the operation), a conditional's condition, a method group's
+        /// receiver, a property or a field read for a delegate, and any
+        /// lambda inside one of those.</summary>
+        private void AdmitWhatStandsIn(ExpressionSyntax written)
+        {
+            switch (written)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    AdmitWhatStandsIn(parenthesized.Expression);
+                    return;
+                case CastExpressionSyntax cast:
+                    AdmitWhatStandsIn(cast.Expression);
+                    return;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } forgiven:
+                    AdmitWhatStandsIn(forgiven.Operand);
+                    return;
+                case ConditionalExpressionSyntax conditional:
+                    AdmitWhatStandsIn(conditional.WhenTrue);
+                    AdmitWhatStandsIn(conditional.WhenFalse);
+                    return;
+                case AnonymousFunctionExpressionSyntax function:
+                    Admit(function);
+                    return;
+                case IdentifierNameSyntax local when model.GetSymbolInfo(local).Symbol is ILocalSymbol:
+                    _ = _localsHandedOver.Add(local);
+                    return;
+            }
+            SimpleNameSyntax? group = written switch
+            {
+                SimpleNameSyntax name => name,
+                MemberAccessExpressionSyntax access => access.Name,
+                _ => null,
+            };
+            if (group is not null && Bound(written).Length > 0)
+            {
+                Admit(group);
+            }
+        }
+
+        private void Admit(SyntaxNode operation)
+        {
+            if (_admissionArguments.ContainsKey(operation))
+            {
+                return;
+            }
+            FileLinePositionSpan at = operation.GetLocation().GetLineSpan();
+            string node = $"admission:{file}:{at.StartLinePosition.Line + 1}:{at.StartLinePosition.Character + 1}";
+            _admissionArguments[operation] = node;
+            _ = reading.AdmissionNodes.Add(node);
         }
 
         private IMethodSymbol[] Bound(SyntaxNode node)
@@ -596,8 +672,9 @@ public sealed class SaveChainAdmissionCensus
             || (method.Name == "KeepsBufferOnReseat" && IsShellType(method.ContainingType, "WorkspaceViewModel"));
 
         /// <summary>Shape (B): the call stands in a lambda assigned to a
-        /// local, and every read of that local in the member stands in an
-        /// admission argument.</summary>
+        /// local, and every read of that local in the member is handed to an
+        /// admission call as its operation or stands in an admission
+        /// lambda.</summary>
         private bool HandedToAnAdmission(SyntaxNode node, SyntaxNode declaration)
         {
             foreach (AnonymousFunctionExpressionSyntax function in node.Ancestors()
@@ -612,7 +689,8 @@ public sealed class SaveChainAdmissionCensus
                     .Where(name => name.Identifier.ValueText == local.Name
                         && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(name).Symbol, local)
                         && !IsAssignedTo(name))];
-                if (reads.Length > 0 && reads.All(read => read.AncestorsAndSelf().Any(_admissionArguments.ContainsKey)))
+                if (reads.Length > 0
+                    && reads.All(read => _localsHandedOver.Contains(read) || read.Ancestors().Any(_admissionArguments.ContainsKey)))
                 {
                     return true;
                 }
@@ -635,7 +713,14 @@ public sealed class SaveChainAdmissionCensus
             {
                 EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } =>
                     model.GetDeclaredSymbol(declarator) as ILocalSymbol,
-                AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment
+                // Only an assignment that is a statement of its own: one
+                // whose value is used (called at once, say) hands the lambda
+                // on unseen.
+                AssignmentExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.SimpleAssignmentExpression,
+                    Parent: ExpressionStatementSyntax,
+                } assignment
                     when assignment.Right == written =>
                     model.GetSymbolInfo(assignment.Left).Symbol as ILocalSymbol,
                 _ => null,
@@ -1342,7 +1427,149 @@ public sealed class SaveChainAdmissionCensus
             "unjoined"
         },
 
+        // Unjoined: an expression in or around an admission call that runs
+        // before any ticket exists (codex round 1, C2). Only a lambda's body
+        // and a method group's target stand in the operation argument.
+        {
+            "a factory that writes and returns the operation, called as the operation argument",
+            InAClass(
+                "Func<Task> PlantedMake() { " + AWrite + " return () => Task.CompletedTask; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedMake()); }"),
+            "unjoined"
+        },
+        {
+            "a cast around a factory call as the operation argument",
+            InAClass(
+                "Func<Task> PlantedMake() { " + AWrite + " return () => Task.CompletedTask; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", (Func<Task>)PlantedMake()); }"),
+            "unjoined"
+        },
+        {
+            "a call in the condition of a conditional of two lambdas",
+            InAClass(
+                "bool PlantedAsk() { " + AWrite + " return true; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedAsk() ? () => Task.CompletedTask : () => Task.FromResult(1)); }"),
+            "unjoined"
+        },
+        {
+            "a lambda the operation argument invokes at once",
+            InAClass(
+                "void PlantedM() { _ = chain.Admit(\"a.md\", ((Func<Func<Task>>)(() => { " + AWrite
+                + " return () => Task.CompletedTask; }))()); }"),
+            "unjoined"
+        },
+        {
+            "a call in the receiver of a method group passed as the operation",
+            InAClass(
+                "Planted PlantedSelf() { " + AWrite + " return this; }\n"
+                + "Task PlantedOperation() => Task.CompletedTask;\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedSelf().PlantedOperation); }"),
+            "unjoined"
+        },
+        {
+            "a lambda in an object initialiser whose member is read as the operation",
+            PlantedPrelude
+            + "internal sealed class PlantedHolder { public Func<Task>? Run { get; set; } }\n"
+            + "internal sealed class Planted(VaultSession session, INoteSaveChain chain)\n{\n"
+            + "void PlantedM() { _ = chain.Admit(\"a.md\", new PlantedHolder { Run = () => { " + AWrite
+            + " return Task.CompletedTask; } }.Run!); }\n}\n",
+            "unjoined"
+        },
+        {
+            "a writer lambda in a collection that a call in the operation argument is given",
+            InAClass(
+                "Func<Task> PlantedPick(Func<Task>[] from) => from[0];\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedPick([() => { " + AWrite + " return Task.CompletedTask; }])); }"),
+            "unjoined"
+        },
+        {
+            // Not followed, so it fails closed: a local function's body is
+            // its member's.
+            "a writer in a local function passed as the operation",
+            InAClass(
+                "void PlantedM() { Task PlantedLocal() { " + AWrite + " return Task.CompletedTask; } "
+                + "_ = chain.Admit(\"a.md\", PlantedLocal); }"),
+            "unjoined"
+        },
+        {
+            "a getter that writes and returns the operation",
+            InAClass(
+                "Func<Task> PlantedOperation { get { " + AWrite + " return () => Task.CompletedTask; } }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedOperation); }"),
+            "unjoined"
+        },
+        {
+            "a writer in the receiver of the admission call",
+            InAClass(
+                "INoteSaveChain PlantedChain() { " + AWrite + " return chain; }\n"
+                + "void PlantedM() { _ = PlantedChain().Admit(\"a.md\", () => Task.CompletedTask); }"),
+            "unjoined"
+        },
+        {
+            "a writer in the path argument of the admission call",
+            InAClass(
+                "string PlantedPath() { " + AWrite + " return \"a.md\"; }\n"
+                + "void PlantedM() { _ = chain.Admit(PlantedPath(), () => Task.CompletedTask); }"),
+            "unjoined"
+        },
+        {
+            "a writer lambda in a local passed as the operation and called by the member too",
+            InAClass(
+                "void PlantedM() { Func<Task> operation = () => { " + AWrite + " return Task.CompletedTask; }; "
+                + "_ = chain.Admit(\"a.md\", operation); _ = operation(); }"),
+            "unjoined"
+        },
+        {
+            "a writer lambda called where it is assigned to a local, the local then passed as the operation",
+            InAClass(
+                "void PlantedM() { Func<Task> operation; _ = (operation = () => { " + AWrite + " return Task.CompletedTask; })(); "
+                + "_ = chain.Admit(\"a.md\", operation); }"),
+            "unjoined"
+        },
+        {
+            // Not followed, so it fails closed: the lambda is its maker's.
+            "a writer lambda that reaches the admission call as a parameter",
+            InAClass(
+                "void PlantedRoute(Func<Task> operation) { _ = chain.Admit(\"a.md\", operation); }\n"
+                + "void PlantedM() { PlantedRoute(() => { " + AWrite + " return Task.CompletedTask; }); }"),
+            "unjoined"
+        },
+
         // Joined.
+        {
+            "a writer in each lambda of a conditional passed as the operation",
+            InAClass(
+                "void PlantedM(bool first) { _ = chain.Admit(\"a.md\", first ? () => { " + AWrite
+                + " return Task.CompletedTask; } : () => { " + AWrite + " return Task.FromResult(1); }); }"),
+            "joined"
+        },
+        {
+            "a writer lambda in a local passed as the operation and read nowhere else",
+            InAClass(
+                "void PlantedM() { Func<Task> operation = () => { " + AWrite + " return Task.CompletedTask; }; "
+                + "_ = chain.Admit(\"a.md\", operation); }"),
+            "joined"
+        },
+        {
+            "a writer lambda in a nullable local passed as the operation with a null-forgiving mark",
+            InAClass(
+                "void PlantedM() { Func<Task>? operation = () => { " + AWrite + " return Task.CompletedTask; }; "
+                + "_ = chain.Admit(\"a.md\", operation!); }"),
+            "joined"
+        },
+        {
+            "a writer lambda under a cast, passed as the operation",
+            InAClass(
+                "void PlantedM() { _ = chain.Admit(\"a.md\", (Func<Task>)(() => { " + AWrite + " return Task.CompletedTask; })); }"),
+            "joined"
+        },
+        {
+            "a method handed to the chain as its operation through this",
+            InAClass(
+                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", this.PlantedWrite); }"),
+            "joined"
+        },
         {
             "a writer in a lambda nested inside an admission lambda",
             InAClass(
