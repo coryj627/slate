@@ -233,7 +233,7 @@ jobs:
         id: results
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: a11y-results
+          name: a11y-resultz
         # A missing artifact means the analysis died before producing
         # results; the floor step below reports that in plain words.
         continue-on-error: true
@@ -256,9 +256,6 @@ jobs:
             echo "discarded=true" >> "$GITHUB_OUTPUT"
           fi
           rm -f a11y-results.json a11y-results.sarif
-
-      - name: Probe, results that are not JSON (never merged)
-        run: printf 'garbage' > a11y-results.json
 
       - name: Upload SARIF to GitHub Code Scanning
         if: hashFiles('a11y-results.sarif') != ''
