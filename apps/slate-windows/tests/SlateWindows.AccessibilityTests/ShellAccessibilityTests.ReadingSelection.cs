@@ -9,6 +9,7 @@
 // interactive lane.
 
 using System.Drawing;
+using System.Drawing.Imaging;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Capturing;
 using FlaUI.Core.Input;
@@ -48,7 +49,7 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the switch to reading mode did not land on the reading surface");
             Color highlight = ReadingHighlight();
-            Thread.Sleep(300);
+            WaitForSettledPixels(reading, "the reading surface");
             int before = Measure(reading, highlight).Highlight;
             Assert.True(before < 50, $"premise: {before} pixels are the highlight with nothing selected.");
 
@@ -62,7 +63,7 @@ public sealed partial class ShellAccessibilityTests
                     () => SelectionText(reading).Length > 0,
                     TimeSpan.FromSeconds(5)),
                 "Ctrl+A selected nothing in the reading view");
-            Thread.Sleep(300);
+            WaitForSettledPixels(reading, "the reading surface's selection");
 
             (int selected, double inkContrast) = Measure(reading, highlight);
             Assert.True(
@@ -119,6 +120,125 @@ public sealed partial class ShellAccessibilityTests
         finally
         {
             SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    /// <summary>Waits until <paramref name="surface"/> has stopped changing
+    /// (<see cref="SettledPixels"/>): what a journey does between the state
+    /// that starts a repaint and its one measurement. The frames are the
+    /// surface's part of its own window's pixels (<see cref="OwnPixels"/>),
+    /// so a caret blinking elsewhere in the window, or another window lying
+    /// on top of it, does not decide whether it has settled. With
+    /// <paramref name="onScreen"/> the frames are the screen under the
+    /// surface instead: for a surface in a popup, whose window the main
+    /// window's pixels do not hold, and for one that waits on a popup going
+    /// away from over it.</summary>
+    private static void WaitForSettledPixels(AutomationElement surface, string what, bool onScreen = false)
+    {
+        Func<int[]?> capture;
+        if (onScreen)
+        {
+            capture = () => ScreenPixelsOf(surface);
+        }
+        else
+        {
+            IntPtr window = OwnWindowOf(surface);
+            capture = () => OwnPixelsOf(window, surface);
+        }
+
+        string? why = SettledPixels.Wait(capture);
+        Assert.True(why is null, $"{what} never came to rest: {why}");
+    }
+
+    /// <summary>The window <paramref name="element"/> belongs to: the
+    /// nearest element at or above it that has a window handle. For an
+    /// element in a WPF popup (a menu, a combo box's list) that is still the
+    /// main window: UI Automation hangs a popup's elements under the element
+    /// that opened it and gives the popup's own window no element, so a
+    /// popup's surface is watched on the screen.</summary>
+    private static IntPtr OwnWindowOf(AutomationElement element)
+    {
+        for (AutomationElement? at = element; at is not null; at = at.Parent)
+        {
+            IntPtr handle = at.Properties.NativeWindowHandle.ValueOrDefault;
+            if (handle != IntPtr.Zero)
+            {
+                return handle;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"{DescribeForDiagnosis(element)} is in no window.");
+    }
+
+    /// <summary><paramref name="surface"/>'s part of <paramref name="window"/>'s
+    /// own pixels, or null when the surface cannot be read, lies outside the
+    /// window, or the window has drawn nothing there yet (pure black, which
+    /// no Slate theme paints).</summary>
+    private static int[]? OwnPixelsOf(IntPtr window, AutomationElement surface)
+    {
+        Rectangle bounds;
+        NativePrint.Rect frame;
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            bounds = surface.BoundingRectangle;
+            if (!NativePrint.GetWindowRect(window, out frame))
+            {
+                return null;
+            }
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
+        finally
+        {
+            SetThreadDpiAwarenessContext(previous);
+        }
+
+        (int[] pixels, Size size) = OwnPixels(window);
+        Rectangle part = Rectangle.Intersect(
+            new Rectangle(bounds.X - frame.Left, bounds.Y - frame.Top, bounds.Width, bounds.Height),
+            new Rectangle(Point.Empty, size));
+        if (part.Width <= 0 || part.Height <= 0)
+        {
+            return null;
+        }
+
+        var cropped = new int[part.Width * part.Height];
+        for (var y = 0; y < part.Height; y++)
+        {
+            Array.Copy(pixels, ((part.Y + y) * size.Width) + part.X, cropped, y * part.Width, part.Width);
+        }
+
+        return Array.Exists(cropped, pixel => (pixel & 0xFFFFFF) != 0) ? cropped : null;
+    }
+
+    /// <summary>The screen under <paramref name="surface"/>, one value a
+    /// pixel, or null when the surface cannot be read.</summary>
+    private static int[]? ScreenPixelsOf(AutomationElement surface)
+    {
+        try
+        {
+            using CaptureImage capture = CapturePhysicalPixels(surface);
+            Bitmap bitmap = capture.Bitmap;
+            var pixels = new int[bitmap.Width * bitmap.Height];
+            BitmapData data = bitmap.LockBits(
+                new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            return pixels;
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
         }
     }
 
