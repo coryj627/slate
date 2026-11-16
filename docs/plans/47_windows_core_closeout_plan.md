@@ -959,6 +959,7 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-4 | #1960 | 2026-11-16 (01b851d4) | #1673 | 4 / 3 / 1 / 0 | The deferred find (a math element's drawing template is tied to the first thread that touches it) is taken at once as #1965, because it can redden the unit lane |
 | CB-1 | #1961 | 2026-11-16 (fcc7b5f6) | #1843 (CD2) | 7 / 3 / 3 / 1 | Filed #1959 (the licence-header script rewrites line endings). CB-6's sleep rules list `Support/Heartbeat.cs` and the planted sleeps in `StaThreadTests` |
 | CB-2 | #1962 | 2026-11-16 (b62d5729) | #1624 | 5 / 2 / 2 / 1 | Filed #1963 (a core property test drew the reserved name `aux`), which CB-8's PR takes. Deferred: the pilot workflow's model step inherits the stall rule with no dump variables |
+| CB-8 | #1966 | 2026-11-16 (70e97ba0) | #1900, #1709, #1963 | 1 / 1 / 0 / 0 | `not delivered: VoiceOver pass` on #1954: on the Mac a quarantined row says a 1969 or 1970 modified date (CD41). Filed for Milestone W as CD41 said: #1964, a marked row and the other surfaces that read the sentinel |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -983,3 +984,10 @@ shards red five minutes into the test step, the log named the stalled
 case, and a failed-jobs rerun kept both attempts' evidence side by
 side. Not verified on a lane: a run that reaches the 70-minute blame
 timer, and the routes and reroot families under a planted stall.
+
+CB-8, 2026-11-16. Its spec was written at wave C2's start and corrected
+from its delivery. A red team found no blocker and four notes, all
+taken. Codex approved in one round, run at effort high where the
+protocol asks for xhigh; the PR body records that. It also took #1963
+at the lead's request: the property test's name generator now leaves
+out the 22 stems core refuses.
