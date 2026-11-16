@@ -250,6 +250,9 @@ jobs:
           fi
           rm -f a11y-results.json a11y-results.sarif
 
+      - name: Probe, results that are not JSON (never merged)
+        run: printf 'garbage' > a11y-results.json
+
       - name: Upload SARIF to GitHub Code Scanning
         if: hashFiles('a11y-results.sarif') != ''
         # Pinned to SHA for supply-chain hardening; corresponds to
