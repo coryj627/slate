@@ -278,8 +278,8 @@ enum SlateCommandID {
     /// The graph verbosity switch (#1216, plan 43 PR 4): one palette row per
     /// level of core's vector, each running `setGraphVerbosity(_:)`, and the
     /// ids the View ▸ Graph ▸ Verbosity items run. Tag-true, the closed set
-    /// the Windows chord table records as `windows.graph.setVerbosity*`
-    /// (contract 35 C-9). Chordless, as every graph row but the viewport's.
+    /// the Windows chord table registers under the same three ids (contract 35
+    /// C-9, addendum 2026-10-30). Chordless, as every graph row but the viewport's.
     static let graphSetVerbosityTerse = "slate.graph.setVerbosityTerse"
     static let graphSetVerbosityStandard = "slate.graph.setVerbosityStandard"
     static let graphSetVerbosityVerbose = "slate.graph.setVerbosityVerbose"

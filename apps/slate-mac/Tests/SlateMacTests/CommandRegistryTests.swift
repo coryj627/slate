@@ -348,7 +348,7 @@ extension CommandRegistryTests {
 /// "Graph Verbosity: {Title}", in the graph section, each running
 /// `setGraphVerbosity(_:)` — and the three presets keep the ids, labels and
 /// section the View ▸ Graph items bind to. The rows are the closed set the
-/// Windows chord table records as `windows.graph.setVerbosity*` (C-9).
+/// Windows chord table registers under the same three ids (C-9, addendum 2026-10-30).
 @MainActor
 extension CommandRegistryTests {
     func testTheVerbosityRowsAreRegisteredInTheGraphSectionWithHints() throws {
