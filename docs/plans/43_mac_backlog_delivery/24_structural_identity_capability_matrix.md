@@ -317,9 +317,10 @@ What each machine showed, on FAT32 and on exFAT alike:
 The read-back was measured where production makes it. With the source
 handle, opened under the old spelling, still open after the kernel call,
 the final-path read gave the folder's own listing in all twelve cases on
-the runner's two volumes, and so did a read of the listing itself; both
-gave the same after the handle closed [P-W3]. So the final-path read
-stays in production. The listing read is compiled for tests only
+the runner's two volumes, and so did a read of the listing itself. The
+final-path read was made again after the handle closed and gave the same;
+the listing read was not repeated [P-W3]. So the final-path read stays
+in production. The listing read is compiled for tests only
 (`windows_entry::stored_name_by_listing`), and the gated fact prints
 both beside its own listing on every run. Not measured anywhere: either
 read after a case-only rename that a FAT volume applied, because neither
@@ -332,11 +333,23 @@ refusal still records both spellings as the provider's own echo, so a
 volume that did raise events for a rename it did not keep would start no
 catch-up scan.
 
-A read-back that itself fails (the entry removed or renamed from outside
-between the two calls) returns its own error. The rename is never
-reported as done on a spelling core could not read, and no echo is
-recorded, so the watcher's catch-up brings the index to what the volume
-holds.
+One residual is left, by reading; none of it was run. The read-back
+fails, or answers a spelling other than the old or the requested one:
+an outside rename or removal between the kernel call and the read-back,
+or a share whose server applies the rename in its own case.
+
+- Where the read fails, the rename returns the read's own error. The
+  rename is never reported as done on a spelling core could not read,
+  but the volume may hold the new spelling while the index holds the old
+  one, and the host says the rename failed. No echo is recorded, so by
+  reading the watcher's burst for those paths calls back and asks the
+  host to rescan.
+- Where the read answers a third spelling, the rename is refused in
+  core's sentence with that spelling: for `Note.md` to `note.md` on a
+  server that stores `NOTE.md`, the reader hears "…so NOTE.md was not
+  renamed to note.md." while the entry was renamed. Before this change
+  the same volume gave a reported success with the index on a name the
+  volume did not hold.
 
 One outcome is possible by reading and was seen on no volume: a volume
 that applies a folder's case-only rename and ignores a file's. The
@@ -497,11 +510,15 @@ New-Partition | Format-Volume -FileSystem FAT32` and `exFAT`), with
 `rust-weak-volumes` job on a Namespace runner, Windows Server
 (`cmd /c ver`: `Microsoft Windows [Version 10.0.20348.5761]`), which
 makes a FAT32 and an exFAT VHD with `diskpart` and sets
-`SLATE_WEAK_VOLUME_FAT32` and `…_EXFAT` to a folder on each. Two
+`SLATE_WEAK_VOLUME_FAT32` and `…_EXFAT` to a folder on each. Three
 `workflow_dispatch` runs on scratch branches, with no pull request open.
 
 - **Run 43935566159 (job 133539197985, commit 85649b43): `main`'s
-  product code with the rewritten facts.**
+  product code with the rewritten provider fact and an earlier session
+  fact.** The provider fact's file is byte for byte CB-13's tests-only
+  version, before its by-hand and watcher additions. The session fact was an
+  earlier version: it renamed the folder with `rename_folder`, and its
+  folder had no note.
   `weak_volume_case_only_rename_keeps_the_entry` makes six case-only
   renames per volume through the provider and records each before it
   asserts. On FAT32 and on exFAT all six, the folder included, printed
@@ -514,8 +531,8 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
   ```
 
   `FILE_ID_INFO` did not answer on either volume (error 87). The other
-  five provider facts passed. The session fact showed the index moving
-  while the volume kept its names:
+  five provider facts passed. That earlier session fact showed the index
+  moving while the volume kept its names:
 
   ```
   OBSERVED FAT32 session case-only Note.md -> note.md: REPORTED SUCCESS AND KEPT Note.md (listing ["Docs", "Note.md"], files ["Docs/Inner.md", "note.md"], dirs ["Docs"])
@@ -524,8 +541,14 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
 
   So the runner's volumes ignore the rename as the owner's desktop did
   [P-W2], on a different Windows build.
-  That run is the facts' red phase on a real volume: one of six provider
-  facts and one of three session facts failed, on both volumes.
+  That run is the provider fact's red phase on a real volume, and the
+  earlier session fact's: one of six provider facts and one of three
+  session facts failed, on both volumes.
+- **[PLACEHOLDER, CB-13 run 3: the run id, job id and commit of the run
+  of CB-13's own session fact (`rename_folder_with_note`, with
+  `Docs/Docs.md`) on `main`'s product code, and its `OBSERVED … session
+  case-only …` lines per volume. Until this is filled in, that fact has
+  been seen only green on real volumes.]**
 - **Run 43943403456 (job 133566627722, commit 6061441e): the same facts
   with the read-back in.** Six provider facts and three session facts
   passed. All twelve provider cases were refused, with the listing and

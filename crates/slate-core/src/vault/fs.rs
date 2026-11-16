@@ -319,7 +319,11 @@ impl FsVaultProvider {
     /// caused. Every Slate write into the vault reaches one of the seven
     /// mutators that call this — saves, link rewrites, creates (imports and
     /// attachments too), folders, moves, undo and redo, Trash — so the ledger
-    /// is complete by construction; a failed mutation records nothing.
+    /// is complete by construction; a failed mutation records nothing here.
+    /// One failed mutation records for itself: a case-only rename the volume
+    /// reported as done and did not make (#1727), whose kernel call
+    /// succeeded and may have raised events. The Windows `rename_beneath_root`
+    /// records both spellings where it refuses.
     fn recorded<T>(
         &self,
         relatives: &[&str],
@@ -2788,7 +2792,10 @@ impl FsVaultProvider {
         )
     }
 
-    /// [`VaultProvider::rename`]'s body; the trait method records its echo.
+    /// [`VaultProvider::rename`]'s body; the trait method records the echo
+    /// of a rename that was made. A case-only rename refused after the
+    /// volume reported it as done (#1727) has its echo recorded here, in the
+    /// Windows `rename_beneath_root`.
     fn rename_unrecorded(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let from_path = self.resolve_for_mutation(from)?;
         let to_path = self.resolve_for_mutation(to)?;
