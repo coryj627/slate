@@ -1337,6 +1337,10 @@ public sealed class TestWaitCensus
     // A site's member is the method, local function, constructor or property
     // nearest around it, as StaThreadCensus names one. Two members of one
     // file with one name share a key, and their counts add.
+    //
+    // What a list keyed by member does not see: a site moved, lengthened or
+    // swapped for another inside one member, and which of two rows of one
+    // member a site belongs to. The count is all it holds.
 
     /// <summary>One place a clock rule names: the file (relative to its
     /// project's folder), the member, the line and the source there.</summary>
@@ -1404,6 +1408,10 @@ public sealed class TestWaitCensus
             {
                 faults.Add($"reason: {file} ({member}) says \"{word}\", which is not one of this list's words "
                     + $"({string.Join(", ", words.Order(StringComparer.Ordinal))})");
+            }
+            else if (word == NoWaitWitness && (!reason.Contains(':') || reason[(reason.IndexOf(':') + 1)..].Trim().Length == 0))
+            {
+                faults.Add($"reason: {file} ({member}) says {NoWaitWitness} and names no seam after it");
             }
             if (count < 1)
             {
@@ -1502,13 +1510,15 @@ public sealed class TestWaitCensus
 
         /// <summary>Whether a loop that can end early stands between
         /// <paramref name="node"/> and the function it runs in.</summary>
-        public static bool StandsInAPoll(SyntaxNode node)
+        public static bool StandsInAPoll(SyntaxNode node, bool foreachIsAPoll = true)
         {
             foreach (SyntaxNode ancestor in node.Ancestors())
             {
                 switch (ancestor)
                 {
-                    case WhileStatementSyntax or DoStatementSyntax or CommonForEachStatementSyntax:
+                    case WhileStatementSyntax or DoStatementSyntax:
+                        return true;
+                    case CommonForEachStatementSyntax when foreachIsAPoll:
                         return true;
                     case ForStatementSyntax loop when CanEndEarly(loop):
                         return true;
@@ -1567,6 +1577,14 @@ public sealed class TestWaitCensus
             return expression;
         }
 
+        /// <summary>Whether a node is a lambda handed to a call named
+        /// SpinUntil, PumpUntil, RunUntil, WaitFor or WaitUntil: what a wait
+        /// keeps asking, not what a fact asserts.</summary>
+        public static bool IsAWaitCondition(SyntaxNode node) =>
+            node is AnonymousFunctionExpressionSyntax lambda
+            && TakenBy(Outermost(lambda)) is InvocationExpressionSyntax wait
+            && NameCalled(wait.Expression) is "SpinUntil" or "PumpUntil" or "RunUntil" or "WaitFor" or "WaitUntil";
+
         /// <summary>The call or creation an expression is a direct argument
         /// of, if it is one.</summary>
         public static ExpressionSyntax? TakenBy(ExpressionSyntax argument) =>
@@ -1618,6 +1636,10 @@ public sealed class TestWaitCensus
         string otherRule = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, NoWaitWitness + ": a seam"), holds], UnitDelayReasons));
         Assert.StartsWith("reason: A.cs (Waits)", otherRule);
         Assert.Empty(PinnedListFaults(found, [("A.cs", "Waits", 2, NoWaitWitness + ": a seam"), holds], UnitCeilingReasons));
+
+        string seamless = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, NoWaitWitness + ": "), holds], UnitCeilingReasons));
+        Assert.StartsWith("reason: A.cs (Waits)", seamless);
+        Assert.Contains("seam", seamless);
 
         string empty = Assert.Single(PinnedListFaults(found, [("A.cs", "Waits", 2, "late-arrival"), holds, ("A.cs", "Waits", 0, "quiesce")], UnitDelayReasons));
         Assert.StartsWith("count: A.cs (Waits)", empty);
@@ -1718,6 +1740,16 @@ public sealed class TestWaitCensus
             "Settle: site"
         },
         { "a sleep in a constructor", "P() { Thread.Sleep(5); }", "P: site" },
+        {
+            "a sleep that is a helper's arrow body, a statement of that helper",
+            "void Settle() => Thread.Sleep(200); void F() { Settle(); Assert.True(done); }",
+            "Settle: site"
+        },
+        {
+            "a pump that is a local function's arrow body",
+            "void F() { void Settle() => host.PumpFor(span); Settle(); Assert.True(done); }",
+            "Settle: site"
+        },
         { "a sleep in a property's getter", "bool Settled { get { Thread.Sleep(5); return done; } }", "Settled: site" },
         {
             "a counted for whose only break ends a switch inside it",
@@ -1937,6 +1969,46 @@ public sealed class TestWaitCensus
             "Check: ceiling"
         },
         {
+            "a ceiling written as a relational pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.ElapsedMilliseconds is < 500); }",
+            "F: ceiling"
+        },
+        {
+            "a floor and a ceiling joined in one pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.Elapsed.TotalMilliseconds is >= 0 and < 100); }",
+            "F: ceiling"
+        },
+        {
+            "a refused floor written as a pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.False(clock.ElapsedMilliseconds is > 500); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling on each case of a foreach",
+            "void F(int[] cases) { foreach (int c in cases) { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.Elapsed < limit); } }",
+            "F: ceiling"
+        },
+        {
+            "DateTimeOffset.Now under a ceiling",
+            "void F() { DateTimeOffset began = DateTimeOffset.Now; Drain(); Assert.True(DateTimeOffset.Now - began < limit); }",
+            "F: ceiling"
+        },
+        {
+            "arithmetic on raw timestamps under a ceiling",
+            "void F() { long began = Stopwatch.GetTimestamp(); Drain(); long ticks = Stopwatch.GetTimestamp() - began; Assert.True(ticks < 5_000_000); }",
+            "F: ceiling"
+        },
+        {
+            "a ceiling kept in a bool and asserted by name",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool fast = clock.Elapsed < limit; Assert.True(fast, \"slow\"); }",
+            "F: ceiling"
+        },
+        {
+            "a floor kept in a bool and refused by name",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool slow = clock.Elapsed > limit; Assert.False(slow); }",
+            "F: ceiling"
+        },
+        {
             "a reading from a seam's own Elapsed()",
             "void F() { TimeSpan sinceFirstFrame = x.Elapsed(); Assert.True(sinceFirstFrame < limit); }",
             "F: ceiling"
@@ -2012,6 +2084,32 @@ public sealed class TestWaitCensus
             "clean"
         },
         {
+            "a floor written as a relational pattern",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.ElapsedMilliseconds is >= 100); }",
+            "clean"
+        },
+        {
+            "a negated ceiling pattern, which is a floor",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); Assert.True(clock.ElapsedMilliseconds is not < 500); }",
+            "clean"
+        },
+        {
+            "a floor kept in a bool and asserted by name",
+            "void F() { var clock = Stopwatch.StartNew(); Drain(); bool waited = clock.Elapsed >= limit; Assert.True(waited); }",
+            "clean"
+        },
+        {
+            "a wait's own condition on a reading, asserted to have held",
+            "void F() { long pressed = Stopwatch.GetTimestamp(); long heard = 0; Drain(); "
+            + "Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref heard) > pressed, 2000)); }",
+            "clean"
+        },
+        {
+            "a wait's own condition kept in a bool",
+            "void F() { var clock = Stopwatch.StartNew(); bool quiet = WaitUntil(() => clock.Elapsed < limit); Assert.True(quiet); }",
+            "clean"
+        },
+        {
             "two timed values compared",
             "void F() { var clock = Stopwatch.StartNew(); TimeSpan first = clock.Elapsed; Drain(); TimeSpan second = clock.Elapsed; "
             + "Assert.True(first < second); }",
@@ -2074,9 +2172,11 @@ public sealed class TestWaitCensus
     //     parameter is the fact's own to call, so it is no seam), or an
     //     argument to Task.Run, Task.Factory.StartNew, new Thread(...) or
     //     ThreadPool.QueueUserWorkItem.
-    // A delay that is a lambda's whole body is no statement, so no site. A
-    // lambda handed to anything else, a fact's RunSta(() => { ... }) included,
-    // is searched like a method body.
+    // A delay that is a lambda's whole body is no statement, so no site. The
+    // arrow body of a method, a local function or an accessor is that
+    // member's one statement, and is read like any other. A lambda handed
+    // to anything else, a fact's RunSta(() => { ... }) included, is searched
+    // like a method body.
     //
     // What binds and what is read as spelled. Thread.Sleep, Task.Delay,
     // Task.WhenAny, Task.Run, Task.Factory.StartNew,
@@ -2101,6 +2201,12 @@ public sealed class TestWaitCensus
     //     sites: nothing in the source tells either from a fact's own body
     //     in a lambda. Such an entry says deliberate-hold or
     //     timeout-under-test;
+    //   a delay in a named method handed to a seam as a method group, which
+    //     reads as a site of that method. Its entry says what it holds;
+    //   a hold that is none: a lambda assigned to the fixture's own field or
+    //     property and called by the fact reads as a hold, and so does a
+    //     body the fact awaits at once
+    //     (await Task.Run(() => { Thread.Sleep(500); }));
     //   FlaUI's Wait.UntilInputIsProcessed in the gate, which plan 47 CB-7
     //     weighs.
 
@@ -2155,9 +2261,10 @@ public sealed class TestWaitCensus
     /// <summary>The unit project's fixed delays as they stand, each with the
     /// word that says why it is not a wait on a condition and, after the
     /// colon, what it holds. The census first read 80 sites here, on
-    /// 2026-11-16; the sweep that followed (plan 47 CB-6) left 67: 24
-    /// Thread.Sleep, 8 Task.Delay and 35 fixed pumps. An entry that names a
-    /// missing seam stays until the product has one.</summary>
+    /// 2026-11-16, and the sweep that followed (plan 47 CB-6) left 67. Read
+    /// with arrow-bodied helpers counted, the list held 69 on 2026-11-16:
+    /// 26 Thread.Sleep, 8 Task.Delay and 35 fixed pumps. An entry that names
+    /// a missing seam stays until the product has one.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitFixedDelays =
     [
         ("AccessibilityNotificationDispatcherTests.cs", "AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost", 1,
@@ -2233,6 +2340,8 @@ public sealed class TestWaitCensus
             + "the writer has no seam that says an outcome was applied"),
         ("HotExitTests.cs", "DivergentPeersAreReconciledIntoARecoveredNote", 1, "distinct-timestamp: the two kept entries need different times"),
         ("HotExitTests.cs", "ADamagedRetirementResolvesWithItsReason", 1, "late-arrival: the damaged retirement is not retried"),
+        ("ExitWatchTests.cs", "SlowCleanUp", 1,
+            "timeout-under-test: an exit handler that outlasts ExitWatch.SlowHandler, so the watch names it"),
         ("PanelWorkSchedulerTests.cs", "Run", 1, "deliberate-hold: the compute body is held for the delay its caller asks"),
         ("RescanTests.cs", "TheHistoryPanelReloadsAfterARescan", 1, "quiesce: 20 turns of both queues, then no history load has run"),
         ("RescanTests.cs", "Settle", 2, "quiesce: counted turns of both queues, in one fact's own Settle and in the harness's"),
@@ -2240,6 +2349,8 @@ public sealed class TestWaitCensus
         ("RescanTests.Round5.cs", "TheGraphAndConnectionsProbesAreTwoOperationsAtTheSeam", 1,
             "quiesce: 20 turns of both queues after the graph tab opens"),
         ("SaveChainAdmissionTests.cs", "Settle", 1, "quiesce: 20 pumped turns, for a fact that asserts nothing happened"),
+        ("StaThreadTests.cs", "Late", 1,
+            "deliberate-hold: the runner starts its wait a second late, through the after-start seam"),
         ("Support/ExitWatch.cs", "WatchTheExit", 1, "watchdog: the exit watch notes a process still alive after its wait"),
         ("SyncDiagnosticsAsyncTests.cs", "QuiesceAsync", 1, "quiesce: 10 drains of the panel"),
         ("SyncDiagnosticsLifecycleTests.cs", "ABlockingUiHopNeverStallsTheWatcherTeardown", 1,
@@ -2446,7 +2557,19 @@ public sealed class TestWaitCensus
         {
             return Standing.NotADelay;
         }
-        if (waits.Parent is not ExpressionStatementSyntax statement)
+        // A statement of its own, or the arrow body of a method, a local
+        // function or an accessor, which is that member's one statement. A
+        // lambda's whole body is neither.
+        SyntaxNode? statement = waits.Parent switch
+        {
+            ExpressionStatementSyntax whole => whole,
+            ArrowExpressionClauseSyntax
+            {
+                Parent: BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax or AccessorDeclarationSyntax,
+            } arrow => arrow,
+            _ => null,
+        };
+        if (statement is null)
         {
             return Standing.NotAStatement;
         }
@@ -2458,8 +2581,7 @@ public sealed class TestWaitCensus
         {
             ExpressionSyntax handed = ClockSyntax.Outermost(lambda);
             ExpressionSyntax? taking = ClockSyntax.TakenBy(handed);
-            if (taking is InvocationExpressionSyntax condition
-                && ClockSyntax.NameCalled(condition.Expression) is "SpinUntil" or "PumpUntil" or "RunUntil" or "WaitFor" or "WaitUntil")
+            if (ClockSyntax.IsAWaitCondition(lambda))
             {
                 return Standing.WaitCondition;
             }
@@ -2490,8 +2612,9 @@ public sealed class TestWaitCensus
     // ---- Rule 2: an elapsed ceiling goes through WallClockBudget or is a benchmark ----
     //
     // A reading is a member named Elapsed, ElapsedMilliseconds or
-    // ElapsedTicks, a call to Stopwatch.GetElapsedTime, or the wall clock:
-    // DateTime.UtcNow, DateTime.Now, DateTimeOffset.UtcNow,
+    // ElapsedTicks, a call to Stopwatch.GetElapsedTime or
+    // Stopwatch.GetTimestamp, or the wall clock: DateTime.UtcNow,
+    // DateTime.Now, DateTimeOffset.UtcNow, DateTimeOffset.Now,
     // Environment.TickCount, Environment.TickCount64. A local is timed when
     // its initialiser or any assignment to it holds a reading or a timed
     // local, to a fixed point, over the whole member with its lambdas and
@@ -2505,10 +2628,18 @@ public sealed class TestWaitCensus
     // Assert.False the comparison is turned round: a > b and a >= b are the
     // ceiling, and a < b is a floor. A ! over the whole first argument turns
     // it round once more, under either assertion.
+    // A reading matched against a relational pattern is read the same way:
+    // elapsed is < x is a ceiling, elapsed is >= x a floor, not turns the
+    // pattern round, and is >= 0 and < x is a ceiling. A bool local given
+    // one value and asserted by name is judged by that value. What stands
+    // inside a wait condition (a lambda handed to SpinUntil and its kin) is
+    // what the wait keeps asking, not a ceiling the fact asserts.
     // Not a ceiling: a floor (elapsed >= x; load only lengthens a
     // reading), a comparison of two timed values (an order or a ratio), an
-    // assertion inside a loop rule 1 calls a poll (the wait's bound), and
-    // anything in a member or a class marked [Trait("kind", "benchmark")].
+    // assertion inside a while, a do or a for that can end early (the
+    // wait's bound; a foreach is no wait here, so a ceiling on each case of
+    // a list is a ceiling), and anything in a member or a class marked
+    // [Trait("kind", "benchmark")].
     //
     // What binds and what is read as spelled. Elapsed, ElapsedMilliseconds
     // and ElapsedTicks are read as spelled on any receiver, so a test seam's
@@ -2527,7 +2658,11 @@ public sealed class TestWaitCensus
     //     reading that throws, fails or collects a line for a later
     //     assertion (the gate's reading-list bound is one);
     //   a ! deeper than the whole first argument (done && !(elapsed > x)),
-    //     whose comparison is read in the assertion's own sense.
+    //     whose comparison is read in the assertion's own sense;
+    //   a ceiling inside a while on something other than a wait
+    //     (while (reader.Read())), which is read as a wait's bound;
+    //   a bool assigned more than once, or kept in a field, before it is
+    //     asserted by name.
 
     /// <summary>The unit project's elapsed-time ceilings as they stand. The
     /// census first read 19 here, on 2026-11-16; the sweep that followed
@@ -2621,12 +2756,20 @@ public sealed class TestWaitCensus
                             first = ((ParenthesizedExpressionSyntax)first).Expression;
                         }
                     }
+                    // A condition kept in a bool is judged where it was written.
+                    ExpressionSyntax condition = name == "InRange" ? first : readings.ConditionBehind(first);
                     int count = name == "InRange"
                         ? (readings.Holds(first) ? 1 : 0)
-                        : first.DescendantNodesAndSelf().OfType<BinaryExpressionSyntax>()
-                            .Count(comparison => readings.IsACeiling(comparison, turned));
-                    // An assertion inside a poll is the wait's bound.
-                    if (count == 0 || ClockSyntax.StandsInAPoll(assertion))
+                        : condition.DescendantNodesAndSelf(inner => !ClockSyntax.IsAWaitCondition(inner)).Count(node => node switch
+                        {
+                            BinaryExpressionSyntax comparison => readings.IsACeiling(comparison, turned),
+                            IsPatternExpressionSyntax matched => readings.IsACeiling(matched, turned),
+                            _ => false,
+                        });
+                    // An assertion inside a wait's loop is the wait's bound.
+                    // A foreach is no wait here: a ceiling on each case of a
+                    // list is a ceiling.
+                    if (count == 0 || ClockSyntax.StandsInAPoll(assertion, foreachIsAPoll: false))
                     {
                         continue;
                     }
@@ -2646,6 +2789,7 @@ public sealed class TestWaitCensus
         "ElapsedMilliseconds",
         "ElapsedTicks",
         "GetElapsedTime",
+        "GetTimestamp",
         "UtcNow",
         "Now",
         "TickCount",
@@ -2660,6 +2804,7 @@ public sealed class TestWaitCensus
         private readonly SemanticModel _model;
         private readonly HashSet<ILocalSymbol> _timed = new(SymbolEqualityComparer.Default);
         private readonly HashSet<string> _timedNames = new(StringComparer.Ordinal);
+        private readonly List<(ILocalSymbol Local, ExpressionSyntax Value)> _flows = [];
 
         public Readings(MemberDeclarationSyntax member, SemanticModel model)
         {
@@ -2668,7 +2813,7 @@ public sealed class TestWaitCensus
 
             // A local is timed when its initialiser or any assignment to it
             // holds a reading or a timed local, to a fixed point.
-            List<(ILocalSymbol Local, ExpressionSyntax Value)> flows = [];
+            List<(ILocalSymbol Local, ExpressionSyntax Value)> flows = _flows;
             foreach (SyntaxNode node in member.DescendantNodes())
             {
                 switch (node)
@@ -2745,6 +2890,48 @@ public sealed class TestWaitCensus
             return Holds(under) && !Holds(limit);
         }
 
+        /// <summary>The same for a reading matched against a relational
+        /// pattern: <c>elapsed is &lt; x</c> is a ceiling and
+        /// <c>elapsed is &gt;= x</c> a floor, <c>not</c> turns the pattern
+        /// round, and a ceiling joined to a floor (<c>is &gt;= 0 and &lt; x</c>)
+        /// is a ceiling.</summary>
+        public bool IsACeiling(IsPatternExpressionSyntax matched, bool turned) =>
+            Holds(matched.Expression) && IsACeiling(matched.Pattern, turned);
+
+        private static bool IsACeiling(PatternSyntax pattern, bool turned) => pattern switch
+        {
+            ParenthesizedPatternSyntax inner => IsACeiling(inner.Pattern, turned),
+            UnaryPatternSyntax negated => IsACeiling(negated.Pattern, !turned),
+            BinaryPatternSyntax both => IsACeiling(both.Left, turned) || IsACeiling(both.Right, turned),
+            RelationalPatternSyntax relational => relational.OperatorToken.Kind() switch
+            {
+                SyntaxKind.LessThanToken or SyntaxKind.LessThanEqualsToken => !turned,
+                SyntaxKind.GreaterThanToken or SyntaxKind.GreaterThanEqualsToken => turned,
+                _ => false,
+            },
+            _ => false,
+        };
+
+        /// <summary>The condition an assertion's first argument stands for:
+        /// a bool local given one value (<c>bool fast = elapsed &lt; x;</c>)
+        /// is judged by that value's expression. A bool assigned more than
+        /// once is not followed.</summary>
+        public ExpressionSyntax ConditionBehind(ExpressionSyntax first)
+        {
+            if (first is IdentifierNameSyntax name
+                && _model.GetSymbolInfo(name).Symbol is ILocalSymbol { Type.SpecialType: SpecialType.System_Boolean } local)
+            {
+                ExpressionSyntax[] values = [.. _flows
+                    .Where(flow => SymbolEqualityComparer.Default.Equals(flow.Local, local))
+                    .Select(flow => flow.Value)];
+                if (values.Length == 1)
+                {
+                    return values[0];
+                }
+            }
+            return first;
+        }
+
         /// <summary>Whether an expression holds a reading or a timed local.
         /// What a <c>WallClockBudget</c> call is handed carries nothing: the
         /// call answers a warm median.</summary>
@@ -2798,7 +2985,9 @@ public sealed class TestWaitCensus
                         "GetElapsedTime" => ClockSyntax.IsMemberOf(access, _model, "Stopwatch", "System.Diagnostics"),
                         "UtcNow" => ClockSyntax.IsMemberOf(access, _model, "DateTime", "System")
                             || ClockSyntax.IsMemberOf(access, _model, "DateTimeOffset", "System"),
-                        "Now" => ClockSyntax.IsMemberOf(access, _model, "DateTime", "System"),
+                        "GetTimestamp" => ClockSyntax.IsMemberOf(access, _model, "Stopwatch", "System.Diagnostics"),
+                        "Now" => ClockSyntax.IsMemberOf(access, _model, "DateTime", "System")
+                            || ClockSyntax.IsMemberOf(access, _model, "DateTimeOffset", "System"),
                         "TickCount" or "TickCount64" => ClockSyntax.IsMemberOf(access, _model, "Environment", "System"),
                         _ => false,
                     };
