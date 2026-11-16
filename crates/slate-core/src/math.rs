@@ -610,14 +610,50 @@ fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> 
     static CHAINED: std::sync::Once = std::sync::Once::new();
     CHAINED.call_once(|| {
         let previous = std::panic::take_hook();
+        #[cfg(test)]
+        hook_chain_pause(HookChainStep::PreviousTaken);
         libmathcat::init_panic_handler();
         let mathcat = std::panic::take_hook();
+        #[cfg(test)]
+        hook_chain_pause(HookChainStep::MathcatTaken);
         std::panic::set_hook(Box::new(move |info| {
             mathcat(info);
             previous(info);
         }));
     });
     libmathcat::set_rules_dir("Rules")
+}
+
+/// #1979, test builds only: a place inside the `Once` body of
+/// [`set_rules_dir_chaining_panic_hook`] where the process panic hook is
+/// neither the one from before the first MathCAT init nor the finished
+/// chain.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookChainStep {
+    /// The previous hook is taken and MathCAT has not installed its own, so
+    /// the process hook is the default one. MathCAT takes whatever is there
+    /// next and never calls it.
+    PreviousTaken,
+    /// MathCAT's hook is taken and the chain is not installed, so the process
+    /// hook is the default one again. The chain replaces whatever is there
+    /// next.
+    MathcatTaken,
+}
+
+/// #1979, test builds only: what the first MathCAT init of the process runs
+/// at each [`HookChainStep`], on the thread that runs the init. One fact sets
+/// it, in a process where it runs alone, to hold the init there. Unset, a
+/// step does nothing.
+#[cfg(test)]
+static HOOK_CHAIN_PAUSE: std::sync::OnceLock<Box<dyn Fn(HookChainStep) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn hook_chain_pause(step: HookChainStep) {
+    if let Some(pause) = HOOK_CHAIN_PAUSE.get() {
+        pause(step);
+    }
 }
 
 /// Largest MathML payload MathCAT 0.7 accepts. Bigger inputs fail
@@ -1373,6 +1409,127 @@ mod tests {
         assert!(
             seen.iter().any(|message| message == &marker),
             "the hook installed before MathCAT never saw the panic: {seen:?}"
+        );
+    }
+
+    /// Puts a hook over the current one that records each panic's message
+    /// and then calls the hook it replaced, as
+    /// [`a_panic_after_mathcat_initializes_still_reaches_the_previous_hook`]
+    /// does. Returns what the hook has recorded.
+    fn swap_in_a_recorder() -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+        use std::sync::{Arc, Mutex, PoisonError};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorder = Arc::clone(&seen);
+        let current = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_string())
+                })
+                .unwrap_or_default();
+            recorder
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(message);
+            current(info);
+        }));
+        seen
+    }
+
+    /// The full name of [`a_hook_swap_inside_the_first_mathcat_init_child`],
+    /// for the process that runs it alone.
+    const SWAP_INSIDE_INIT_CHILD: &str =
+        "math::tests::a_hook_swap_inside_the_first_mathcat_init_child";
+
+    /// #1979: a fact that swaps a recording hook in while another thread runs
+    /// the first MathCAT init of the process keeps its recorder. The `Once`
+    /// and the panic hook are the process's, so the init can be held between
+    /// its hook calls only where nothing has run it yet: this runs
+    /// [`a_hook_swap_inside_the_first_mathcat_init_child`] alone in a fresh
+    /// copy of the test binary and reports its result. That holds under
+    /// nextest (a process per fact) and in a shared `cargo test` process
+    /// alike.
+    #[test]
+    fn a_hook_swap_inside_the_first_mathcat_init_keeps_its_recorder() {
+        crate::session::run_alone(SWAP_INSIDE_INIT_CHILD);
+    }
+
+    /// The body of
+    /// [`a_hook_swap_inside_the_first_mathcat_init_keeps_its_recorder`], which
+    /// starts the one process this runs in. Anywhere else (a test runner's
+    /// own process, nextest's or a shared `cargo test` one) it returns at
+    /// once and proves nothing.
+    ///
+    /// A render on another thread starts the first MathCAT init of the
+    /// process, and the init is held at each [`HookChainStep`] in turn. At
+    /// each, a recorder is swapped in, and the init is let go. A panic after
+    /// the render must reach both recorders.
+    #[test]
+    fn a_hook_swap_inside_the_first_mathcat_init_child() {
+        use std::sync::{Mutex, PoisonError, mpsc};
+        if !crate::session::is_alone_child(SWAP_INSIDE_INIT_CHILD) {
+            return;
+        }
+        enum Event {
+            Held(HookChainStep),
+            Rendered,
+        }
+        let (events, reached) = mpsc::channel::<Event>();
+        let (let_go, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let holding = events.clone();
+        let armed = HOOK_CHAIN_PAUSE.set(Box::new(move |step| {
+            // An end that is gone means the fact is over: the init goes on.
+            let _ = holding.send(Event::Held(step));
+            let _ = held.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        }));
+        assert!(armed.is_ok(), "one fact sets the pause, once per process");
+        let render = thread::spawn(move || {
+            let raw = RawMathBlock {
+                source: "x^2".to_string(),
+                display_style: MathDisplayStyle::Block,
+                line: 1,
+                byte_offset: 0,
+            };
+            let block = render_math(&raw, MathPrefs::default());
+            let _ = events.send(Event::Rendered);
+            block
+        });
+        let mut recorders = Vec::new();
+        for step in [HookChainStep::PreviousTaken, HookChainStep::MathcatTaken] {
+            // The render answers only after the init, so `Rendered` first
+            // means the init never stopped here.
+            match reached.recv().expect("the render thread is alive") {
+                Event::Held(at) => assert_eq!(at, step),
+                Event::Rendered => panic!("the first MathCAT init was not held at {step:?}"),
+            }
+            recorders.push((step, swap_in_a_recorder()));
+            let_go.send(()).expect("the init is held at the pause");
+        }
+        let block = render.join().expect("the render thread joined");
+        assert!(!block.mathml.is_empty(), "the render must reach MathCAT");
+        let marker = "slate-1979: a panic after a hook swap inside the first init";
+        let outcome = thread::spawn(move || std::panic::catch_unwind(|| panic!("{marker}"))).join();
+        assert!(
+            matches!(outcome, Ok(Err(_))),
+            "the probe panic is caught on its own thread"
+        );
+        let lost: Vec<HookChainStep> = recorders
+            .iter()
+            .filter(|(_, seen)| {
+                let seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
+                !seen.iter().any(|message| message == marker)
+            })
+            .map(|(step, _)| *step)
+            .collect();
+        assert!(
+            lost.is_empty(),
+            "a recorder swapped in inside the first MathCAT init never saw the panic: {lost:?}"
         );
     }
 
