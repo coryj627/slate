@@ -340,6 +340,43 @@ public sealed class TestWaitCensus
             "3a"
         },
         {
+            "disposes a gate a using statement declares, with a worker on it",
+            "sealed class P : IDisposable { public void Dispose() { using (var gate = new ManualResetEventSlim(false)) "
+            + "{ _ = Task.Run(() => gate.Wait()); gate.Set(); } } }",
+            "3a"
+        },
+        {
+            "disposes the second gate of a using statement",
+            "sealed class P : IDisposable { public void Dispose() { using (ManualResetEventSlim first = new(false), second = new(false)) "
+            + "{ _ = Task.Run(() => second.Wait()); second.Set(); } } }",
+            "3a"
+        },
+        {
+            "disposes a private gate a getter answers",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _gate = new(false); "
+            + "public ManualResetEventSlim Gate => _gate; public void Dispose() { _gate.Dispose(); } } "
+            + "sealed class User { void Use(P p) => p.Gate.Wait(); }",
+            "3a"
+        },
+        {
+            "disposes a private gate a method returns",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _gate = new(false); "
+            + "public ManualResetEventSlim Park() { return _gate; } public void Dispose() { _gate.Dispose(); } }",
+            "3a"
+        },
+        {
+            "disposes a private gate an iterator yields",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _gate = new(false); "
+            + "public IEnumerable<ManualResetEventSlim> Gates() { yield return _gate; } public void Dispose() { _gate.Dispose(); } }",
+            "3a"
+        },
+        {
+            "disposes a private gate it put in a new array",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _gate = new(false); "
+            + "public ManualResetEventSlim[] Gates() { ManualResetEventSlim[] all = [_gate]; return all; } public void Dispose() { _gate.Dispose(); } }",
+            "3a"
+        },
+        {
             "disposes through a null check and a pattern variable",
             "sealed class P : IDisposable { private ManualResetEventSlim? _gate = new(false); "
             + "ManualResetEventSlim? Held() => _gate; public void Park() => _gate?.Wait(); "
@@ -393,6 +430,30 @@ public sealed class TestWaitCensus
             + "public P(VaultSession session) { _session = session; } public Task Work = Task.CompletedTask; "
             + "public void Dispose() { _first.Set(); PumpedDispatcher.PumpUntilDrained(Work); _second.Set(); _session.Dispose(); } }",
             "3b"
+        },
+        {
+            "a second session after a release the first drain did not cover",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _first = new(false); "
+            + "private readonly ManualResetEventSlim _second = new(false); private readonly VaultSession _a; private readonly VaultSession _b; "
+            + "public P(VaultSession a, VaultSession b) { _a = a; _b = b; } public Task Work = Task.CompletedTask; "
+            + "public void Dispose() { _first.Set(); PumpedDispatcher.PumpUntilDrained(Work); _a.Dispose(); _second.Set(); _b.Dispose(); } }",
+            "3b"
+        },
+        {
+            "a second session inside a nested fixture, after an undrained release",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _first = new(false); "
+            + "private readonly ManualResetEventSlim _second = new(false); private readonly VaultSession _a; private readonly Inner _inner; "
+            + "public P(VaultSession a, VaultSession b) { _a = a; _inner = new Inner(b); } public Task Work = Task.CompletedTask; "
+            + "public void Dispose() { _first.Set(); PumpedDispatcher.PumpUntilDrained(Work); _a.Dispose(); _second.Set(); _inner.Dispose(); } "
+            + "private sealed class Inner(VaultSession session) : IDisposable { public void Dispose() => session.Dispose(); } }",
+            "3b"
+        },
+        {
+            "two sessions after one drained release",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _release = new(false); private readonly VaultSession _a; private readonly VaultSession _b; "
+            + "public P(VaultSession a, VaultSession b) { _a = a; _b = b; } public Task Work = Task.CompletedTask; "
+            + "public void Dispose() { _release.Set(); PumpedDispatcher.PumpUntilDrained(Work); _a.Dispose(); _b.Dispose(); } }",
+            "clean"
         },
         {
             "a session disposed through a cast",
@@ -526,7 +587,9 @@ public sealed class TestWaitCensus
 
     /// <summary>Rule 3b: every <c>Dispose</c> or <c>DisposeAsync</c> that
     /// releases a gate and later tears a session down with no drain between
-    /// the last release before that teardown and the teardown itself.</summary>
+    /// the last release before that teardown and the teardown itself. Every
+    /// teardown in the method is checked, each against the release nearest
+    /// before it.</summary>
     internal static IReadOnlyList<Violation> ReleasesWithNoDrainBeforeTheSession(
         CSharpCompilation compilation, IReadOnlyList<SyntaxTree> sources, Func<SyntaxTree, string> fileOf)
     {
@@ -535,54 +598,34 @@ public sealed class TestWaitCensus
         foreach ((INamedTypeSymbol type, MethodDeclarationSyntax method) in teardowns.DisposeMethods(sources))
         {
             IReadOnlyList<Step> steps = teardowns.StepsOf(method);
-            int first = IndexOfFirst(steps, 0, StepKind.Release);
-            if (first < 0)
-            {
-                continue;
-            }
-            int gone = IndexOfFirst(steps, first + 1, StepKind.Teardown);
-            if (gone < 0)
-            {
-                continue;
-            }
-            // Every release wants a drain after it: the last one before the
-            // session decides.
-            int released = first;
-            for (int index = first + 1; index < gone; index++)
-            {
-                if (steps[index].Kind == StepKind.Release)
-                {
-                    released = index;
-                }
-            }
+            // Every release wants a drain after it and before the next
+            // session that goes: walking in order, a release clears the
+            // drain, a drain sets it, and a teardown asks for it.
+            int released = -1;
             bool drained = false;
-            for (int index = released + 1; index < gone; index++)
+            for (int index = 0; index < steps.Count; index++)
             {
-                drained |= steps[index].Kind == StepKind.Drain;
-            }
-            if (!drained)
-            {
-                found.Add(new Violation(
-                    fileOf(method.SyntaxTree),
-                    type.Name,
-                    LineOf(steps[gone].Site),
-                    $"{method.Identifier.ValueText} releases {steps[released].Text} (line {LineOf(steps[released].Site)}) "
-                    + $"and then tears the session down through {steps[gone].Text}, with no drain between the two"));
+                switch (steps[index].Kind)
+                {
+                    case StepKind.Release:
+                        released = index;
+                        drained = false;
+                        break;
+                    case StepKind.Drain:
+                        drained = true;
+                        break;
+                    case StepKind.Teardown when released >= 0 && !drained:
+                        found.Add(new Violation(
+                            fileOf(method.SyntaxTree),
+                            type.Name,
+                            LineOf(steps[index].Site),
+                            $"{method.Identifier.ValueText} releases {steps[released].Text} (line {LineOf(steps[released].Site)}) "
+                            + $"and then tears the session down through {steps[index].Text}, with no drain between the two"));
+                        break;
+                }
             }
         }
         return found;
-    }
-
-    private static int IndexOfFirst(IReadOnlyList<Step> steps, int from, StepKind kind)
-    {
-        for (int index = from; index < steps.Count; index++)
-        {
-            if (steps[index].Kind == kind)
-            {
-                return index;
-            }
-        }
-        return -1;
     }
 
     private static int LineOf(SyntaxNode node) => node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
@@ -717,9 +760,17 @@ public sealed class TestWaitCensus
                         Classify(name, name);
                         break;
                     case UsingStatementSyntax used:
-                        foreach (ExpressionSyntax resource in ResourcesOf(used))
+                        if (used.Expression is { } resource)
                         {
                             Disposed(used, used.Span.End, resource, TypeReachedOn(resource, model), null, "using " + resource);
+                        }
+                        foreach (VariableDeclaratorSyntax variable in used.Declaration?.Variables ?? [])
+                        {
+                            if (variable.Initializer?.Value is { } value
+                                && model.GetDeclaredSymbol(variable) is ILocalSymbol local)
+                            {
+                                Disposed(used, used.Span.End, value, local.Type, local, "using " + variable.Identifier.ValueText);
+                            }
                         }
                         break;
                     case LocalDeclarationStatementSyntax { UsingKeyword.RawKind: not 0 } declared:
@@ -880,21 +931,6 @@ public sealed class TestWaitCensus
             .OfType<InvocationExpressionSyntax>()
             .Any(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" });
 
-        private static IEnumerable<ExpressionSyntax> ResourcesOf(UsingStatementSyntax used)
-        {
-            if (used.Expression is { } expression)
-            {
-                yield return expression;
-            }
-            foreach (VariableDeclaratorSyntax variable in used.Declaration?.Variables ?? [])
-            {
-                if (variable.Initializer?.Value is { } value)
-                {
-                    yield return value;
-                }
-            }
-        }
-
         /// <summary>The expression a member is reached on: <c>a</c> in
         /// <c>a.B</c> and in <c>a?.B</c>; nothing for a bare name.</summary>
         private static ExpressionSyntax? ReceiverOf(ExpressionSyntax callee) => callee switch
@@ -1041,6 +1077,25 @@ public sealed class TestWaitCensus
                                 yield return handed;
                                 break;
                             }
+                        // A gate a member answers (a getter, a method's
+                        // return, a yield) or puts in a new collection goes
+                        // to whoever asks.
+                        case ReturnStatementSyntax { Expression: { } returned }
+                            when handedOn && IsGate(TypeReachedOn(returned, model)):
+                            yield return IdentityOf(returned, model, 0);
+                            break;
+                        case YieldStatementSyntax { Expression: { } yielded }
+                            when handedOn && IsGate(TypeReachedOn(yielded, model)):
+                            yield return IdentityOf(yielded, model, 0);
+                            break;
+                        case ArrowExpressionClauseSyntax { Expression: { } answered }
+                            when handedOn && IsGate(TypeReachedOn(answered, model)):
+                            yield return IdentityOf(answered, model, 0);
+                            break;
+                        case ExpressionSyntax { Parent: InitializerExpressionSyntax or ExpressionElementSyntax } element
+                            when handedOn && IsGate(TypeReachedOn(element, model)):
+                            yield return IdentityOf(element, model, 0);
+                            break;
                         case AssignmentExpressionSyntax { Right: { } assigned } assignment
                             when handedOn
                                 && IsGate(TypeReachedOn(assigned, model))
