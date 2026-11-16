@@ -182,13 +182,16 @@ internal sealed class WorkspaceSaveCoordinator : INoteSaveChain
         });
     }
 
-    /// <summary>Plan 47 CB-9a: <see cref="Admit(string, Func{SaveTicket, Task})"/>
-    /// for an operation that needs no ticket (<see cref="INoteSaveChain"/>).</summary>
-    public Task<bool> Admit(string path, Func<Task> operation)
+    /// <summary>Plan 47 CB-9a: <see cref="Admit"/> for an operation that
+    /// needs no ticket, as <see cref="INoteSaveChain"/> offers it. Explicit:
+    /// the coordinator's own members stay internal.</summary>
+    Task<bool> INoteSaveChain.Admit(string path, Func<Task> operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
         return Admit(path, _ => operation());
     }
+
+    void INoteSaveChain.TrackWorker(Task worker) => TrackWorker(worker);
 
     private static void Finish(SaveTicket ticket, Task done)
     {
@@ -276,7 +279,7 @@ internal sealed class WorkspaceSaveCoordinator : INoteSaveChain
 
     /// <summary>Track a save's worker until it finishes, whatever the
     /// dispatcher does with its publication.</summary>
-    public void TrackWorker(Task worker)
+    internal void TrackWorker(Task worker)
     {
         lock (_workersGate)
         {

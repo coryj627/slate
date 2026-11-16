@@ -14,19 +14,25 @@
 //
 // How a call is shown admitted. The shell's calls between members are read
 // once. A node is a method, a constructor, an accessor, or the initialiser of
-// a field or a property. A lambda or a local function belongs to the member
-// that holds it, except an admission argument, which is a node of its own. An
+// a field or a property. A lambda or a local function belongs to the
+// innermost admission argument or member that holds it, and an admission
+// argument is a node of its own, admitted whatever holds it. Nodes and edges
+// are named by the symbol's original definition, so a generic method is one
+// node however it is constructed, and a reduced extension call is taken back
+// to the method it calls. An
 // admission call is a bound call to WorkspaceSaveCoordinator.Admit or Enqueue,
 // to INoteSaveChain.Admit, or to WorkspaceViewModel.AdmitPropertyWrite, and
 // its admission argument is the argument for `operation` (`start` for
 // Enqueue), never `abandoned`. An edge from A to B is a call of B, a creation
-// through B, or a reference to B as a method group, in A. A method that
-// implements or overrides another is called wherever that one is called, and
-// one that implements or overrides a member the shell does not declare is
-// called from outside. The admitted set is the least set that holds every
-// admission argument and every node that has a caller and whose callers are
-// all in the set. A call is admitted when either holds:
-//   (A) its node is in the admitted set; or
+// through B, or a reference to B as a method group, in A. The admitted set is
+// the least set that holds every admission argument and every node that has a
+// caller and whose callers are all in the set. A call is admitted when either
+// holds:
+//   (A) its node is in the admitted set. A node that implements an interface
+//       member (implicitly or explicitly), that overrides, or that is virtual
+//       or abstract is never admitted this way: a call through the interface
+//       or the base binds to another symbol, so the graph does not hold all
+//       of its callers; or
 //   (B) it stands in a lambda assigned to a local, and every read of that
 //       local in the member stands in an admission argument (the property
 //       write's shape: the write is built first and handed to the admitted
@@ -34,12 +40,19 @@
 //
 // What the census does not prove. That the path admitted is the path
 // written. That the worker is handed to TrackWorker. That the ticket settles
-// on every path. That a route re-checks its gates at its turn. A call through
-// a delegate kept in a field or a property, through a property or an
-// operator, or through any interface the shell does not declare: a call
-// inside an accessor has no caller here, so it is never admitted, and the
-// rule names it. The facts in SaveChainAdmissionTests prove the rest for each
-// route.
+// on every path. That a route re-checks its gates at its turn. The facts in
+// SaveChainAdmissionTests answer those four for each route. The rest have no
+// fact and are for review. A call through a delegate kept in a field or a
+// property, or through any interface other than INoteSaveChain. That a lambda
+// or a method group created inside an admitted node runs before the operation
+// ends: one kept and run later counts as admitted and is not. For rule 3,
+// that the answer of HasAdmittedSaveFor gates the reload, or that it was
+// asked about the path that is reloaded: the rule sees only a call standing
+// before the reload. That a method does what its name says: every table
+// classifies by name. A write made through reflection or a dynamic call, and
+// a direct System.IO write to a vault note, are not seen. A call inside an
+// accessor or an operator has no caller here, so it is never admitted, and
+// the rule names it.
 
 using System.Reflection;
 using Microsoft.CodeAnalysis;
@@ -90,19 +103,25 @@ public sealed class SaveChainAdmissionCensus
 
     /// <summary>The session methods that create a file only where none is:
     /// core refuses an occupied path, so the create is its own check.</summary>
-    private static readonly string[] ExclusiveCreators =
+    /// <remarks><c>Admitted</c> marks the creators held to the chain all the
+    /// same (CD5(c)): a deleted file's recovery to its own path. A call to
+    /// one is a site of rule 2. It is a flag on these rows and no table of
+    /// its own, so the admitted creators are creators by construction.</remarks>
+    private static readonly (string Name, bool Admitted)[] ExclusiveCreatorRows =
     [
-        "CreateExclusive",
-        "CreateExclusiveReporting",
-        "CreateExclusiveBytes",
-        "RecoverDeletedFile",
-        "RecoverDeletedFileAs",
+        ("CreateExclusive", false),
+        ("CreateExclusiveReporting", false),
+        ("CreateExclusiveBytes", false),
+        ("RecoverDeletedFile", true),
+        ("RecoverDeletedFileAs", false),
     ];
 
-    /// <summary>The creators held to the chain all the same (CD5(c)): a
-    /// deleted file's recovery to its own path. A call to one is a site of
-    /// rule 2.</summary>
-    private static readonly string[] AdmittedCreators = ["RecoverDeletedFile"];
+    private static readonly string[] ExclusiveCreators = [.. ExclusiveCreatorRows.Select(row => row.Name)];
+
+    /// <summary>The rows of <see cref="ExclusiveCreatorRows"/> that carry the
+    /// flag.</summary>
+    private static readonly string[] AdmittedCreators =
+        [.. ExclusiveCreatorRows.Where(row => row.Admitted).Select(row => row.Name)];
 
     /// <summary>Every other session method the shell calls, in groups with
     /// one reason a group: none rewrites the bytes of a note an editor can
@@ -314,8 +333,10 @@ public sealed class SaveChainAdmissionCensus
 
         public List<(string Caller, string Callee)> Edges { get; } = [];
 
-        /// <summary>A method, and what it implements or overrides.</summary>
-        public Dictionary<string, HashSet<string>> Stands { get; } = new(StringComparer.Ordinal);
+        /// <summary>The methods a call can reach through another symbol: one
+        /// that implements an interface member, overrides, or is virtual or
+        /// abstract. Rule (A) never admits them.</summary>
+        public HashSet<string> Open { get; } = new(StringComparer.Ordinal);
 
         public List<Violation> Unbound { get; } = [];
 
@@ -332,23 +353,11 @@ public sealed class SaveChainAdmissionCensus
                 joined.Edges.AddRange(part.Edges);
                 joined.Unbound.AddRange(part.Unbound);
                 joined.ChainImplementers.AddRange(part.ChainImplementers);
-                foreach ((string method, HashSet<string> stands) in part.Stands)
-                {
-                    if (!joined.Stands.TryGetValue(method, out HashSet<string>? known))
-                    {
-                        known = new HashSet<string>(StringComparer.Ordinal);
-                        joined.Stands[method] = known;
-                    }
-                    known.UnionWith(stands);
-                }
+                joined.Open.UnionWith(part.Open);
             }
             return joined;
         }
     }
-
-    /// <summary>A caller the shell does not declare: a member reached
-    /// through an interface or a base type of the framework.</summary>
-    private const string Outside = "(outside the shell)";
 
     private const string ShellNamespace = "SlateWindows";
 
@@ -402,6 +411,7 @@ public sealed class SaveChainAdmissionCensus
         HashSet<string> typesRead)
     {
         private readonly Dictionary<SyntaxNode, string> _admissionArguments = [];
+        private readonly HashSet<ITypeSymbol> _sessionTypes = SessionTypes(model.Compilation);
 
         public void Read(SyntaxNode root)
         {
@@ -525,7 +535,9 @@ public sealed class SaveChainAdmissionCensus
                 {
                     reading.Edges.Add((NodeOf(node), Id(method)));
                 }
-                if (IsSession(method.ContainingType) && sessionMethods.Contains(method.Name))
+                if (method.ContainingType is { } owner
+                    && _sessionTypes.Contains(owner.OriginalDefinition)
+                    && sessionMethods.Contains(method.Name))
                 {
                     reading.Sites.Add(SiteAt(SiteKind.Session, node, method.Name));
                 }
@@ -655,8 +667,8 @@ public sealed class SaveChainAdmissionCensus
             _ => null,
         };
 
-        /// <summary>What each method of a type implements or overrides, and
-        /// whether the type is a save chain.</summary>
+        /// <summary>Which methods of a type a call can reach through another
+        /// symbol, and whether the type is a save chain.</summary>
         private void ReadType(BaseTypeDeclarationSyntax declaration)
         {
             if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !typesRead.Add(Id(type)))
@@ -669,30 +681,14 @@ public sealed class SaveChainAdmissionCensus
             }
             foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
             {
-                var stands = new List<IMethodSymbol>();
-                if (method.OverriddenMethod is { } overridden)
+                if (method.IsVirtual
+                    || method.IsAbstract
+                    || method.IsOverride
+                    || !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty
+                    || type.AllInterfaces.Any(contract => contract.GetMembers(method.Name).OfType<IMethodSymbol>().Any(member =>
+                        SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method))))
                 {
-                    stands.Add(overridden);
-                }
-                stands.AddRange(method.ExplicitInterfaceImplementations);
-                foreach (INamedTypeSymbol contract in type.AllInterfaces)
-                {
-                    stands.AddRange(contract.GetMembers(method.Name).OfType<IMethodSymbol>().Where(member =>
-                        SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method)));
-                }
-                if (stands.Count == 0)
-                {
-                    continue;
-                }
-                string id = Id(method);
-                if (!reading.Stands.TryGetValue(id, out HashSet<string>? known))
-                {
-                    known = new HashSet<string>(StringComparer.Ordinal);
-                    reading.Stands[id] = known;
-                }
-                foreach (IMethodSymbol stood in stands)
-                {
-                    _ = known.Add(stood.OriginalDefinition.DeclaringSyntaxReferences.IsDefaultOrEmpty ? Outside : Id(stood));
+                    _ = reading.Open.Add(Id(method));
                 }
             }
         }
@@ -733,9 +729,15 @@ public sealed class SaveChainAdmissionCensus
     private static bool IsShellType(ITypeSymbol? type, string name) =>
         type is not null && type.Name == name && type.ContainingNamespace?.ToDisplayString() == ShellNamespace;
 
-    private static bool IsSession(ITypeSymbol? type) =>
-        type is { Name: "VaultSession" or "IVaultSession" }
-        && type.ContainingNamespace?.ToDisplayString() == typeof(VaultSession).Namespace;
+    /// <summary>The binding's <c>VaultSession</c> and every interface it
+    /// implements, as <paramref name="compilation"/> binds them: a call
+    /// through one of the interfaces is the same call.</summary>
+    private static HashSet<ITypeSymbol> SessionTypes(Compilation compilation)
+    {
+        INamedTypeSymbol session = compilation.GetTypeByMetadataName(typeof(VaultSession).FullName!)
+            ?? throw new InvalidOperationException("The binding's VaultSession does not bind in the shell compilation.");
+        return new HashSet<ITypeSymbol>([session, .. session.AllInterfaces], SymbolEqualityComparer.Default);
+    }
 
     /// <summary>A symbol's name as every compilation of the same source
     /// spells it.</summary>
@@ -750,8 +752,9 @@ public sealed class SaveChainAdmissionCensus
     }
 
     /// <summary>The least set that holds every admission argument and every
-    /// node that has a caller and whose callers are all in the set. A call
-    /// a member makes to itself is no caller.</summary>
+    /// node that has a caller, whose callers are all in the set, and that no
+    /// call can reach through another symbol (<see cref="Reading.Open"/>). A
+    /// call a member makes to itself is no caller.</summary>
     internal static HashSet<string> AdmittedNodes(Reading reading)
     {
         var direct = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -771,43 +774,17 @@ public sealed class SaveChainAdmissionCensus
                 _ = CallersOf(callee).Add(caller);
             }
         }
-        // A method is called wherever what it implements or overrides is
-        // called, at any depth.
-        var callersOf = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (string node in direct.Keys.Concat(reading.Stands.Keys).Distinct(StringComparer.Ordinal).ToArray())
-        {
-            var all = new HashSet<string>(CallersOf(node), StringComparer.Ordinal);
-            var seen = new HashSet<string>(StringComparer.Ordinal) { node };
-            var pending = new Queue<string>(reading.Stands.GetValueOrDefault(node) ?? []);
-            while (pending.TryDequeue(out string? stood))
-            {
-                if (!seen.Add(stood))
-                {
-                    continue;
-                }
-                if (stood == Outside)
-                {
-                    _ = all.Add(Outside);
-                    continue;
-                }
-                all.UnionWith(direct.GetValueOrDefault(stood) ?? []);
-                foreach (string further in reading.Stands.GetValueOrDefault(stood) ?? [])
-                {
-                    pending.Enqueue(further);
-                }
-            }
-            _ = all.Remove(node);
-            callersOf[node] = all;
-        }
-
         var admitted = new HashSet<string>(reading.AdmissionNodes, StringComparer.Ordinal);
         bool grew = true;
         while (grew)
         {
             grew = false;
-            foreach ((string node, HashSet<string> callers) in callersOf)
+            foreach ((string node, HashSet<string> callers) in direct)
             {
-                if (callers.Count > 0 && !admitted.Contains(node) && callers.All(admitted.Contains))
+                if (callers.Count > 0
+                    && !reading.Open.Contains(node)
+                    && !admitted.Contains(node)
+                    && callers.All(admitted.Contains))
                 {
                     _ = admitted.Add(node);
                     grew = true;
@@ -1012,7 +989,7 @@ public sealed class SaveChainAdmissionCensus
             outside.SequenceEqual(proved),
             $"The shell calls these exclusive creators outside the save chain: [{string.Join(", ", outside)}]. "
             + $"{CreateClassFact} has rows for: [{string.Join(", ", proved)}]. Add a row for a new creator (the create "
-            + "first and the tab's save first), or admit it and name it in AdmittedCreators.");
+            + "first and the tab's save first), or admit it and flag its row in ExclusiveCreatorRows.");
     }
 
     // ---- Fail closed, and the floors --------------------------------------
@@ -1231,7 +1208,62 @@ public sealed class SaveChainAdmissionCensus
             "unjoined"
         },
 
+        {
+            "a writer in a method that implements an interface member, with every caller admitted",
+            PlantedPrelude
+            + "internal interface IPlantedWriter { void Write(); }\n"
+            + "internal sealed class Planted(VaultSession session, WorkspaceSaveCoordinator saves) : IPlantedWriter\n{\n"
+            + "public void Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { Write(); return Task.CompletedTask; }); }\n}\n",
+            "unjoined"
+        },
+        {
+            "a writer in a method that implements an interface member explicitly, with every caller admitted",
+            PlantedPrelude
+            + "internal interface IPlantedWriter { void Write(); }\n"
+            + "internal sealed class Planted(VaultSession session, WorkspaceSaveCoordinator saves) : IPlantedWriter\n{\n"
+            + "void IPlantedWriter.Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { ((IPlantedWriter)this).Write(); return Task.CompletedTask; }); }\n}\n",
+            "unjoined"
+        },
+        {
+            "a writer in an override, with every caller admitted",
+            PlantedPrelude
+            + "internal abstract class PlantedBase { public abstract void Write(); }\n"
+            + "internal sealed class Planted(VaultSession session, WorkspaceSaveCoordinator saves) : PlantedBase\n{\n"
+            + "public override void Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { Write(); return Task.CompletedTask; }); }\n}\n",
+            "unjoined"
+        },
+        {
+            "a writer in a virtual method, with every caller admitted",
+            PlantedPrelude
+            + "internal class Planted(VaultSession session, WorkspaceSaveCoordinator saves)\n{\n"
+            + "public virtual void Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { Write(); return Task.CompletedTask; }); }\n}\n",
+            "unjoined"
+        },
+        {
+            "a writer called through IVaultSession in a plain method",
+            InAClass("void PlantedM(IVaultSession through) { _ = through.SaveText(\"a.md\", \"text\", null); }"),
+            "unjoined"
+        },
+
         // Joined.
+        {
+            "a writer in a lambda nested inside an admission lambda",
+            InAClass(
+                "void PlantedM() { _ = saves.Admit(\"a.md\", ticket => { Action inner = () => { " + AWrite + " }; inner(); "
+                + "return Task.CompletedTask; }); }"),
+            "joined"
+        },
+        {
+            "a writer in an admission lambda that an unadmitted lambda holds",
+            InAClass(
+                "void PlantedM() { Action outer = () => { _ = saves.Admit(\"a.md\", ticket => { " + AWrite
+                + " return Task.CompletedTask; }); }; outer(); }"),
+            "joined"
+        },
         {
             "a writer in an Admit lambda",
             InAClass("void PlantedM() { _ = saves.Admit(\"a.md\", ticket => { " + AWrite + " return Task.CompletedTask; }); }"),
