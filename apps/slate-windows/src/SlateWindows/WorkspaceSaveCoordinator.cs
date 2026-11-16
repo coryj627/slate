@@ -424,6 +424,36 @@ internal interface INoteSaveChain
     void TrackWorker(Task worker);
 }
 
+/// <summary>
+/// Plan 47 CB-9a (#1889; codex round 1): the publication of an admitted
+/// operation, as steps. Every step is attempted, in order, even when an
+/// earlier one throws, so a sentence that throws (an announcer, an alert)
+/// skips no state step beside it: a tab's reload or reconcile, a row's
+/// answer, a list's reload. The operation ends either way, and a save queued
+/// behind it then starts against whatever the publication left. The first
+/// fault is rethrown once every step has run, for the operation to end
+/// carrying it.
+/// </summary>
+internal static class AdmittedPublication
+{
+    internal static void RunEvery(params Action[] steps)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? first = null;
+        foreach (Action step in steps)
+        {
+            try
+            {
+                step();
+            }
+            catch (Exception exception)
+            {
+                first ??= System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+        first?.Throw();
+    }
+}
+
 /// <summary>#1280: a wait that keeps the dispatcher pumping — a nested
 /// frame that ends when the task completes. Everything the dispatcher can
 /// run may run inside it, so a caller re-reads what it acts on afterwards

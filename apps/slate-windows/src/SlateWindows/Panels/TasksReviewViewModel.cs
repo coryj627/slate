@@ -734,7 +734,27 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// shutdown skipped its body, or it faulted outside its catch).</summary>
     private Task DirectToggleAtItsTurn(ReviewTaskRowViewModel row)
     {
-        if (IsShutDown || RoutedThroughAnOpenTab(row))
+        if (IsShutDown)
+        {
+            return Task.CompletedTask;
+        }
+        bool routed;
+        try
+        {
+            routed = RoutedThroughAnOpenTab(row);
+        }
+        catch
+        {
+            // The open-tab route speaks a refusal and then answers, so a
+            // sentence that throws leaves its answer unknown (codex round
+            // 1's class). The stale refusal is the one answer with a step
+            // after its sentence, the rows' reload, so an unknown answer
+            // reloads them: at worst a reload nobody needed. The fault
+            // still ends the operation.
+            LoadFirstPage();
+            throw;
+        }
+        if (routed)
         {
             return Task.CompletedTask;
         }
@@ -898,16 +918,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // The file changed since the snapshot: refusing is
             // the point — the stale ordinal could have toggled
             // a different task. Reload so the rows are true.
-            _announce(new A11yEvent.TaskToggleConflict(fileName));
-            LoadFirstPage();
+            // Both are attempted (plan 47 CB-9a; codex round 1): a
+            // sentence that throws does not skip the rows' reload.
+            AdmittedPublication.RunEvery(
+                () => _announce(new A11yEvent.TaskToggleConflict(fileName)),
+                () => LoadFirstPage());
             return;
         }
         if (failure is not null)
         {
-            _announce(new A11yEvent.TaskToggleFailed(
-                vaultFailure is not null
-                    ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
-                    : failure));
             // The write may have landed before the failure
             // (round 12: the real window leaves the index
             // uncommitted). Hash moved → certain; hash
@@ -920,18 +939,30 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 && !string.Equals(
                     postFailureDiskHash, expectedHash, StringComparison.Ordinal);
             bool outcomeUnknown = postFailureDiskHash is null;
-            if (diskMoved || outcomeUnknown)
-            {
-                bool repaired = _repairs.TryRepairNow(path, out _);
-                if (diskMoved)
+            // Every step is attempted (plan 47 CB-9a; codex round 1): a
+            // sentence that throws, here or in the tab the workspace
+            // reconciles, skips neither the repair nor the rows' reload.
+            bool repaired = false;
+            AdmittedPublication.RunEvery(
+                () => _announce(new A11yEvent.TaskToggleFailed(
+                    vaultFailure is not null
+                        ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
+                        : failure)),
+                () => repaired = (diskMoved || outcomeUnknown) && _repairs.TryRepairNow(path, out _),
+                () =>
                 {
-                    DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
-                }
-                if (repaired)
+                    if (diskMoved)
+                    {
+                        DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
+                    }
+                },
+                () =>
                 {
-                    LoadFirstPage();
-                }
-            }
+                    if (repaired)
+                    {
+                        LoadFirstPage();
+                    }
+                });
             return;
         }
         // The NoOpenTab route was decided BEFORE this write
@@ -940,11 +971,17 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         // the workspace re-checks now that the disk moved. It runs
         // inside the toggle's admitted operation, so a save queued
         // behind the toggle starts against a tab already reconciled.
-        DiskWriteLanded?.Invoke(path, report!.NewContentHash);
+        //
         // The editor precedent (mac is silent on success);
         // task.Completed is the state before the toggle.
-        _announce(new A11yEvent.TaskToggled(!task.Completed));
-        LoadFirstPage();
+        //
+        // Every step is attempted (codex round 1): a sentence that
+        // throws, the toggle's own or the one a tab that opened is
+        // told, skips neither the other nor the rows' reload.
+        AdmittedPublication.RunEvery(
+            () => DiskWriteLanded?.Invoke(path, report!.NewContentHash),
+            () => _announce(new A11yEvent.TaskToggled(!task.Completed)),
+            () => LoadFirstPage());
     }
 
     /// <summary>Workspace seam (adversarial round 3): fired on the UI

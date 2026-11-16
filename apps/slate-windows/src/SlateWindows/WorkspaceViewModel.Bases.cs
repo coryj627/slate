@@ -2099,11 +2099,19 @@ internal sealed partial class WorkspaceViewModel
                             _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure)));
                             return;
                         }
-                        if (report is not null)
-                        {
-                            _ = tab.RebaselineAfterPropertyWrite(report.NewContentHash, _announce);
-                        }
-                        CompleteBasesWrite(document, row, column, value);
+                        // Both steps are attempted (plan 47 CB-9a; codex
+                        // round 1): the sentence a tab dirty by now is
+                        // told may throw, and the base's refresh, which
+                        // carries the cell's own sentence, still runs.
+                        AdmittedPublication.RunEvery(
+                            () =>
+                            {
+                                if (report is not null)
+                                {
+                                    _ = tab.RebaselineAfterPropertyWrite(report.NewContentHash, _announce);
+                                }
+                            },
+                            () => CompleteBasesWrite(document, row, column, value));
                     },
                     done)));
             _saves.TrackWorker(worker);
@@ -2204,8 +2212,14 @@ internal sealed partial class WorkspaceViewModel
             // tab that opened on the note while the write ran loaded the
             // bytes from before it. A clean one is rebaselined to the
             // written bytes; a dirty one is marked stale and told so.
-            _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
-            CompleteBasesWrite(document, row, column, value);
+            //
+            // Each tab and the base's refresh are steps of their own
+            // (codex round 1): the sentence a dirty tab is told may
+            // throw, and it then skips neither another tab on the note
+            // nor the refresh, which carries the cell's own sentence.
+            Action[] tabs = [.. TabsShowing(path).Select<(WorkspaceTabViewModel Tab, int Identity), Action>(
+                showing => () => _ = showing.Tab.RebaselineAfterPropertyWrite(report.NewContentHash, _announce))];
+            AdmittedPublication.RunEvery([.. tabs, () => CompleteBasesWrite(document, row, column, value)]);
         }));
     }
 

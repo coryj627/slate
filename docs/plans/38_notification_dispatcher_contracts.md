@@ -823,7 +823,8 @@ reworded.
   recover of the same path finds the deleted file's history gone, so core
   answers `InvalidArgument` and the reader hears the existing "Can't
   restore" alert. On success the recover reloads every clean Markdown tab
-  on the path inside its ticket, keeping a save queued on it. The `Created`
+  on the path inside its ticket, before it speaks, keeping a save queued
+  on it. The `Created`
   event's re-seat now runs under the recover's ticket, so it keeps the
   buffer and only marks the tab back on disk; without the reload a tab
   that was missing would keep its old document and file identity over a
@@ -868,7 +869,12 @@ reworded.
   properties header's own writes go through that worker with no backstop
   yet, which is a deferred find. A backstop speaks the route's same
   failure, in a `try`, and the recover's answers its row that nothing
-  happened. A publication that throws still ends the operation too.
+  happened. A publication that throws still ends the operation too, and a
+  sentence that throws in one skips no state step of it: the tabs' reload
+  or reconcile, the row's answer, the Deleted list's or the rows' reload
+  and the task index's repair are each attempted, and the operation ends
+  carrying the first fault. The open-note Bases cell write's completion is
+  held to the same.
 - **A failed recover ends its operation before its alert.** The "Can't
   restore" alert is a modal box. A close that arrives inside its loop
   settles the saves from a frame above the box, and that settle could not
@@ -903,7 +909,8 @@ reworded.
 
 Facts: `SaveChainAdmissionTests` (the rescan fact; eighteen for the recover,
 the cell edit and the toggle; the create-class theory; seven for faults,
-teardown and the settle; the Restore As and repair-lease theories) and
+teardown and the settle; four for a sentence that throws in a
+publication; the Restore As and repair-lease theories) and
 `SaveChainAdmissionCensus`.
 
 ## Hot-exit amendment, Mac (plan 43 PR 29, #1525, 2026-11-13)

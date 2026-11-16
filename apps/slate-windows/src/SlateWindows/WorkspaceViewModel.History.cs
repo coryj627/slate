@@ -693,8 +693,6 @@ internal sealed partial class WorkspaceViewModel
             completed(false, true);
             return;
         }
-        _announce(new A11yEvent.RestoredFile(
-            System.IO.Path.GetFileName(path)));
         // Announce + refresh ONLY (the mac shape): recovery
         // deliberately does NOT navigate — selection stays in
         // the Deleted list so recovering several files in a
@@ -711,17 +709,25 @@ internal sealed partial class WorkspaceViewModel
         // file that was created anew. A dirty tab is not reloaded: its
         // buffer outranks the recovered bytes, as in the template's
         // sweep, and a save queued on a clean tab is kept.
-        foreach (WorkspaceTabViewModel samePath in Groups
+        //
+        // Every step is attempted, the tabs' reload first (codex round
+        // 1). A save queued behind the recover starts when the ticket
+        // ends, against the tab as this publication left it, so the
+        // reload never waits behind a sentence; and a sentence that
+        // throws skips neither the Deleted list's reload nor the row's
+        // answer.
+        WorkspaceTabViewModel[] clean = [.. Groups
             .SelectMany(group => group.Tabs)
             .Where(candidate => candidate.IsMarkdown
                 && string.Equals(candidate.Path, path, StringComparison.Ordinal)
-                && !candidate.IsDirty)
-            .ToArray())
-        {
-            samePath.ReloadKeepingQueuedSave();
-        }
-        History.ReloadDeletedFilesIfLoaded();
-        completed(true, false);
+                && !candidate.IsDirty)];
+        AdmittedPublication.RunEvery(
+        [
+            .. clean.Select<WorkspaceTabViewModel, Action>(samePath => () => samePath.ReloadKeepingQueuedSave()),
+            () => _announce(new A11yEvent.RestoredFile(System.IO.Path.GetFileName(path))),
+            () => History.ReloadDeletedFilesIfLoaded(),
+            () => completed(true, false),
+        ]);
     }
 
     /// <summary>Recover a deleted file to a caller-chosen destination
