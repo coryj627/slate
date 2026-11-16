@@ -429,6 +429,35 @@ public sealed class ReadingFocusTests
         Assert.False(ShowsLoadingNotice(surface), $"the release took the post from {poster} for its projection's");
     });
 
+    /// <summary>#1673: the fixture's teardown waits for a fetch it let go
+    /// before that fetch reached its gate. The fetch stands in the fixture's
+    /// seam, short of the gate, until the teardown says it is waiting for
+    /// the released work or says its session is gone; the witness counts a
+    /// fetch let through only by the second. No sleep decides either
+    /// outcome: a teardown with no drain can only let the fetch run late.</summary>
+    [Fact]
+    public void DisposingTheFixtureWaitsForAFetchThatHasNotReachedItsGate() => RunSta(() =>
+    {
+        var host = new Host();
+        TeardownWitness teardown = host.Teardown;
+        try
+        {
+            host.Initialize(readingMode: true);
+            ReadingSurface surface = host.ShownSurface();
+            host.HoldFetchesAtTeardown();
+            _ = host.BindProjectionInFlight(surface);
+            teardown.WaitUntilEntered();
+        }
+        finally
+        {
+            host.Dispose();
+        }
+
+        teardown.WaitUntilPassed();
+        Assert.Equal(0, teardown.LateRuns);
+        Assert.True(teardown.DrainedBeforeGone, "the fixture's session went before the fetches it released had ended");
+    });
+
     /// <summary>#1323: a transient read error retries the fetch after a
     /// delay, and the retry can resume on another pool thread. The release
     /// follows the fetch, not the thread, and returns with the projection
@@ -3857,7 +3886,9 @@ public sealed class ReadingFocusTests
         private int _transientAttempts;
         private int _transientFailures;
         private bool _fetchFails;
+        private bool _holdFetchesAtTeardown;
         private ReadingContentViewModel? _inFlight;
+        private readonly List<ReadingContentViewModel> _projections = [];
         private readonly TaskCompletionSource _canvasLoadGate =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private CanvasDocumentViewModel? _loadingCanvas;
@@ -3879,6 +3910,10 @@ public sealed class ReadingFocusTests
         /// <summary>The status bar's stand-in (the ring's StatusBar).</summary>
         public TextBox Status { get; private set; } = null!;
         public List<A11yEvent> Announced { get; } = [];
+
+        /// <summary>#1673: what this fixture's teardown did for the fetches
+        /// it let go.</summary>
+        public TeardownWitness Teardown { get; } = new();
         private FrameworkElement? _heldSurface;
 
         /// <summary>A reading-mode note, a canvas or the graph as the active
@@ -4403,6 +4438,12 @@ public sealed class ReadingFocusTests
             {
                 FetchFaultForTests = () =>
                 {
+                    if (Volatile.Read(ref _holdFetchesAtTeardown) && Teardown.Hold())
+                    {
+                        // Let through only after the session went: the fetch
+                        // stops here, before it calls a disposed session.
+                        return new InvalidOperationException("The fetch ran after the fixture's session was gone.");
+                    }
                     ManualResetEventSlim gate = GateForTheFetch();
                     _ = gate.Wait(TimeSpan.FromSeconds(30));
                     // #1323: this fetch's flow, which carries it on to its one
@@ -4421,11 +4462,18 @@ public sealed class ReadingFocusTests
                         : null;
                 },
             };
+            _projections.Add(_inFlight);
             surface.Model = _inFlight;
             PumpedDispatcher.Drain();
             Assert.True(ShowsLoadingNotice(surface));
             return _inFlight;
         }
+
+        /// <summary>#1673: a fetch started from now on stands in the seam
+        /// before it reaches its gate, so the gate stays unreached, until
+        /// this fixture's teardown waits for it or its session is gone
+        /// (<see cref="Teardown"/>).</summary>
+        public void HoldFetchesAtTeardown() => Volatile.Write(ref _holdFetchesAtTeardown, true);
 
         /// <summary>Hold the in-flight model's NEXT fetch at a gate of its own,
         /// failing it terminally when asked.</summary>
@@ -4694,6 +4742,16 @@ public sealed class ReadingFocusTests
                     }
                 }
                 CleanUp(() => _inFlight?.Dispose());
+                // #1673: every fetch let go above ends before the session
+                // goes, one that had not reached its gate included. The loop
+                // only opens that fetch's gate; the pool has yet to run the
+                // seam as far as the gate, and then the fetch itself. The
+                // model's own drain covers its fetch and its diagram stage,
+                // and a decode in flight may take its whole tolerance (#1949).
+                CleanUp(() => Teardown.DrainBeforeTheSessionGoes(
+                    () => Task.WhenAll(_projections.Select(model => model.WhenRefreshWorkDrained())),
+                    UnhurriedSvgDecodes.LandingWait()));
+                CleanUp(PumpedDispatcher.Drain);
                 if (_loadingCanvas is { } canvas)
                 {
                     // Retire the parked load before the session goes: its
@@ -4719,11 +4777,11 @@ public sealed class ReadingFocusTests
                 CleanUp(() => Workspace?.Dispose());
                 CleanUp(() => Shell?.Close());
                 CleanUp(() => Session?.Dispose());
+                Teardown.SessionGone();
                 CleanUp(_fixture.Dispose);
-                foreach (ManualResetEventSlim gate in _fetchGates)
-                {
-                    CleanUp(gate.Dispose);
-                }
+                // The fetch gates are left to the collector: a fetch that
+                // outlived the drain's bound must not wake on, or reach, a
+                // disposed event.
             }
             finally { CanvasSurfaceView.ShellOverlayIsOpen = _priorOverlayProbe; }
             if (failures.Count > 0) { throw new AggregateException("Reading focus fixture cleanup failed.", failures); }
