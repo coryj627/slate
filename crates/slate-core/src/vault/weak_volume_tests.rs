@@ -565,11 +565,12 @@ fn observe_the_read_back_by_hand(kind: VolumeKind, scratch: &Scratch, breaches: 
 
 /// What the vault watcher hears around a case-only rename on this volume
 /// (plan 47 CB-13): a volume that reports the rename as done and keeps the
-/// old spelling may still raise change events for it. A refusal records both
-/// spellings as the provider's own echo, so such events start no catch-up
-/// scan. This records what arrives; it asserts nothing. A file made before
-/// the rename shows the watch is live, and one made after it bounds the
-/// wait: every event the rename raised is ahead of that file's own.
+/// old spelling may still raise change events for it. A refusal records no
+/// echo, so such events would start one catch-up scan; a rename that lands
+/// records both spellings. This records what arrives and what the ledger
+/// holds; it asserts nothing. A file made before the rename shows the watch
+/// is live, and one made after it bounds the wait: every event the rename
+/// raised is ahead of that file's own.
 fn observe_the_watcher_around_a_rename(kind: VolumeKind, scratch: &Scratch) {
     use super::provider::{FileEvent, FileEventSink};
     use std::sync::{Arc, Condvar, Mutex};

@@ -405,15 +405,15 @@ fn a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes() {
         "{error:?}"
     );
 
-    // A refusal follows a kernel call that reported success, and a volume
-    // may raise change events for a rename it did not keep. Both spellings
-    // are recorded as this provider's own echo, so those events start no
-    // catch-up scan. (The seam makes no kernel call; what the real volumes
-    // raise is the gated weak-volume fact's record.)
+    // A refused rename is a failed mutation and records no echo: neither
+    // spelling is this provider's own afterwards. An echo recorded here
+    // would take the entry's current state for Slate's own, and an outside
+    // edit whose event was still pending would be dropped with it
+    // (`watch::an_outside_edit_pending_at_a_refused_case_only_rename_still_calls_back`).
     for path in renamed_names {
         assert!(
-            session.provider.is_own_echo(path),
-            "{path} is not this provider's echo after the refusal"
+            !session.provider.is_own_echo(path),
+            "{path} was recorded as this provider's echo by a refusal"
         );
     }
 

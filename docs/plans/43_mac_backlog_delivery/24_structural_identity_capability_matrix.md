@@ -295,8 +295,9 @@ of the handle's final path). Where the stored name is not the requested
 one, the rename fails with core's sentence
 (`a11y::case_only_rename_refused`): "This drive keeps the capitalization
 a file was created with, so Note.md was not renamed to note.md." The
-index row, the links and the report do not move, and both spellings are
-recorded as the provider's own echo. The rule names no file system: it
+index row, the links and the report do not move, and no echo is
+recorded: a failed mutation records nothing, as before. The rule names
+no file system: it
 refuses wherever the volume kept the old spelling, and NTFS and SMB over
 NTFS, which apply the rename, read back the requested name and are
 unchanged. A folder gets the same check and the same sentence with its
@@ -328,10 +329,30 @@ volume on either machine applied one.
 
 The vault watcher heard nothing for an ignored rename: on both volumes
 no event named `Watch.md` or `watch.md` between a file made before the
-rename and one made after it, whose events both arrived [P-W3]. A
-refusal still records both spellings as the provider's own echo, so a
-volume that did raise events for a rename it did not keep would start no
-catch-up scan.
+rename and one made after it, whose events both arrived [P-W3].
+
+A refusal records no echo. The first version of this change recorded
+both spellings as the provider's own echo at the refusal, so that a
+volume raising events for a rename it did not keep would start no
+catch-up scan. That call was withdrawn on review. An echo holds the
+entry's size and modification time as they are when it is recorded, so
+an outside edit to the note whose event was still pending was taken for
+Slate's own and dropped, and nothing re-read the note. With the real
+watcher on NTFS and core's seam standing in for the volume:
+
+```
+A control, outside edit alone: callbacks 1; decisions [CalledBack { paths: ["Note.md"], overflowed: false }]
+B outside edit, then the refused case-only rename (echo recorded): callbacks 0; decisions [DroppedAsEchoes { paths: ["Note.md"] }]
+```
+
+Both measured volumes raise no event for the ignored rename, so the echo
+bought nothing there. Without it, a volume that did raise such events
+would get one catch-up rescan for each refused rename, which finds
+nothing changed; that is by reading and was not run. The gated fact
+keeps printing what the watcher hears around a case-only rename, so a
+volume that ever raises events is seen. The fact
+`watch::an_outside_edit_pending_at_a_refused_case_only_rename_still_calls_back`
+pins the outside edit's callback on a fake clock.
 
 One residual is left, by reading; none of it was run. The read-back
 fails, or answers a spelling other than the old or the requested one:
@@ -587,6 +608,12 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
   OBSERVED Fat32 watcher around a case-only rename (refused: This drive keeps the capitalization a file was created with, so Watch.md was not renamed to watch.md.): events for the renamed name []; the provider's own echo: Watch.md true, watch.md true; the later file's event arrived: true
   ```
 
+  That line says `true, true` for the provider's own echo because the
+  run was made on the commit that recorded an echo at the refusal. That
+  call was withdrawn (§6). A refusal now records nothing, so the line
+  reads `false, false`; on these volumes that is first seen in the
+  pull request's own lane run.
+
   The session fact, through `rename_file` and `rename_folder_with_note`,
   on both volumes:
 
@@ -598,7 +625,8 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
   P-W1 (Windows 11 10.0.26300, 2026-11-16) the fact passed with the
   read-back in: all six cases `renamed`, each read equal to the listing
   with the source handle open and after it closed, the watcher hearing
-  the rename's events with both spellings the provider's own echo, and
+  the rename's events with both spellings the provider's own echo (the
+  rename landed there, and a rename that lands records its echo), and
   the identity inverse renaming its alias.
 
 ## Appendix B. Sources

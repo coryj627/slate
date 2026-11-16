@@ -319,11 +319,7 @@ impl FsVaultProvider {
     /// caused. Every Slate write into the vault reaches one of the seven
     /// mutators that call this — saves, link rewrites, creates (imports and
     /// attachments too), folders, moves, undo and redo, Trash — so the ledger
-    /// is complete by construction; a failed mutation records nothing here.
-    /// One failed mutation records for itself: a case-only rename the volume
-    /// reported as done and did not make (#1727), whose kernel call
-    /// succeeded and may have raised events. The Windows `rename_beneath_root`
-    /// records both spellings where it refuses.
+    /// is complete by construction; a failed mutation records nothing.
     fn recorded<T>(
         &self,
         relatives: &[&str],
@@ -680,11 +676,6 @@ impl FsVaultProvider {
             let stored = windows_entry::stored_name(destination_parent.handle(), to_leaf)
                 .map_err(|error| destination_parent.failed(error))?;
             if stored.as_os_str() != to_leaf {
-                // The kernel call reported success, so the volume may have
-                // raised change events for both spellings. They are this
-                // provider's own: recorded as echoes, they start no catch-up
-                // scan of an outside change that did not happen.
-                self.record_echoes(&[from, to]);
                 return Err(VaultError::InvalidArgument {
                     message: crate::a11y::case_only_rename_refused(
                         &stored.to_string_lossy(),
@@ -2792,10 +2783,7 @@ impl FsVaultProvider {
         )
     }
 
-    /// [`VaultProvider::rename`]'s body; the trait method records the echo
-    /// of a rename that was made. A case-only rename refused after the
-    /// volume reported it as done (#1727) has its echo recorded here, in the
-    /// Windows `rename_beneath_root`.
+    /// [`VaultProvider::rename`]'s body; the trait method records its echo.
     fn rename_unrecorded(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let from_path = self.resolve_for_mutation(from)?;
         let to_path = self.resolve_for_mutation(to)?;

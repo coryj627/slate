@@ -9,9 +9,7 @@
 //! `FsVaultProvider` records an expected post-state after every mutation it
 //! completes — present with the size, mtime, ctime and kind it stats right
 //! after the write, or absent — for the mutated paths and the folders above
-//! them. It records the same for one mutation it refuses: a case-only rename
-//! the volume reported as done and did not make (#1727). At burst close the
-//! watch coalescer asks
+//! them. At burst close the watch coalescer asks
 //! [`VaultProvider::is_own_echo`](super::VaultProvider::is_own_echo) for each
 //! touched path, and a path whose current state equals its newest entry is
 //! Slate's own echo. The test is "this provider wrote it", never "the index
