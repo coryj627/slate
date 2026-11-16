@@ -2138,25 +2138,26 @@ public sealed class TestWaitCensus
     };
 
     /// <summary>A floor for each name a project calls, sites or not. Counted
-    /// on 2026-11-16: 67 Thread.Sleep, 46 Task.Delay, 35 PumpFor and 8
-    /// RunDispatcherFor in the unit project, and 51 Thread.Sleep in the
-    /// gate's, which calls none of the other three. Fewer means the rule
-    /// lost sight of that name, not that the project waits less.</summary>
+    /// on 2026-11-16, after the unit project's sweep (plan 47 CB-6): 64
+    /// Thread.Sleep, 42 Task.Delay, 33 PumpFor and 5 RunDispatcherFor in the
+    /// unit project, and 51 Thread.Sleep in the gate's, which calls none of
+    /// the other three. Fewer means the rule lost sight of that name, not
+    /// that the project waits less.</summary>
     private static readonly (string Project, string Name, int Calls)[] DelayCallsAtLeast =
     [
-        (UnitProject, "Thread.Sleep", 62),
-        (UnitProject, "Task.Delay", 42),
-        (UnitProject, "PumpFor", 31),
+        (UnitProject, "Thread.Sleep", 60),
+        (UnitProject, "Task.Delay", 39),
+        (UnitProject, "PumpFor", 30),
         (UnitProject, "RunDispatcherFor", 4),
         (GateProject, "Thread.Sleep", 46),
     ];
 
     /// <summary>The unit project's fixed delays as they stand, each with the
     /// word that says why it is not a wait on a condition and, after the
-    /// colon, what it holds. 80 sites on 2026-11-16: 27 Thread.Sleep, 13
-    /// Task.Delay and 40 fixed pumps. An entry that says a wait "would do"
-    /// is a positive wait written as a fixed delay, kept under the nearest
-    /// word until it is one.</summary>
+    /// colon, what it holds. The census first read 80 sites here, on
+    /// 2026-11-16; the sweep that followed (plan 47 CB-6) left 67: 24
+    /// Thread.Sleep, 8 Task.Delay and 35 fixed pumps. An entry that names a
+    /// missing seam stays until the product has one.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitFixedDelays =
     [
         ("AccessibilityNotificationDispatcherTests.cs", "AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost", 1,
@@ -2528,11 +2529,11 @@ public sealed class TestWaitCensus
     //   a ! deeper than the whole first argument (done && !(elapsed > x)),
     //     whose comparison is read in the assertion's own sense.
 
-    /// <summary>The unit project's elapsed-time ceilings as they stand: 19
-    /// on 2026-11-16. "None shown yet" is followed by the state that would
-    /// show the call did not wait; the ceiling leaves this list when a
-    /// mutation has been seen red at that state. "Nearest word" marks a
-    /// budget or an oracle the word does not describe.</summary>
+    /// <summary>The unit project's elapsed-time ceilings as they stand. The
+    /// census first read 19 here, on 2026-11-16; the sweep that followed
+    /// (plan 47 CB-6) gave 17 of them a witness or a warm median and left
+    /// these two, each kept because no seam observes what the call really
+    /// waited. Its entry names the seam that would.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitElapsedCeilings =
     [
         ("HeldVaultStoreFileTests.cs", "ASaveThatStaysHeldFailsAfterAShortWaitAndLeavesTheFile", 1,
