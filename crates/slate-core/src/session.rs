@@ -8733,6 +8733,8 @@ impl VaultSession {
         // error: nothing is read through a spelling that did not
         // resolve, and the marker stays (contract 32 I7).
         let mut bound: Vec<(String, Vec<i64>)> = Vec::new();
+        let mut bound_slot: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (path, tokens) in candidates {
             let key = match self.bind_marker_to_stored_spelling_locked(
                 conn,
@@ -8748,10 +8750,16 @@ impl VaultSession {
                     continue;
                 }
             };
-            if let Some(entry) = bound.iter_mut().find(|(p, _)| *p == key) {
-                entry.1.extend(tokens);
-            } else {
-                bound.push((key, tokens));
+            // One entry for each key, in first-seen order: a marker under
+            // its own key is repaired in the order it always was, and a
+            // folder's markers (two for each file) merge without a search
+            // of the list for each of them.
+            match bound_slot.get(&key) {
+                Some(&at) => bound[at].1.extend(tokens),
+                None => {
+                    bound_slot.insert(key.clone(), bound.len());
+                    bound.push((key, tokens));
+                }
             }
         }
         for (path, tokens) in bound {
@@ -8863,10 +8871,15 @@ impl VaultSession {
     ///   Nothing is cleared here: the tokens stand until the sweep's
     ///   repair of the stored spelling commits a full read
     ///   ([`MarkerBinding::Moved`]).
-    /// - A move owns the stored spelling (a HELD marker stands under it
-    ///   and the structural lock cannot be claimed): the per-path
-    ///   deferral follows the stored spelling and nothing is done
+    /// - A move owns either spelling (a HELD marker stands under the alias
+    ///   or under the stored spelling and the structural lock cannot be
+    ///   claimed): the per-path deferral follows both and nothing is done
     ///   ([`MarkerBinding::Waits`]).
+    /// - The volume's answer moved between the lookup and the writer
+    ///   transaction (a second lookup, inside it, no longer names the same
+    ///   stored spelling): nothing is done either, and the next sweep
+    ///   binds the marker afresh ([`MarkerBinding::Waits`]). The marker
+    ///   keeps its `created_ms`, so that sweep selects it again.
     ///
     /// A moved token keeps its `created_ms`, so a held marker stays held
     /// and an aged one stays aged. Its `registered_epoch` becomes the
@@ -8912,6 +8925,20 @@ impl VaultSession {
             {
                 return Ok(MarkerBinding::Waits);
             }
+        }
+        // The first lookup ran before this transaction, so another
+        // process's case-only rename can have landed in between: the
+        // spelling this sweep took for the alias is then the stored one,
+        // the index row stands under it, and removing that row would cost
+        // the note its history binding and its inbound links. Ask again,
+        // here. A coordinated mover has by now either committed (this
+        // lookup sees its result) or still has held markers standing (the
+        // check above waited). An answer that moved changes nothing in
+        // this sweep: the marker stays as it is and the next sweep binds
+        // it afresh. A lookup that fails is the marker's repair error, as
+        // the first one's is.
+        if self.provider.canonical_path(path)?.as_deref() != Some(stored.as_str()) {
+            return Ok(MarkerBinding::Waits);
         }
         let mut graph_sink = self.graph_sink();
         let row_under_alias: bool = tx.query_row(
@@ -13369,7 +13396,9 @@ enum MarkerBinding {
     /// The marker was under an alias: its selected tokens now stand under
     /// this stored spelling, which the sweep repairs.
     Moved(String),
-    /// A move owns the stored spelling: nothing was done in this sweep.
+    /// A move owns one of the two spellings, or the volume's answer moved
+    /// under the sweep: nothing was done, and the marker stands as it was
+    /// for the next sweep.
     Waits,
 }
 

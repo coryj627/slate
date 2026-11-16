@@ -415,6 +415,7 @@ fn a_failed_case_only_rename_leaves_one_row_after_the_next_task_query() {
         "premise: the holder refuses the rename: {outcome:?}"
     );
     assert_eq!(root_listing(tmp.path()), strings(&["A.md"]));
+    let recorder = ChangeRecorder::on(&session);
 
     session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(10))
@@ -425,6 +426,9 @@ fn a_failed_case_only_rename_leaves_one_row_after_the_next_task_query() {
         index_paths(&session, "text_write_intents"),
         Vec::<String>::new()
     );
+    // A host hears the note read again, once, under the spelling it kept,
+    // and nothing for the spelling that was asked for.
+    assert_eq!(recorder.take(), strings(&["Modified A.md"]));
 }
 
 /// The vault-wide task list as `path: text`, in the order the query gives.
@@ -569,10 +573,12 @@ fn plant_alias_row(session: &VaultSession, stored: &str, alias: &str) {
 
 /// A folder's case-only rename plants one marker pair for each file in it.
 /// After the next vault-wide task query each file keeps one row, each task
-/// is listed once, and no marker is left.
+/// is listed once, and no marker is left. A host hears each note read
+/// again, once, under the spelling the volume holds; on a volume that keeps
+/// case the old names are gone and are reported deleted first, as always.
 #[test]
 fn a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_query() {
-    let (_tmp, session) = make_vault(|provider| {
+    let (tmp, session) = make_vault(|provider| {
         provider.write_file("Docs/Note.md", b"- [ ] one\n").unwrap();
         provider
             .write_file("Docs/Sub/Inner.md", b"- [ ] two\n")
@@ -580,8 +586,23 @@ fn a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_q
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     session.rename_folder("Docs", "docs").unwrap();
+    // The volume says which it is: the old spelling still opens the note
+    // only where spellings alias.
+    let aliasing = tmp.path().join("Docs").join("Note.md").is_file();
+    let recorder = ChangeRecorder::on(&session);
 
     let mut tasks = vault_tasks(&session);
+    let expected: &[&str] = if aliasing {
+        &["Modified docs/Note.md", "Modified docs/Sub/Inner.md"]
+    } else {
+        &[
+            "Deleted Docs/Note.md",
+            "Deleted Docs/Sub/Inner.md",
+            "Modified docs/Note.md",
+            "Modified docs/Sub/Inner.md",
+        ]
+    };
+    assert_eq!(recorder.take(), strings(expected));
     tasks.sort();
     assert_eq!(
         tasks,
@@ -740,17 +761,25 @@ fn the_sweep_after_a_case_only_rename_reports_the_stored_spelling_once() {
     };
     assert_eq!(recorder.take(), strings(expected));
 }
+
 /// A provider that stands in for an aliasing volume on any platform: one
 /// alias spelling reaches the file stored under another. It can also fail
 /// the stored-spelling lookup for one path, as an unreachable volume does,
-/// and it counts the lookups it is asked for.
+/// answer the alias's next lookups from a list a fact gives it, as a volume
+/// another process is renaming on does, and it counts the lookups it is
+/// asked for.
 struct OneAliasProvider {
     inner: FsVaultProvider,
     alias: &'static str,
     stored: &'static str,
     lookup_fails_for: std::sync::Mutex<Option<&'static str>>,
+    alias_answers: std::sync::Mutex<std::collections::VecDeque<&'static str>>,
     lookups: std::sync::atomic::AtomicUsize,
 }
+
+/// In `alias_answers`: this lookup fails, as a read of an unreachable
+/// volume does.
+const LOOKUP_FAILS: &str = "\0fails";
 
 impl OneAliasProvider {
     fn through<'a>(&self, relative: &'a str) -> &'a str {
@@ -810,6 +839,16 @@ impl VaultProvider for OneAliasProvider {
                 "test: the stored spelling cannot be read",
             )));
         }
+        if path == self.alias
+            && let Some(answer) = self.alias_answers.lock().unwrap().pop_front()
+        {
+            if answer == LOOKUP_FAILS {
+                return Err(VaultError::Io(std::io::Error::other(
+                    "test: the stored spelling cannot be read",
+                )));
+            }
+            return Ok(Some(answer.to_string()));
+        }
         self.inner.canonical_path(self.through(path))
     }
     fn watch(
@@ -840,6 +879,7 @@ fn one_alias_vault_named(
         alias,
         stored,
         lookup_fails_for: std::sync::Mutex::new(None),
+        alias_answers: std::sync::Mutex::new(std::collections::VecDeque::new()),
         lookups: std::sync::atomic::AtomicUsize::new(0),
     });
     let session = VaultSession::open(
@@ -963,12 +1003,13 @@ fn a_marker_under_a_path_that_names_nothing_is_settled_as_before() {
     assert_eq!(recorder.take(), strings(&["Deleted gone1975.md"]));
 }
 
-/// What the bind step costs: one stored-spelling lookup for each marker
-/// the sweep selected, and none anywhere else. A task query with no marker
-/// asks for none, a marker too fresh to be selected asks for none, and a
-/// scan asks for none.
+/// What the bind step costs: one stored-spelling lookup for each path the
+/// sweep selected, one more for a path that turned out to be an alias (the
+/// second look, inside the writer transaction), and none anywhere else. A
+/// task query with no marker asks for none, a marker too fresh to be
+/// selected asks for none, and a scan asks for none.
 #[test]
-fn the_stored_spelling_is_looked_up_once_for_each_selected_marker_and_never_otherwise() {
+fn the_stored_spelling_is_looked_up_for_selected_paths_only_and_twice_for_an_alias() {
     let (_tmp, provider, session) = one_alias_vault();
     let lookups = || provider.lookups.load(std::sync::atomic::Ordering::SeqCst);
     let after_open = lookups();
@@ -994,14 +1035,147 @@ fn the_stored_spelling_is_looked_up_once_for_each_selected_marker_and_never_othe
         conn.execute("DELETE FROM text_write_intents", []).unwrap();
     }
 
+    // Two tokens under one path are one path: one lookup.
+    plant_marker(&session, "stored.md", false);
+    plant_marker(&session, "stored.md", false);
+    vault_tasks(&session);
+    assert_eq!(lookups(), after_open + 1, "one lookup for a selected path");
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+
     plant_marker(&session, "ALIAS.md", false);
     plant_marker(&session, "stored.md", false);
     vault_tasks(&session);
-    assert_eq!(lookups(), after_open + 2, "one lookup for each marker");
+    assert_eq!(
+        lookups(),
+        after_open + 4,
+        "two for the alias, one for the stored spelling"
+    );
     assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
 
     vault_tasks(&session);
-    assert_eq!(lookups(), after_open + 2, "settled markers cost nothing");
+    assert_eq!(lookups(), after_open + 4, "settled markers cost nothing");
+}
+
+/// The volume's answer can move between the sweep's lookup and its writer
+/// transaction: another Slate process case-renames the note the other way
+/// and commits, so the spelling the sweep took for the alias is now the
+/// stored one and the index row stands under it. The sweep looks again
+/// inside the transaction. An answer that moved changes nothing: the row,
+/// its history binding and the marker are as they were, and nothing is
+/// sent. Before this, the sweep removed that row and gave the note a new
+/// one under the spelling that had become the alias. The next sweep, with a
+/// steady answer, settles the marker.
+#[test]
+fn a_marker_whose_stored_spelling_moved_under_the_sweep_is_left_for_the_next_one() {
+    let (_tmp, provider, session) = one_alias_vault();
+    // The other process's rename has landed in the index: the row is under
+    // the spelling this sweep is about to take for an alias.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET path = 'ALIAS.md', name = 'ALIAS.md' WHERE path = 'stored.md'",
+            [],
+        )
+        .unwrap();
+    }
+    bind_history(&session, "ALIAS.md", "kept-1975");
+    plant_marker_as(&session, "ALIAS.md", 31, false, 0);
+    let recorder = ChangeRecorder::on(&session);
+    // Before the transaction the volume still answered the old way; inside
+    // it, the rename has landed and the path is its own stored spelling.
+    provider
+        .alias_answers
+        .lock()
+        .unwrap()
+        .extend(["stored.md", "ALIAS.md"]);
+
+    assert_eq!(vault_tasks(&session), strings(&["ALIAS.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["ALIAS.md"]));
+    assert_eq!(
+        history_binding(&session, "ALIAS.md").as_deref(),
+        Some("kept-1975")
+    );
+    assert_eq!(
+        marker_rows(&session),
+        vec![("ALIAS.md".to_string(), 31, false, 0)]
+    );
+    assert_eq!(recorder.take(), no_markers());
+
+    // A steady answer: the path is its own stored spelling, so the marker
+    // is settled by reading it, in place.
+    provider.alias_answers.lock().unwrap().push_back("ALIAS.md");
+    assert_eq!(vault_tasks(&session), strings(&["ALIAS.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["ALIAS.md"]));
+    assert_eq!(
+        history_binding(&session, "ALIAS.md").as_deref(),
+        Some("kept-1975")
+    );
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+    assert_eq!(recorder.take(), strings(&["Modified ALIAS.md"]));
+}
+
+/// The second lookup can fail too. It is the marker's repair error, as the
+/// first one's is: the row the marker's own key names is contained (it
+/// serves no tasks while it cannot be vouched for), the row and its history
+/// binding stay, the marker stays, and the query answers.
+#[test]
+fn a_second_lookup_that_fails_is_the_markers_repair_error() {
+    let (_tmp, provider, session) = one_alias_vault();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET path = 'ALIAS.md', name = 'ALIAS.md' WHERE path = 'stored.md'",
+            [],
+        )
+        .unwrap();
+    }
+    bind_history(&session, "ALIAS.md", "kept-1975");
+    plant_marker(&session, "ALIAS.md", false);
+    provider
+        .alias_answers
+        .lock()
+        .unwrap()
+        .extend(["stored.md", LOOKUP_FAILS]);
+
+    assert_eq!(vault_tasks(&session), no_markers());
+    assert_eq!(index_paths(&session, "files"), strings(&["ALIAS.md"]));
+    assert_eq!(
+        history_binding(&session, "ALIAS.md").as_deref(),
+        Some("kept-1975")
+    );
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["ALIAS.md"])
+    );
+}
+
+/// Round 22's token discipline through the bind step: the repair clears
+/// the tokens the sweep selected, the moved ones among them, and no other.
+/// A writer whose save is in flight on the stored spelling has a fresh
+/// token there, never selected. It still stands after the sweep moved an
+/// alias marker onto that key and read the note.
+#[test]
+fn a_live_writers_token_under_the_stored_spelling_outlives_the_bind() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES ('stored.md', ?1, 41, 0)",
+            rusqlite::params![now_ms()],
+        )
+        .unwrap();
+    }
+    plant_marker_as(&session, "ALIAS.md", 42, false, 0);
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    let left: Vec<(String, i64)> = marker_rows(&session)
+        .into_iter()
+        .map(|(path, token, _, _)| (path, token))
+        .collect();
+    assert_eq!(left, vec![("stored.md".to_string(), 41)]);
 }
 
 /// Contract 32 I7 at the sweep: when the stored spelling cannot be looked
@@ -1299,7 +1473,11 @@ fn two_files_whose_names_differ_only_by_case_keep_two_rows() {
 /// The two repair routes a host calls with a path of its own bind it as a
 /// save does (contract 32 I2 and I3): through an alias they read the stored
 /// row again and add none. On every platform, through the stand-in
-/// provider, and on a real volume where it aliases.
+/// provider, and on a real volume where it aliases. It says whether the
+/// real-volume half ran, so a run's output shows it.
+// The line printed is the fact's own record and names no vault path; #507's
+// no-stdout rule is for slate-core itself.
+#[allow(clippy::disallowed_macros)]
 #[test]
 fn a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none() {
     let (tmp, _provider, session) = one_alias_vault();
@@ -1318,8 +1496,14 @@ fn a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none() {
     assert_eq!(vault_tasks(&session), strings(&["stored.md: three"]));
 
     let Some((_tmp, session)) = aliasing_vault() else {
+        println!(
+            "a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none: SKIPPED on a real volume, this one keeps case; the stand-in half ran"
+        );
         return;
     };
+    println!(
+        "a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none: RAN on a real volume that aliases, after the stand-in half"
+    );
     session.reindex_path("notes/alpha.md").unwrap();
     assert_eq!(index_paths(&session, "files"), strings(&["Notes/Alpha.md"]));
     let outcome = session.repair_or_contain_path("notes/alpha.md").unwrap();

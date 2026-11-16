@@ -193,6 +193,7 @@ public sealed class CanonicalIdentityTests
         Assert.Equal("note.md", row.Path);
         Assert.Equal("Tasks Review, 1 shown", review.Header);
     }
+
     private static string FindSource(string fileName)
     {
         DirectoryInfo? dir = new(AppContext.BaseDirectory);

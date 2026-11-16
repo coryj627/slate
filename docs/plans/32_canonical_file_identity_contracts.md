@@ -180,6 +180,19 @@ of a folder inside a case-renamed folder
 (`a_folders_case_only_rename_moves_the_rows_of_the_folders_inside_it`). Not
 verified on APFS: no lane runs the Rust facts on macOS.
 
+Where the bind cannot see an alias (limits, by reading, not verified
+behaviour): the bind knows only what `canonical_path` answers. On Linux the
+provider keeps the identity default (ID-1), so on a mount that aliases
+names (vfat, exFAT, ext4 with casefold, CIFS) an existing alias answers with
+its own spelling and the second row can still be added there. On Windows a
+link at the END of a path answers with the requested spelling verbatim
+("a link keeps its own spelling", `fs_root.rs` `stored_spelling_beneath`),
+so an alias of a link's own name is not seen either; the scanner skips
+links, so that reaches only rows Slate itself writes on link paths. The
+lookup is also a probe (IR-1): the bind asks twice, once before its writer
+transaction and once inside it, and changes nothing when the two answers
+differ (`a_marker_whose_stored_spelling_moved_under_the_sweep_is_left_for_the_next_one`).
+
 **I4 — A case-only rename BECOMES expressible (a behavior change).**
 `A.md → a.md` is the sharp edge: source and destination alias each
 other, so canonicalizing the DESTINATION would collapse it onto the
