@@ -2178,9 +2178,7 @@ public sealed class TestWaitCensus
         ("AccessibilityNotificationDispatcherTests.cs", "EachQueuedLineExpiresAtItsOwnDeadlineNeverTheWholeQueue", 1,
             "late-arrival: 750 ms of ticks after the drain raise nothing more"),
         ("AccessibilityNotificationDispatcherTests.cs", "TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction", 1,
-            "deliberate-hold: start-up time passes before the first frame, and the launch clock still reads zero"),
-        ("AccessibilityNotificationDispatcherTests.cs", "TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction", 1,
-            "deliberate-hold: 100 ms for the launch clock to move; a wait on the clock itself would do"),
+            "deliberate-hold: 250 ms of start-up pass before the first frame, and the launch clock still reads zero"),
         ("BasesExportTests.cs", "AnExportInsideTheVaultIsAnEchoAndSpeaksOnce", 1,
             "late-arrival: core's quiet window and its spacing pass with no call from the watch"),
         ("BasesRedTeamRegressionTests.cs", "DashboardEditorRefusesAStaleSaveWithTheCanonicalSentence", 1,
@@ -2548,8 +2546,6 @@ public sealed class TestWaitCensus
     /// budget or an oracle the word does not describe.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitElapsedCeilings =
     [
-        ("AccessibilityNotificationDispatcherTests.cs", "TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction", 1,
-            "no-wait-witness: nearest word; the launch clock, read after the first frame, is held under the start-up hold"),
         ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesTreeQueryAndDrainsAtOnce", 1,
             "no-wait-witness: none shown yet; the candidate is observed(), read straight after Dispose"),
         ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesGraphQueryAndDrainsAtOnce", 1,

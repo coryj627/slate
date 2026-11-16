@@ -1378,7 +1378,9 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// Codex round 2: OD-7's launch window is measured from the FIRST FRAME,
     /// not from construction. Production's clock over a real window reads
     /// zero until the window has rendered — however long construction and
-    /// start-up took — and starts then.
+    /// start-up took — and starts then. The fact's own clock starts before
+    /// the dispatcher's is built, so the two readings taken after the first
+    /// frame differ by the start-up hold; a busy runner only widens that.
     /// </summary>
     [Fact]
     public void TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction() => RunSta(() =>
@@ -1395,8 +1397,9 @@ public sealed class AccessibilityNotificationDispatcherTests
         };
         try
         {
+            var sinceConstruction = Stopwatch.StartNew();
             AccessibilityNotificationDispatcher.LaunchSeams launch = AccessibilityNotificationDispatcher.LaunchSeams.ForProduction(status);
-            TimeSpan startUp = TimeSpan.FromSeconds(1);
+            TimeSpan startUp = TimeSpan.FromMilliseconds(250);
             Thread.Sleep(startUp);
             Assert.Equal(TimeSpan.Zero, launch.Elapsed());
 
@@ -1404,12 +1407,19 @@ public sealed class AccessibilityNotificationDispatcherTests
             window.ContentRendered += (_, _) => rendered = true;
             window.Show();
             Assert.True(PumpedDispatcher.PumpUntil(() => rendered), "the window never rendered its first frame");
+            // The launch clock first, then the fact's own. A launch clock
+            // started at construction reads what the fact's does; one started
+            // at the first frame reads the start-up hold less. Time between
+            // the two readings only adds to the difference.
             TimeSpan sinceFirstFrame = launch.Elapsed();
+            TimeSpan built = sinceConstruction.Elapsed;
             Assert.True(
-                sinceFirstFrame < startUp,
-                $"the launch window counted construction: {sinceFirstFrame} after the first frame, start-up was {startUp}");
-            Thread.Sleep(TimeSpan.FromMilliseconds(100));
-            Assert.True(launch.Elapsed() > sinceFirstFrame, "the launch window never started counting");
+                built - sinceFirstFrame >= startUp / 2,
+                $"the launch window counted construction: it read {sinceFirstFrame} when {built} had passed since construction, "
+                + $"{startUp} of it start-up");
+            Assert.True(
+                SpinWait.SpinUntil(() => launch.Elapsed() > sinceFirstFrame, TimeSpan.FromSeconds(10)),
+                "the launch window never started counting");
         }
         finally
         {
