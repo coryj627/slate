@@ -2,6 +2,14 @@
 
 Issues: #1730. Size S. Lanes: windows (the app job; no gate journey is added). AT: an NVDA spot check (the PR opens as a draft and is marked ready when the spoken phrases are in its body). Wave: C3, slot 3. Depends on: nothing. Parallel with: CB-7 (the shell gate's journeys and `TestWaitCensus.cs`) and CB-9a (the save chain: `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs`, a new census). Decision: none (no row of plan §3 gates it). Interlock: this chunk edits `VaultLifecycleViewModel.cs`. Plan §6's shared-file row now names CB-10 first, for `OpenVaultAsync` only, then CB-9b, CB-15a to CB-15c and CB-17b "each only where its spec names one of them", and says CB-9a's spec edits none of that row's files; see "Overlap" below. Review: a red team, then Codex adversarial-review rounds until it approves (plan §4 rule 9; the chunk changes product code).
 
+*2026-11-16, delivered:* by #1972 (48df4543), which closed #1730. No step below is run again; plan 47 §12 has the record. The delivery found six things this spec had wrong or inexact, and the text below is left as written:
+
+1. The flag is cleared just before `IsVaultOpen = true`, not just after (the red team's finding).
+2. Design 2's reason, "the workspace took the keys in between", is false. Everything from `IsVaultOpen = true` to the end of the `try` is synchronous, and the window's landing is queued at Loaded priority, so a throw there is caught before the keys leave the welcome view. The return after the vault shows is defensive.
+3. The recents are republished for any failure after `RecordRecentVault`, not only a failure in the scan.
+4. The change was not only two guards and one assignment. Both catch arms left `VaultDisplayName` and `VaultPath` set, so the window's title named a vault that was not open. #1972 clears them, as a find fixed there with a failing fact first.
+5. The theory has four arms, not three, and fails the open through `Task.Run`, so the fact runs as production does.
+6. NVDA step 2: Ctrl+Shift+O does not reach Slate on the owner's desktop, where another program holds it as a global hotkey. The pass used File, Open Vault. The moved-keys case could not be held open in the field, and the hosted fact covers it.
 Written 2026-11-16 from `reading/03_save_chain_lifecycle.md:132-165` (read at 1ec9bf31). Every file and line below was re-read at 80925d72 and is cited as of that commit.
 
 `S/` below is `apps/slate-windows/src/SlateWindows/`; `T/` is `apps/slate-windows/tests/SlateWindows.Tests/`.
