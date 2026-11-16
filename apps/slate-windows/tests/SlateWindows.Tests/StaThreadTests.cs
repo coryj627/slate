@@ -1,8 +1,10 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -33,6 +35,7 @@ public sealed class StaThreadTests : IDisposable
     {
         StaThread.DumpDirectory = _dumpDirectory;
         StaThread.DumpKindForTests = null;
+        StaThread.LongestGapForTests = null;
         StaThread.ResetDumpsForTests();
     }
 
@@ -590,6 +593,209 @@ public sealed class StaThreadTests : IDisposable
             unwindGrace: TimeSpan.FromSeconds(10)));
 
         Assert.Contains("the body has no dispatcher to pump", timedOut.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>#1843: a timeout that takes no stack cannot say where the
+    /// body was, so it says what it measured instead: the longest stretch
+    /// the process's heartbeat thread went without running during the body,
+    /// and how long the collector paused the process. A long gap is what a
+    /// stall of the whole process would leave, and a short one rules that
+    /// out. The job log keeps the message for 90 days. Here the body made a
+    /// dispatcher and never pumped it.</summary>
+    [Fact]
+    public void ATimedOutBodyThatDoesNotPumpSaysWhatItsHeartbeatSaw() =>
+        SaysWhatItsHeartbeatSaw(TimeOutABodyThatDoesNotPump, "the body did not pump its dispatcher within 5 s.");
+
+    /// <summary>#1843: the same for a body that never made a dispatcher.</summary>
+    [Fact]
+    public void ATimedOutBodyWithNoDispatcherSaysWhatItsHeartbeatSaw() =>
+        SaysWhatItsHeartbeatSaw(TimeOutASleepingBody, "the body has no dispatcher to pump.");
+
+    /// <summary>#1843: createdump suspends every thread of the process while
+    /// it writes, the heartbeat's included: a reading taken after it would
+    /// show the write as a stall. So the heartbeat is read first, and its
+    /// sentence stands before the one that names the file.</summary>
+    [Fact]
+    public void TheHeartbeatIsReadBeforeTheDumpIsTaken()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        var order = new List<string>();
+        StaThread.LongestGapForTests = () =>
+        {
+            order.Add("the heartbeat was read");
+            return TimeSpan.FromMilliseconds(100);
+        };
+        StaThread.RunDumperForTests = start =>
+        {
+            order.Add("createdump ran");
+            File.WriteAllBytes(start.ArgumentList[2], "MDMP"u8.ToArray());
+            return (0, string.Empty);
+        };
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+            Assert.Equal(new[] { "the heartbeat was read", "createdump ran" }, order);
+            int heartbeat = timedOut.Message.IndexOf(" The heartbeat thread ", StringComparison.Ordinal);
+            int collector = timedOut.Message.IndexOf(" Garbage collection paused ", StringComparison.Ordinal);
+            int file = timedOut.Message.IndexOf(" A full dump of the test process is at ", StringComparison.Ordinal);
+            Assert.True(
+                heartbeat >= 0 && collector > heartbeat && file > collector,
+                $"the heartbeat's sentence, the collector's and the file's stand in that order: {timedOut.Message}");
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>#1843: a body that gave up its stack was pumping, so its
+    /// timeout names where it waits. The heartbeat is not read for it, and
+    /// its message says nothing of the heartbeat or the collector.</summary>
+    [Fact]
+    public void ATimedOutBodyThatGaveItsStackSaysNothingOfItsHeartbeat()
+    {
+        bool read = false;
+        StaThread.LongestGapForTests = () =>
+        {
+            read = true;
+            return TimeSpan.FromSeconds(40);
+        };
+        // The bound starts once the body has its dispatcher: a thread that
+        // first ran late would otherwise have none to give a stack on.
+        using var pumping = new ManualResetEventSlim(false);
+        StaThread.AfterStartForTests = () => Assert.True(pumping.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        Xunit.Sdk.XunitException timedOut;
+        try
+        {
+            timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    _ = Dispatcher.CurrentDispatcher;
+                    pumping.Set();
+                    WaitHereWhilePumping();
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body kept pumping",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+        }
+
+        Assert.Contains("Its stack while pumping:", timedOut.Message, StringComparison.Ordinal);
+        Assert.False(read, "the heartbeat was read for a body that gave up its stack");
+        Assert.DoesNotContain("The heartbeat thread", timedOut.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Garbage collection", timedOut.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>#1843: with no seam, the gap is the heartbeat thread's own.
+    /// The body's window is at least its 200 ms bound and the thread beats
+    /// every 100 ms, so some stretch of the window with no beat in it is
+    /// about 100 ms or longer, and the sentence never reads 0.0 s.</summary>
+    [Fact]
+    public void WithNoSeamATimeoutReadsTheHeartbeatThreadItself()
+    {
+        Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+        Match gap = Regex.Match(
+            timedOut.Message,
+            @" The heartbeat thread (?:kept running during the body: its longest gap was|missed) (\d+\.\d) s");
+        Assert.True(gap.Success, $"the timeout's message has no heartbeat sentence: {timedOut.Message}");
+        Assert.True(
+            double.Parse(gap.Groups[1].Value, CultureInfo.InvariantCulture) > 0,
+            $"the heartbeat thread's gap reads as nothing, so it is not that thread's: {timedOut.Message}");
+    }
+
+    /// <summary>#1843: the collector records a memory load at each
+    /// collection and has none before its first. The sentence says so then,
+    /// rather than print a load of 0 %.</summary>
+    [Fact]
+    public void TheCollectorsSentenceSaysSoWhenNoCollectionHasRun()
+    {
+        Assert.Equal(
+            " Garbage collection paused the process for 0.3 s of the body; memory load at the last collection was 71 %.",
+            StaThread.CollectorSaw(TimeSpan.FromMilliseconds(300), collections: 12, loadBytes: 71, availableBytes: 100));
+        Assert.Equal(
+            " Garbage collection paused the process for 0.0 s of the body; no collection has run in this process yet, so there is no memory load to report.",
+            StaThread.CollectorSaw(TimeSpan.Zero, collections: 0, loadBytes: 0, availableBytes: 100));
+    }
+
+    private const string AStalledHeartbeat =
+        " The heartbeat thread missed 40.0 s in one gap during the body, which a stall of the whole process would explain.";
+
+    private const string ARunningHeartbeat =
+        " The heartbeat thread kept running during the body: its longest gap was 0.1 s, so the process as a whole was not stalled for longer than that.";
+
+    /// <summary>The collector's sentence once a collection has run, as a
+    /// pattern: its two numbers are the process's own.</summary>
+    private const string TheCollectorsSentence =
+        @" Garbage collection paused the process for \d+\.\d s of the body; memory load at the last collection was \d+ %\.";
+
+    /// <summary>Time a body out twice through <paramref name="timeOut"/>,
+    /// with the heartbeat's seam answering a gap of 40 s and then of 0.1 s.
+    /// Each message ends with the stack's sentence
+    /// (<paramref name="noStack"/>), the heartbeat's and the collector's, in
+    /// that order: no dump folder is named, so nothing follows them.</summary>
+    private static void SaysWhatItsHeartbeatSaw(Func<Xunit.Sdk.XunitException> timeOut, string noStack)
+    {
+        // Premise of the collector's sentence: a collection has run, so
+        // there is a memory load to report.
+        GC.Collect();
+        CultureInfo culture = CultureInfo.CurrentCulture;
+        string stalled;
+        string ran;
+        try
+        {
+            // A culture that writes 40,0: the sentences' numbers do not
+            // follow it.
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            StaThread.LongestGapForTests = () => TimeSpan.FromSeconds(40);
+            stalled = timeOut().Message;
+            StaThread.LongestGapForTests = () => TimeSpan.FromMilliseconds(100);
+            ran = timeOut().Message;
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+        }
+
+        EndsWithItsReading(stalled, noStack + AStalledHeartbeat);
+        EndsWithItsReading(ran, noStack + ARunningHeartbeat);
+    }
+
+    private static void EndsWithItsReading(string message, string noStackThenHeartbeat) =>
+        Assert.True(
+            Regex.IsMatch(message, Regex.Escape(noStackThenHeartbeat) + TheCollectorsSentence + "$"),
+            $"the timeout's message does not end with \"{noStackThenHeartbeat}\" and then the collector's sentence: {message}");
+
+    /// <summary>Time out a body that makes a dispatcher and then sleeps
+    /// without pumping it. The bound starts once the dispatcher exists.</summary>
+    private static Xunit.Sdk.XunitException TimeOutABodyThatDoesNotPump()
+    {
+        using var made = new ManualResetEventSlim(false);
+        StaThread.AfterStartForTests = () => Assert.True(made.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        try
+        {
+            return Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    _ = Dispatcher.CurrentDispatcher;
+                    made.Set();
+                    Thread.Sleep(TimeSpan.FromMilliseconds(800));
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body outlived its bound",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+        }
     }
 
     /// <summary>A body that pumps its dispatcher until the runner shuts it

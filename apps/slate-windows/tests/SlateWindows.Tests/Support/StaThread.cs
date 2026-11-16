@@ -37,13 +37,22 @@ namespace SlateWindows.Tests;
 /// at the OS level, which is when the system destroys its windows, and
 /// which a managed Join does not always wait for (<see cref="OsThreadExit"/>)
 /// — every class carrying that name is unregistered. A class that will not
-/// unregister fails the fact, naming it and any window that still has it. Nothing runs on the fact's thread after its body: tearing its
-/// windows down while the thread lives (a dispatcher shutdown disposes
+/// unregister fails the fact, naming it and any window that still has it.
+/// </para>
+/// <para>
+/// After its body. The thread runs one thing more before it ends,
+/// <see cref="ReleaseTextServices"/>: WPF's own teardown of the thread's
+/// text services and render context (#1855), and then WPF's own
+/// <c>StopListening</c> on the thread's shut-down listeners, which takes
+/// them off the process's exit (#1826). Neither takes a window down, and
+/// the dispatcher of a body that returned in time is not shut down. Tearing
+/// a thread's windows down while it lives (a dispatcher shutdown disposes
 /// them) hands the foreground to another process's window, after which the
 /// next fact's <c>Window.Activate</c> is refused and every focus-dependent
 /// fact after it fails (measured: ReadingFocusTests, 6–9 of 21 facts),
 /// whereas a thread that simply ends leaves the foreground for the next
-/// fact to take. The fact's thread therefore ends exactly as it always has.
+/// fact to take. The thread's windows therefore still go as they always
+/// have, when the thread ends.
 /// </para>
 /// <para>
 /// Bounded and fail-fast. The thread is a background thread, so a wedged
@@ -51,7 +60,10 @@ namespace SlateWindows.Tests;
 /// token is cancelled (<see cref="TimedOut"/>), so a body that polls it
 /// between phases stops there, and its dispatcher is told to shut down, so
 /// a pump wedged in a frame unwinds through the body's own disposals; the
-/// fact fails here instead of at the job's limit. A body that unwinds
+/// fact fails here instead of at the job's limit. A timeout that takes no
+/// stack says how long the process's heartbeat thread went without running
+/// during the body, and how long the collector paused the process (#1843,
+/// <see cref="Heartbeat"/>). A body that unwinds
 /// within <see cref="UnwindGrace"/> still has its classes unregistered; one
 /// that does not is running beside every later fact, so
 /// <see cref="LeakedDispatcherGuardAttribute"/> fails each of them
@@ -104,6 +116,10 @@ internal static class StaThread
     /// <summary>Test seam: runs on the fact's thread before its first line,
     /// so a witness can make the body start after its joins have expired.</summary>
     internal static Action? BeforeBodyForTests { get; set; }
+
+    /// <summary>Test seam (#1843): answers in place of the heartbeat's
+    /// longest gap.</summary>
+    internal static Func<TimeSpan>? LongestGapForTests { get; set; }
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
@@ -319,6 +335,10 @@ internal static class StaThread
             Name = name,
         };
         thread.SetApartmentState(ApartmentState.STA);
+        // #1843: what a timeout that takes no stack reads is measured from
+        // here, before the thread starts, so the body lies inside it.
+        Heartbeat.Window beats = Heartbeat.OpenWindow();
+        TimeSpan pausedBefore = GC.GetTotalPauseDuration();
         thread.Start();
         AfterStartForTests?.Invoke();
         TimeSpan limit = timeout ?? DefaultTimeout;
@@ -328,10 +348,15 @@ internal static class StaThread
             (string stack, bool taken) = StackOf(thread, dispatcher);
             if (!taken)
             {
+                // Read before the dump is taken: createdump suspends every
+                // thread of the process while it writes, the heartbeat's
+                // included, and a reading taken after it would show the
+                // write as a stall.
+                stack += HeartbeatSaw(beats) + CollectorSawSince(pausedBefore);
                 stack += DumpOnTimeout(name);
             }
-            // After the stack and the dump, so a body that stops on its token
-            // has not left before either is taken.
+            // After the stack, the reading and the dump, so a body that stops
+            // on its token has not left before any of them is taken.
             string cancelled = Cancel(cancellation);
             dispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
             string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its timeout token was cancelled{cancelled} and its dispatcher was told to shut down";
@@ -373,6 +398,59 @@ internal static class StaThread
             return $", though a callback on it threw {thrown.InnerException?.GetType().Name}: {thrown.InnerException?.Message},";
         }
     }
+
+    /// <summary>A heartbeat gap this long or longer is named as one a stall
+    /// of the whole process would explain. A shorter one is printed as the
+    /// longest gap of a thread that kept running.</summary>
+    internal static readonly TimeSpan StalledGap = TimeSpan.FromSeconds(5);
+
+    /// <summary>#1843: what the process's heartbeat thread saw while a body
+    /// that gave no stack ran (<see cref="Heartbeat"/>): the longest stretch
+    /// it went without running. The job log keeps the sentence for 90 days,
+    /// so it outlives the dump.</summary>
+    /// <remarks>The sentence says what was measured and no more. A stall of
+    /// the whole process is named only as what a long gap would explain.
+    /// One heartbeat cannot say how many other threads were held, and
+    /// because it runs at the highest priority it cannot tell a starved fact
+    /// thread from a healthy one.</remarks>
+    private static string HeartbeatSaw(Heartbeat.Window beats)
+    {
+        TimeSpan gap = LongestGapForTests is { } answer ? answer() : beats.LongestGap();
+        return gap >= StalledGap
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $" The heartbeat thread missed {gap.TotalSeconds:0.0} s in one gap during the body, which a stall of the whole process would explain.")
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $" The heartbeat thread kept running during the body: its longest gap was {gap.TotalSeconds:0.0} s, so the process as a whole was not stalled for longer than that.");
+    }
+
+    /// <summary>#1843: what the collector did while a body that gave no
+    /// stack ran: how long it paused the process since
+    /// <paramref name="pausedBefore"/> was read, and the memory load it
+    /// recorded at its last collection. A collection stops the heartbeat's
+    /// thread too, so its pause stands beside the heartbeat's gap.</summary>
+    private static string CollectorSawSince(TimeSpan pausedBefore)
+    {
+        GCMemoryInfo last = GC.GetGCMemoryInfo();
+        return CollectorSaw(
+            GC.GetTotalPauseDuration() - pausedBefore, last.Index, last.MemoryLoadBytes, last.TotalAvailableMemoryBytes);
+    }
+
+    /// <summary>The collector's sentence, from what it reported. The memory
+    /// load is the share of <paramref name="availableBytes"/> in use
+    /// (<paramref name="loadBytes"/>) when the last collection ran. The
+    /// collector records one at each collection, so before the first
+    /// (<paramref name="collections"/> is 0) there is none, and the sentence
+    /// says that instead of a load of 0 %.</summary>
+    internal static string CollectorSaw(TimeSpan paused, long collections, long loadBytes, long availableBytes) =>
+        collections > 0
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $" Garbage collection paused the process for {paused.TotalSeconds:0.0} s of the body; memory load at the last collection was {100.0 * loadBytes / availableBytes:0} %.")
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $" Garbage collection paused the process for {paused.TotalSeconds:0.0} s of the body; no collection has run in this process yet, so there is no memory load to report.");
 
     /// <summary>The folder a timed-out body's dump goes to (#1603): CI's
     /// app job names its uploaded results folder through
