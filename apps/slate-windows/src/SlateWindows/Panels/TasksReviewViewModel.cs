@@ -837,13 +837,38 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 {
                     return;
                 }
-                if (ended.IsFaulted)
+                if (!ended.IsFaulted)
                 {
-                    _ = done.TrySetException(ended.Exception!.GetBaseException());
-                }
-                else
-                {
+                    // A shutdown skipped the body: nothing was written, and
+                    // the panel is going, so there is nothing to say.
                     _ = done.TrySetResult();
+                    return;
+                }
+                // The toggle still fails aloud, with the fault's own message
+                // (#1467), and the operation ends carrying the fault.
+                Exception fault = ended.Exception!.GetBaseException();
+                try
+                {
+                    Post(() =>
+                    {
+                        try
+                        {
+                            if (!IsShutDown)
+                            {
+                                _announce(new A11yEvent.TaskToggleFailed(fault.Message));
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            _ = done.TrySetException(new AggregateException(fault, exception));
+                            return;
+                        }
+                        _ = done.TrySetException(fault);
+                    });
+                }
+                catch (Exception exception)
+                {
+                    _ = done.TrySetException(new AggregateException(fault, exception));
                 }
             },
             CancellationToken.None,

@@ -1548,6 +1548,55 @@ public sealed class SaveChainAdmissionTests
         held.AssertHeldUntilReleased();
     });
 
+    /// <summary>Found and fixed with the tabless write: a property write
+    /// rewrites the note and re-indexes it, tasks included, so the shared
+    /// task-index repair lease brackets the session write, as it does for a
+    /// tab's property write. While the write is in flight no task query
+    /// gets a clean ticket, and a write that fails leaves the note waiting
+    /// for a repair, since its index may no longer match the file.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATablessBasesCellWriteHoldsTheTaskIndexRepairLeaseAcrossItsWrite(bool fails) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-repair-lease", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        TaskIndexRepairCoordinator repairs = h.Workspace.TaskIndexRepairsForTests;
+        Assert.True(repairs.TryBeginCleanQuery(out _, out _), "premise: a write was already in flight");
+        var held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook is null
+            ? null
+            : () =>
+            {
+                hook();
+                if (fails)
+                {
+                    throw new InvalidOperationException("the cell write failed (test seam)");
+                }
+            });
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+            Assert.False(
+                repairs.TryBeginCleanQuery(out _, out bool onlyByAWriteInFlight),
+                "a task query could read the index while the cell write was in flight");
+            Assert.True(onlyByAWriteInFlight);
+
+            held.Release();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !h.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the cell write's end");
+            Assert.Equal(fails, repairs.HasPendingFor("a.md"));
+            Assert.Equal(!fails, repairs.TryBeginCleanQuery(out _, out bool stillInFlight));
+            Assert.False(stillInFlight, "the lease outlived the write");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
     /// <summary>The base's row for a.md and its status column, with no tab
     /// on the note.</summary>
     private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) TablessStatusCell(Vault h)
@@ -1907,6 +1956,434 @@ public sealed class SaveChainAdmissionTests
         h.Workspace.History.NoteChanged("a.md");
         h.PumpUntil(() => Version(h, v1) is not null, "the history rows loading");
         return Version(h, v1)!;
+    }
+
+    // ---- Faults, teardown and the settle for the three routes (CB-9a) ---------
+    //
+    // WorkspaceSaveCoordinator.SettlePumping has no bound, so one ticket that
+    // never ends hangs Close Vault and every later save of the note. Each
+    // fact here drives one way an admitted route could have left its ticket
+    // open, and shows the note's chain idle afterwards.
+
+    /// <summary>A fault outside VaultException on the route's worker (a core
+    /// panic) is the route's failed outcome, given once, and the operation
+    /// ends: the chain goes idle and a later operation on the path runs.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle before its write")]
+    [InlineData("toggle after its write")]
+    public void AnAdmittedSinglePathRouteWhoseWorkerFaultsEndsAndFreesTheNotesChain(string route) => RunSta(() =>
+    {
+        const string Fault = "the route's core call panicked (test seam)";
+        using var r = new SinglePathRoute(route, "route-faults");
+        Action thrower = () => throw new InvalidOperationException(Fault);
+        if (route == "toggle after its write")
+        {
+            r.H.Workspace.TasksReview.DirectToggleFaultForTests = thrower;
+        }
+        else
+        {
+            r.SetSeam(thrower);
+        }
+        try
+        {
+            int before = r.H.Workspace.SavesForTests.AdmittedForTests;
+            r.Ask();
+            Assert.Equal(before + 1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => r.FailureGiven && r.H.Workspace.SavesIdle, "the faulted route ending");
+            r.AssertFailedOnce(Fault);
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.H.Workspace.TasksReview.DirectToggleFaultForTests = null;
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The same when the worker faults outside its own catch (the
+    /// catch leaves out of memory, stack overflow and access violation
+    /// alone), so no publication was posted: the route still fails aloud,
+    /// once, writes nothing, and its operation ends.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteWhoseWorkerFaultsOutsideItsCatchStillEnds(string route) => RunSta(() =>
+    {
+        const string Fault = "a fault the worker's catch does not take (test seam)";
+        using var r = new SinglePathRoute(route, "route-faults-outside-catch");
+        r.SetSeam(() => throw new OutOfMemoryException(Fault));
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => r.FailureGiven && r.H.Workspace.SavesIdle, "the route ending after its worker faulted");
+            r.AssertFailedOnce(Fault);
+            Assert.False(r.Written);
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>A publication that throws (the recover's row callback; the
+    /// announcer under the cell write's failure and under the toggle's
+    /// success) still ends the operation.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteEndsEvenWhenItsPublicationThrows(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-publication-throws");
+        bool thrown = false;
+        void ThrowOnce()
+        {
+            if (!thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the publication failed (test seam)");
+            }
+        }
+        switch (route)
+        {
+            case "recover":
+                r.WhenAnswered = ThrowOnce;
+                break;
+            case "cell write":
+                r.SetSeam(() => throw new InvalidOperationException("the cell write failed (test seam)"));
+                r.H.BeforeAnnounce = spoken =>
+                {
+                    if (spoken is A11yEvent.BasesCellEditFailed)
+                    {
+                        ThrowOnce();
+                    }
+                };
+                break;
+            default:
+                r.H.BeforeAnnounce = spoken =>
+                {
+                    if (spoken is A11yEvent.TaskToggled)
+                    {
+                        ThrowOnce();
+                    }
+                };
+                break;
+        }
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => thrown && r.H.Workspace.SavesIdle, "the route ending after its publication threw");
+            Assert.False(r.H.Workspace.PropertyWriteInFlightFor(r.Path), "the lease was not released");
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.H.BeforeAnnounce = null;
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The review's scheduler can skip a body it had queued, when
+    /// it shuts down first. The toggle's worker then ends having posted no
+    /// publication, and the operation still ends: nothing written, nothing
+    /// spoken.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseBodyAShutdownSkipsStillEndsItsOperation() => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("toggle", "toggle-body-skipped");
+        TasksReviewViewModel review = r.H.Workspace.TasksReview;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        review.GateWorkOn(gate.Task);
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            review.Shutdown();
+            gate.SetResult();
+            r.H.PumpUntil(() => r.H.Workspace.SavesIdle, "the toggle's operation ending after its body was skipped");
+            Assert.False(r.Written);
+            r.AssertNothingSpoken();
+        }
+        finally
+        {
+            _ = gate.TrySetResult();
+            r.Drain();
+        }
+    });
+
+    /// <summary>Contract 35 A-1 for the three routes: each worker is among
+    /// the workers the save coordinator joins, without a bound, before the
+    /// session goes. The hold is released inside the join, so the join
+    /// returns only when the write has landed.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void TeardownJoinsAnAdmittedRecoverAndTheTablessWrites(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-teardown-join");
+        var held = new HeldWork(r.SetSeam);
+        int trackedAtJoin = -1;
+        r.H.Workspace.SavesForTests.BeforeJoinForTests = () =>
+        {
+            trackedAtJoin = r.H.Workspace.SavesForTests.TrackedWorkersForTests;
+            held.Release();
+        };
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the route's worker reaching its hold");
+
+            r.H.DisposeWorkspace();
+            Assert.Equal(1, trackedAtJoin);
+            Assert.True(r.Written, "teardown returned before the route's write landed");
+        }
+        finally
+        {
+            held.Release();
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Close Vault's first step: settling the saves waits for an
+    /// admitted route, and returns once its outcome has been published. The
+    /// release is queued on the dispatcher, so it can only run inside the
+    /// settle's own pumping.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void SettlingSavesWaitsForAnAdmittedSinglePathRouteAndReturns(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-settle");
+        var held = new HeldWork(r.SetSeam);
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the route's worker reaching its hold");
+
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(held.Release));
+            Assert.True(r.H.Workspace.SettleSaves(), "the settle did not return true");
+            Assert.True(r.Succeeded, "the settle returned before the route's outcome was published");
+            Assert.True(r.H.Workspace.SavesIdle);
+        }
+        finally
+        {
+            held.Release();
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A route still waiting its turn when the workspace is torn
+    /// down never runs: nothing is written or spoken, the cell write's lease
+    /// is released, and the recover's row is answered that nothing
+    /// happened.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteStillWaitingAtTeardownEndsUnwritten(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-waiting-at-teardown");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = r.H.Workspace.SavesForTests.Admit(r.Path, _ => ahead.Task);
+        try
+        {
+            r.Ask();
+            Assert.Equal(2, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.DisposeWorkspace();
+            ahead.SetResult();
+            r.H.PumpUntil(
+                () => r.H.Workspace.SavesForTests.IsIdle
+                    && !r.H.Workspace.PropertyWriteInFlightFor(r.Path)
+                    && (route != "recover" || !r.Answers.IsEmpty),
+                "the queued route ending after teardown");
+            Assert.True(held.Result);
+            Assert.False(r.Written);
+            r.AssertNothingSpoken();
+            if (route == "recover")
+            {
+                Assert.Equal([(false, false)], r.Answers);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            r.Drain();
+        }
+    });
+
+    /// <summary>One of the three routes this chunk admits, in a vault of its
+    /// own with no tab on its note, ready to be asked once: "recover", "cell
+    /// write" or "toggle" (the route is its name's first word).</summary>
+    private sealed class SinglePathRoute : IDisposable
+    {
+        private readonly string _kind;
+        private readonly HistoryDeletedRow? _deleted;
+        private readonly BaseDocumentViewModel? _document;
+        private readonly BasesRow? _row;
+        private readonly BasesColumn? _column;
+        private readonly ReviewTaskRowViewModel? _task;
+
+        public SinglePathRoute(string route, string label)
+        {
+            _kind = route.Split(' ')[0];
+            switch (_kind)
+            {
+                case "recover":
+                    H = Vault.WithADeletedNote(label + "-recover", "gone.md", Gone);
+                    Path = "gone.md";
+                    (_deleted, Alerts) = RecoverSetup(H);
+                    break;
+                case "cell":
+                    H = new Vault(label + "-cell", ("a.md", Note), ("Notes.base", NotesBase));
+                    Path = "a.md";
+                    (_document, _row, _column) = TablessStatusCell(H);
+                    break;
+                default:
+                    H = new Vault(label + "-toggle", ("a.md", TaskNote));
+                    Path = "a.md";
+                    (_, _task) = ReviewRow(H);
+                    break;
+            }
+        }
+
+        public Vault H { get; }
+
+        public string Path { get; }
+
+        public ConcurrentQueue<string> Alerts { get; } = new();
+
+        /// <summary>The recover's row answers.</summary>
+        public ConcurrentQueue<(bool Ok, bool Collision)> Answers { get; } = new();
+
+        /// <summary>Runs inside the recover's row callback, after the answer
+        /// is recorded: a fact makes the callback throw.</summary>
+        public Action? WhenAnswered { get; set; }
+
+        public void Ask()
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    H.Workspace.RecoverDeletedFile(_deleted!, (ok, collision) =>
+                    {
+                        Answers.Enqueue((ok, collision));
+                        WhenAnswered?.Invoke();
+                    });
+                    break;
+                case "cell":
+                    _document!.ApplyPropertyEdit!(_row!, _column!, new PropertyValue.Text("done"));
+                    break;
+                default:
+                    H.Workspace.TasksReview.ToggleTask(_task!);
+                    break;
+            }
+        }
+
+        /// <summary>The seam on the route's worker, before its core call.</summary>
+        public void SetSeam(Action? hook)
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    H.Workspace.HistoryCreateHookForTests = hook;
+                    break;
+                case "cell":
+                    H.Workspace.BasesTablessWriteHookForTests = hook;
+                    break;
+                default:
+                    H.Workspace.TasksReview.DirectToggleBeforeWriteForTests = hook;
+                    break;
+            }
+        }
+
+        public bool Written => _kind switch
+        {
+            "recover" => File.Exists(System.IO.Path.Combine(H.Root, Path)),
+            "cell" => H.Read(Path).Contains("status: done", StringComparison.Ordinal),
+            _ => H.Read(Path).Contains("- [x] the task", StringComparison.Ordinal),
+        };
+
+        /// <summary>The route's outcome on success, published.</summary>
+        public bool Succeeded => _kind switch
+        {
+            "recover" => Answers.Contains((true, false)) && H.Events.Any(e => e is A11yEvent.RestoredFile),
+            "cell" => Written && !H.Workspace.PropertyWriteInFlightFor(Path),
+            _ => H.Events.Any(e => e is A11yEvent.TaskToggled),
+        };
+
+        public bool FailureGiven => _kind switch
+        {
+            "recover" => !Alerts.IsEmpty && !Answers.IsEmpty,
+            "cell" => H.Events.Any(e => e is A11yEvent.BasesCellEditFailed) && !H.Workspace.PropertyWriteInFlightFor(Path),
+            _ => H.Events.Any(e => e is A11yEvent.TaskToggleFailed),
+        };
+
+        /// <summary>The route's existing failure, given once.</summary>
+        public void AssertFailedOnce(string message)
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    Assert.Equal(["Can't restore: " + message], Alerts);
+                    Assert.Equal([(false, false)], Answers);
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.RestoredFile);
+                    break;
+                case "cell":
+                    _ = Assert.Single(H.Events, e => e is A11yEvent.BasesCellEditFailed);
+                    Assert.False(H.Workspace.PropertyWriteInFlightFor(Path), "the lease was not released");
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.BasesCellSaved);
+                    break;
+                default:
+                    _ = Assert.Single(H.Events, e => e is A11yEvent.TaskToggleFailed);
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.TaskToggled);
+                    break;
+            }
+        }
+
+        public void AssertNothingSpoken()
+        {
+            Assert.Empty(Alerts);
+            Assert.DoesNotContain(H.Events, e => e is A11yEvent.RestoredFile
+                or A11yEvent.BasesCellSaved or A11yEvent.BasesCellCleared or A11yEvent.BasesCellEditFailed
+                or A11yEvent.TaskToggled or A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+        }
+
+        /// <summary>The note's chain is free: an operation admitted now runs.</summary>
+        public void AssertALaterOperationRuns()
+        {
+            bool ran = false;
+            Task<bool> later = H.Workspace.SavesForTests.Admit(Path, _ =>
+            {
+                ran = true;
+                return Task.CompletedTask;
+            });
+            H.PumpUntil(() => later.IsCompleted, "an operation admitted after the route ended");
+            Assert.True(ran && later.Result, "the note's chain was still held");
+        }
+
+        /// <summary>For a fact's <c>finally</c>: everything admitted ends and
+        /// the review's own workers end, before the vault is disposed.</summary>
+        public void Drain() => ReleaseAndDrainTheReview(H, H.Workspace.TasksReview);
+
+        public void Dispose() => H.Dispose();
     }
 
     // ---- Teardown -------------------------------------------------------------

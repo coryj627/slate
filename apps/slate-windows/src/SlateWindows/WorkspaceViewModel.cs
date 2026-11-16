@@ -3565,6 +3565,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
     internal WorkspaceSaveCoordinator SavesForTests => _saves;
 
+    /// <summary>Plan 47 CB-9a test seam: the workspace's one task-index
+    /// repair coordinator, which every write that re-indexes a note takes a
+    /// lease from.</summary>
+    internal Panels.TaskIndexRepairCoordinator TaskIndexRepairsForTests => _taskIndexRepairs;
+
     public void RetargetPath(string oldPath, string newPath)
     {
         string source = NormalizeWorkspacePath(oldPath);

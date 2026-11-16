@@ -1066,8 +1066,9 @@ public sealed class SaveChainAdmissionCensus
 
     /// <summary>The walk as it stood on 2026-11-16: 308 sources, 31 calls to
     /// a note writer, 6 to an exclusive creator, 9 reloads of a tab from
-    /// outside it and 12 admission calls. Fewer means the walk missed files
-    /// or calls, not that the shell writes less.</summary>
+    /// outside it and, once the recover, the tabless cell write and the
+    /// tabless review toggle were admitted, 15 admission calls. Fewer means
+    /// the walk missed files or calls, not that the shell writes less.</summary>
     [Fact]
     public void TheWalkReadsTheShell()
     {
@@ -1078,7 +1079,7 @@ public sealed class SaveChainAdmissionCensus
             ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 28),
             ("calls to an exclusive creator", reading.Sites.Count(site => site.Kind == SiteKind.Session && ExclusiveCreators.Contains(site.Name)), 5),
             ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 8),
-            ("admission calls", reading.AdmissionCalls.Count, 11),
+            ("admission calls", reading.AdmissionCalls.Count, 14),
         ];
         string[] missing = [.. floors.Where(floor => floor.Found < floor.AtLeast)
             .Select(floor => $"{floor.What}: the walk found {floor.Found}; it held at least {floor.AtLeast} when the census was written")];

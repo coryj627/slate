@@ -2121,18 +2121,34 @@ internal sealed partial class WorkspaceViewModel
     {
         string path = row.FilePath;
         SaveReport report;
+        // The task-index repair lease brackets the session write, as it does
+        // for a tab's property write (WorkspaceTabViewModel.WriteProperty): a
+        // property write rewrites the file and re-indexes it, tasks included,
+        // so no task query may take a clean ticket across it, and a failure
+        // that is not a certain no-write leaves the note waiting for a
+        // repair. The finally fails closed for a fault the catch leaves
+        // alone: a leaked lease bars every task query for good.
+        _taskIndexRepairs.BeginMutation(path);
+        bool leaseSettled = false;
         try
         {
             hook?.Invoke();
             report = value is null
                 ? _session.DeleteProperty(path, key, expectedContentHash: null)
                 : _session.SetProperty(path, key, value, expectedContentHash: null);
+            _taskIndexRepairs.EndMutation(path, indexConsistent: true);
+            leaseSettled = true;
         }
         catch (Exception failure) when (failure
             is not OutOfMemoryException
                 and not StackOverflowException
                 and not AccessViolationException)
         {
+            if (!leaseSettled)
+            {
+                _taskIndexRepairs.EndMutation(path, indexConsistent: failure is VaultException.WriteConflict);
+                leaseSettled = true;
+            }
             // Catch-ALL (the W4-4 completion-totality precedent, red
             // team round 2): any worker failure must still release the
             // note-scoped lease — a stranded entry refuses every later
@@ -2146,6 +2162,13 @@ internal sealed partial class WorkspaceViewModel
                 }
             }));
             return;
+        }
+        finally
+        {
+            if (!leaseSettled)
+            {
+                _taskIndexRepairs.EndMutation(path, indexConsistent: false);
+            }
         }
         RunOnSaveDispatcher(() => EndTablessWrite(path, done, () =>
         {
