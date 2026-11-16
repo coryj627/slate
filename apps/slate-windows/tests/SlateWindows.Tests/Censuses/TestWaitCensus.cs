@@ -2147,7 +2147,7 @@ public sealed class TestWaitCensus
         (UnitProject, "Thread.Sleep", 62),
         (UnitProject, "Task.Delay", 42),
         (UnitProject, "PumpFor", 31),
-        (UnitProject, "RunDispatcherFor", 6),
+        (UnitProject, "RunDispatcherFor", 4),
         (GateProject, "Thread.Sleep", 46),
     ];
 
@@ -2186,8 +2186,6 @@ public sealed class TestWaitCensus
         ("CanvasDocumentTests.cs", "QuiesceAsync", 1, "quiesce: 20 drains, since a drained body can queue follow-up work"),
         ("Censuses/CallbackConcurrencyCensus.cs", "RegisterUnregisterOnce", 1,
             "deliberate-hold: a millisecond for events to land between the register and the unregister"),
-        ("Censuses/CanonicalHighlightCensus.cs", "LoadedCoordinatorQuiescesAndRefreshesForEditScrollAndResize", 1,
-            "quiesce: the shown editor finishes loading before its coordinator is read; a wait on the coordinator would do"),
         ("Censuses/CanonicalHighlightCensus.cs", "LoadedCoordinatorQuiescesAndRefreshesForEditScrollAndResize", 2,
             "late-arrival: 160 ms after a refresh settles no further refresh comes"),
         ("CitationAsyncInterleavingTests.cs", "QuiesceAsync", 1, "quiesce: 40 drains of the seed and both leaves"),
