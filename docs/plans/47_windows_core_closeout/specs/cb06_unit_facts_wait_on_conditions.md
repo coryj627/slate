@@ -2,7 +2,7 @@
 
 Issues: none (the class sweep; it closes nothing). Size M. Lanes: windows (the app job's unit facts). AT: — (tests only). Wave: C2, slot 2. Depends on: CB-4 merged (it creates `Censuses/TestWaitCensus.cs` with rule 3 and the shared walk). Parallel with: CB-3 then CB-5, CB-8 (no shared files). Decision: none. Interlock: `TestWaitCensus.cs` is shared in order CB-4, CB-6, CB-7; CB-7 deletes the gate entries this PR pins, in the shape chosen here. CB-1 and CB-4 (wave C1) edited `StaThread.cs`, `StaThreadTests.cs`, `SaveChainAdmissionTests.cs`, `FinalMergeDeltaTests.cs` and `ReadingFocusTests.cs`: re-check every line below against `main` at start. No product file and no workflow changes. Review: its tests alone (plan §4 rule 9).
 
-`T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `G/` = `…/SlateWindows.AccessibilityTests/`, `S/` = `apps/slate-windows/src/SlateWindows/`. Lines are from c2377210; those in `StaThreadCensus.cs`, `session.rs` and `windows.yml`, which changed since, were re-read on 2026-11-14 at f0bde81c.
+`T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `G/` = `…/SlateWindows.AccessibilityTests/`, `S/` = `apps/slate-windows/src/SlateWindows/`. Lines are from c2377210; those in `StaThreadCensus.cs`, `session.rs` and `windows.yml`, which changed since, were re-read on 2026-11-15 at 798cdaae, where the greps below were also run again.
 
 ## Goal
 
@@ -10,9 +10,9 @@ A unit fact goes red because the code is wrong, not because the runner was busy.
 
 ## Current state on main
 
-**The greps, run again in `T/`.** `Thread.Sleep(`: 66 in 29 files (the reading's 64 in 27, plus `ExitWatch.cs` and `ExitWatchTests.cs` from #1927). `Task.Delay(`: 46 in 19. Not in the reading: 43 calls to the fixed pumps `PumpFor(span)` and `RunDispatcherFor(span)` in four files (`HotExitTests.cs` 26, `AccessibilityNotificationDispatcherTests.cs` 9, `Censuses/AvalonDocumentBufferCensus.cs` 5, `Censuses/CanonicalHighlightCensus.cs` 3). A fixed pump is a fixed sleep on a dispatcher thread. In `G/`: 47 `Thread.Sleep(` in 14 files, no `Task.Delay`.
+**The greps, run again in `T/`.** `Thread.Sleep(`: 66 in 29 files (the reading's 64 in 27, plus `ExitWatch.cs` and `ExitWatchTests.cs` from #1927). `Task.Delay(`: 46 in 19. Not in the reading: 43 calls to the fixed pumps `PumpFor(span)` and `RunDispatcherFor(span)` in four files (`HotExitTests.cs` 26, `AccessibilityNotificationDispatcherTests.cs` 9, `Censuses/AvalonDocumentBufferCensus.cs` 5, `Censuses/CanonicalHighlightCensus.cs` 3). A fixed pump is a fixed sleep on a dispatcher thread. In `G/`: 51 `Thread.Sleep(` in 15 files, no `Task.Delay` (47 in 14 before #1944 and #1951 added two each, in `ShellAccessibilityTests.AppMenu.cs` and `…Settings.cs`).
 
-**What exists.** `T/WallClockBudget.cs:27-58` (`WarmMedian`, `WarmMedianAsync`: one untimed run, five timed, the median), used at `T/CanvasDocumentTests.cs:4898` and `:4956` (#1915). The lane filter `kind!=benchmark` (`.github/workflows/windows.yml:909`); two facts carry the trait (`GraphEndToEndTests.cs:944`, `CommandPaletteTests.cs:134`). `TestWaitCensus.cs` is not on c2377210. CB-4's spec gives it one lazy walk of both projects, a floor per project, and rules written as pure functions from parsed source to violation strings, each with a planted-source theory.
+**What exists.** `T/WallClockBudget.cs:27-58` (`WarmMedian`, `WarmMedianAsync`: one untimed run, five timed, the median), used at `T/CanvasDocumentTests.cs:4898` and `:4956` (#1915). The lane filter `kind!=benchmark` (`.github/workflows/windows.yml:941`); two facts carry the trait (`GraphEndToEndTests.cs:944`, `CommandPaletteTests.cs:134`). `TestWaitCensus.cs` is not on c2377210. CB-4's spec gives it one lazy walk of both projects, a floor per project, and rules written as pure functions from parsed source to violation strings, each with a planted-source theory.
 
 **The reading's instances, checked.** Every line claim holds.
 
@@ -71,7 +71,7 @@ A delay that is an expression body (`() => Thread.Sleep(600)`) is not a statemen
 
 Sites are keyed `(file, member)`, the member named as `StaThreadCensus.cs:167-175` names it. Two pinned lists, unit and gate, of `(File, Member, Count, Reason)`. The fact fails on a key with more sites than its count or with no entry ("new: wait on the condition, or add an entry and say in the PR why none could be waited on"), on an entry with fewer sites than its count ("stale: lower or remove it"), on a reason outside Design 2, and on `unswept` in the unit list. A floor on calls seen to the four names: 140 in `T/`, 20 in `G/`.
 
-Blind spots, written in the file's header: a `while` on a clock with no other exit; a pump helper with another name; FlaUI's `Wait.UntilInputIsProcessed` (76 calls in `G/`, CB-7's to weigh).
+Blind spots, written in the file's header: a `while` on a clock with no other exit; a pump helper with another name; FlaUI's `Wait.UntilInputIsProcessed` (78 calls in `G/`, CB-7's to weigh).
 
 **5. Rule 2, `AnElapsedCeilingGoesThroughWallClockBudgetOrIsABenchmark`.** Per member, its lambdas and local functions included.
 
@@ -81,7 +81,7 @@ A *ceiling* is `a < b`, `a <= b`, `b > a` or `b >= a` where `a` holds a reading 
 
 Its pinned list has the same shape and checks. Blind spots, in the header: a reading returned from a helper (`WeakEventExitTests`), and a fact that medians its own samples (`AvalonDocumentBufferCensus.cs:359-370`, already the warm-median shape).
 
-**6. The lists' size.** By this spec's reading, rule 1 starts at 81 unit sites: 28 `Thread.Sleep`, 13 `Task.Delay`, 40 fixed pumps. The reading's "about 30" counted the first kind only. Five go by the fixes above (#2's second sleep, both of #9, `AvalonDocumentBufferCensus.cs:586`, `CitationAsyncInterleavingTests.cs:956`), so the target is 76 or fewer, each with a reason; every positive wait found under Design 1 lowers it. The gate starts at about 30 sites, all `unswept` (CB-7's spec works 29). Rule 2 starts at 18 unit ceilings and one gate ceiling (`G/FocusSettleWatchTests.cs:54`, pinned for CB-7); the unit target is one (`HeldVaultStoreFileTests.cs:68`, `no-wait-witness`), or two with `HotExitTests.cs:684`. The census's first run is the authority for every number here. The PR body gives its numbers at the first commit and at merge.
+**6. The lists' size.** By this spec's reading, rule 1 starts at 81 unit sites: 28 `Thread.Sleep`, 13 `Task.Delay`, 40 fixed pumps. The reading's "about 30" counted the first kind only. Five go by the fixes above (#2's second sleep, both of #9, `AvalonDocumentBufferCensus.cs:586`, `CitationAsyncInterleavingTests.cs:956`), so the target is 76 or fewer, each with a reason; every positive wait found under Design 1 lowers it. The gate starts at about 30 sites, all `unswept` (CB-7's spec works 29; `G/ShellAccessibilityTests.AppMenu.cs:113`, a 1.5 s sleep before a negative that #1944 added, is a thirtieth). Rule 2 starts at 18 unit ceilings and one gate ceiling (`G/FocusSettleWatchTests.cs:54`, pinned for CB-7); the unit target is one (`HeldVaultStoreFileTests.cs:68`, `no-wait-witness`), or two with `HotExitTests.cs:684`. The census's first run is the authority for every number here. The PR body gives its numbers at the first commit and at merge.
 
 **7. Order inside the PR (plan §4 rule 4).** First commit: both rules, the planted theory, and the lists holding today's sites. Then one commit per file: the fix, and its entry lowered or deleted.
 
@@ -107,7 +107,7 @@ Its pinned list has the same shape and checks. Blind spots, in the header: a rea
 
 ## Docs and registers
 
-`BENCHMARKS.md`, the paragraph at `:942-946`: one sentence, that since plan 47 CB-6 the fact asserts the median of five warm readings (`WallClockBudget`), so the table's recorded cold values are history. No contract row, chord, matrix or announcement changes. Evidence (plan §4 rule 6): this PR answers no recorded failing run; the app job's results keep 7 days (`windows.yml:949-958`), and the PR body says so.
+`BENCHMARKS.md`, the paragraph at `:942-946`: one sentence, that since plan 47 CB-6 the fact asserts the median of five warm readings (`WallClockBudget`), so the table's recorded cold values are history. No contract row, chord, matrix or announcement changes. Evidence (plan §4 rule 6): this PR answers no recorded failing run; the app job's results keep 7 days (`windows.yml:992-1001`), and the PR body says so.
 
 ## Verification
 

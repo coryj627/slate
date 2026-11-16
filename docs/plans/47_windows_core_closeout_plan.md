@@ -1,7 +1,7 @@
 # 47 — Windows and core close-out: delivery plan
 
 Status: draft for the owner's review, 2026-11-13; corrected 2026-11-14
-for six merges that landed around it (§2.6). Not adopted; nothing in
+and 2026-11-15 for twelve merges that landed around it (§2.6). Not adopted; nothing in
 this plan has started. Written from the requirements brief the owner
 approved the same day
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
@@ -33,7 +33,7 @@ below means the code says so and nobody has seen it happen.
 
 **In:** 61 issues that were open on 2026-11-13, in six kinds. Two have
 since left: #1826 is closed and #1596 is back with plan 45 (§2.6), so 59
-remain.
+remain, all still open on 2026-11-15.
 
 | Kind | Issues |
 |---|---|
@@ -169,7 +169,7 @@ The brief's six classes held up, with different sizes than expected.
 | A control disabled while it holds the keys | #1866 | Fourteen sheet triggers on the menu, and the launcher's rows; neither has been heard under NVDA yet. Four sites were fixed by #1867. Six further groups (about twenty buttons that go unavailable when the reader activates them) are instances by mechanism and have never been heard either (CD11). The focus manifest's census does not scrape `Command=`, so 249 bindings can disable through `CanExecute` unseen. |
 | An open dropdown's rows with no place in their set | #1783 #1836 | Eleven combo box sites, one defect. |
 | An embedded reading element spoken as "grouping" | #1708 | One live member, the diagram, in three states. Math is fixed. A thematic break and an embed image each sit alone on a line with no name; what NVDA says there needs one pass. Tab onto a diagram still reads its whole source as HelpText, which #1591 removed for math; nobody had filed it (CD12). |
-| A test that waits on the clock, or a fixture that tears down under in-flight work | six issues | Only #1673 is the class as worded. The unit project has 81 fixed waits that stand as statements of their own (28 sleeps, 13 delays, 40 fixed pumps) and the gate has 29; 19 elapsed-time oracles; nine fixtures that release a gate or dispose an event under work still running; and ten gate polls that hold a file the app replaces by rename (the mirror of #1788). Most of the unit project's fixed waits prove that nothing happened, and replacing one needs a product seam, so CB-6 fixes the few it can and pins the rest with reasons. |
+| A test that waits on the clock, or a fixture that tears down under in-flight work | six issues | Only #1673 is the class as worded. The unit project has 81 fixed waits that stand as statements of their own (28 sleeps, 13 delays, 40 fixed pumps) and the gate has 30; 19 elapsed-time oracles; nine fixtures that release a gate or dispose an event under work still running; and ten gate polls that hold a file the app replaces by rename (the mirror of #1788). Most of the unit project's fixed waits prove that nothing happened, and replacing one needs a product seam, so CB-6 fixes the few it can and pins the rest with reasons. |
 
 The reading also found the palette seal's route table has two rows in no
 register (drag and drop, and UIA `SetFocus`), and five more search
@@ -184,9 +184,9 @@ rule 6 answers it.
 ### 2.4 The audit of issues other plans own
 
 The brief expected the audit to close some. **None can close on today's
-evidence.** CB-0 posts a status comment on each of the 25 still open
-(#998 has since closed); nine of those also correct text on the issue
-that is no longer true. Three are one
+evidence.** CB-0 posts a status comment on each of the 24 still open
+(#998 and #1525 have since closed); eight of those also correct text on
+the issue that is no longer true. Three are one
 owner action from closing (#1565, #1756, #1564) and three could end on
 an owner decision (CD36). §9 has the table.
 
@@ -206,7 +206,7 @@ Two had no owner at all, and one fits this plan better than where it sat:
 Plans 44 to 46 have one chunk not yet delivered, WB-30 (blocked on plan
 43's PR 34), and plan 45's XB-6 is half delivered. WB-32 merged as #1937
 on 2026-11-14. Plan 46 is fully merged. Plan 43 restarted on 2026-11-13
-with PR 29's spec (#1935) and its core half (#1936); twelve of the
+with PR 29 (#1935, #1936, then #1942, which ended #1525); eleven of the
 audited issues wait on it.
 
 ### 2.5 Where this plan meets other work
@@ -233,25 +233,37 @@ corrections once: two findings, both applied.
 | #1930 | A CI job, `rust-weak-volumes`, runs the weak-volume facts on FAT32, exFAT and letterless VHDs on every lane run; it skips the case-only rename fact by name until #1727 is fixed | CB-13 needs no elevated session from the owner. It un-skips that fact, so it edits `windows.yml` and `Workflows.Tests.ps1`. The two facts WB-28 left are delivered. |
 | #1935, #1936 | Plan 43's PR 29 spec, and its core half (an FFI addition) | Plan 43's queue has restarted. CB-14 and CB-20b re-read `a11y.rs` and the variant count when they start. |
 
+Read again on 2026-11-15 at 798cdaae (#1946).
+
+| Merge | What it did | What changes here |
+|---|---|---|
+| #1941, #1944 | Found and fixed #1939: when the keys open the app menu and the pointer rests where it appears, WPF hovers the row under the pointer and that row takes the keys. The fix is in `MainWindow.AppMenu.cs`, for the app menu only | This is very likely #1849's cause too: the reading's first candidate was a parked pointer. CB-24 still records one NVDA run, then applies #1944's remedy to the note header's menu and checks the other code-built context menus (the Files toolbar's, the rail's More menu) as finds on the way. It is no longer diagnosis-first. |
+| #1942 | The Mac half of hot exit; ended #1525 | #1525 leaves §9 and the audit's comments, which are now 24. |
+| #1946 | A PR that touches only Mac sources or the documents the censuses read runs the Windows lane's census tier; `AGENTS.md` gained two paragraphs; the parity-matrix check moved from the model job to the docs census job; a guard requires `[Trait("tier", "census")]` on any test class that reads a census-only path | CB-0's `AGENTS.md` line numbers moved. CB-3 pins the parity-matrix check where it now lives, and its ledger check must run in both tiers, because a Mac-only PR is the one that moves ledger rows. A census this plan adds carries the trait if it reads a Mac source or a census-list document. |
+| #1950 | The unit tests tolerate a 20-second SVG decode through a new process-wide seam in `EditorInteractions.cs`; ended #1949 | CB-28 builds on that seam. Lines in `ReadingSvgEmbedDecodeTests`, `ReadingDiagramTests` and `W2EditorInteractionRedTeamTests` moved for CB-4, CB-6 and CB-28. |
+| #1951 | The gate's theme fact reads the window's own pixels at its first rendered frame; ended #1943 | CB-7's pixel sites in the theme journeys can use the same reader; `ShellAccessibilityTests.Settings.cs` moved. |
+
+#1943, #1945 and #1949 were filed and ended inside those two days, so
+CB-46's re-count has nothing to do for them. #1932 and #1933 are Mac
+defects and plan 43's.
 Also since the baseline:
 
 - **The home pool ran again.** A golden-image acceptance run on
   2026-11-14 used an image rebuilt with #1937 and #1938. The default mode
   is still `namespace`. That rebuild did not carry #1903 or #1614, so
   CB-43 needs another.
-- **#1939, filed 2026-11-14,** reports the app menu opening with the keys
-  on its last row on home-pool VMs. #1849 is the note header's menu moving
-  to its last row. By the freeze, #1939 waits for CB-46's re-count. CB-24's
-  diagnosis reads it beside #1849, and if one cause explains both, CB-24
-  takes it as a find on the way.
+- **#1939, filed 2026-11-14,** reported the app menu opening with the keys
+  on its last row on home-pool VMs. #1944 fixed and ended it on
+  2026-11-15 (second table below).
 - **#1934** (Windows consumes core's hot-exit restore plan), filed
   2026-11-13 from plan 43's PR 29 work, is labelled an enhancement but
   also names a Windows defect it would end: the host groups `A.md` and
   `a.md` as one file and can give a displaced tab the group's latest
   text. CB-46's re-count takes it and records what was decided for it.
-- `windows.yml`, `Workflows.Tests.ps1`, `StaThread.cs` and its tests,
-  `session.rs`, `a11y.rs` and plans 43 and 44 all changed, so the line
-  numbers in the first-wave specs were re-read on 2026-11-14.
+- `windows.yml`, `Workflows.Tests.ps1`, `AGENTS.md`, `StaThread.cs` and
+  its tests, `session.rs`, `a11y.rs`, the SVG decode tests and plans 43
+  and 44 all changed, so the line numbers in the first-wave specs were
+  re-read on 2026-11-14 and again on 2026-11-15.
 
 ## 3. Decisions for the owner (CD1 to CD40)
 
@@ -412,7 +424,7 @@ work the chunk carries.
 | CB-21 | Narrator announces the selection on Ctrl+A in the reading view; diagnosis first | #1330 | S–M | windows (gate) | Narrator | CD13 |
 | CB-22 | Activate at Cursor and Preview Embed are unavailable in reading mode; a Ctrl+click on prose stays silent while the cache loads | #1661 | S | windows | NVDA spot | CD14 |
 | CB-23 | A right-pane panel with no body says what it will show | #1800 | S | windows | NVDA spot | CD15 |
-| CB-24 | One NVDA session records #1846 and traces #1849; the note header's menu keeps its first row | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
+| CB-24 | One NVDA session records #1846 and #1849; the note header's menu keeps its first row under a resting pointer, by #1944's remedy | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
 | CB-25 | A `LayoutItemsControl` drops a removed item's raw-view peer | #1860 | S | windows | — | — |
 | CB-26 | A callout reads as its label, not its marker, on both hosts | #1775 | M | rust, windows, swift | NVDA and Narrator spot | CD17 |
 | CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (no known input reaches it) | CD18 |
@@ -604,7 +616,7 @@ None closes today on evidence; CD36 may end three.
 
 | Owner of what remains | Issues |
 |---|---|
-| Plan 43's queue (restarted 2026-11-13; needs a Mac) | #1323 (one mac fact) #1370 #1398 #1434 #1470 #1469 #1513 #1525 #940 (CD36) #1389 and #1526 (through #1651, CD36) #1484 (through #1653) #1733 |
+| Plan 43's queue (restarted 2026-11-13; needs a Mac) | #1323 (one mac fact) #1370 #1398 #1434 #1470 #1469 #1513 #940 (CD36) #1389 and #1526 (through #1651, CD36) #1484 (through #1653) #1733 |
 | Plan 44 WB-30, then plan 43 PR 41 | #1468 |
 | The owner | #1560 #1564 #1565 #1756 #746 #747 #750; and #748 #749, which the audit did not read |
 | The watch list | #480 #1493 |
@@ -647,7 +659,7 @@ wording from `AGENTS.md`; the PR body with `Closes #N`, the facts, the
 registers, the field-pass phrases, "Found and fixed here", `not
 delivered: <reason>` and the count (§4 rule 8).
 
-A chunk whose cause is unknown (CB-17a, CB-18, CB-21, CB-24, CB-37)
+A chunk whose cause is unknown (CB-17a, CB-18, CB-21, CB-37)
 opens with a diagnosis recorded on its issue before any product code. A
 chunk that rests on WPF behaviour nobody has checked (CB-19, CB-36,
 CB-41) opens with the failing fact or probe that settles it, with
@@ -655,7 +667,8 @@ the fallback named. A chunk with a spike (CB-20) or a design step
 (CB-40, CB-45) opens with that, and the owner reads it first.
 
 Specs for the first wave, written 2026-11-13 against c2377210. CB-1's
-was rewritten, and every line number re-read, on 2026-11-14 at f0bde81c:
+was rewritten on 2026-11-14, and every line number re-read on
+2026-11-15 at 798cdaae:
 
 | Chunk | Spec |
 |---|---|

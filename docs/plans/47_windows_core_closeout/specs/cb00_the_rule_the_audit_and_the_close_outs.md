@@ -1,6 +1,6 @@
-# CB-0 — The found-on-the-way rule is in `AGENTS.md`, the 25 audited issues still open say where they stand, #1835 is closed, and plan 47's hand-offs are on GitHub
+# CB-0 — The found-on-the-way rule is in `AGENTS.md`, the 24 audited issues still open say where they stand, #1835 is closed, and plan 47's hand-offs are on GitHub
 
-Issues: #1835 (closed by hand, with a comment); comments on the 25 audited issues still open (#998 closed on 2026-11-14, with #1937) and on #1653, #1733, #1842, #1848; three new issues (the ledger, the deferred finds, CD38's catalogue). Size S. Lanes: none (the docs PR touches no lane's path list, so each lane's `lane paths` job and `pr gate` run and every other job skips). AT: —. Wave: C0. Depends on: plan 47's documents being on `main`, and the owner's answers to plan §3. Parallel with: nothing (C0 has one slot). Decision: the `AGENTS.md` PR waits on no row. CD35, CD36, CD37 and CD38 gate the issue edits and the catalogue issue; CD40 gates #1835's close; CD8 and CD13 each gate one comment. All are answered before C0 (plan 47 §3). Interlock: CB-3 adds one line to `AGENTS.md` beside the parity-matrix gotcha, after this chunk's PR has merged.
+Issues: #1835 (closed by hand, with a comment); comments on the 24 audited issues still open (#998 closed on 2026-11-14 with #1937, and #1525 on 2026-11-15 with #1942) and on #1653, #1733, #1842, #1848; three new issues (the ledger, the deferred finds, CD38's catalogue). Size S. Lanes: none (the docs PR touches no lane's path list, so each lane's `lane paths` job and `pr gate` run and every other job skips). AT: —. Wave: C0. Depends on: plan 47's documents being on `main`, and the owner's answers to plan §3. Parallel with: nothing (C0 has one slot). Decision: the `AGENTS.md` PR waits on no row. CD35, CD36, CD37 and CD38 gate the issue edits and the catalogue issue; CD40 gates #1835's close; CD8 and CD13 each gate one comment. All are answered before C0 (plan 47 §3). Interlock: CB-3 adds one line to `AGENTS.md` beside the parity-matrix gotcha, after this chunk's PR has merged.
 
 ## Goal
 
@@ -8,17 +8,17 @@ Every later chunk works under one written rule for a defect found on the way. Ea
 
 ## Current state on main
 
-Read at c2377210 and on GitHub on 2026-11-13; the line numbers in the files that changed since were re-read on 2026-11-14 at f0bde81c.
+Read at c2377210 and on GitHub on 2026-11-13; the line numbers in the files that changed since were re-read on 2026-11-15 at 798cdaae (#1946 added eight lines to `AGENTS.md` above the rule).
 
-- **The rule.** `AGENTS.md:116-118`: "One PR closes its issues and nothing else. A defect found on the way is filed as an issue unless it blocks the PR. A defect in the PR's own feature is fixed on its branch." The "PR body:" bullet is `:112-115`. No test or workflow reads `AGENTS.md`.
+- **The rule.** `AGENTS.md:124-126`: "One PR closes its issues and nothing else. A defect found on the way is filed as an issue unless it blocks the PR. A defect in the PR's own feature is fixed on its branch." The "PR body:" bullet is `:120-123`. No test or workflow reads `AGENTS.md`.
 - **Repeats of the old rule.** `43_mac_backlog_delivery/00_program.md:148-149` (§4 rule 8); `44_windows_backlog_plan.md:307-308`; `45_windows_followups_plan.md:138`; `46_windows_design_system_plan.md:185` (the plan does not name this one). `00_program.md:317-320` and `90_reassessment_2026-10-19.md:196` record what the rule did and stay.
-- **None is a frozen record.** Only `*_contracts.md` is append-only (`AGENTS.md:119-121`), and later PRs edited each plan in place (#1655, #1732, #1853). Plan 43 marks a later fact with a dated italic note (`00_program.md:404`, `:555`). This chunk does the same: it appends, and rewrites only a status sentence that is now false.
+- **None is a frozen record.** Only `*_contracts.md` is append-only (`AGENTS.md:127-129`), and later PRs edited each plan in place (#1655, #1732, #1853). Plan 43 marks a later fact with a dated italic note (`00_program.md:404`, `:555`). This chunk does the same: it appends, and rewrites only a status sentence that is now false.
 - **Stale text.** `45_windows_followups_plan.md:5-6` "Not adopted; nothing in this plan has started." (decided 2026-10-24, `:123`; fifteen of sixteen chunks merged, by the audit). `46_windows_design_system_plan.md:5` "Later waves wait for the owner." and `:147-148` "Plan 44's WB-29 and WB-30 are still open". `43_mac_backlog_delivery/22_descriptor_relative_session_design.md:6-7` says 22W is not delivered. `44_windows_backlog_plan.md:434` waits for a measurement that "confirms the remedy"; #1909's body says the remedy was dropped on the owner's call.
 - **#1835.** Open, no comments. #1856 (3035525d) removed the toggle; `SidebarDualPaneToggle` is a menu row (`apps/slate-windows/src/SlateWindows/MainWindow.FilesToolbar.cs:89`).
 - **#1842, #1848.** Open, no milestone, no comments. Milestone W is number 22, `Milestone W — Windows Version`.
 - **9edf4b6b.** `origin` no longer has `claude/ds11-accent` (`git ls-remote origin`; a local `origin/claude/ds11-accent` is a stale tracking ref). The commit is an ancestor of 6740106c, the head of merged PR #1841, so `refs/pull/1841/head` reaches it. The repository has no tags, and no workflow or ruleset acts on one.
 - **#1733 and the mac follow-ups** (#1651 #1652 #1653 #1654 #1662 #1679 #1720): open, no comments, and `00_program.md` names none. #1733's code is unchanged (`vault/fs.rs:314`).
-- **The 25.** All open, read again on 2026-11-14; #998, the twenty-sixth, closed that day with #1937 and gets no comment. No issue titled "Mac work owed by plan 47" exists.
+- **The 24.** All open, read again on 2026-11-15. Two of the audit's 26 have closed and get no comment: #998 (with #1937) and #1525 (with #1942). No issue titled "Mac work owed by plan 47" exists.
 
 ## Reference
 
@@ -28,7 +28,7 @@ Plan 45's XB-0 (close by comment: name the fixing merge and the anchor). `readin
 
 One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9). Item 8's issue is opened first, because the PR cites its number. Write each comment to a file and post it with `gh issue comment N --body-file <file>`. `<date>` is the day the step runs or the decision was answered.
 
-1. **`AGENTS.md`.** Replace `:112-118` with:
+1. **`AGENTS.md`.** Replace `:120-126` with:
 
    ```markdown
    - PR body: `Closes #N` for each issue it closes, the tests added, the contract
@@ -95,7 +95,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    | #940 | LO+C | :299 | last sentence, by CD36 (5c) |
    | #1370 #1398 #1434 #1468 #1469 #1470 #1484 | LO | :57 :92 :104 :114 :124 :134 :149 | nothing |
    | #1564 #1565 #746 #747 | LO | :229 :246 :321 :331 | nothing |
-   | #1525 #1526 #1756 #750 | LO+C | :193 :204 :273 :342 | nothing |
+   | #1526 #1756 #750 | LO+C | :204 :273 :342 | nothing |
 
    **5a. The two plan 47 takes, and #1596.** The owner answers plan 47 §3 before C0, so each row is answered when CB-0 starts and each comment is posted with the rest. Under "no", post the audit's draft with its bracket replaced by "Plan 47 does not take it (CDn, `<date>`)."
 
@@ -108,7 +108,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    #1596:
    > Correction and status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): half delivered since this was read. #1938 (2026-11-14, plan 45 XB-6b) moved the golden image's runner to 2.338.2. The setup-python half (XB-6a) is still open: there are eleven `actions/setup-python` pins at v7.0.0 in six files, not nine in five, since two were added to `windows.yml` after this was filed. This issue stays with plan 45's XB-6; plan 47 does not take it, and its CB-43 covers only #1614 and #1903, which need a golden rebuild of their own.
 
-   **5b. #1653** (not one of the 25): post the audit's draft at `:151` unchanged.
+   **5b. #1653** (not one of the 24): post the audit's draft at `:151` unchanged.
 
    **5c. CD36.** CD36 is answered before C0, like every row. Under "no", or for a part the owner declines, post the audit's draft unchanged.
    - #940, "yes": the last sentence becomes "The owner has ended this by hand (plan 47 CD36, `<date>`): the race it reports is shut on all three platforms (22a, 22W), and 22b's one remaining fact, `a_renamed_open_vault_keeps_working_and_can_show_its_new_path`, is carried by #1513." Then `gh issue close 940 --reason completed`. #1513's comment gains: "It also carries 22b's mac host fact, `a_renamed_open_vault_keeps_working_and_can_show_its_new_path`, since #940 was ended by hand (CD36)."
@@ -186,7 +186,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
 
 10. **Deliberately not done.**
     - No product code, test or workflow change, and no version bump for anything on the watch list.
-    - None of the 25 is closed, except #940 under CD36 "yes". No title, body or label is edited except #1323's title under CD36 "yes". #940 gets no milestone.
+    - None of the 24 is closed, except #940 under CD36 "yes". No title, body or label is edited except #1323's title under CD36 "yes". #940 gets no milestone.
     - The owner's steps stay the owner's: the ruleset `PUT` (#1565), `/design-sync` (#1756), the four Studio steps (#1564). `AGENTS.md`'s two #1565 caveats in the merge steps stay until the ruleset requires the lanes.
     - The old rule sentences in plans 43 to 46 are not deleted, and the two records of what the old rule did are not touched.
     - No issue is filed for anything the sweeps found, apart from the three in item 8; each find has an owner in plan 47 §9. #748 and #749 were not audited and get no comment.
@@ -214,14 +214,14 @@ git ls-remote origin 'refs/tags/ds11-accent-contrast-gate^{}'
 gh issue list --search '"Mac work owed by plan 47" in:title' --json number
 ```
 
-CI lanes: none does its work. `windows.yml` names the plan documents its censuses read (`:151-164`), and none of the seven files is among them; no other lane's path list matches a file here. The push to `main` matches no lane's paths either, so `gh run list --commit <merge-sha>` may be empty. AT: none.
+CI lanes: none does its work. `windows.yml` names the plan documents its censuses read (`:160-173`), and none of the seven files is among them; no other lane's path list matches a file here. The push to `main` matches no lane's paths either, so `gh run list --commit <merge-sha>` may be empty. AT: none.
 
 ## Acceptance
 
 - [ ] `AGENTS.md` carries item 1's text; plans 43 to 46 each carry their pointer line.
 - [ ] The five stale sentences are corrected.
 - [ ] #1835 is closed with item 4's comment; under CD40 "no", it has the comment and stays open.
-- [ ] Each of the 25 has its comment, or is named under `not delivered` with the decision row it waits for. #1653 has its correction.
+- [ ] Each of the 24 has its comment, or is named under `not delivered` with the decision row it waits for. #1653 has its correction.
 - [ ] The tag resolves to 9edf4b6b on `origin`, or, if the owner does not want tags, #1842 carries the pasted code item 6 names; #1842 and #1848 are in Milestone W, each with its comment.
 - [ ] #1733 has its comment, and plan 43 §11.4 has the row.
 - [ ] The ledger issue exists; plan 47 §8 and plan 43's row cite its number.
@@ -231,4 +231,4 @@ CI lanes: none does its work. `windows.yml` names the plan documents its censuse
 
 ## Brief
 
-Work on `claude/cb0-rule-audit-close-outs` from `main`, once the owner has answered plan 47 §3. (1) Open the ledger (`gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y`) and the deferred-finds issue (`--title "Plan 47 deferred finds" --label windows`), each with item 8's body, and under CD38 as recommended the catalogue issue in Milestone W; keep the numbers. (2) One docs PR, titled `docs: agents.md sizes a defect found on the way by what its fix touches, and plans 43 to 46 point to it`: replace `AGENTS.md:112-118` with item 1's block; append item 2's dated line to `43_mac_backlog_delivery/00_program.md` after `:149` and as the last paragraph of §4 in plans 44, 45 and 46 (above `:366`, `:155`, `:227`); make item 3's five replacements (`45…plan.md:5-6`, `46…plan.md:5` and `:147-148`, `22_descriptor_relative_session_design.md:6-7`, `44…plan.md:434`); add item 7's row after `00_program.md:470`; write the ledger's and the deferred-finds issue's numbers into plan 47 §8. Re-read each line number first. The body names no issue after a closing word, lists the files, and ends "found on the way: 0, fixed here: 0, deferred: 0, filed: 0". Check `gh pr view N --json closingIssuesReferences` is `[]`; merge when `pr gate` passes and the lanes skip. (3) Close #1835 with item 4's comment (CD40); under CD40 "no", post the comment and leave it open. (4) Read the three release lists (item 9). (5) Post the 25 comments from `reading/09_group_c_audit.md` at the lines in item 5's table, with the changes the table names: the two decision texts in 5a as CD13 and CD8 were answered and #1596's as written, CD36's endings from 5c, CD37's reader and the reading's result in #1493 and #480, and #1560 without its brackets. Post #1653's correction (`:151`). Check each issue's state and last comment before posting. Under CD36 "yes", close #940 and retitle #1323. (6) Tag 9edf4b6b and push the tag (or, if the owner does not want tags, paste the code into #1842 as item 6 gives it), move #1842 and #1848 to Milestone W, and post their two comments (item 6). (7) Post #1733's comment. Do nothing in item 10. Report each step as the command and its result.
+Work on `claude/cb0-rule-audit-close-outs` from `main`, once the owner has answered plan 47 §3. (1) Open the ledger (`gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y`) and the deferred-finds issue (`--title "Plan 47 deferred finds" --label windows`), each with item 8's body, and under CD38 as recommended the catalogue issue in Milestone W; keep the numbers. (2) One docs PR, titled `docs: agents.md sizes a defect found on the way by what its fix touches, and plans 43 to 46 point to it`: replace `AGENTS.md:120-126` with item 1's block; append item 2's dated line to `43_mac_backlog_delivery/00_program.md` after `:149` and as the last paragraph of §4 in plans 44, 45 and 46 (above `:366`, `:155`, `:227`); make item 3's five replacements (`45…plan.md:5-6`, `46…plan.md:5` and `:147-148`, `22_descriptor_relative_session_design.md:6-7`, `44…plan.md:434`); add item 7's row after `00_program.md:470`; write the ledger's and the deferred-finds issue's numbers into plan 47 §8. Re-read each line number first. The body names no issue after a closing word, lists the files, and ends "found on the way: 0, fixed here: 0, deferred: 0, filed: 0". Check `gh pr view N --json closingIssuesReferences` is `[]`; merge when `pr gate` passes and the lanes skip. (3) Close #1835 with item 4's comment (CD40); under CD40 "no", post the comment and leave it open. (4) Read the three release lists (item 9). (5) Post the 24 comments from `reading/09_group_c_audit.md` at the lines in item 5's table, with the changes the table names: the two decision texts in 5a as CD13 and CD8 were answered and #1596's as written, CD36's endings from 5c, CD37's reader and the reading's result in #1493 and #480, and #1560 without its brackets. Post #1653's correction (`:151`). Check each issue's state and last comment before posting. Under CD36 "yes", close #940 and retitle #1323. (6) Tag 9edf4b6b and push the tag (or, if the owner does not want tags, paste the code into #1842 as item 6 gives it), move #1842 and #1848 to Milestone W, and post their two comments (item 6). (7) Post #1733's comment. Do nothing in item 10. Report each step as the command and its result.

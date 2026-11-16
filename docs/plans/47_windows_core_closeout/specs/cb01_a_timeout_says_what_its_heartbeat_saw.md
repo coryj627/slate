@@ -10,7 +10,7 @@ A fact that times out without giving up its stack says in its message how long a
 
 ## Current state on main
 
-Read at f0bde81c (#1938).
+Read at f0bde81c (#1938); the line numbers in `windows.yml`, which changed since, were re-read on 2026-11-15 at 798cdaae.
 
 - **What #1928 delivered** (662be6b1, 2026-11-13; #1826 was closed by it). `StaThread`'s teardown calls WPF's own `StopListening` on the thread's three shut-down listeners (`T/Support/StaThread.cs:156-161`, `:229-244`). Its two facts (`T/StaThreadTests.cs:76`, `:108`) and census (`T/Censuses/StaThreadCensus.cs:82-86`) are not touched here.
 - **The timeout path.** `Run<T>` is `StaThread.cs:273-359`; the thread starts at `:322`, and the timeout branch is `:325-351`. The stack is taken at `:328`. The dump is taken at `:329-332`, only when no stack was. The message is built at `:337` and thrown at `:341` or `:349-350`, with the stack text last.
@@ -20,7 +20,7 @@ Read at f0bde81c (#1938).
 - **No heartbeat exists** in `T/`. The project targets `net10.0-windows` (`T/SlateWindows.Tests.csproj:4`), which has `GC.GetTotalPauseDuration()`.
 - **Stale remarks.** `StaThread.cs:40-46` still says "Nothing runs on the fact's thread after its body"; #1875 and #1928 made that untrue.
 - **#1843's failure.** Run 42146706653, attempt 1, `main` at 28dae96e, home pool, 1 failed of 6,289. The job's log (job 127659883812, line 450, 02:06:04Z): `bound 60 s … and the body unwound.) Its stack could not be taken: the body did not pump its dispatcher within 5 s. A full dump … sta-fact-797-20261106T020456.dmp (5082 MB private; … written in 61738ms)`. So the thread was in synchronous code, not in the settle loop, which pumps (`T/RightPaneRailTests.cs:242-248`).
-- **The fact was rewritten** on 2026-11-07 by #1853 (e7ebfe30): `T/RightPaneRailTests.cs:30-46`, under a 60 s bound (`:269-270`). The dump expired: the app job's results keep 7 days (`.github/workflows/windows.yml:950-958`).
+- **The fact was rewritten** on 2026-11-07 by #1853 (e7ebfe30): `T/RightPaneRailTests.cs:30-46`, under a 60 s bound (`:269-270`). The dump expired: the app job's results keep 7 days (`.github/workflows/windows.yml:993-1001`).
 - **The host was not idle.** `C:\slate-ci\logs\orchestrator-2026-11-05.log:183-186` (UTC−5): the Rust slot committed cache generation 112 at 02:03:31Z; the model shard's VM was provisioned at 02:03:43Z, handed off at 02:03:55Z and claimed at 02:05:06Z. The fact's minute began about 02:03:51Z; its dump began at 02:04:56Z.
 - **Retention, checked 2026-11-14.** Job logs: 90 days (the repository's setting, read with `gh api`). The host's orchestrator logs: 30 days (`docs/runbooks/self-hosted-windows-runner.md:1035`).
 
@@ -79,7 +79,7 @@ No full local run: the chunk tears nothing down, so it cannot move the foregroun
 - [ ] The three red facts were seen failing, then passing; the PR body quotes both runs.
 - [ ] The reading precedes the dump; a timeout that took a stack carries no heartbeat sentence; the heartbeat's thread is a background thread; no sentence contains "dump" or says how many threads were blocked.
 - [ ] Rule 2: a "Found and fixed here" section. The stale remarks at `StaThread.cs:40-46` are its first line (a comment, so no test).
-- [ ] Rule 6, in the PR body: a timeout's heartbeat and collector sentences are in the job log for 90 days; its dump and TRX are in `slate-windows-app-results-<run>-<attempt>` for 7 days (`windows.yml:958`, unchanged by CD2); the home host's side is `C:\slate-ci\logs` for 30 days.
+- [ ] Rule 6, in the PR body: a timeout's heartbeat and collector sentences are in the job log for 90 days; its dump and TRX are in `slate-windows-app-results-<run>-<attempt>` for 7 days (`windows.yml:1001`, unchanged by CD2); the home host's side is `C:\slate-ci\logs` for 30 days.
 - [ ] Rule 7 with CD2: `Closes #1843`, with `not delivered: the cause of the 2026-11-06 timeout`.
 - [ ] Rule 8: the body's last line is the count: found on the way, fixed here, deferred, filed.
 - [ ] Rule 9: its tests alone; no red team.
