@@ -259,7 +259,8 @@ Describe 'windows.yml model evidence' {
             $file = Join-Path $TestDrive "step-$([guid]::NewGuid().ToString('N')).ps1"
             # The runner puts this line before a pwsh step's script.
             [IO.File]::WriteAllText($file, "`$ErrorActionPreference = 'stop'`n" + $script)
-            $output = @(& (Get-Process -Id $PID).Path -NoProfile -File $file 2>&1 | ForEach-Object { "$_" })
+            # No timeout: the script reads files, never the keyboard, and ends with `exit 0`.
+            $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $file 2>&1 | ForEach-Object { "$_" })
             return @{ Output = $output; ExitCode = $LASTEXITCODE }
         }
     }
@@ -367,6 +368,20 @@ Describe 'windows.yml model evidence' {
         $none = Invoke-StepScript $print[0] (Join-Path $TestDrive 'no-such-folder')
         $none.ExitCode | Should -Be 0
         @($none.Output | Where-Object { $_ -like '::*' }).Count | Should -Be 0
+        # A reader that held a checkpoint's file through the stall leaves the old phase in it, and ModelTestRun
+        # writes the stalled checkpoint beside it as <family>-shard-<n>.stalled.progress.txt. The pair gets its one
+        # error line.
+        $held = Join-Path $TestDrive 'held'
+        New-Item -ItemType Directory -Force $held | Out-Null
+        [IO.File]::WriteAllText((Join-Path $held 'reroot-shard-1.progress.txt'),
+            '{"family":"reroot","shardIndex":1,"shardCount":2,"selectedCases":272,"completedCases":4,"activeOrdinal":9,"activeCell":"held cell","phase":"drive","success":false,"elapsedMilliseconds":1200.5}')
+        [IO.File]::WriteAllText((Join-Path $held 'reroot-shard-1.stalled.progress.txt'),
+            '{"family":"reroot","shardIndex":1,"shardCount":2,"selectedCases":272,"completedCases":4,"activeOrdinal":9,"activeCell":"held cell","phase":"stalled","success":false,"elapsedMilliseconds":302000.5,"stalledPhase":"drive","stalledMilliseconds":300800}')
+        $pair = Invoke-StepScript $print[0] $held
+        $pair.ExitCode | Should -Be 0
+        @($pair.Output | Where-Object { $_ -like '::*' }) | Should -Be @(
+            '::error::the reroot model stalled on shard 1: case 9 (held cell), phase drive, for 301 s, with 4 of 272 cases completed')
+        @($pair.Output | Where-Object { $_ -like 'reroot-shard-1.progress.txt: *"phase":"drive"*' }).Count | Should -Be 1
     }
 }
 

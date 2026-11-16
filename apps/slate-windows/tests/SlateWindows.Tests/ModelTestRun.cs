@@ -79,6 +79,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private int _ticksUnchanged;
     private Checkpoint? _stalledOn;
     private Checkpoint? _stalled;
+    // The stalled checkpoint's own file, while it exists (a reader held the
+    // checkpoint's file through every try).
+    private string? _stalledBeside;
     private bool _progressStopped;
     private Case? _activeCase;
     private int _missedProgressWrites;
@@ -394,6 +397,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
                     WaitBetweenStalledWrites(StalledWriteWait);
                     written = WriteCheckpoint(latest);
                 }
+                if (sentence is not null && !written)
+                {
+                    // A reader that outlasted every try. The process is
+                    // about to end with the old phase in the file, and the
+                    // job log prints only what is on disk.
+                    WriteStalledBeside(latest);
+                }
             }
             if (sentence is not null)
             {
@@ -432,7 +442,68 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private bool WriteCheckpoint(Checkpoint checkpoint)
     {
         string directory = _configuration.ReportDirectory!;
-        string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
+        string path = CheckpointPath();
+        string temporary = path + ".tmp";
+        string contents = Serialize(checkpoint);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
+            _written = checkpoint;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // Reuse this same temporary file on the next checkpoint. The final
+            // JSON remains strict and records any missed diagnostic writes.
+            _missedProgressWrites++;
+            return false;
+        }
+        if (_stalledBeside is { } beside)
+        {
+            // The checkpoint's own file is current again, so the stalled
+            // copy beside it would only be a second, older word.
+            _stalledBeside = null;
+            try
+            {
+                File.Delete(beside);
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            {
+                _missedProgressWrites++;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>The stalled checkpoint in a file of its own, for a stall
+    /// whose every write a reader of the checkpoint's file refused: the same
+    /// folder, a name no reader holds, and one the job's print step matches
+    /// (<c>*.progress.txt</c>). It is replaced whole, so no one reads half
+    /// of it, and a failure here is counted and goes no further: the
+    /// callback still runs. Callers hold the progress gate.</summary>
+    private void WriteStalledBeside(Checkpoint stalled)
+    {
+        string path = CheckpointPath(".stalled");
+        string temporary = path + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(_configuration.ReportDirectory!);
+            File.WriteAllText(temporary, Serialize(stalled));
+            File.Move(temporary, path, overwrite: true);
+            _stalledBeside = path;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            _missedProgressWrites++;
+        }
+    }
+
+    private string CheckpointPath(string kind = "") =>
+        Path.Combine(_configuration.ReportDirectory!, $"{_family}-shard-{_configuration.Index}{kind}.progress.txt");
+
+    private string Serialize(Checkpoint checkpoint)
+    {
         var progress = new JsonObject
         {
             ["family"] = _family,
@@ -452,23 +523,7 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             progress["stalledPhase"] = checkpoint.StalledPhase;
             progress["stalledMilliseconds"] = checkpoint.StalledMilliseconds;
         }
-        string temporary = path + ".tmp";
-        string contents = progress.ToJsonString();
-        try
-        {
-            Directory.CreateDirectory(directory);
-            File.WriteAllText(temporary, contents);
-            File.Move(temporary, path, overwrite: true);
-            _written = checkpoint;
-            return true;
-        }
-        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-        {
-            // Reuse this same temporary file on the next checkpoint. The final
-            // JSON remains strict and records any missed diagnostic writes.
-            _missedProgressWrites++;
-            return false;
-        }
+        return progress.ToJsonString();
     }
 
     public void Dispose()

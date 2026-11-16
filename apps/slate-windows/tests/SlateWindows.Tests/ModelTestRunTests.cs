@@ -463,7 +463,10 @@ public sealed class ModelTestRunTests
 
     /// <summary>The age and the ticks together still report a checkpoint
     /// that is held: the real timer, five ticks of 20 ms, and a case that
-    /// waits for the report.</summary>
+    /// waits for the report. The case holds in the phase the run publishes
+    /// as it starts and publishes no other before the report, so the rule
+    /// has one checkpoint to name however the threads are scheduled, and
+    /// the stalled checkpoint is read from whichever file took it.</summary>
     [Fact]
     public void AHeldCheckpointIsReportedOnceItsAgeAndItsTicksAreBothReached()
     {
@@ -479,17 +482,16 @@ public sealed class ModelTestRunTests
         run.AssertInventory(7, 2, 5, InventorySha256);
         run.RunCase(run.SelectedCases[0], timing =>
         {
-            timing.Phase("drive");
             Assert.True(reported.Wait(TimeSpan.FromSeconds(30)), "the held checkpoint was never reported.");
-            using JsonDocument stalled = directory.ReadProgress();
+            using JsonDocument stalled = directory.ReadStalled();
             Assert.Equal("stalled", stalled.RootElement.GetProperty("phase").GetString());
-            Assert.Equal("drive", stalled.RootElement.GetProperty("stalledPhase").GetString());
+            Assert.Equal("fixtureSetup", stalled.RootElement.GetProperty("stalledPhase").GetString());
             // Four intervals between the first of five ticks and the last.
             Assert.True(stalled.RootElement.GetProperty("stalledMilliseconds").GetDouble() >= 80,
                 "the checkpoint was reported younger than the bound.");
             timing.Complete();
         });
-        Assert.Contains("phase drive", Assert.Single(stalls), StringComparison.Ordinal);
+        Assert.Contains("phase fixtureSetup", Assert.Single(stalls), StringComparison.Ordinal);
     }
 
     /// <summary>The three model facts give no callback, so the default is
@@ -545,22 +547,29 @@ public sealed class ModelTestRunTests
             Assert.Single(stalls);
             Assert.Equal(["stalled"], onDiskAtTheCall);
             Assert.Single(waits);
+            Assert.False(File.Exists(directory.StalledPath), "the checkpoint took the stall, and a second file was written beside it.");
             timing.Complete();
         });
     }
 
+    /// <summary>A reader that holds the checkpoint through every try leaves
+    /// the old phase in it. The process is about to end, and the job log
+    /// prints only what is on disk, so the stalled checkpoint goes to a file
+    /// of its own beside the held one, under a name no reader holds.</summary>
     [Fact]
-    public void AStalledCheckpointAReaderNeverLetsGoStillReachesTheCallbackOnce()
+    public void AStalledCheckpointAReaderNeverLetsGoIsWrittenBesideItBeforeTheCallback()
     {
         using var directory = new ReportDirectory();
         var stalls = new List<string>();
         var onDiskAtTheCall = new List<string?>();
+        var besideAtTheCall = new List<string?>();
         using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
             stallTicks: 2, onStall: sentence =>
             {
                 stalls.Add(sentence);
                 using JsonDocument atTheCall = directory.ReadProgress();
                 onDiskAtTheCall.Add(atTheCall.RootElement.GetProperty("phase").GetString());
+                besideAtTheCall.Add(File.Exists(directory.StalledPath) ? File.ReadAllText(directory.StalledPath) : null);
             });
         run.AssertInventory(7, 2, 5, InventorySha256);
         var cell = run.SelectedCases[0];
@@ -583,13 +592,28 @@ public sealed class ModelTestRunTests
                 // seconds in all.
                 Assert.Equal(4, waits.Count);
                 Assert.InRange(waits.Aggregate(TimeSpan.Zero, (sum, wait) => sum + wait), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+                // What the callback found beside the held file: the whole
+                // stalled checkpoint, under the name the job's print step
+                // also matches.
+                Assert.EndsWith(".stalled.progress.txt", directory.StalledPath, StringComparison.Ordinal);
+                string? beside = Assert.Single(besideAtTheCall);
+                Assert.NotNull(beside);
+                using JsonDocument besideIt = JsonDocument.Parse(beside);
+                JsonElement root = besideIt.RootElement;
+                Assert.Equal("stalled", root.GetProperty("phase").GetString());
+                Assert.Equal("drive", root.GetProperty("stalledPhase").GetString());
+                Assert.Equal(cell.Ordinal, root.GetProperty("activeOrdinal").GetInt32());
+                Assert.Equal(cell.Value.Name, root.GetProperty("activeCell").GetString());
+                Assert.Equal("routes", root.GetProperty("family").GetString());
+                Assert.Empty(Directory.GetFiles(directory.Path, "*.stalled.progress.txt.tmp"));
             }
             // A run that goes on writes the stalled checkpoint on its next
-            // tick, and is not reported again.
+            // tick, is not reported again, and keeps no second copy.
             run.FlushProgress();
             Assert.Single(stalls);
             using JsonDocument stalled = directory.ReadProgress();
             Assert.Equal("stalled", stalled.RootElement.GetProperty("phase").GetString());
+            Assert.False(File.Exists(directory.StalledPath), "the checkpoint took the stall, and the copy beside it stayed.");
             timing.Complete();
         });
     }
@@ -784,8 +808,16 @@ public sealed class ModelTestRunTests
         internal JsonDocument Read(int index) =>
             JsonDocument.Parse(File.ReadAllText(System.IO.Path.Combine(Path, $"routes-shard-{index}.json")));
 
+        /// <summary>Where a stalled checkpoint goes when a reader holds the
+        /// checkpoint's own file.</summary>
+        internal string StalledPath => System.IO.Path.Combine(Path, "routes-shard-0.stalled.progress.txt");
+
         internal JsonDocument ReadProgress() =>
             JsonDocument.Parse(File.ReadAllText(ProgressPath));
+
+        /// <summary>The stalled checkpoint, from whichever file took it.</summary>
+        internal JsonDocument ReadStalled() =>
+            JsonDocument.Parse(File.ReadAllText(File.Exists(StalledPath) ? StalledPath : ProgressPath));
 
         public void Dispose()
         {
