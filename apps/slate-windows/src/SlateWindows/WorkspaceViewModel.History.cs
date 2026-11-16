@@ -567,9 +567,22 @@ internal sealed partial class WorkspaceViewModel
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Publish(bool destinationExists, string? failure)
         {
+            if (failure is not null && !destinationExists)
+            {
+                // A failed recover wrote nothing, so its operation ends
+                // BEFORE its alert. The alert is a modal box in the shell:
+                // a close that arrives inside its loop settles the saves
+                // from a frame above the box, and a ticket still open then
+                // could end only when the box returns, which waits for
+                // that frame. A save queued behind may start once the
+                // failure is known.
+                _ = recovered.TrySetResult();
+                FailRecover(completed, failure);
+                return;
+            }
             try
             {
-                FinishRecover(path, completed, destinationExists, failure);
+                FinishRecover(path, completed, destinationExists);
             }
             catch (Exception exception)
             {
@@ -614,11 +627,10 @@ internal sealed partial class WorkspaceViewModel
         // outside its catch, on one of the three faults the catch leaves
         // alone, so its publication was never posted. On the save
         // dispatcher, and only while the operation has not ended, the
-        // recover fails aloud with the existing alert, the row is answered
-        // that nothing happened, and the operation ends carrying the
-        // fault. The answer stands in a finally and the whole in a try, so
-        // an alert or a callback that throws still answers the row and
-        // still ends the operation.
+        // operation ends carrying the fault, and then the recover fails
+        // aloud with the existing alert and the row is answered that
+        // nothing happened (FailRecover: the operation ends before the
+        // alert, and an alert that throws still answers the row).
         _ = worker.ContinueWith(
             faulted =>
             {
@@ -629,26 +641,8 @@ internal sealed partial class WorkspaceViewModel
                     {
                         return;
                     }
-                    try
-                    {
-                        try
-                        {
-                            if (!_workspaceDisposed)
-                            {
-                                HistoryAlert("Can't restore", fault.Message);
-                            }
-                        }
-                        finally
-                        {
-                            completed(false, false);
-                        }
-                    }
-                    catch (Exception publication)
-                    {
-                        _ = recovered.TrySetException(new AggregateException(fault, publication));
-                        return;
-                    }
                     _ = recovered.TrySetException(fault);
+                    FailRecover(completed, fault.Message);
                 });
             },
             CancellationToken.None,
@@ -657,8 +651,37 @@ internal sealed partial class WorkspaceViewModel
         return recovered.Task;
     }
 
+    /// <summary>A failed recover's alert and answer, run after its
+    /// operation has ended (see <c>Publish</c>). The row is answered once,
+    /// in a finally, so an alert that throws still answers it. The ticket
+    /// can no longer carry a fault from here, so one is logged once, as a
+    /// failed ticket's would be.</summary>
+    private void FailRecover(Action<bool, bool> completed, string failure)
+    {
+        try
+        {
+            try
+            {
+                if (!_workspaceDisposed)
+                {
+                    HistoryAlert("Can't restore", failure);
+                }
+            }
+            finally
+            {
+                completed(false, false);
+            }
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+        }
+    }
+
+    /// <summary>The recover's publication when it did not fail: inside its
+    /// ticket.</summary>
     private void FinishRecover(
-        string path, Action<bool, bool> completed, bool destinationExists, string? failure)
+        string path, Action<bool, bool> completed, bool destinationExists)
     {
         if (_workspaceDisposed)
         {
@@ -668,12 +691,6 @@ internal sealed partial class WorkspaceViewModel
         if (destinationExists)
         {
             completed(false, true);
-            return;
-        }
-        if (failure is not null)
-        {
-            HistoryAlert("Can't restore", failure);
-            completed(false, false);
             return;
         }
         _announce(new A11yEvent.RestoredFile(

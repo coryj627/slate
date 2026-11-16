@@ -2274,6 +2274,93 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>The red team's F2. In the shell the "Can't restore" alert is
+    /// a modal box. A close that arrives inside its loop settles the saves
+    /// from a frame nested above the box, and that settle returns only when
+    /// every ticket has ended. So a failed recover ends its operation
+    /// first, then shows its alert, then answers its row: nothing was
+    /// written, and a save queued behind may start once the failure is
+    /// known. The alert here stands for that close: it pumps until the
+    /// saves are idle, with a bound, and then settles them.</summary>
+    [Theory]
+    [InlineData("its worker's catch takes the fault")]
+    [InlineData("its worker faults outside its catch")]
+    [InlineData("no history is left")]
+    public void ARecoverThatFailsEndsItsOperationBeforeItsAlert(string how) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("recover", "recover-ends-before-alert");
+        int alerts = 0;
+        bool idleInsideTheAlert = false;
+        bool settledInsideTheAlert = false;
+        r.H.Workspace.HistoryAlert = (_, _) =>
+        {
+            alerts++;
+            idleInsideTheAlert = PumpedDispatcher.PumpUntil(() => r.H.Workspace.SavesIdle, TimeSpan.FromSeconds(10));
+            settledInsideTheAlert = idleInsideTheAlert && r.H.Workspace.SettleSaves();
+        };
+        if (how == "its worker's catch takes the fault")
+        {
+            r.SetSeam(() => throw new InvalidOperationException("the create's core call panicked (test seam)"));
+        }
+        else if (how == "its worker faults outside its catch")
+        {
+            r.SetSeam(() => throw new OutOfMemoryException("a fault the worker's catch does not take (test seam)"));
+        }
+        int asked = how == "no history is left" ? 2 : 1;
+        try
+        {
+            for (int ask = 0; ask < asked; ask++)
+            {
+                r.Ask();
+            }
+            Assert.Equal(asked, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(
+                () => alerts == 1 && r.Answers.Count == asked && r.H.Workspace.SavesIdle,
+                "the failed recover's alert and answer");
+            Assert.True(idleInsideTheAlert, "the recover's operation was still open while its alert stood");
+            Assert.True(settledInsideTheAlert, "a settle inside the alert did not return true");
+            Assert.Equal((false, false), r.Answers.Last());
+            PumpedDispatcher.Drain();
+            Assert.Equal(1, alerts);
+            Assert.Equal(asked, r.Answers.Count);
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The red team's F5. In background mode a recover whose
+    /// create faults is answered by its catch or, were the catch narrow, by
+    /// its backstop, and the two look alike. Run inline the worker is no
+    /// task, so only the worker's own wide catch can answer the row: a
+    /// fault outside VaultException is a failed recover, with the alert and
+    /// the row's answer, and nothing is created.</summary>
+    [Fact]
+    public void ARecoverRunInlineWhoseCreateFaultsIsAnsweredByItsOwnCatch() => RunSta(() =>
+    {
+        const string Fault = "the create's core call panicked (test seam)";
+        using var h = Vault.WithADeletedNote("recover-inline-fault", "gone.md", Gone, background: false);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        h.Workspace.HistoryCreateHookForTests = () => throw new InvalidOperationException(Fault);
+        try
+        {
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the inline recover ending");
+            Assert.Equal([(false, false)], answers);
+            Assert.Equal(["Can't restore: " + Fault], alerts);
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")));
+        }
+        finally
+        {
+            h.Workspace.HistoryCreateHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Two recovers of one path, the second queued behind the
     /// first. The first creates the file and drops the deleted file's
     /// history, so core answers the second that no such history is left: the
