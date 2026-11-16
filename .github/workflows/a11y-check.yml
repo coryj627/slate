@@ -1,4 +1,5 @@
 # SwiftUI accessibility analysis on every PR that touches Swift sources.
+# Probe A (plan 47 CB-5): one comment line, on main's workflow. Never merged.
 #
 # Runs cvs-health/ios-swiftui-accessibility-techniques' `a11y-check`
 # static analyzer over the Mac app's SwiftUI code. 34 rules across 19
