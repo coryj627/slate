@@ -147,6 +147,9 @@ description and the register records why.
    never a dylib with mismatched bindings.
 8. **Scope.** One PR closes its issues and nothing else. A defect found
    on the way is filed, not fixed in passing, unless it blocks the PR.
+   *2026-11-16:* `AGENTS.md` ("Git and PRs") now sizes a defect found on
+   the way by what its fix touches, and replaces this rule (plan 47 §4,
+   CB-0).
 
 ## 5. The chunks
 
@@ -453,7 +456,7 @@ design-first.
 | 36 | Sidebar: selection after mutations, shortcut verbs never silent, a race-safe lock | #1407 #1409 #1405 #1521 | M | swift, a11y/VO | W4 |
 | 37 | Core test infrastructure: the real-Trash facts in the mac lane, a poison-proof fault guard | #1479 #1481 (Refs #1323) | S–M | rust (mac lane) | W5, slot 1 first → plan 44 WB-18 for #1481; #1479 stays here (WD1) |
 | 38 | No-replace renames on weak volumes (exFAT, SMB, NFS, FAT32) | #1434 #1470 | M | rust, swift | W5, slot 1 after 37 and 34; needs RD9 → plan 44 WB-27 for the Windows proof (WD1) |
-| 39 | Landed-but-unindexed creates, and the caveat's punctuation | #1394 #1395 | S–M | rust, swift, a11y, windows | W5, after 33 |
+| 39 | Landed-but-unindexed creates, and the caveat's punctuation | #1394 #1395 | S–M | rust, swift, a11y, windows | W5, after 33; *2026-11-16:* #1395 is plan 47's CB-14 (CD8), and this PR keeps #1394 |
 | 40 | Open-scan and rescan follow-ups | #1462 #1446 | M | swift, a11y | W5 (diagnose #1462 with one fact first) |
 | 41 | Trash: verify what arrived (T2) | #1468 | L | rust, swift, windows | W6, after 37 and 34; needs the `~/.Trash` read check on the owner's unlocked Mac → plan 44 WB-30 for the shared outcome contract and the Windows back end; the macOS Rust half and the mac host stay here (WD1) |
 | 42 | R-9 re-sync, complete on mac (canvas and base tabs, Bases, dashboards, an open Quick Open, the filter, feed renames of every tab kind) | #1445 #1416 | L | swift, a11y | W6, after 30, 33, 35, 36 and 40 |
@@ -466,8 +469,9 @@ design-first.
 | 49 | Static accessibility: a11y-check 0.7.0, and doubled names | #1371 #1372 | M | swift, a11y/VO (spot) | W8; needs RD11 |
 | 50 | Organization facts on the async seam | #1490 | M | swift | W8, after 36 and 42 |
 | 51 | Reading-view links VoiceOver can press on any SDK | #1460 | L (spike first) | swift, a11y/VO on both builds | W9, and before any move to an Xcode project or `--build-system native`; needs RD12 |
-| 52 | Code preamble verbosity: remove the two modes that do nothing, on both hosts (the real modes are #1526) | #1389 | S | swift, a11y/VO, windows | W9 (RD6) → plan 44 WB-21 for #1389's Windows half (WD1) |
+| 52 | Code preamble verbosity: remove the two modes that do nothing, on both hosts (the real modes are #1526) | #1389 | S | swift, a11y/VO, windows | W9 (RD6) → plan 44 WB-21 for #1389's Windows half (WD1); *2026-11-16:* retired (plan 47 CD36): #1651 carries #1389's mac half |
 | 53 | Editor ⌘-click activates in the current tab by default, with a setting for a new tab, honoured by Windows' Ctrl+click too | #1466 | M | swift, a11y, windows | W9, after 27 (RD13) |
+| — | *2026-11-16, plan 47 CB-0:* open issues no row above names. #1733 is the same Unix read path as 22c's (#1513), with `file_identity` and the hot-exit classification added to its test, and goes with 22c. The mac follow-ups plan 44 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #1954. PR 52 is retired and 22b's fact goes with #1513 (plan 47 CD36). #1395 is plan 47's CB-14, and PR 39 keeps #1394 (CD8). | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
 
 **Waves.** At most three delivery agents run at once
 (`subagent-parallelism`). PRs in one wave share no files, except
@@ -484,7 +488,7 @@ and core's `a11y.rs` and corpus (independent variants).
 | W6 | 41 | 42 | 43 |
 | W7 | 44, then 45 (both moved: plan 44 WB-18, WB-19) | 46 | 47 (moved: plan 44 WB-17) |
 | W8 | 48 | 49 | 50 |
-| W9 | 51 | 52 | 53 |
+| W9 | 51 | 52 (retired 2026-11-16: plan 47 CD36) | 53 |
 
 **Some PRs are sequenced on purpose** because they share files:
 
@@ -550,7 +554,8 @@ needed by the wave named.
 - **The queue stays paused** until the owner says to start W1, which
   is 26, 27, 28, then 29a (since 2026-10-26 29's design and core store
   are plan 44's WB-29a; 29 keeps the mac half, which waits for that
-  store on `main`, plan 44 W11).
+  store on `main`, plan 44 W11). *2026-11-16:* no longer paused: the
+  queue restarted on 2026-11-13 with PR 29 (#1935, #1936, then #1942).
 - **Dated item:** the zip exception (#1457) must be renewed or upgraded
   before 2026-11-17. *2026-10-26:* no longer dated — #1537 moved to
   MathCAT 0.7.7, on zip 9, and the issue is closed.

@@ -3,8 +3,9 @@
 Status: design, 2026-10-17, with the owner's decisions of 2026-10-17 in
 §11. PR 22a (§7, the core interior, macOS and Linux) is delivered. Its
 watcher re-arm (§4.3) is built and off until #1513, per the owner's
-decision of 2026-10-19 on #1518 (§11, Q3). PR 22b, the mac host, and PR
-22W, the Windows body under Milestone W, are not delivered.
+decision of 2026-10-19 on #1518 (§11, Q3). PR 22W, the Windows body, is
+delivered as plan 44's WB-28 (#1729 fb131216, #1731 ed172e07). PR 22b,
+the mac host, is not delivered.
 Issue #940 (FL-06 round 28, the A→B→A open race). Spec:
 `specs/pr22_descriptor_relative_session.md`. Baseline: `main` at
 beed82e1; every file:line reference below was read at that commit (the
