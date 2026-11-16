@@ -97,9 +97,7 @@ public sealed partial class CommandPaletteTests
                 host.Dispose();
             }
 
-            teardown.WaitUntilPassed();
-            Assert.Equal(0, teardown.LateRuns);
-            Assert.True(teardown.DrainedBeforeGone, "the host's session went before the lane work it released had ended");
+            teardown.AssertTheTeardownWaited("the lane item the host released");
         });
 
     /// <summary>

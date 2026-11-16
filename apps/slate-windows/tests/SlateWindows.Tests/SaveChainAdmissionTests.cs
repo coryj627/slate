@@ -920,9 +920,7 @@ public sealed class SaveChainAdmissionTests
             peers.Dispose();
         }
 
-        teardown.WaitUntilPassed();
-        Assert.Equal(0, teardown.LateRuns);
-        Assert.True(teardown.DrainedBeforeGone, "the fixture's session went before the header read it released had ended");
+        teardown.AssertTheTeardownWaited("the header read the fixture released");
     });
 
     /// <summary>The header's refresh fails while the write waits: nothing is

@@ -453,9 +453,7 @@ public sealed class ReadingFocusTests
             host.Dispose();
         }
 
-        teardown.WaitUntilPassed();
-        Assert.Equal(0, teardown.LateRuns);
-        Assert.True(teardown.DrainedBeforeGone, "the fixture's session went before the fetches it released had ended");
+        teardown.AssertTheTeardownWaited("the fetch the fixture released");
     });
 
     /// <summary>#1323: a transient read error retries the fetch after a

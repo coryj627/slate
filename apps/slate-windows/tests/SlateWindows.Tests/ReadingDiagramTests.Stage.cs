@@ -257,9 +257,7 @@ public sealed partial class ReadingDiagramTests
                 harness.Dispose();
             }
 
-            teardown.WaitUntilPassed();
-            Assert.Equal(0, teardown.LateRuns);
-            Assert.True(teardown.DrainedBeforeGone, "the harness's session went before the stage it released had ended");
+            teardown.AssertTheTeardownWaited("the stage the harness released");
         });
     }
 

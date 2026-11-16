@@ -130,19 +130,24 @@ public sealed class TestWaitCensus
     // 3b: a Dispose that releases a gate and later tears a session down has
     //     a drain between the two, so the released work ends while the
     //     session lives.
-
-    /// <summary>Fixtures rule 3a still names, each fixed by a later commit
-    /// of the change that added the rule (plan 47 rule 4); none is left when
-    /// that change merges.</summary>
-    private static readonly (string File, string Type, string Reason, string Dated)[] GatesStillDisposed =
-    [
-    ];
+    //
+    // What rule 3 does not prove. It reads a teardown in source order, not
+    // in the order a run takes through its branches. It follows a test
+    // method the teardown calls one level deep, and another fixture's
+    // Dispose by what that Dispose does as a whole. 3b sees that a drain is
+    // named between the release and the session, not that it is the drain of
+    // the released work: each fixture's forced fact proves that
+    // (TeardownWitness). A park and the host that owns its session are two
+    // objects a fact disposes one after the other, and no rule joins them. A
+    // gate or a session reached through a variable of a wider type
+    // (IDisposable, object) is not followed. The using-declared gates in
+    // fact bodies are outside the rule.
 
     /// <summary>Fixtures rule 3b names whose teardown is right as it stands:
     /// the product's own lifecycle waits for the released work before it
-    /// lets the session go, so the fixture names no drain of its own. The
-    /// dated entries after them are fixed by a later commit of the change
-    /// that added the rule.</summary>
+    /// lets the session go, so the fixture names no drain of its own. Rule
+    /// 3a has no such list: there is no right way to dispose a gate a worker
+    /// may still reach.</summary>
     private static readonly (string File, string Type, string Reason, string Dated)[] DrainedByTheLifecycle =
     [
         (
@@ -166,6 +171,8 @@ public sealed class TestWaitCensus
         "AutoResetEvent",
         "SemaphoreSlim",
         "CountdownEvent",
+        "EventWaitHandle",
+        "Semaphore",
     };
 
     /// <summary>What a type does with a gate besides disposing it: it lets
@@ -225,12 +232,12 @@ public sealed class TestWaitCensus
         {
             found.AddRange(GatesDisposedInTeardown(project.Compilation, project.Sources, FileOf));
         }
-        AssertOnlyTheListed(
-            found,
-            GatesStillDisposed,
+        Assert.True(
+            found.Count == 0,
             "These dispose a gate their own type sets, releases or waits on. A worker that has not reached the gate "
             + "yet, or is still waking on it, meets a disposed event. Release the gate and leave it to the collector "
-            + "(GraphDiagramTests.Lineage's park), or hold with HeldWork, which has nothing to dispose:");
+            + "(GraphDiagramTests.Lineage's park), or hold with HeldWork, which has nothing to dispose. This rule has "
+            + "no allow-list:\n" + string.Join("\n", found));
     }
 
     [Fact]
@@ -337,6 +344,24 @@ public sealed class TestWaitCensus
             + "public void Dispose() { Gate?.Dispose(); } } "
             + "sealed class User { void Use(P p) => p.Gate.WaitOne(); }",
             "3a"
+        },
+        {
+            "disposes through a cast",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _gate = new(false); public void Park() => _gate.Wait(); "
+            + "public void Dispose() { _gate.Set(); ((IDisposable)_gate).Dispose(); } }",
+            "3a"
+        },
+        {
+            "disposes a kernel event",
+            "sealed class P : IDisposable { private readonly EventWaitHandle _gate = new(false, EventResetMode.ManualReset); "
+            + "public void Park() => _gate.WaitOne(); public void Dispose() { _gate.Set(); _gate.Dispose(); } }",
+            "3a"
+        },
+        {
+            "a session disposed through a cast",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _release = new(false); private readonly VaultSession _session; "
+            + "public P(VaultSession session) { _session = session; } public void Dispose() { _release.Set(); ((IDisposable)_session).Dispose(); } }",
+            "3b"
         },
         {
             "sets a gate, then disposes a session",
@@ -710,7 +735,9 @@ public sealed class TestWaitCensus
                 {
                     return;
                 }
-                ExpressionSyntax? receiver = ReceiverOf(callee);
+                // The receiver as declared, under any cast: ((IDisposable)gate)
+                // is still the gate.
+                ExpressionSyntax? receiver = ReceiverOf(callee) is { } reached ? Uncast(reached) : null;
                 ITypeSymbol? type = receiver is not null
                     ? model.GetTypeInfo(receiver).Type
                     : symbol is { IsStatic: false } ? symbol.ContainingType : null;
@@ -755,6 +782,32 @@ public sealed class TestWaitCensus
                         Collect(inner, site ?? at, position ?? at.SpanStart, isLocal ? levels : levels - 1, entered, steps);
                         _ = entered.Remove(declaration);
                     }
+                }
+            }
+        }
+
+        /// <summary>The expression under parentheses, casts, <c>as</c> and
+        /// the null-forgiving mark.</summary>
+        private static ExpressionSyntax Uncast(ExpressionSyntax expression)
+        {
+            while (true)
+            {
+                switch (expression)
+                {
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        expression = parenthesized.Expression;
+                        continue;
+                    case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } forgiven:
+                        expression = forgiven.Operand;
+                        continue;
+                    case CastExpressionSyntax cast:
+                        expression = cast.Expression;
+                        continue;
+                    case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AsExpression } converted:
+                        expression = converted.Left;
+                        continue;
+                    default:
+                        return expression;
                 }
             }
         }
@@ -935,22 +988,7 @@ public sealed class TestWaitCensus
                 identity.Unknown = true;
                 return identity;
             }
-            while (true)
-            {
-                switch (expression)
-                {
-                    case ParenthesizedExpressionSyntax parenthesized:
-                        expression = parenthesized.Expression;
-                        continue;
-                    case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } forgiven:
-                        expression = forgiven.Operand;
-                        continue;
-                    case CastExpressionSyntax cast:
-                        expression = cast.Expression;
-                        continue;
-                }
-                break;
-            }
+            expression = Uncast(expression);
 
             switch (expression)
             {
