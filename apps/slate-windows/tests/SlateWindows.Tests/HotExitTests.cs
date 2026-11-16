@@ -1295,9 +1295,12 @@ public sealed class HotExitTests
         host.Open();
         WorkspaceTabViewModel tab = host.OpenNote("a.md");
         tab.Text += "typed";
-        DateTime began = DateTime.UtcNow;
         Assert.Equal(WorkspaceTeardown.ClosedChangesDiscarded, host.Close(TeardownRoute.Close));
-        Assert.True(DateTime.UtcNow - began < TimeSpan.FromSeconds(3), "the wait ran to its budget");
+        // A wait that ran out its budget asks the "not discarded" prompt, and
+        // this host's answer to it cancels the close. A finished close with
+        // no prompt says the wait ended on the discard itself, so no elapsed
+        // time is asserted.
+        Assert.Equal(0, host.DiscardPrompts);
     }
 
     [Fact]
@@ -1336,13 +1339,26 @@ public sealed class HotExitTests
             }
             return null;
         };
+        int ended = 0;
+        host.Store.AfterCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Write)
+            {
+                Interlocked.Increment(ref ended);
+            }
+            return null;
+        };
         tab.Text += "two";
         host.PumpUntil(() => Volatile.Read(ref writes) == 1, "the write never started");
         Assert.True(tab.Save());
         host.PumpUntil(() => !tab.HasPendingSaves && !tab.IsDirty, "the save never landed");
         host.PumpUntil(() => host.StoredEntry(tab) is null, "the retirement never confirmed");
         gate.Set();
-        host.PumpFor(TimeSpan.FromMilliseconds(200));
+        // The held write has ended at the store and no entry is left: the
+        // late write was retired. The pump waits for that, not a fixed time.
+        host.PumpUntil(
+            () => Volatile.Read(ref ended) > 0 && host.StoredEntry(tab) is null,
+            "the write that landed late was never retired");
         host.Crash();
         host.Open();
         host.AssertRead();
@@ -2522,16 +2538,18 @@ public sealed class HotExitTests
         WorkspaceTabViewModel tab = host.OpenNote("a.md");
         using var gate = new ManualResetEventSlim();
         HotExitVaultKey first = host.Key;
+        int heldWrites = 0;
         host.Store.BeforeCallForTests = call =>
         {
             if (call.Kind == HotExitCallKind.Write && call.KeyText == first.Text)
             {
+                Interlocked.Increment(ref heldWrites);
                 Assert.True(gate.Wait(Patience), "A's write was never released");
             }
             return null;
         };
         tab.Text += "typed in A";
-        host.PumpFor(TimeSpan.FromMilliseconds(100));
+        host.PumpUntil(() => Volatile.Read(ref heldWrites) > 0, "A's write never reached the store");
 
         string other = host.SecondVault();
         Assert.True(host.SwitchTo(other), "the switch did not complete");

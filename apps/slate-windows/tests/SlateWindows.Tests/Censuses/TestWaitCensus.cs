@@ -2214,20 +2214,23 @@ public sealed class TestWaitCensus
         ("HotExitTests.cs", "ALateClaimNeverDisplacesANewerEpisode", 1, "late-arrival: no second claim starts while the first is held"),
         ("HotExitTests.cs", "AClaimForAReaderEndedEpisodeIsRetired", 1, "deliberate-hold: the claim stays held while the reader ends the episode"),
         ("HotExitTests.cs", "ARetriedRetirementNeverDisplacesASuccessor", 1, "late-arrival: the errored retirement stays parked"),
-        ("HotExitTests.cs", "AnErroredClaimIsRetriedWithItsOwnIncarnation", 1, "quiesce: the errored claim's outcome lands before the next edit"),
-        ("HotExitTests.cs", "AnAdoptingClaimTakenByAnotherClaimIsNotKept", 1, "quiesce: the taken claim's outcome lands before the close"),
+        ("HotExitTests.cs", "AnErroredClaimIsRetriedWithItsOwnIncarnation", 1,
+            "deliberate-hold: a gap for the errored claim's outcome to reach the writer before the next edit; "
+            + "the writer has no seam that says an outcome was applied"),
+        ("HotExitTests.cs", "AnAdoptingClaimTakenByAnotherClaimIsNotKept", 1,
+            "deliberate-hold: a gap for the taken claim's outcome to reach the writer before the close; "
+            + "the writer has no seam that says an outcome was applied"),
         ("HotExitTests.cs", "AnOldClaimsLateOutcomeNeverCountsForANewOne", 1,
             "deliberate-hold: a gap between the episode's end and the next edit while the old write is held"),
         ("HotExitTests.cs", "AnOldClaimsLateOutcomeNeverCountsForANewOne", 1,
             "late-arrival: the old write's outcome arrives and the new text stays stored"),
         ("HotExitTests.cs", "ARefusedDiscardKeepsTheWriterFencedUntilItResolves", 1, "late-arrival: the fenced writer stores no later edit"),
-        ("HotExitTests.cs", "AWriteThatLandsAfterItsTabTurnedCleanIsRetired", 1, "quiesce: the released write lands and is retired before the crash"),
         ("HotExitTests.cs", "ADiscardedUnkeptTabEditedLaterIsKept", 1, "late-arrival: after the discard resolves no entry is stored"),
         ("HotExitTests.cs", "ASessionEndThatIgnoresCancelAbandons", 1, "late-arrival: after the session ends no retirement runs"),
-        ("HotExitTests.cs", "RestoreThenDiscardThenReopenGetsNothing", 1, "quiesce: the adoption's outcome lands before the next tab opens"),
+        ("HotExitTests.cs", "RestoreThenDiscardThenReopenGetsNothing", 1,
+            "deliberate-hold: a gap for the adoption's outcome to reach the writer before the next tab opens; "
+            + "the writer has no seam that says an outcome was applied"),
         ("HotExitTests.cs", "DivergentPeersAreReconciledIntoARecoveredNote", 1, "distinct-timestamp: the two kept entries need different times"),
-        ("HotExitTests.cs", "AStalledWriteInOneVaultNeverHoldsAnother", 1,
-            "quiesce: the first vault's claim lands and its write reaches the held call"),
         ("HotExitTests.cs", "ADamagedRetirementResolvesWithItsReason", 1, "late-arrival: the damaged retirement is not retried"),
         ("PanelWorkSchedulerTests.cs", "Run", 1, "deliberate-hold: the compute body is held for the delay its caller asks"),
         ("RescanTests.cs", "TheHistoryPanelReloadsAfterARescan", 1, "quiesce: 20 turns of both queues, then no history load has run"),
@@ -2533,11 +2536,10 @@ public sealed class TestWaitCensus
     private static readonly (string File, string Member, int Count, string Reason)[] UnitElapsedCeilings =
     [
         ("HeldVaultStoreFileTests.cs", "ASaveThatStaysHeldFailsAfterAShortWaitAndLeavesTheFile", 1,
-            "no-wait-witness: AnchoredVaultStore has no seam that observes what a held save's backoff really waited"),
+            "no-wait-witness: AnchoredVaultStore has no delay seam, so nothing observes what a held save's backoff really waited"),
         ("HotExitTests.cs", "AClosedOpenStopsWaitingForTheLastSession", 1,
-            "no-wait-witness: none found yet; nothing read here tells a cancelled open from one that ran out its wait"),
-        ("HotExitTests.cs", "ADiscardWaitNeverDeadlocksTheDispatcher", 1,
-            "no-wait-witness: none shown yet; the candidate is the discard prompt count, which a wait that ran out its budget raises"),
+            "no-wait-witness: the hot-exit open answers HotExitReasonEarlierWorkPending whether the close cancelled its wait or "
+            + "HotExitReopenWait ran out; a seam that says which ended the wait would be the witness"),
     ];
 
     /// <summary>The gate's one elapsed-time ceiling, as it stands. Plan 47
