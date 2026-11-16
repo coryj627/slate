@@ -784,8 +784,13 @@ internal sealed partial class WorkspaceViewModel
         // another save of the file — across this apply turn. A tab of the
         // path with an admitted save is never reloaded under it, even one
         // the reader has taken back to its baseline while the write runs:
-        // the save's publication owns the tab's next baseline.
+        // the save's publication owns the tab's next baseline. Plan 47 CB-9a
+        // (#1889): the same holds for any operation admitted into the file's
+        // chain (a History restore, a recover, a write from a surface with no
+        // tab on the note). This reload is unadmitted, so it asks the chain;
+        // the tab is marked stale below and the next rescan reloads it.
         bool saveInFlight = PropertyWriteInFlightFor(path)
+            || _saves.HasAdmittedSaveFor(path)
             || live.Any(tab => IsMarkdownTabAt(tab, path) && (tab.IsTaskToggleInFlight || tab.HasPendingSaves));
         var reload = new List<WorkspaceTabViewModel>();
         var stale = new List<WorkspaceTabViewModel>();

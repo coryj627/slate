@@ -1174,6 +1174,48 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    // ---- The rescan's reload (plan 47 CB-9a, #1889) ---------------------------
+
+    /// <summary>A rescan's reload of a changed note is unadmitted, so it asks
+    /// the chain: while any operation is admitted for the note, a clean tab
+    /// keeps its buffer and its document and is marked stale against the
+    /// index hash. The next rescan, on an idle chain, reloads it.</summary>
+    [Fact]
+    public void ARescanNeverReloadsATabUnderAnOperationAdmittedForItsNote() => RunSta(() =>
+    {
+        const string Outside = "written outside Slate\n";
+        using var h = new Vault("rescan-under-admitted", ("a.md", "v0\n"));
+        WorkspaceTabViewModel tab = h.Open("a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            int document = tab.ItemIdentity;
+            File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+
+            h.ReSyncDocuments("a.md");
+            Assert.Equal(document, tab.ItemIdentity);
+            Assert.Equal("v0\n", tab.Text);
+            Assert.True(tab.IsExternallyStale, "the tab kept under the admitted operation was not marked stale");
+
+            ahead.SetResult();
+            h.PumpUntil(() => held.IsCompleted && h.Workspace.SavesIdle, "the operation ahead ending");
+            h.ReSyncDocuments("a.md");
+            Assert.NotEqual(document, tab.ItemIdentity);
+            Assert.Equal(Outside, tab.Text);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+        }
+    });
+
     // ---- Teardown -------------------------------------------------------------
 
     /// <summary>Contract 35 A-1: teardown joins an admitted restore's worker
@@ -1377,6 +1419,29 @@ public sealed class SaveChainAdmissionTests
 
         public void Wait(ManualResetEventSlim signal, string failure) =>
             Assert.True(PumpedDispatcher.PumpUntil(() => signal.IsSet, Hold), failure);
+
+        /// <summary>The documents re-sync of a rescan whose index holds
+        /// <paramref name="path"/>'s current bytes, run to its end.</summary>
+        public void ReSyncDocuments(string path)
+        {
+            string hash;
+            using (var cancel = new CancelToken())
+            {
+                hash = _session.IndexedContentHashes([path], cancel)[0]!;
+            }
+            Task<WorkspaceViewModel.RescanDocumentsOutcome> documents = Workspace.ReSyncOpenDocumentsAsync(
+                new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal) { [path] = new(hash, OnDisk: true) },
+                read => Task.Run<WorkspaceViewModel.RescanRead?>(() =>
+                {
+                    string text = _session.ReadText(read);
+                    return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+                }),
+                _ => Task.FromResult<IReadOnlyDictionary<string, WorkspaceViewModel.ReseatProbe>>(
+                    new Dictionary<string, WorkspaceViewModel.ReseatProbe>(StringComparer.Ordinal)),
+                CancellationToken.None);
+            PumpUntil(() => documents.IsCompleted, "the documents re-sync");
+            _ = documents.GetAwaiter().GetResult();
+        }
 
         /// <summary>A while of pumped turns, for a fact that asserts nothing
         /// happened.</summary>

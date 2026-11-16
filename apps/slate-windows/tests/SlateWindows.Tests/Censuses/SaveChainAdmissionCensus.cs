@@ -212,13 +212,6 @@ public sealed class SaveChainAdmissionCensus
             "2026-11-16",
             "CB-9a"),
         new(
-            "WorkspaceViewModel.Rescan.cs",
-            "ReloadMarkdownPathAsync",
-            ["ReloadKeepingCaretLine"],
-            "the rescan's reload asks the property lease, the toggle flag and each tab's own saves, not the chain",
-            "2026-11-16",
-            "CB-9a"),
-        new(
             "Panels/BulkRenameViewModel.cs",
             "Run",
             ["RenamePropertyAcrossVault", "RenamePropertyByIdentityAcrossVault"],
