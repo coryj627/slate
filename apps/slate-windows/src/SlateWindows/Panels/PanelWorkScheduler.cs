@@ -139,24 +139,32 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// inline: without a UI SynchronizationContext, worker publishes
     /// would land on background threads and race every list the test
     /// thread is reading.</summary>
-    protected void StartWork(Action body)
+    protected void StartWork(Action body) => _ = StartTrackedWork(body);
+
+    /// <summary><see cref="StartWork"/>, for a caller that must know when
+    /// its body has ended (plan 47 CB-9a: an admitted write hands the task
+    /// to the save coordinator, and settles its operation when the body
+    /// never reached its publication). The tracked task; or a completed one
+    /// when the body ran inline, or was refused because the scheduler has
+    /// shut down. A task that completes does not mean the body ran: a
+    /// shutdown between queueing and pickup skips it.</summary>
+    protected Task StartTrackedWork(Action body)
     {
         if (_isShutDown)
         {
-            return;
+            return Task.CompletedTask;
         }
         if (_synchronous)
         {
             body();
-            return;
+            return Task.CompletedTask;
         }
         Task? gate = _prerequisite;
-        if (gate is null)
-        {
-            TrackWork(Task.Run(() => RunIfLive(body)));
-            return;
-        }
-        TrackWork(RunGatedAsync(gate, body));
+        Task work = gate is null
+            ? Task.Run(() => RunIfLive(body))
+            : RunGatedAsync(gate, body);
+        TrackWork(work);
+        return work;
     }
 
     /// <summary>

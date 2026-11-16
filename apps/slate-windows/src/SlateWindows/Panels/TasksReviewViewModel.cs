@@ -101,6 +101,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private readonly Action<A11yEvent> _announce;
     private readonly Func<string, TaskItem, string, ReviewOpenRoute> _activateRow;
     private readonly Func<string, TaskItem, string, ReviewToggleRoute> _toggleViaOpenTab;
+    private readonly INoteSaveChain _chain;
     private readonly Func<DateTimeOffset> _clock;
 
     private TaskReviewFilter _activeFilter = TaskReviewFilter.All;
@@ -137,6 +138,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         Action<A11yEvent> announce,
         Func<string, TaskItem, string, ReviewOpenRoute> activateRow,
         Func<string, TaskItem, string, ReviewToggleRoute> toggleViaOpenTab,
+        INoteSaveChain chain,
         Func<DateTimeOffset>? clock = null,
         TaskIndexRepairCoordinator? repairs = null,
         bool synchronousForTests = false)
@@ -146,6 +148,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _announce = announce;
         _activateRow = activateRow;
         _toggleViaOpenTab = toggleViaOpenTab;
+        _chain = chain;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _repairs = repairs ?? new TaskIndexRepairCoordinator(session);
     }
@@ -468,6 +471,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// write.</summary>
     internal Action? DirectToggleFaultForTests { get; set; }
 
+    /// <summary>Plan 47 CB-9a test seam: runs on the direct (tabless)
+    /// toggle's worker before its core call, inside the repair lease. A fact
+    /// holds the toggle there, counts it, or throws.</summary>
+    internal Action? DirectToggleBeforeWriteForTests { get; set; }
+
     /// <summary>Internal so stale-ordering is testable
     /// deterministically (the PublishOutline pattern).</summary>
     internal void PublishFirstPage(
@@ -677,20 +685,58 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// for a given source text, so a hash mismatch means the clicked
     /// row could name a DIFFERENT task now. Conflicts refuse loudly
     /// and reload the snapshot.</summary>
+    /// <remarks>Plan 47 CB-9a (#1889): the direct toggle rewrites the note,
+    /// so it joins the note's save chain through <see cref="INoteSaveChain"/>.
+    /// It never writes beside a save or an operation admitted for the note
+    /// before it, and a save asked for after it waits for its
+    /// publication.</remarks>
     public void ToggleTask(ReviewTaskRowViewModel row)
+    {
+        if (RoutedThroughAnOpenTab(row))
+        {
+            return;
+        }
+        _ = _chain.Admit(row.Path, () => DirectToggleAtItsTurn(row));
+    }
+
+    /// <summary>The open-tab route: true when a tab on the row's file took
+    /// the toggle or refused it, so the direct toggle must not run.</summary>
+    private bool RoutedThroughAnOpenTab(ReviewTaskRowViewModel row)
     {
         switch (_toggleViaOpenTab(row.Path, row.Task, row.ContentHash))
         {
             case ReviewToggleRoute.Started:
                 _ = _pendingToggleRefreshPaths.Add(row.Path);
-                return;
+                return true;
             case ReviewToggleRoute.RefusedStale:
                 // The conflict was announced; the snapshot is stale.
                 LoadFirstPage();
-                return;
+                return true;
             case ReviewToggleRoute.RefusedDirty:
             case ReviewToggleRoute.RefusedBusy:
-                return;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>The admitted direct toggle, run once every save and
+    /// operation admitted for the note before it has ended. The route is
+    /// decided again: a tab that opened on the note while this waited takes
+    /// the toggle through its own admitted route, queued behind this
+    /// operation, or refuses with that route's sentence, and this operation
+    /// ends having written nothing. Otherwise the worker runs, tracked by
+    /// the chain, with the row's snapshot hash as core's compare-and-swap
+    /// token: the task is an ordinal in the text the row was read from, so
+    /// a note that a save ahead of it changed is refused and the conflict
+    /// spoken. The operation ends when the publication has run, when the
+    /// publication throws, and when the worker ends without posting one (a
+    /// shutdown skipped its body, or it faulted outside its catch).</summary>
+    private Task DirectToggleAtItsTurn(ReviewTaskRowViewModel row)
+    {
+        if (IsShutDown || RoutedThroughAnOpenTab(row))
+        {
+            return Task.CompletedTask;
         }
 
         string path = row.Path;
@@ -698,7 +744,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         TaskItem task = row.Task;
         string expectedHash = row.ContentHash;
         string nextStatus = task.Completed ? " " : "x";
-        StartWork(() =>
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool posted = false;
+        Task worker = StartTrackedWork(() =>
         {
             SaveReport? report = null;
             bool conflict = false;
@@ -715,6 +763,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             bool leaseSettled = false;
             try
             {
+                DirectToggleBeforeWriteForTests?.Invoke();
                 report = _session.ToggleTaskStatus(
                     path, task.Ordinal, nextStatus, expectedHash);
                 DirectToggleFaultForTests?.Invoke();
@@ -761,62 +810,116 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             }
             Post(() =>
             {
-                if (IsShutDown)
+                try
                 {
+                    PublishDirectToggle(
+                        path, fileName, task, expectedHash, report, conflict, failure, vaultFailure, postFailureDiskHash);
+                }
+                catch (Exception exception)
+                {
+                    // A sentence or a callback that throws still ends the
+                    // operation; the chain logs the fault once.
+                    _ = done.TrySetException(exception);
                     return;
                 }
-                if (conflict)
-                {
-                    // The file changed since the snapshot: refusing is
-                    // the point — the stale ordinal could have toggled
-                    // a different task. Reload so the rows are true.
-                    _announce(new A11yEvent.TaskToggleConflict(fileName));
-                    LoadFirstPage();
-                    return;
-                }
-                if (failure is not null)
-                {
-                    _announce(new A11yEvent.TaskToggleFailed(
-                        vaultFailure is not null
-                            ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
-                            : failure));
-                    // The write may have landed before the failure
-                    // (round 12: the real window leaves the index
-                    // uncommitted). Hash moved → certain; hash
-                    // UNREADABLE → unknown, and unknown fails CLOSED
-                    // (round 16): treating it as "no write" would let
-                    // both surfaces query a possibly-stale index with
-                    // nothing barring them. Either way the repair
-                    // must succeed before any reload (rounds 14-15).
-                    bool diskMoved = postFailureDiskHash is not null
-                        && !string.Equals(
-                            postFailureDiskHash, expectedHash, StringComparison.Ordinal);
-                    bool outcomeUnknown = postFailureDiskHash is null;
-                    if (diskMoved || outcomeUnknown)
-                    {
-                        bool repaired = _repairs.TryRepairNow(path, out _);
-                        if (diskMoved)
-                        {
-                            DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
-                        }
-                        if (repaired)
-                        {
-                            LoadFirstPage();
-                        }
-                    }
-                    return;
-                }
-                // The NoOpenTab route was decided BEFORE this write
-                // (adversarial round 3): a tab can have opened for the
-                // file in the meantime and loaded pre-write content —
-                // the workspace re-checks now that the disk moved.
-                DiskWriteLanded?.Invoke(path, report!.NewContentHash);
-                // The editor precedent (mac is silent on success);
-                // task.Completed is the state before the toggle.
-                _announce(new A11yEvent.TaskToggled(!task.Completed));
-                LoadFirstPage();
+                _ = done.TrySetResult();
             });
+            Volatile.Write(ref posted, true);
         });
+        _chain.TrackWorker(worker);
+        // The worker ended without posting its publication: a shutdown
+        // skipped the body, or it faulted outside its catch. Nothing else
+        // would end the operation, so this does.
+        _ = worker.ContinueWith(
+            ended =>
+            {
+                if (Volatile.Read(ref posted))
+                {
+                    return;
+                }
+                if (ended.IsFaulted)
+                {
+                    _ = done.TrySetException(ended.Exception!.GetBaseException());
+                }
+                else
+                {
+                    _ = done.TrySetResult();
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return done.Task;
+    }
+
+    /// <summary>The direct toggle's publication, on the UI thread.</summary>
+    private void PublishDirectToggle(
+        string path,
+        string fileName,
+        TaskItem task,
+        string expectedHash,
+        SaveReport? report,
+        bool conflict,
+        string? failure,
+        VaultException? vaultFailure,
+        string? postFailureDiskHash)
+    {
+        if (IsShutDown)
+        {
+            return;
+        }
+        if (conflict)
+        {
+            // The file changed since the snapshot: refusing is
+            // the point — the stale ordinal could have toggled
+            // a different task. Reload so the rows are true.
+            _announce(new A11yEvent.TaskToggleConflict(fileName));
+            LoadFirstPage();
+            return;
+        }
+        if (failure is not null)
+        {
+            _announce(new A11yEvent.TaskToggleFailed(
+                vaultFailure is not null
+                    ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
+                    : failure));
+            // The write may have landed before the failure
+            // (round 12: the real window leaves the index
+            // uncommitted). Hash moved → certain; hash
+            // UNREADABLE → unknown, and unknown fails CLOSED
+            // (round 16): treating it as "no write" would let
+            // both surfaces query a possibly-stale index with
+            // nothing barring them. Either way the repair
+            // must succeed before any reload (rounds 14-15).
+            bool diskMoved = postFailureDiskHash is not null
+                && !string.Equals(
+                    postFailureDiskHash, expectedHash, StringComparison.Ordinal);
+            bool outcomeUnknown = postFailureDiskHash is null;
+            if (diskMoved || outcomeUnknown)
+            {
+                bool repaired = _repairs.TryRepairNow(path, out _);
+                if (diskMoved)
+                {
+                    DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
+                }
+                if (repaired)
+                {
+                    LoadFirstPage();
+                }
+            }
+            return;
+        }
+        // The NoOpenTab route was decided BEFORE this write
+        // (adversarial round 3): a tab can have opened for the
+        // file in the meantime and loaded pre-write content —
+        // the workspace re-checks now that the disk moved. It runs
+        // inside the toggle's admitted operation, so a save queued
+        // behind the toggle starts against a tab already reconciled.
+        DiskWriteLanded?.Invoke(path, report!.NewContentHash);
+        // The editor precedent (mac is silent on success);
+        // task.Completed is the state before the toggle.
+        _announce(new A11yEvent.TaskToggled(!task.Completed));
+        LoadFirstPage();
     }
 
     /// <summary>Workspace seam (adversarial round 3): fired on the UI

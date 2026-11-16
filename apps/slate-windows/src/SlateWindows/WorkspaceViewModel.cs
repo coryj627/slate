@@ -2690,12 +2690,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             repairs: _taskIndexRepairs,
             synchronousForTests: !_startInteractionBackgroundWork);
         // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
-        // state, deliberately NOT keyed on the active note.
+        // state, deliberately NOT keyed on the active note. Its direct
+        // toggle joins the note's save chain (plan 47 CB-9a, #1889), so
+        // it is handed the workspace's coordinator.
         TasksReview = new Panels.TasksReviewViewModel(
             session,
             announce,
             TryActivateTaskRow,
             TryToggleTaskInOpenTab,
+            _saves,
             repairs: _taskIndexRepairs,
             synchronousForTests: !_startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's

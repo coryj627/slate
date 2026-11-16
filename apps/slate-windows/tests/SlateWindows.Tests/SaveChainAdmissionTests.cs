@@ -1563,6 +1563,211 @@ public sealed class SaveChainAdmissionTests
         return (document, row, column);
     }
 
+    // ---- A Tasks Review toggle on a note with no tab (plan 47 CB-9a, #1889) ---
+
+    /// <summary>A review toggle on a note with no tab takes a ticket in the
+    /// note's chain: the box is not ticked until the operation admitted
+    /// before it ends, and then it is ticked once.</summary>
+    [Fact]
+    public void ATablessReviewToggleWaitsForAnOperationAdmittedForTheNoteAndTogglesOnce() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-behind-op", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(TaskNote, h.Read("a.md"));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.TaskToggled) && h.Workspace.SavesIdle,
+                "the toggle after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The row's task is an ordinal in the text the row was read
+    /// from. The operation ahead rewrites the note, so when the toggle's turn
+    /// comes core's compare-and-swap on the row's snapshot hash refuses it:
+    /// the conflict is spoken once, the operation's bytes are kept, and the
+    /// rows reload.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseNoteChangedWhileItWaitedRefusesAsStale() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-note-changed", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            int loads = review.LoadRequestIdForTests;
+
+            // The operation ahead writes the note, then ends.
+            _ = h.Session.SaveText("a.md", TaskNoteEdited, expectedContentHash: null);
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.TaskToggleConflict) && h.Workspace.SavesIdle,
+                "the toggle's refusal after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal(TaskNoteEdited, h.Read("a.md"));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleConflict);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.True(review.LoadRequestIdForTests > loads, "the rows did not reload after the refusal");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The route is decided again at the toggle's turn. A tab that
+    /// opened on the note while it waited takes the toggle through its own
+    /// admitted route, or refuses with that route's sentence when it is
+    /// dirty. Either way the direct toggle does not run too.</summary>
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("dirty")]
+    public void ATablessReviewToggleWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute(string tab) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-tab-opened-" + tab, ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            if (tab == "dirty")
+            {
+                opened.Text = TaskNote + "An unsaved line.\n";
+            }
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !opened.IsTaskToggleInFlight
+                    && h.Events.Any(e => tab == "dirty" ? e is A11yEvent.TaskToggleUnsaved : e is A11yEvent.TaskToggled),
+                "the toggle's turn on the tab that opened");
+            Assert.True(held.Result);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            if (tab == "dirty")
+            {
+                Assert.Equal(TaskNote, h.Read("a.md"));
+                _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleUnsaved);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+            }
+            else
+            {
+                string written = h.Read("a.md");
+                Assert.Contains("- [x] the task", written, StringComparison.Ordinal);
+                Assert.Equal(written, opened.Text);
+                Assert.False(opened.IsExternallyStale);
+                Assert.False(opened.IsDirty);
+                _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The other direction: the direct toggle is held before its
+    /// core call when a tab opens on the note and saves. The save waits for
+    /// the toggle's publication. The tab holds the bytes from before the
+    /// toggle, so that publication marks it stale with the sentence it gets
+    /// today, and the one write is the toggle's.</summary>
+    [Fact]
+    public void ASaveStartedUnderATablessReviewToggleWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-tabless-toggle", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var held = new HeldWork(hook => review.DirectToggleBeforeWriteForTests = hook);
+        try
+        {
+            review.ToggleTask(row);
+            h.PumpUntil(() => held.Entered, "premise: the toggle reaching its hold before its core call");
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(TaskNote, opened.Text);
+            Task<bool> save = opened.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the toggle");
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Events.Any(e => e is A11yEvent.TaskToggled) && h.Workspace.SavesIdle,
+                "the toggle and then the save");
+            Assert.True(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            Assert.True(
+                h.Events.FindIndex(e => e is A11yEvent.TaskToggled) < h.Events.FindIndex(e => e is A11yEvent.NoteSaved),
+                "the save spoke before the toggle it waited for");
+            Assert.True(opened.IsExternallyStale, "the tab that raced open was not told the disk moved");
+            _ = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(),
+                line => line.Text == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
+            Assert.Equal(TaskNote, opened.Text);
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ReleaseAndDrainTheReview(h, review);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The review's row for a.md's task, loaded, with no tab on the
+    /// note.</summary>
+    private static (TasksReviewViewModel Review, ReviewTaskRowViewModel Row) ReviewRow(Vault h)
+    {
+        TasksReviewViewModel review = h.Workspace.TasksReview;
+        review.EnsureLoaded();
+        h.PumpUntil(() => !review.IsLoading && review.Rows.Any(row => row.Path == "a.md"), "the review's rows");
+        ReviewTaskRowViewModel row = review.Rows.Single(candidate => candidate.Path == "a.md");
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+        h.Events.Clear();
+        return (review, row);
+    }
+
+    /// <summary>For a fact's <c>finally</c>: the admitted work ends, and then
+    /// the review's own workers (a reload a toggle's publication started)
+    /// end, before the vault is disposed. It asserts nothing.</summary>
+    private static void ReleaseAndDrainTheReview(Vault h, TasksReviewViewModel review)
+    {
+        h.ReleaseAndDrain();
+        Task drained = review.WhenAllWorkDrained();
+        _ = PumpedDispatcher.PumpUntil(() => drained.IsCompleted, TimeSpan.FromSeconds(30));
+    }
+
     /// <summary>The deleted note's row, loaded, and the alerts the workspace
     /// raises from here on.</summary>
     private static (HistoryDeletedRow Row, ConcurrentQueue<string> Alerts) RecoverSetup(Vault h)

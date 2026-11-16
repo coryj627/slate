@@ -190,14 +190,6 @@ public sealed class SaveChainAdmissionCensus
     private static readonly Row[] OutsideTheChain =
     [
         new(
-            "Panels/TasksReviewViewModel.cs",
-            "ToggleTask",
-            ["ToggleTaskStatus"],
-            "a review toggle on a note with no tab writes on the panel's own worker, which nothing joins before the "
-            + "session goes",
-            "2026-11-16",
-            "CB-9a"),
-        new(
             "Panels/BulkRenameViewModel.cs",
             "Run",
             ["RenamePropertyAcrossVault", "RenamePropertyByIdentityAcrossVault"],
