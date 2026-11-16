@@ -2554,10 +2554,6 @@ public sealed class TestWaitCensus
             "no-wait-witness: none shown yet; the candidate is the discard prompt count, which a wait that ran out its budget raises"),
         ("PumpedDispatcherTests.cs", "ADrainTheDispatcherNeverRunsFailsWithinItsBound", 1,
             "no-wait-witness: none shown yet; the candidate is the TimeoutException and the runner's own bound"),
-        ("RescanTests.cs", "TheRescanDoesNotWaitForThePoolToUntrackEndedWork", 1,
-            "no-wait-witness: none shown yet; the candidate is a count of the untracking seam's returns, zero straight after the call"),
-        ("RescanTests.cs", "TheCloseDoesNotWaitForThePoolToUntrackEndedWork", 1,
-            "no-wait-witness: none shown yet; the candidate is a count of the untracking seam's returns, zero straight after the call"),
         ("SingleInstanceCoordinatorTests.cs", "ConnectedPrimaryThatStopsReadingCannotExceedTheSendDeadline", 1,
             "no-wait-witness: none shown yet; the candidate is send.WaitAsync's bound and the refused delivery"),
     ];
