@@ -166,6 +166,11 @@ public sealed partial class ShellAccessibilityTests
             WaitForPaletteClosed(window, automation);
             outcome = ListenerOutcome.Completed;
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Palette_TypingAnnouncesOnlyTheFinalCountAndSelection), logDirectory);
+            throw;
+        }
         finally
         {
             int slateId = process?.Id ?? -1;

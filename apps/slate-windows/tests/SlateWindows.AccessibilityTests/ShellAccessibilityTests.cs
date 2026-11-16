@@ -1682,6 +1682,11 @@ public sealed partial class ShellAccessibilityTests
                 }
             }
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -6867,6 +6872,11 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(File.Exists(Path.Combine(vaultRoot, "existing.md")));
             Assert.True(
                 File.Exists(Path.Combine(vaultRoot, "arch", "journey copy.md")));
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(FileManagement_CreateRenameDuplicateMoveDelete_IsClean), logDirectory);
+            throw;
         }
         finally
         {

@@ -176,6 +176,11 @@ public sealed partial class ShellAccessibilityTests
             }
             AssertAxeClean(process, "spoken-chords-reading");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(SpokenChords_MenusPaletteAndOverlays_MatchTheTable), logs);
+            throw;
+        }
         finally
         {
             if (process is not null)
