@@ -1254,7 +1254,8 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
-    /// <summary>A tab that names the deleted path saves by create. Its save
+    /// <summary>A tab that names the deleted path and holds no hash saves by
+    /// create. Its save
     /// is held before its write when the recover is asked, so the recover
     /// waits; the save then creates the file, and core's exclusive create
     /// answers the recover that the path is taken: the row opens Restore As,
@@ -1341,6 +1342,132 @@ public sealed class SaveChainAdmissionTests
         }
         held.AssertHeldUntilReleased();
     });
+
+    /// <summary>The admission moves the recover's publication behind the
+    /// `Created` event's re-seat: the listener posts that event to the
+    /// dispatcher before the worker posts its continuation, so the re-seat
+    /// runs inside the ticket, sees an operation admitted for the path, and
+    /// only marks a clean tab back on disk. The recover therefore reloads
+    /// every clean tab on its path itself, inside its ticket: the tab shows
+    /// the recovered file as a new document, with that file's identity. It
+    /// takes a vault opened through the lifecycle, whose event listener is
+    /// attached, in background mode; no workspace-level fact receives the
+    /// event.</summary>
+    [Fact]
+    public void ARecoverReloadsACleanTabThatWasMissingOnItsPath() => RunSta(() =>
+    {
+        using var v = new OpenedVault("recover-reloads-tab", "gone.md", Gone);
+        v.Workspace.OpenPath("gone.md", WorkspaceOpenTarget.NewTab);
+        // What a Deleted event does to a tab on the path (the route
+        // FinalMergeDeltaTests takes to a missing tab).
+        v.Workspace.InvalidatePath("gone.md");
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = v.Workspace.Groups.SelectMany(group => group.Tabs).Single(candidate => candidate.Path == "gone.md");
+        Assert.True(tab.IsMarkdown);
+        Assert.False(tab.IsDirty);
+        Assert.True(tab.IsMissingFromDisk, "premise: the tab on the deleted path does not report its file missing");
+        int document = tab.ItemIdentity;
+        string? identity = tab.FileIdentity;
+
+        v.Workspace.History.LoadDeletedFiles();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(30)),
+            "the deleted files list never loaded");
+        HistoryDeletedRow deleted = v.Workspace.History.DeletedRows.Single(row => row.Path == "gone.md");
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        v.Workspace.RecoverDeletedFile(deleted, (ok, collision) => answers.Enqueue((ok, collision)));
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !answers.IsEmpty && v.Workspace.SavesIdle, TimeSpan.FromSeconds(30)),
+            "the recover never answered its row");
+        // The `Created` event's own turn, whichever side of the publication it
+        // fell on, has run by the time the dispatcher is drained.
+        PumpedDispatcher.Drain();
+
+        Assert.Equal([(true, false)], answers);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal(Gone, tab.Text);
+        Assert.False(tab.IsDirty);
+        Assert.NotEqual(document, tab.ItemIdentity);
+        Assert.NotNull(tab.FileIdentity);
+        Assert.NotEqual(identity, tab.FileIdentity);
+    });
+
+    /// <summary>A vault opened through the vault lifecycle, as the app opens
+    /// one: its event listener is attached, so a file core creates reaches
+    /// the workspace as a `Created` event, and interaction work runs in the
+    /// background. Its note at <c>deleted</c> was saved and deleted in an
+    /// earlier session.</summary>
+    private sealed class OpenedVault : IDisposable
+    {
+        private readonly SynchronizationContext? _previous;
+        private readonly string _state;
+
+        public OpenedVault(string label, string deleted, string text)
+        {
+            _previous = SynchronizationContext.Current;
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            Root = Path.Combine(Path.GetTempPath(), $"slate-save-chain-{label}-{Guid.NewGuid():N}");
+            _state = Root + "-state";
+            Directory.CreateDirectory(Root);
+            Directory.CreateDirectory(_state);
+            File.WriteAllText(Path.Combine(Root, "keeper.md"), "# Keeper\n");
+            using (VaultSession earlier = VaultSession.OpenFilesystem(Root))
+            {
+                using (var scan = new CancelToken())
+                {
+                    earlier.ScanInitial(scan);
+                }
+                _ = earlier.SaveText(deleted, text, expectedContentHash: null);
+                StaThread.Run(() => earlier.DeleteFile(deleted));
+            }
+            Lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(Root),
+                enqueueUi: action => dispatcher.BeginInvoke(action),
+                recentVaultsStore: new RecentVaultsStore(Path.Combine(_state, "recent-vaults.json")),
+                announce: Events.Add,
+                confirmUnsavedClose: () => VaultCloseDecision.Discard);
+            Task open = Lifecycle.OpenVaultAsync(Root);
+            Assert.True(PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)), "the vault never opened");
+            open.GetAwaiter().GetResult();
+            Workspace = Assert.IsType<WorkspaceViewModel>(Lifecycle.Workspace);
+            Assert.True(Workspace.StartsInteractionBackgroundWorkForTests);
+        }
+
+        public string Root { get; }
+
+        public VaultLifecycleViewModel Lifecycle { get; }
+
+        public WorkspaceViewModel Workspace { get; }
+
+        public List<A11yEvent> Events { get; } = [];
+
+        public void Dispose()
+        {
+            try
+            {
+                Lifecycle.Dispose();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(_previous);
+                foreach (string folder in (string[])[Root, _state])
+                {
+                    try
+                    {
+                        Directory.Delete(folder, recursive: true);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+                }
+            }
+        }
+    }
 
     /// <summary>Found and fixed with the recover: a Restore As whose worker
     /// meets a fault outside VaultException (a core panic) still answers its
@@ -1994,6 +2121,14 @@ public sealed class SaveChainAdmissionTests
 
             r.H.PumpUntil(() => r.FailureGiven && r.H.Workspace.SavesIdle, "the faulted route ending");
             r.AssertFailedOnce(Fault);
+            if (route.StartsWith("toggle", StringComparison.Ordinal))
+            {
+                // The seam stands inside the body's try, after the repair
+                // lease is taken, so the body's own arms settled the lease:
+                // none is left held, whatever repair is pending.
+                _ = r.H.Workspace.TaskIndexRepairsForTests.TryBeginCleanQuery(out _, out bool onlyALeaseBars);
+                Assert.False(onlyALeaseBars, "the toggle's repair lease was left held");
+            }
             r.AssertALaterOperationRuns();
         }
         finally
@@ -2009,7 +2144,6 @@ public sealed class SaveChainAdmissionTests
     /// alone), so no publication was posted: the route still fails aloud,
     /// once, writes nothing, and its operation ends.</summary>
     [Theory]
-    [InlineData("recover")]
     [InlineData("cell write")]
     [InlineData("toggle")]
     public void AnAdmittedSinglePathRouteWhoseWorkerFaultsOutsideItsCatchStillEnds(string route) => RunSta(() =>
@@ -2031,6 +2165,127 @@ public sealed class SaveChainAdmissionTests
         {
             r.SetSeam(null);
             r.Drain();
+        }
+    });
+
+    /// <summary>The recover's backstop. Its worker faults outside its catch
+    /// (out of memory, which the catch leaves alone), so its own publication
+    /// was never posted. The row is still answered, once, with "nothing
+    /// happened"; the recover fails aloud with the existing alert; nothing is
+    /// created; and the path's chain is free. The second row makes that
+    /// alert throw: the row is answered all the same, and the operation
+    /// still ends.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARecoverWhoseWorkerFaultsOutsideItsCatchStillEndsAndAnswersItsRow(bool theAlertThrows) => RunSta(() =>
+    {
+        const string Fault = "a fault the worker's catch does not take (test seam)";
+        using var r = new SinglePathRoute("recover", "recover-faults-outside-catch");
+        if (theAlertThrows)
+        {
+            r.H.Workspace.HistoryAlert = (_, _) =>
+                throw new System.Runtime.InteropServices.COMException("the alert failed (test seam)");
+        }
+        r.SetSeam(() => throw new OutOfMemoryException(Fault));
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => !r.Answers.IsEmpty && r.H.Workspace.SavesIdle, "the recover ending after its worker faulted");
+            PumpedDispatcher.Drain();
+            Assert.Equal([(false, false)], r.Answers);
+            if (!theAlertThrows)
+            {
+                Assert.Equal(["Can't restore: " + Fault], r.Alerts);
+            }
+            Assert.False(r.Written);
+            Assert.DoesNotContain(r.H.Events, e => e is A11yEvent.RestoredFile);
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>Two recovers of one path, the second queued behind the
+    /// first. The first creates the file and drops the deleted file's
+    /// history, so core answers the second that no such history is left: the
+    /// existing "Can't restore" alert, the row answered that nothing
+    /// happened, and the file written once.</summary>
+    [Fact]
+    public void ARecoverQueuedBehindAnotherRecoverOfItsPathIsToldNoHistoryIsLeft() => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("recover", "recover-behind-recover");
+        var held = new HeldWork(r.SetSeam);
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the first recover reaching its hold before its create");
+            r.Ask();
+            Assert.Equal(2, r.H.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Empty(r.Answers);
+
+            held.Release();
+            r.H.PumpUntil(() => r.Answers.Count == 2 && r.H.Workspace.SavesIdle, "both recovers answering");
+            Assert.Equal([(true, false), (false, false)], r.Answers);
+            _ = Assert.Single(r.H.Events, e => e is A11yEvent.RestoredFile);
+            Assert.StartsWith("Can't restore: ", Assert.Single(r.Alerts), StringComparison.Ordinal);
+            Assert.Equal(Gone, r.H.Read("gone.md"));
+        }
+        finally
+        {
+            r.H.ReleaseAndDrain(held);
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A tab that raced open can have a toggle of its own in flight
+    /// when the tabless toggle's turn comes. The route decided again then
+    /// refuses as busy, with the tab route's existing sentence, heard after
+    /// the wait and not at the press; the direct toggle does not run, and
+    /// the tab's own toggle is the one write.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseNoteOpenedWithAToggleInFlightHearsBusyAndWritesNothing() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-tab-busy", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(TabTaskToggle.Started, opened.ToggleTask(h.Session.TasksForFile("a.md")[0], h.Events.Add));
+            Assert.Equal(3, h.Workspace.SavesForTests.AdmittedForTests);
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !opened.IsTaskToggleInFlight && h.Events.Any(e => e is A11yEvent.TaskToggled),
+                "the tabless toggle's refusal and then the tab's own toggle");
+            Assert.True(held.Result);
+            _ = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(),
+                line => line.Text == "A task update is already in progress.");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
         }
     });
 

@@ -819,7 +819,15 @@ reworded.
   re-checks nothing on the host at its turn. Core's exclusive create is the
   check: a file a save ahead of it created answers `DestinationExists`, the
   row opens Restore As, and nothing is spoken. `RestoredFile` is spoken from
-  `WorkspaceViewModel.FinishRecover`.
+  `WorkspaceViewModel.FinishRecover`. A recover queued behind another
+  recover of the same path finds the deleted file's history gone, so core
+  answers `InvalidArgument` and the reader hears the existing "Can't
+  restore" alert. On success the recover reloads every clean Markdown tab
+  on the path inside its ticket, keeping a save queued on it. The `Created`
+  event's re-seat now runs under the recover's ticket, so it keeps the
+  buffer and only marks the tab back on disk; without the reload a tab
+  that was missing would keep its old document and file identity over a
+  file created anew. A dirty tab is not reloaded.
 - **A Bases cell edit on a note with no tab** holds the note's property
   lease from the request to the operation's end. At its turn the route is
   decided again. A Markdown tab on the note by then takes the open-note
@@ -830,22 +838,34 @@ reworded.
   publication reconciles a tab that opened while the write ran: a clean one
   is rebaselined, and a dirty one hears "Properties changed on disk, but the
   editor no longer matches it. Save or reopen the note to reconcile.", an
-  existing sentence at a new occasion. The outcome sentence
-  (`BasesCellSaved`, `BasesCellCleared`, `BasesCellRowNoLongerMatches`) is
-  still spoken when the base's refresh publishes, which is after the
-  operation has ended.
+  existing sentence at a new occasion. The operation ends when
+  `CompleteBasesWrite` returns, never on the funnel refresh's publication:
+  a base document that shuts down drops that continuation unrun, and a
+  ticket waiting on it would hold the note's chain for good. So the outcome
+  sentence (`BasesCellSaved`, `BasesCellCleared`,
+  `BasesCellRowNoLongerMatches`) is spoken after the operation has ended,
+  as on the open-note route, and a save queued behind the write can speak
+  before it.
 - **A Tasks Review toggle on a note with no tab** is admitted through
   `INoteSaveChain`, which only the workspace's coordinator implements. At
   its turn the route is decided again: a tab that opened on the note takes
   the toggle through its own admitted route, or refuses with that route's
-  sentence. Otherwise core's compare-and-swap on the row's snapshot hash is
+  sentence. One of those is heard later than before: "A task update is
+  already in progress.", after the wait and not at the press, when that
+  tab has a toggle of its own in flight at this turn. Otherwise core's
+  compare-and-swap on the row's snapshot hash is
   the re-check, and a note that changed while the toggle waited is refused
   with `TaskToggleConflict`. `DiskWriteLanded` runs inside the ticket, so a
   save queued behind the toggle starts against a tab already reconciled.
 - **Each of the three ends.** A worker fault is the route's failed outcome
   ("Can't restore", `BasesCellEditFailed`, `TaskToggleFailed`), given once. A
   worker that ends without posting its publication still ends the
-  operation, and so does a publication that throws. Each worker is tracked,
+  operation: each route has a backstop on its worker's task for a fault its
+  catch leaves alone (out of memory, stack overflow, access violation), and
+  the toggle's also covers a body its scheduler skipped. The backstop
+  speaks the route's same failure, in a `try`, and the recover's answers
+  its row that nothing happened. A publication that throws still ends the
+  operation too. Each worker is tracked,
   so teardown joins it before the session goes, and the save settle waits
   for it. A route still queued when the coordinator closes never runs.
 - **The rescan's reload** of a changed note asks the chain
@@ -870,9 +890,9 @@ reworded.
   the Bases view export onto an existing file (accepted until the owner
   answers in CB-46's table).
 
-Facts: `SaveChainAdmissionTests` (the rescan fact; ten for the recover, the
-cell edit and the toggle; the create-class theory; seven for faults, teardown
-and the settle; the Restore As and repair-lease theories) and
+Facts: `SaveChainAdmissionTests` (the rescan fact; fourteen for the recover,
+the cell edit and the toggle; the create-class theory; seven for faults,
+teardown and the settle; the Restore As and repair-lease theories) and
 `SaveChainAdmissionCensus`.
 
 ## Hot-exit amendment, Mac (plan 43 PR 29, #1525, 2026-11-13)

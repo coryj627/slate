@@ -532,7 +532,8 @@ internal sealed partial class WorkspaceViewModel
     /// <remarks>Plan 47 CB-9a (#1889; CD5(c)): the recovery creates the
     /// note's file, so it joins the file's save chain. It waits for every
     /// save and operation admitted for the path before it (a tab that names
-    /// the path saves by create), and a save asked for after it waits for
+    /// the path and holds no hash saves by create; one that still holds the
+    /// deleted file's hash saves on it), and a save asked for after it waits for
     /// its publication. <paramref name="completed"/> answers the row once,
     /// whatever happens: a recover that never ran, because the chain closed
     /// first, answers <c>(false, false)</c>.</remarks>
@@ -564,7 +565,7 @@ internal sealed partial class WorkspaceViewModel
             return Task.CompletedTask;
         }
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Publish(bool destinationExists, string? failure, Exception? fault)
+        void Publish(bool destinationExists, string? failure)
         {
             try
             {
@@ -577,14 +578,7 @@ internal sealed partial class WorkspaceViewModel
                 _ = recovered.TrySetException(exception);
                 return;
             }
-            if (fault is null)
-            {
-                _ = recovered.TrySetResult();
-            }
-            else
-            {
-                _ = recovered.TrySetException(fault);
-            }
+            _ = recovered.TrySetResult();
         }
         Action? hook = HistoryCreateHookForTests;
         Task worker = RunAdmittedHistoryWork(() =>
@@ -614,16 +608,48 @@ internal sealed partial class WorkspaceViewModel
                 // ticket left holding the path's chain.
                 failure = exception.Message;
             }
-            RunOnSaveDispatcher(() => Publish(destinationExists, failure, fault: null));
+            RunOnSaveDispatcher(() => Publish(destinationExists, failure));
         });
-        // The worker faulted outside its catch, so its publication was never
-        // posted: the recover still fails aloud and ends, and its Task
-        // carries the fault.
+        // The backstop, as a tab's task toggle has. The worker faulted
+        // outside its catch, on one of the three faults the catch leaves
+        // alone, so its publication was never posted. On the save
+        // dispatcher, and only while the operation has not ended, the
+        // recover fails aloud with the existing alert, the row is answered
+        // that nothing happened, and the operation ends carrying the
+        // fault. The answer stands in a finally and the whole in a try, so
+        // an alert or a callback that throws still answers the row and
+        // still ends the operation.
         _ = worker.ContinueWith(
             faulted =>
             {
                 Exception fault = faulted.Exception!.GetBaseException();
-                RunOnSaveDispatcher(() => Publish(destinationExists: false, fault.Message, fault));
+                RunOnSaveDispatcher(() =>
+                {
+                    if (recovered.Task.IsCompleted)
+                    {
+                        return;
+                    }
+                    try
+                    {
+                        try
+                        {
+                            if (!_workspaceDisposed)
+                            {
+                                HistoryAlert("Can't restore", fault.Message);
+                            }
+                        }
+                        finally
+                        {
+                            completed(false, false);
+                        }
+                    }
+                    catch (Exception publication)
+                    {
+                        _ = recovered.TrySetException(new AggregateException(fault, publication));
+                        return;
+                    }
+                    _ = recovered.TrySetException(fault);
+                });
             },
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted,
@@ -657,6 +683,26 @@ internal sealed partial class WorkspaceViewModel
         // the Deleted list so recovering several files in a
         // row is not disruptive (red team round 1). Restore
         // As… is the flow that opens the new file (H9).
+        //
+        // A clean tab on the path is reloaded here, inside the ticket.
+        // Core fires Created on the worker, and the listener posts it to
+        // the dispatcher before the worker posts this publication, so the
+        // event's re-seat runs under this recover's ticket: it sees an
+        // operation admitted for the path, keeps the buffer, and only
+        // marks the tab back on disk. Left there the tab would keep its
+        // old file identity, its document and its undo history over a
+        // file that was created anew. A dirty tab is not reloaded: its
+        // buffer outranks the recovered bytes, as in the template's
+        // sweep, and a save queued on a clean tab is kept.
+        foreach (WorkspaceTabViewModel samePath in Groups
+            .SelectMany(group => group.Tabs)
+            .Where(candidate => candidate.IsMarkdown
+                && string.Equals(candidate.Path, path, StringComparison.Ordinal)
+                && !candidate.IsDirty)
+            .ToArray())
+        {
+            samePath.ReloadKeepingQueuedSave();
+        }
         History.ReloadDeletedFilesIfLoaded();
         completed(true, false);
     }
