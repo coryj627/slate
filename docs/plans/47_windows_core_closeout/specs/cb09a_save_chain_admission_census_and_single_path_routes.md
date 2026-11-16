@@ -1,0 +1,271 @@
+# CB-9a — A census holds every route that writes a note to its save chain, and the single-path routes join it
+
+Issues: Refs #1889 (the issue stays open; CB-9b ends it in wave C4). Size M. Lanes: windows (the app job's unit facts; no gate journey). AT: — (no sentence is added or reworded). Wave: C3, slot 2. Depends on: nothing in code. Wave C2 has merged by then, and its CB-6 pins the fixed waits of `SaveChainAdmissionTests.cs` by member and count; re-read that file's lines against `main` at start. Parallel with: CB-7 (the gate project and `TestWaitCensus.cs` rule 4) and CB-10 (`VaultLifecycleViewModel.cs` and its two test files). No source file is shared with either. One document is shared with CB-10, contract 40, at different rows; see Overlap. Decision: CD5, answered as recommended on 2026-11-16 (plan §3.1). Interlock: CB-9b follows in C4 and deletes the census rows marked CB-9b; from this PR on, a chunk that adds a first Windows call to a `VaultSession` method classifies it in `SaveChainAdmissionCensus.cs`; `docs/plans/38_notification_dispatcher_contracts.md` is shared by rebase and `--write`, never by hand. Review: a red team, then Codex adversarial-review rounds until it approves (plan §4 rule 9; the plan names CB-9a for Codex).
+
+Every `path:line` below is as of `main` at 80925d72, read on 2026-11-16. `S/` is `apps/slate-windows/src/SlateWindows/`, `T/` is `apps/slate-windows/tests/SlateWindows.Tests/`, `WVM.X.cs` is `S/WorkspaceViewModel.X.cs`, and `WVM.cs` is `S/WorkspaceViewModel.cs`. Nothing was built or run for this spec.
+
+**Open questions before code starts.** None for the owner: CD5 answers every decision this chunk rests on, and no new sentence is needed. Three calls made here are the lead's to confirm or overrule before the implementer starts:
+
+1. A tabless write whose note has a tab by the time its turn comes takes the open-note route's gates on that tab (Design 5 and 6). The reading said "refuse as the open-tab route does". Both use existing sentences only. Taking the route again was chosen because the open-note route already refuses a dirty or stale tab and otherwise writes on the tab's saved hash.
+2. The tabless Bases cell write's completion reconciles a tab that opened during the write (Design 5, last bullet). A dirty one then hears an existing sentence at a new occasion: "Properties changed on disk, but the editor no longer matches it. Save or reopen the note to reconcile." Today that tab is marked stale in silence by the `Modified` event. Dropping the reconcile leaves a clean tab that raced open behind the disk until the next rescan.
+3. The census closes the writer list over the `VaultSession` methods the Windows shell calls, not over every method of the binding (Design 2, rule 1). The reading asked for every method. The narrower rule still fails on a new Windows call to an unclassified method, and it does not fail a Mac-driven core PR that adds a method Windows never calls.
+
+*2026-11-16:* the plan lead confirmed all three. For call 2, the raced tab's sentence cannot be held open in the field, so the PR writes `not delivered: an NVDA hearing of the raced-tab sentence` and rests on its hosted fact; the owner is told of the new occasion in the wave report.
+
+**Overlap.** CB-9a edits six product files: `S/WorkspaceSaveCoordinator.cs`, `WVM.cs` (the Tasks Review construction at `:2694-2700` only), `WVM.Rescan.cs` (`:782-789` only), `WVM.History.cs`, `WVM.Bases.cs`, `S/Panels/TasksReviewViewModel.cs`, and one base class, `S/Panels/PanelWorkScheduler.cs` (`:142-160`). Tests: `T/SaveChainAdmissionTests.cs`, `T/TasksReviewTests.cs` (two constructions), and the new `T/Censuses/SaveChainAdmissionCensus.cs`. Documents: contracts 38 and 40. CB-10's fix is in `S/VaultLifecycleViewModel.cs` (`OpenVaultAsync`, the two catch arms at `:770-802`, the flag at `:616`), `T/VaultOpenIdentityTests.cs` and `T/WelcomeOpenTests.cs` (`reading/03_save_chain_lifecycle.md:132-165`, and CB-10's own spec); CB-9a edits none of them. **One overlap:** both chunks append an addendum to `docs/plans/40_nvda_matrix_remediation_contracts.md`. CB-10's follows R-5 at `:15`; CB-9a's follows R-9 at `:25`. The paragraphs are ten lines apart, so the second PR to merge rebases and keeps both; neither edits the other's row. Plan §6 lists CB-9a among the chunks that may edit `VaultLifecycleViewModel.cs` or `Panels/BulkRenameViewModel.cs`; this spec names neither, so CB-9a edits neither. CB-7 edits the gate project and appends rule 4 to `T/Censuses/TestWaitCensus.cs`; CB-9a adds a census file of its own and does not edit that one. If CB-10 or CB-7 turns out to move an `A11yEvent` construction, the later PR rebases and reruns `python scripts/a11y_trigger_ledger.py --write`.
+
+## Goal
+
+A route that rewrites a note, or reloads a tab on it, waits for every save or operation admitted for that note before it, and a save asked for after it waits for its publication. After this chunk that holds for a deleted file's recovery, a Bases cell edit on a note with no tab and a Tasks Review toggle on a note with no tab, and a rescan never reloads a tab under any admitted operation. A census names every route that still writes outside the chain, with a reason, a date and the chunk that ends it, so no new one arrives unseen. The exclusive creates are shown safe as a class by one fact.
+
+## Current state on main
+
+**The mechanism.** `S/WorkspaceSaveCoordinator.cs`: `HasAdmittedSaveFor` `:83-87`, `Enqueue` `:94-131`, `Admit` `:150-170`, `ContinueChain` `:210-223`, `TrackWorker` `:258-275`, `SettlePumping` `:280-291` (pumps with no bound until `_pending` is zero), `CloseAndJoinWorkers` `:297-318` (joins with no bound). The workspace's one coordinator is `_saves` (`WVM.cs:2468-2469`). `AdmitPropertyWrite(path, operation, abandoned)` (`WVM.Properties.cs:769-798`) is `Admit` with a callback for an operation that never ran. Close Vault settles first (`S/VaultLifecycleViewModel.cs:2163-2174`), then the workspace's `Dispose` joins the tracked workers (`WVM.cs:3830`) before the session goes. The earlier joins are WB-2 (#1659, plan 44 `specs/wb02_save_chain_admission.md`, WD2: wait), #1885 and #1888.
+
+**Every route that writes a note's bytes or reloads its tab.** Re-derived on 80925d72 from three searches of `S/`: every call to a `VaultSession` method that writes or creates a file, every direct file write, and every caller of the tab methods that replace a buffer from disk.
+
+| # | Route | File and line today | In the chain today | Taken by |
+|---|---|---|---|---|
+| W1 | A tab's save | `WVM.cs:1011` (`Enqueue`), worker `:1221`, writes `:1279`, `:1295-1296` | yes | — |
+| W2 | History restore | `WVM.History.cs:190`, write `:232`, worker `:328` | yes (WB-2) | — |
+| W3 | Task toggle through a tab | `WVM.cs:1542`, worker `:1638`, write `:1781`; callers `S/EditorInteractions.cs:2055`, `S/Reading/ReadingContentViewModel.cs:449`, `WVM.cs:4065`, `:4221` | yes (#1888) | — |
+| W4 | Properties header: set, delete, add, both Keep Mine retries | `WVM.Properties.cs:211`, `:253`, `:437`, `:545`; writes `:430`, `:435`, `:533`, `:542`, `:1045`, `:1097` | yes (WB-2) | — |
+| W5 | Bases cell edit, note open in a tab | `WVM.Bases.cs:1879`, write `:1973-1974` | yes (#1885) | — |
+| W6 | Bases cell edit, no tab on the note | `WVM.Bases.cs:1885-1903`, body `:1999-2048`, writes `:2010`, `:2014` | no: under the note's property lease only, on the bounded drain (`:1902`) | CB-9a |
+| W7 | Tasks Review toggle, no tab on the note | `S/Panels/TasksReviewViewModel.cs:680`, worker `:701`, write `:718` | no: nothing joins its worker before the session goes (`WVM.cs:3862` only stops its publishing) | CB-9a |
+| W8 | Bulk property rename, apply | `S/Panels/BulkRenameViewModel.cs:243-245`; reconcile `WVM.Properties.cs:668` | no | CB-9b |
+| W9 | Link rewrites by a rename, a move, a batch move, and their undo and redo | `S/FilesSidebarViewModel.FileManagement.cs:239-240`, `:382-383`, `:404-405`, `:422`, `:1125-1126`; `S/FilesSidebarViewModel.cs:2308` | no | accepted exception, CD5(b); CB-9b adds the clean-tab rebaseline |
+| W10 | Sidebar tag add or remove on checked files | `S/FilesSidebarViewModel.cs:1693`, `:1708-1709` | no | CB-9b |
+| W11 | Bases view export onto an existing vault file | `WVM.Bases.cs:950` | no: a CAS on the hash seen before the reader confirmed | accepted exception (the reading's W11), in CB-46's table |
+| W14 | Saved-query "export as base" | `WVM.Bases.cs:1760`; core `crates/slate-core/src/session.rs:19886-19895` | no, and no CAS | CB-9b (CD5(d)) |
+| C1 | `RecoverDeletedFile` | `WVM.History.cs:514`, core call `:529`, on `RunHistoryWork` `:636-644` | no; its catch takes `VaultException` only (`:531-538`) | CB-9a, admitted (CD5(c)) |
+| C2 | Every other exclusive create | Recover As `WVM.History.cs:593`; Restore As `:462`, the template create `WVM.Templates.cs:192` and the six sidebar creators, all through `S/CreateOutcomes.cs:42`; import `S/FilesSidebarViewModel.Import.cs:352`; the export's create arm `WVM.Bases.cs:945` | no | exempt as a class (CD5(c)), one class fact |
+| R1 | The restore's reload | `WVM.History.cs:398` | yes | — |
+| R2 | The unadmitted history reload | `WVM.History.cs:372`, guard `:368-370` | asks the chain | — |
+| R3 | The template's same-path sweep | `WVM.Templates.cs:276-289` | yes | — |
+| R4 | Re-seat on a Created or Renamed event | `WVM.cs:3695`, guard `:3687` (`KeepsBufferOnReseat`, `:3724-3730`) | asks the chain | — |
+| R5 | The rescan's re-seat of missing tabs | `WVM.Rescan.cs:659`, `:711`, guard `:625` | asks the chain | — |
+| R6 | The rescan's reload of a changed note | `WVM.Rescan.cs:832`, guard `:788-789` | partly: it asks the property lease, the toggle flag and each tab's own saves, not the chain | CB-9a |
+| R7 | Rebaseline after a property write | `WVM.Properties.cs:702` from `:273`, `:594`, `:632`; `WVM.Bases.cs:1985` | yes | — |
+| R8 | The same fan-out from the bulk rename's reconcile | `WVM.Properties.cs:677` | no | CB-9b |
+| R10 | Navigation re-points a tab at another item | `WVM.Layout.cs:363` | not this class: another item, behind the dirty-tab settle | standing |
+
+Not note content, and so classified but not held to the chain: `.base` edits and Save As base (`S/Bases/BaseDocumentViewModel.cs:599`, `:759`; `S/Bases/BaseQueryBuilderViewModel.cs:721`), canvas edits (`S/Canvas/CanvasDocumentViewModel.cs:5155`), deletes and trash, folder creates, the index repair, hot exit's store, and the app's own stores. `SaveComposed` and `SetFrontmatterSource` have no Windows call site. The one direct file write of export text is outside the vault or onto a scanner-hidden path (`WVM.Bases.cs:860`).
+
+**Where this list differs from the reading's** (`reading/03_save_chain_lifecycle.md:373-466`, written at 1ec9bf31).
+
+- No route is added or removed. `git diff --stat 1ec9bf31..80925d72 -- apps/slate-windows/src` lists three files (`EditorInteractions.cs`, `MainWindow.AppMenu.cs`, `Reading/ReadingMathElement.cs`), none on a save route, so every `S/` line the reading cites still holds, `EditorInteractions.cs:2055` among them. Each line in the table above was opened again.
+- The reading counts eleven create routes. A census that binds calls sees six creator call sites: `S/CreateOutcomes.cs:42` (one helper behind eight of the eleven), `WVM.cs:1279` (a tab's own save when it holds no hash, already inside the chain), `Import.cs:352`, `WVM.Bases.cs:945`, `WVM.History.cs:529` and `:593`.
+- Core has moved. `recover_deleted_file` is `session.rs:6537` (the reading: `:6276`), `recover_remnant_to` `:6576`, its exclusive create `:6596`. `export_saved_query_as_base` is `:19886-19895` (the reading and plan §2.3: `:19620`). `save_query_as_base` is `:20036`. The FFI's `VaultSession` blocks start at `crates/slate-uniffi/src/lib.rs:871`, `:13059` and `:14521` (the reading: `:844`, `:12920`, `:14382`).
+- The reading left one statement unverified: that core's property write with a null expected hash re-reads under the writer lock. It does. `set_property_impl` takes the session's connection mutex (`session.rs:9619`) before it reads the file (`:9621`), and `delete_property`'s body does the same (`:9698`, `:9704`). So W6's write lands on top of whatever bytes the file holds.
+- W7 is worse than "not tracked by the coordinator". Nothing waits for its worker at teardown: the workspace only shuts the review's scheduler down (`WVM.cs:3862`), and no drain names it (`:3878-3914`).
+- `T/SaveChainAdmissionTests.cs` is 1,580 lines, not 1,530: CB-4 (#1960) added `DisposingThePeersWaitsForAHeaderReadItReleased` (`:907`) and the `Peers` teardown drain (`:1557-1578`).
+- Plan §11 says #1888's first two review rounds were an apply not cancelled before teardown settles. #1888's PR body says otherwise: both rounds found a ticket left open on a fault (a worker exception outside its catch, and a refusal whose sentence throws). Either way the symptom is the same, a save settle that never returns. See Design 8.
+
+**The teardown facts today.** `TeardownJoinsAnAdmittedRestoreAndPropertyWrite` (`T/SaveChainAdmissionTests.cs:1186`) pins each admitted worker through `TrackedWorkersForTests` read at `BeforeJoinForTests`. It holds two `Thread.Sleep(200)` calls, and `Vault.Settle` (`:1383-1390`) holds a `Thread.Sleep(5)`; CB-6 (wave C2) pins all three by count.
+
+## Reference
+
+`T/Support/ShellCompilation.cs:22-113` (one bound compilation over the shell's sources, references from the build's record). `T/Censuses/BasesErrorDetailCensus.cs:50-68` (fail closed when a source does not bind) and `:582-585` (a planted tree added to the shell compilation). `T/Censuses/TestWaitCensus.cs:102-123` (`AssertOnlyTheListed`: an unexplained hit, an entry with no reason or date, and a stale entry each fail), `:49-52` and `:84-98` (the walk floor), `:269-294` (a rule run on planted source). `T/Censuses/BoundedFfiListCensus.cs:41-56` (a planted call named with file and line). `T/Support/HeldWork.cs` (a hold with nothing to dispose). `T/RescanTests.Round3.cs:345-364` and `T/RescanTests.Round5.cs:227-231` (an outside write, `Session.Rescan`, then the documents re-sync). `T/HistoryPanelTests.cs:84-132` (a deleted file needs two sessions). Plan 47 §4 rules 1 to 4 and 7 to 9; contract 38's save-chain amendment (`docs/plans/38_notification_dispatcher_contracts.md:763-812`).
+
+## Design
+
+Build in this order. Each numbered part after the census is one commit: its failing facts, its change, its census rows deleted.
+
+**1. Two additions to the coordinator (`S/WorkspaceSaveCoordinator.cs`).**
+
+- `internal int AdmittedForTests`: the count of admitted tickets not yet completed (`_pending`), dispatcher only. A fact reads it straight after a request to see whether the route asked the chain. That is a positive witness, so no fact pumps for a time to show that nothing was written.
+- `internal interface INoteSaveChain { Task<bool> Admit(string path, Func<Task> operation); void TrackWorker(Task worker); }`, implemented by the coordinator: `Admit(path, operation)` is `Admit(path, _ => operation())`. It is the chain as a view model with no tab on the note sees it. The coordinator is its only implementer in the shell; the census holds that.
+
+**2. `T/Censuses/SaveChainAdmissionCensus.cs` (new), `[Trait("census", "save-chain-admission")]`.** It binds through `ShellCompilation`, never by spelling. It reads Windows sources and the test assembly only, so it carries no `[Trait("tier", "census")]`, as `BasesErrorDetailCensus` carries none. Each rule is a pure function from a compilation and a set of trees to violations (`File:Line (Member): text`), so the planted theory feeds it source.
+
+- **The tables.**
+  - `NoteWriters`, each with a word of what it writes: `SaveText`, `SaveTextChecked`, `SaveComposed`, `SetFrontmatterSource`, `RestoreVersion`, `ToggleTaskStatus`, `SetProperty`, `DeleteProperty`, `SetPropertyByIdentity`, `DeletePropertyByIdentity`, `RenamePropertyAcrossVault`, `RenamePropertyByIdentityAcrossVault`, `AddTagToFiles`, `RemoveTagFromFiles`, `ExportSavedQueryAsBase`, and the link rewriters `RenameFile`, `RenameFileIfIdentity`, `RenameFolder`, `RenameFolderWithNote`, `RenameFolderWithNoteIfIdentity`, `MoveFile`, `MoveFileIfIdentity`, `MoveFolder`, `MoveFolderIfIdentity`, `BatchMove`, `UndoStructural`, `UndoBatchMove`, `UndoBatchMoveIfIdentities`.
+  - `ExclusiveCreators`: `CreateExclusive`, `CreateExclusiveReporting`, `CreateExclusiveBytes`, `RecoverDeletedFile`, `RecoverDeletedFileAs`. `AdmittedCreators`: `RecoverDeletedFile` (CD5(c)).
+  - `NotNoteBytes`: groups of names, one reason a group. The groups: reads and queries; the index, the scan and repairs; deletes, trash and folders (structural, no note rewritten); a `.base` or a `.canvas` through its handle, and `SaveQueryAsBase` (neither kind has an editor save: `KeysFor` gives a path key to Markdown only, `WVM.cs:1012`); saved queries, dashboards, preferences and settings; handles and lifecycle. The implementer fills them from the list rule 1 prints.
+- **Rule 1, `EveryVaultSessionMethodTheShellCallsIsClassified`.** Candidates are the invocations and method-group references in `ShellCompilation.Sources` whose simple name is a public instance method of the binding's `VaultSession` (by reflection; `Dispose` left out). Each is bound. One whose symbol's containing type is `VaultSession` must be named in exactly one table. A candidate that does not bind at all fails. A table name the binding no longer has fails. The message names the file and line and says which table to add the name to. This is the rule that would have caught `ExportSavedQueryAsBase`.
+- **How a site is shown admitted.** Build the shell's call graph on demand. A node is a method, constructor or accessor; a lambda or local function belongs to the member that holds it, except an admission lambda, which is a node of its own. An admission call is a bound call to `WorkspaceSaveCoordinator.Admit` or `Enqueue`, to `INoteSaveChain.Admit`, or to `WorkspaceViewModel.AdmitPropertyWrite`; the argument for its `operation` parameter (`start` for `Enqueue`; never `abandoned`) is an admission lambda. An edge A to B is an invocation of B, or a method-group reference to B, in A's body. The admitted set is the least set that holds every admission lambda and every node that has at least one caller and whose callers are all in the set. A site is admitted when either holds:
+  - (A) its node is in the admitted set; or
+  - (B) it sits in an anonymous function assigned to a local, and an admission lambda in the same member reads that local (the property write's shape, `WVM.Properties.cs:427-440`).
+  - If a real joined route fits neither after an honest try, its row may say `ByFact("fact name")`; the census then checks that the fact exists in `SaveChainAdmissionTests`. The PR names every such row. Expected: none.
+- **Rule 2, `EveryNoteWriterCallIsAdmittedIntoItsNotesChain`.** Every bound call to a `NoteWriters` or `AdmittedCreators` method is a site. A site that is not admitted is a violation. Violations are answered only by the exception list.
+- **Rule 3, `EveryReloadOfATabFromDiskIsAdmittedOrAsksTheChain`.** A site is a bound call to `WorkspaceTabViewModel.ReplaceItem`, `ReplaceItemWithReadText`, `ReloadKeepingCaretLine`, `ReloadKeepingQueuedSave` or `RebaselineAfterPropertyWrite` made from outside `WorkspaceTabViewModel`. It passes when it is admitted as above, when its enclosing member has a `SaveTicket` parameter, or when a bound call to `HasAdmittedSaveFor` or `KeepsBufferOnReseat` stands before it in that member in source order.
+- **The exception list**, `(File, Member, Calls, Reason, Dated, Ends)`. `Calls` is the sorted list of method names found in that member, so a new unjoined call in a listed member still fails. `AssertOnlyTheListed`'s three checks apply: a violation no row explains, a row with no reason, date or `Ends`, and a row that matches no violation each fail. Rows in the first commit, all dated 2026-11-16:
+
+  | File | Member | Calls | Ends |
+  |---|---|---|---|
+  | `WorkspaceViewModel.History.cs` | `RecoverDeletedFile` | `RecoverDeletedFile` | CB-9a |
+  | `WorkspaceViewModel.Bases.cs` | `BasesTablessWriteBody` | `DeleteProperty`, `SetProperty` | CB-9a |
+  | `Panels/TasksReviewViewModel.cs` | `ToggleTask` | `ToggleTaskStatus` | CB-9a |
+  | `WorkspaceViewModel.Rescan.cs` | `ReloadMarkdownPathAsync` | `ReloadKeepingCaretLine` | CB-9a |
+  | `Panels/BulkRenameViewModel.cs` | `Run` | `RenamePropertyAcrossVault`, `RenamePropertyByIdentityAcrossVault` | CB-9b |
+  | `FilesSidebarViewModel.cs` | `EditTag` | `AddTagToFiles`, `RemoveTagFromFiles` | CB-9b |
+  | `WorkspaceViewModel.Bases.cs` | `ExportSavedQueryAsBase` | `ExportSavedQueryAsBase` | CB-9b (CD5(d)) |
+  | `WorkspaceViewModel.Properties.cs` | `ReconcileTabsAfterPropertyWrite` | `RebaselineAfterPropertyWrite` | CB-9b: the bulk rename's reconcile reaches this fan-out outside the chain |
+  | `FilesSidebarViewModel.FileManagement.cs` | `TryRenameSelected` | `RenameFile`, `RenameFolderWithNote` | accepted, CD5(b); CB-46's table |
+  | `FilesSidebarViewModel.FileManagement.cs` | `ExecuteUndoStep` | `MoveFileIfIdentity`, `MoveFolderIfIdentity`, `RenameFileIfIdentity`, `RenameFolderWithNoteIfIdentity`, `UndoBatchMoveIfIdentities` | accepted, CD5(b); CB-46's table |
+  | `FilesSidebarViewModel.FileManagement.cs` | `ExecuteMoveTo` | `MoveFile`, `MoveFolder` | accepted, CD5(b); CB-46's table |
+  | `FilesSidebarViewModel.cs` | `BatchMove` | `BatchMove` | accepted, CD5(b); CB-46's table |
+  | `WorkspaceViewModel.Bases.cs` | `PublishBasesExport` | `SaveText` | accepted until the owner answers in CB-46's table (the reading's W11) |
+
+  The reasons are the "In the chain today" column above, in a sentence each. The link rewrites' reason: core rewrites the linking notes and reports them, each under its own CAS, and the set is not known before the call. The export's: both sides are guarded by a CAS and both refusals are true.
+- **A second list, `NotThisClass`,** for a reload site that is right as it stands: `WorkspaceViewModel.Layout.cs` `ReplaceTabItem` (`ReplaceItem`), "navigation re-points a tab at another item behind the dirty-tab settle; its one same-item caller, the rescan's re-seat, asks `KeepsBufferOnReseat` first (`WVM.Rescan.cs:625`)". Same three checks. It is not one of the plan's accepted exceptions.
+- **`OnlyTheCoordinatorIsANotesSaveChain`:** the one type in the shell compilation that implements `INoteSaveChain` is `WorkspaceSaveCoordinator`.
+- **`EveryUnadmittedCreatorIsInTheCreateClassFact`:** the creator methods with a call site outside the admitted set, `AdmittedCreators` left out, are exactly the first arguments of the `[InlineData]` rows of `SaveChainAdmissionTests.AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther` (by reflection). Today: `CreateExclusiveReporting`, `CreateExclusiveBytes`, `RecoverDeletedFileAs`.
+- **Fail closed and floors.** `TheSaveChainSourcesBind`: every file that holds a site or an admission call, and a fixed list (`WorkspaceViewModel.cs`, `.Bases.cs`, `.History.cs`, `.Properties.cs`, `.Rescan.cs`, `.Templates.cs`, `.Layout.cs`, `WorkspaceSaveCoordinator.cs`, `WorkspaceTabViewModel.Properties.cs`, `Panels/TasksReviewViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `FilesSidebarViewModel.cs`, `FilesSidebarViewModel.FileManagement.cs`, `FilesSidebarViewModel.Import.cs`, `CreateOutcomes.cs`), binds with no error. `TheWalkReadsTheShell`: at least 290 sources (308 today), 28 writer sites (31), 5 creator sites (6), 8 reload sites (9) and 9 admission calls (10). Count each again at the first commit and pin just under. A walk that finds fewer missed files.
+- **`TheRulesSeeAPlantedRoute`,** a theory over source planted into the shell compilation. Unjoined: a writer in a plain method; a method called from an admission lambda and from an unadmitted method; a method with no caller; a method handed out as a method group by an unadmitted method; a writer lambda in a local no admission lambda reads; a writer in the `abandoned` argument; `RecoverDeletedFile` in a plain method. Joined: a writer in an `Admit` lambda; in a method reached only through `Task.Run` inside one; two calls deep with every caller admitted; through `AdmitPropertyWrite`; through `INoteSaveChain.Admit`; shape (B). Clean: `CreateExclusiveBytes` in a plain method. Reloads, unguarded: `tab.ReplaceItem(tab.Item)` in a plain method; the chain asked after the reload. Guarded: `HasAdmittedSaveFor` before it; `KeepsBufferOnReseat` before it; a `SaveTicket` parameter; inside an admission lambda. Not a site: `ReplaceItem(Item)` inside `WorkspaceTabViewModel`. Also planted: a second `INoteSaveChain` implementer (a violation), and for rule 1 a name in no table and a name in two.
+- **`ARuleNamesAPlantedCallsFileAndLine`:** one planted unjoined writer is reported as `Planted.cs:<line>` with its member.
+- **What the census does not prove.** That the path admitted is the path written. That the worker is handed to `TrackWorker`. That the ticket settles on every path. That a route re-checks its gates at its turn. A call through any delegate or interface other than `INoteSaveChain`. The facts in Tests prove these for each route.
+
+**3. The rescan's reload guard (R6), `WVM.Rescan.cs:788-789`.** Add one operand: `saveInFlight = PropertyWriteInFlightFor(path) || _saves.HasAdmittedSaveFor(path) || live.Any(…)`. Extend the comment at `:782-787` to say "or any operation admitted into the file's chain". The rescan's reload is unadmitted, so it may ask. A clean tab whose note changed on disk while an operation is admitted for it then takes the existing arm at `:822-827`: it keeps its buffer and document and is marked stale against the index hash. It waits for nothing, says nothing (a rescan speaks its one completion sentence), and the next rescan reloads it. The reading's risk, that a wider guard makes an admitted write refuse where it wrote before, does not arise: a tab is marked stale only when its saved hash differs from the index hash (`:1431-1440`), which is true of it either way, and an operation that reloads the tab (a restore) clears the mark (`WVM.cs:760`).
+
+**4. `RecoverDeletedFile` (C1), `WVM.History.cs:514-568`.** The `RestoreAdmitted` shape (`:195-271`).
+
+- Request: the two gates stay (`_workspaceDisposed`, `row.Recoverable`). Then `AdmitPropertyWrite(path, () => RecoverAdmitted(path, completed), abandoned: () => completed(false, false))`. On an idle chain it starts in the same dispatcher turn, as today.
+- It waits for every save and operation admitted for the path before it. A path with a deleted file can hold one: the save of a tab that names the path (its save is a create, `WVM.cs:1266-1290`), or a queued recover.
+- At its turn: `_workspaceDisposed` ends it with `completed(false, false)`. Nothing else is re-checked on the host, because the target is a path and core's exclusive create is the check (`session.rs:6596`): a file that a save ahead of it created answers `DestinationExists`.
+- The worker runs through `RunAdmittedHistoryWork` (`:320-330`), so the coordinator joins it. It runs the new seam `HistoryCreateHookForTests` (an `Action?` run on the history worker before the core call), then `_session.RecoverDeletedFile(path)`. It catches `DestinationExists`, then `VaultException`, then every other fault but `OutOfMemoryException`, `StackOverflowException` and `AccessViolationException`, as a failure with the exception's message.
+- The continuation runs through `RunOnSaveDispatcher` (`:334-343`), not `RunOnDispatcher`, which runs inline on the worker when there is no `Application` (`WVM.Bases.cs:2108-2117`). It is `try { FinishRecover(…); done.TrySetResult(); } catch (Exception e) { done.TrySetException(e); }`, so a `completed` or an announcer that throws still ends the ticket (the coordinator logs it once).
+- `FinishRecover` does what `:541-565` does: disposed, `completed(false, false)`; `DestinationExists`, `completed(false, true)` (the view opens the Restore As row, `S/Panels/HistorySurfaceView.cs:804-817`); a failure, the existing "Can't restore" alert; else `RestoredFile` ("Restored {filename}."), the Deleted list reloaded, `completed(true, false)`.
+- Close Vault while it waits or runs: the save settle pumps until its ticket ends, so the recover lands first and the vault then closes. It is not cancelled; history work is not cancellable, and an admitted restore has behaved so since WB-2. A workspace disposed with no settle closes the coordinator: a recover still queued never runs and `abandoned` answers the row.
+- A tab closing while it waits changes nothing for it; it holds no tab. A save queued behind it waits for the recover's publication.
+- What the reader hears: on an idle chain, what they hear today. Behind a save of that path, the save's own outcome first, then either "Restored {filename}." or, when the save created the file, no sentence and the Restore As row.
+- **Found and fixed here (the reading's siblings, rule 1 small):** `CommitRestoreAsVersion` (`:465-473`) and `CommitRestoreAsDeleted` (`:595-603`) catch `VaultException` only, so any other fault leaves the Restore As row with no answer. Both gain the same third arm, routed to the existing "Can't restore" alert and `completed(false, null)`, and both run `HistoryCreateHookForTests` before their core call. They stay outside the chain (the create class).
+
+**5. The Bases cell edit with no tab (W6), `WVM.Bases.cs:1885-1904`.**
+
+- Request: the lease is taken as today (`:1890-1894`). Then `AdmitPropertyWrite(path, () => BasesTablessWriteAdmitted(document, row, column, key, value), () => ReleasePropertyWriteLease(path))`. The lease is held from the request to the operation's end, as on the open-note route.
+- It waits for every save and operation admitted for the note before it.
+- `BasesTablessWriteAdmitted`, at its turn, in a `try` whose `catch` releases the lease and faults the operation's Task (the shape at `:1939-1996`):
+  - `_workspaceDisposed || _saves.IsClosed`: release the lease, end, say nothing.
+  - A Markdown tab is on the note now (`FindTabForPath(path)`): the route decision is taken again. Return `BasesCellWriteAdmitted(document, row, column, key, value, [(tab, tab.ItemIdentity)])`. That method's own gates then answer on that tab with their existing sentences: dirty, the dirty-note line (`AnnounceDirtyTabPropertyRefusal`); stale, `PropertyEditConflict`; else it writes on the tab's saved hash and rebaselines the tab. The identity it is handed is the tab's own at this turn, because a tabless request named a path and never a document.
+  - Still no tab: start the worker. Inline in synchronous mode; else `Task.Run`, handed to `_saves.TrackWorker` and to `TrackRetiredBasesWork`. A continuation for a worker that faults outside the body's catch releases the lease and faults the Task.
+- `BasesTablessWriteBody` (`:1999-2048`) takes the operation's `TaskCompletionSource`. It runs the new seam `BasesTablessWriteHookForTests` before the core call, keeps the `SaveReport`, and keeps its catch-all. Both continuations move to `RunOnSaveDispatcher` and settle the Task on every path, in the `EndingWith` shape (`WVM.Properties.cs:853-867`). The write keeps a null expected hash. Recorded reason: the Bases row carries no content hash (`crates/slate-uniffi/src/lib.rs:12662-12667`), and core applies the change as a read, an edit and a write under one lock (`session.rs:9619-9621`), so it lands on the bytes the save ahead of it published.
+- On success, before `CompleteBasesWrite`, it calls `ReconcileTabsAfterPropertyWrite(path, report.NewContentHash)` (`WVM.Properties.cs:695-708`): a tab that opened during the write is rebaselined when clean and flagged stale when dirty, which is contract 8 applied to the one property write that skipped it. This is lead call 2 above.
+- Close Vault: the settle waits for the write to land and publish. A write still queued when the coordinator closes never runs, and `abandoned` releases the lease.
+- What the reader hears: `BasesCellSaved`, `BasesCellCleared`, `BasesCellRowNoLongerMatches` or `BasesCellEditFailed`, as today, after the save it waited for has spoken. Lease refusals are unchanged.
+
+**6. The Tasks Review toggle with no tab (W7), `S/Panels/TasksReviewViewModel.cs:680-820`.**
+
+- `S/Panels/PanelWorkScheduler.cs`: `StartWork` becomes `_ = StartTrackedWork(body)`. `protected Task StartTrackedWork(Action body)` is today's body of `StartWork` (`:142-160`) and returns the tracked task, or a completed one when the body ran inline or was refused. No other panel changes.
+- The constructor gains one required parameter after `toggleViaOpenTab`: `INoteSaveChain chain`. The workspace passes `_saves` (`WVM.cs:2694-2700`). `T/TasksReviewTests.cs:62` and `:415` pass a test double that runs the operation at once and tracks nothing.
+- `ToggleTask`: the switch at `:682-694` moves, unchanged, into `private bool RoutedThroughAnOpenTab(ReviewTaskRowViewModel row)`. When it answers false: `_ = _chain.Admit(row.Path, () => DirectToggleAtItsTurn(row))`.
+- `DirectToggleAtItsTurn`: `IsShutDown` ends it. Then `RoutedThroughAnOpenTab(row)` again: a tab that opened while it waited takes the toggle, through the tab's own admitted route behind this ticket, or refuses with that route's sentence (`WVM.cs:4035-4075`); this operation then ends having written nothing. Else the worker starts through `StartTrackedWork`, and its task goes to `_chain.TrackWorker`.
+- The worker's body is `:703-761` with the new seam `DirectToggleBeforeWriteForTests` before the core call. It still passes the row's snapshot hash, and that is the re-check at its turn: the task is an ordinal in the text the row was read from, so a note that a save ahead of it changed is refused by core's CAS and the existing `TaskToggleConflict` is spoken, with the rows reloaded.
+- The publication (`:762-818`) runs in a `try` and settles the operation's Task after it: completed, or faulted when it throws. The `IsShutDown` return settles it too. A continuation on the worker's task settles it when the body never reached its post (a shutdown skipped it, or it faulted). `DiskWriteLanded` (`WVM.cs:2707-2711`) therefore runs inside the ticket, so a save queued behind the toggle starts against a tab the workspace has already reconciled.
+- Close Vault: the settle waits for the toggle to publish. At `Dispose` the coordinator joins the worker before the session goes, which nothing does today.
+- What the reader hears: `TaskToggled`, `TaskToggleConflict` or `TaskToggleFailed`, as today, after the operation it waited for has spoken. A tab that raced open hears what it hears today (`WVM.cs:2034-2055`).
+
+**7. The create class (C2).** The class: an exclusive create at a path the reader or the namer chose, through `CreateExclusiveReporting`, `CreateExclusiveBytes` or `RecoverDeletedFileAs`. It is exempt because the create is its own CAS: core refuses an occupied path with `DestinationExists`, and a tab that names that path and holds no hash saves by create too (`WVM.cs:1266-1290`), so whichever lands second is refused and neither overwrites. No code changes. The one fact, `AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther`, is a theory over the three methods and both orders (Tests). The census ties its rows to the creators the shell calls outside the chain.
+
+**8. The hang risk.** #1888 ended at Codex round 3 after two rounds on one fault class: a ticket that never completes. `SettlePumping` has no bound, so one such ticket hangs Close Vault and every later save of that note. Plan §11's other half, an apply that must be cancelled before the settle, is CB-9b's: each CB-9a route makes one core call on one file, or one log-proportional recover as the admitted restore has since WB-2, and Close Vault waits for it as it waits for a save. What applies here, for all three routes:
+
+- every fault but the fatal three is the operation's failed outcome, never a faulted worker;
+- a worker that faults anyway, or whose body is skipped, still ends the operation;
+- the publication settles the operation in a `try`, so a sentence or a callback that throws still ends it;
+- an operation that finds the workspace disposed or the coordinator closed ends at once;
+- the worker is handed to `TrackWorker`.
+
+Each has a fact (Tests, "Faults and teardown").
+
+**9. Not changed.** Core, the FFI, the Mac. `AdmitPropertyWrite`'s name. The open-note routes. The bulk rename, the tag edit, the link rewrites, both exports and every `FilesSidebarViewModel*.cs` file (CB-9b). `VaultLifecycleViewModel.cs`. Found while reading and not taken: `BasesTablessWriteBody` does not bracket its write with the task-index repair lease that `WriteProperty` takes (`S/WorkspaceTabViewModel.Properties.cs:189-199`); the implementer sizes it by rule 1 and takes it or defers it.
+
+## Tests
+
+All in `T/SaveChainAdmissionTests.cs` unless said, on its pumped harness (`Vault` `:1331-1404`, `Peers` `:1441-1579`). Rules for every new fact:
+
+- It waits on a condition (`PumpUntil` on a state, a `HeldWork` entered, a task completed). It adds no `Thread.Sleep`, `Task.Delay`, `PumpFor` or `RunDispatcherFor`, and does not call `Vault.Settle`. CB-6's rules 1 and 2 pin this file's fixed waits by member and count; a new one turns `TestWaitCensus` red.
+- "Nothing was written yet" is shown by `AdmittedForTests` read straight after the request, then one `PumpedDispatcher.Drain()` and a read of the file. It is never shown by waiting.
+- A worker is held with `HeldWork` on the route's seam, which has nothing to dispose (`TestWaitCensus` rule 3a). The fact releases it in a `finally` and then pumps the route's own drain (`Workspace.SavesIdle`, `TasksReview.WhenAllWorkDrained()`, `Workspace.RetiredBasesDrains`) before its vault is disposed, so a red run tears down cleanly too. No new fixture type releases a gate in its `Dispose`; if one is added it drains before its session goes (rule 3b).
+- An operation held ahead of a route is `Workspace.SavesForTests.Admit(path, _ => ahead.Task)`, as the #1888 facts do (`:447`). It stands for any admitted operation that holds no lease, no toggle flag and no tab save.
+- A deleted note is built in two sessions (`T/HistoryPanelTests.cs:84-132`); `Vault` gains a constructor or factory for it.
+- An existing headless fact that drives a changed route from a thread other than the one that built its workspace now fails the coordinator's `VerifyAccess`. Re-host it on a serial context, as WB-2 did for `TemplateFlowTests` (plan 44 `specs/wb02_save_chain_admission.md:17`), and list it in the PR. By reading, `HistoryPanelTests`, `BasesCellEditTests` and `TasksPanelTests` call from the building thread and need no change.
+
+**The census.** The facts of Design 2. Red first: the first commit lands the census with the thirteen exception rows and one standing row; for each of the four CB-9a rows, the row is deleted before its fix and `EveryNoteWriterCallIsAdmittedIntoItsNotesChain` (or the reload rule) is seen naming that member.
+
+**R6.**
+
+- `ARescanNeverReloadsATabUnderAnOperationAdmittedForItsNote`. A clean tab on `a.md`; an operation held ahead; the file rewritten outside Slate and `Session.Rescan`; the documents re-sync run to completion (`RescanTests.Round3`'s recipe). The tab keeps its `ItemIdentity` and text and is `IsExternallyStale`. The operation ends; a second re-sync reloads the tab: identity moved, the outside text, not stale. Red today: the first re-sync reloads the tab. Mutation: remove the new operand.
+
+**Recover.**
+
+- `ARecoverStartedUnderAnAdmittedOperationWaitsThenRecoversOnce`. Red today: `AdmittedForTests` is 1 after the request, not 2, and the file is already back. Then: released, `completed(true, false)`, one `RestoredFile`, the file's bytes.
+- `ARecoverBehindAGhostTabsSaveAnswersDestinationExistsAndOverwritesNothing`. A tab opened on the deleted path, its save held before its write; the recover asked. After release: `NoteSaved`, then `completed(false, true)`, no `RestoredFile`, the file holds the tab's text. Red today: the recover lands while the save is held.
+- `ASaveStartedUnderAnAdmittedRecoverWaitsForItsPublication`. The recover held in `HistoryCreateHookForTests`; a tab on the path types and saves; `AdmittedForTests` is 2 and the save is not complete. After release: `RestoredFile` before `NoteSaveBlocked`, and the file holds the recovered bytes. Red today: the count is 1 and the save creates the file under the recover.
+- Mutation for the three: call the worker without `AdmitPropertyWrite`.
+
+**The tabless Bases cell edit.**
+
+- `ATablessBasesCellEditWaitsForAnOperationAdmittedForTheNoteAndWritesOnce`. Red today: the count is 1 and `status: done` is on disk before the release.
+- `ATablessBasesCellEditWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute`, a theory. "clean": one write, on the tab's saved hash; the tab holds the written bytes and is not stale; one `BasesCellSaved`. "dirty": the dirty-note sentence once, nothing written, the lease released. Red today: the write lands at the request in both rows.
+- `ASaveStartedUnderATablessBasesCellEditWaitsForItsPublication`. The write held in `BasesTablessWriteHookForTests`; a tab opens on the note and saves, clean; the count is 2. After release: the cell's outcome before `NoteSaved`, the tab rebaselined to the written bytes and not stale, one write. Red today: the count is 1.
+- Mutation: start the worker at the request.
+
+**The tabless review toggle.**
+
+- `ATablessReviewToggleWaitsForAnOperationAdmittedForTheNoteAndTogglesOnce`. Red today: the count is 1 and the box is ticked on disk before the release.
+- `ATablessReviewToggleWhoseNoteChangedWhileItWaitedRefusesAsStale`. The operation ahead rewrites the note. After release: one `TaskToggleConflict`, the file holds the operation's bytes, the rows reload. Red today: the toggle lands first and the operation's write then replaces it.
+- `ATablessReviewToggleWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute`, a theory. "clean": one `TaskToggled`, the tab's text holds the tick, the tab is not stale. "dirty": `TaskToggleUnsaved` once, nothing written. Red today: the toggle lands at the request.
+- `ASaveStartedUnderATablessReviewToggleWaitsForItsPublication`. The toggle held in `DirectToggleBeforeWriteForTests`; a tab opens and saves, clean; the count is 2. After release: `TaskToggled` before `NoteSaved`; the tab, which holds the bytes from before the toggle, is marked stale with the sentence it gets today (`WVM.cs:2034-2055`); one write, the toggle's. Red today: the count is 1.
+- Mutation: call `DirectToggleAtItsTurn` without `_chain.Admit`.
+- `T/TasksReviewTests.cs`: its direct-toggle facts pass unchanged with the test double.
+
+**The create class.**
+
+- `AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther`, a theory: `[InlineData("CreateExclusiveReporting", …)]` (Restore As a version, `CommitRestoreAsVersion`), `"RecoverDeletedFileAs"` (`CommitRestoreAsDeleted`), `"CreateExclusiveBytes"` (the session call the import makes), each with `saveFirst` false and true. The create first, with the tab's save held before its write: the create lands, the save is refused with `NoteSaveBlocked`, the file holds the created bytes. The save first: it lands, the create is refused with its own `DestinationExists` answer, the file holds the tab's text. It passes today; it is the exemption's proof, the issue's second way to be done. Mutation, in the host: make `WriteForSave`'s no-hash arm (`WVM.cs:1266-1290`) an unconditional `SaveText`; the three create-first rows fail. No host mutation reaches core's side of it; the PR says so.
+
+**Faults and teardown.**
+
+- `AnAdmittedSinglePathRouteWhoseWorkerFaultsEndsAndFreesTheNotesChain`, a theory over recover, cell write, and toggle before and after its write. Its first line asserts that `AdmittedForTests` rose by one at the request. The seam throws `InvalidOperationException`. The route's existing failure is given once ("Can't restore" and `completed(false, false)`; `BasesCellEditFailed` and the lease released; `TaskToggleFailed`), `SavesIdle` is reached, and a later `Admit` on the path runs. Every row fails today at its first line: no route takes a ticket. The fault itself is seen red by mutation, with the route admitted: the recover with its narrow catch kept never answers and never frees the chain, so its wait runs out at 30 s, as #1888's fault facts did; the other two with a settle removed do the same.
+- `AnAdmittedSinglePathRouteEndsEvenWhenItsPublicationThrows`, the same three routes with a `completed` or an announcer that throws once. `SavesIdle` is reached and a later `Admit` runs. Red by mutation: remove the `try` around the publication. Seen red before the settle is written.
+- `ARestoreAsWhoseWorkerFaultsStillAnswersItsRow`, a theory ("version", "deleted"). Red today: the row's callback never runs.
+- `TeardownJoinsAnAdmittedRecoverAndTheTablessWrites`. A new fact; `TeardownJoinsAnAdmittedRestoreAndPropertyWrite` is not edited, so its pinned sleeps keep their count. For each route in a fresh workspace: the worker held; `BeforeJoinForTests` reads `TrackedWorkersForTests` and releases the hold; `Dispose()`; then the count read was 1 and the write is on disk. No sleep: the join returns only when the worker has ended. Red today: the count is 0.
+- `SettlingSavesWaitsForAnAdmittedSinglePathRouteAndReturns`, a theory over the three. The worker held; the release queued on the dispatcher (`BeginInvoke`); `Workspace.SettleSaves()` called. It returns true, and the route's outcome has been published by then. This is Close Vault's first step. Red today: nothing is admitted, so the settle returns at once with the worker still held.
+- `AnAdmittedSinglePathRouteStillWaitingAtTeardownEndsUnwritten`, a theory over the three. The route queued behind a held operation; `Dispose()`; the operation released; `SavesForTests.IsIdle` reached. Nothing written, nothing spoken, the lease released, the recover's row answered `(false, false)`. Red today: the write landed at the request.
+
+## Docs and registers
+
+- `docs/plans/38_notification_dispatcher_contracts.md`, in the save-chain amendment (`:763-812`): one dated addendum, "CB-9a (#1889, plan 47, CD5)". It names the three routes now admitted and what each re-checks at its turn, the rescan's reload rule, the create class and its fact, the census and its exception list, and "no new sentence".
+- The same document's generated ledger, if a construction site moves. Expected rows: `RestoredFile` (to `WorkspaceViewModel.FinishRecover@1`), and `TaskToggleConflict`, `TaskToggleFailed` and `TaskToggled` if the review's publication leaves `ToggleTask`. Regenerate with `--write`; never edit rows by hand. `BasesCellEditFailed` keeps `BasesTablessWriteBody@1`.
+- `docs/plans/40_nvda_matrix_remediation_contracts.md`: an `*R-9 addendum (2026-11-…, plan 47 CB-9a, #1889):*` paragraph after R-9 (`:25`), in the form of R-8's at `:23`. R-9 says a tab reloads only with "no Slate-owned save in flight on the path" and lists three kinds; the addendum says the test is now the file's save chain, so any admitted operation counts. The frozen row is not edited.
+- `docs/plans/18_windows_port/a11y_trigger_designations.json` holds no key for a site this chunk moves (its only `TasksReviewViewModel` keys are `OpenRow@1` and `@2`, and it has none for the recover or the tabless cell write). If `--write` reports a designation with no site, re-key it as WB-2 did for the restore's refusal.
+- The new `.cs` file: `git add`, then `python scripts/apply-license-header.py`.
+- No Mac ledger line, no parity-matrix change, no help document. Plan 47 §12's row goes in the wave's docs PR.
+
+## Verification
+
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-cb9a-save-chain-census'
+./apps/slate-windows/generate-bindings.ps1 -Locked
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0
+$t = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+dotnet test $t -c Release --no-build --filter "FullyQualifiedName~SaveChainAdmissionCensus"
+dotnet test $t -c Release --no-build --filter "FullyQualifiedName~SaveChainAdmissionTests|FullyQualifiedName~WorkspaceSaveCoordinatorTests"
+# every class that drives a changed route, and the censuses the change can move
+dotnet test $t -c Release --no-build --filter "FullyQualifiedName~HistoryPanelTests|FullyQualifiedName~TasksReviewTests|FullyQualifiedName~TasksPanelTests|FullyQualifiedName~BasesCellEditTests|FullyQualifiedName~BasesRedTeamRegressionTests|FullyQualifiedName~RescanTests|FullyQualifiedName~A11yTriggerParityCensus|FullyQualifiedName~TestWaitCensus"
+python scripts/a11y_trigger_ledger.py --write
+python scripts/a11y_trigger_ledger.py --check
+$cs = git diff --name-only origin/main -- '*.cs'
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
+```
+
+The PR body quotes each new fact's red result and its green one, each mutation's result, and each CB-9a census row's red result. Once the pull request exists, `gh pr view N --json closingIssuesReferences` must print an empty list. CI: `windows.yml` on the PR, the app job. AT: none.
+
+## Acceptance
+
+- [ ] The census landed as the first commit with thirteen dated rows and one standing row. Each of the four CB-9a rows was deleted in the commit that fixed its route, after its rule was seen naming that member.
+- [ ] At the head, the exception list holds nine rows and `NotThisClass` holds one. Four rows end at CB-9b. Five are the plan's two accepted exceptions: the link rewrites, which sit in four members, and the Bases export. Every row has a reason, a date and what ends it.
+- [ ] Every planted case answers as Design 2 lists. The floors hold. No row is `ByFact`, or the PR names each and says why.
+- [ ] Each fact in Tests was seen red, on today's code or by its named mutation, and then green. The PR body says which of the two for each.
+- [ ] No new fact sleeps, delays, pumps for a fixed time or calls `Vault.Settle`. `TestWaitCensus` passes with no new entry.
+- [ ] No sentence is added or reworded. The PR body lists the sentence each route can speak and where it was spoken before.
+- [ ] `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, every `FilesSidebarViewModel*.cs` file, core and the FFI are unchanged (`git diff --stat`).
+- [ ] Contract 38's addendum and contract 40's R-9 addendum are in the PR. `a11y_trigger_ledger.py --check` passes.
+- [ ] Every class in Verification passes locally. The lane is green; its run id is in the PR body.
+- [ ] The PR body has "Found and fixed here" (the two Restore As catches, and anything else, each with its failing fact) and ends with the count: found on the way, fixed here, deferred, filed (rule 8).
+- [ ] Rule 9: the red team's findings and the Codex round count with its verdict are in the PR body.
+- [ ] The PR body says `Refs #1889`, with no closing word before the number anywhere in it, and `gh pr view N --json closingIssuesReferences` is empty. `not delivered: the bulk rename, the tag edit, the saved-query export and the link rewrites' rebaseline (CB-9b)`.
+
+## Brief
+
+Windows host only; core, the FFI and the Mac do not change. With plan 47 §10 this is all you need. Read this spec's "Current state" table and open each CB-9a line; then `S/WorkspaceSaveCoordinator.cs` whole, `WVM.History.cs:176-343` (the admitted restore, your model), `WVM.Bases.cs:1820-2048`, `S/Panels/TasksReviewViewModel.cs:672-834`, `WVM.Rescan.cs:767-835`, and the census models in Reference. Build in Design's order. (1) The coordinator's `AdmittedForTests` and `INoteSaveChain`. (2) `T/Censuses/SaveChainAdmissionCensus.cs`, bound through `ShellCompilation`: the three tables, rule 1 over the `VaultSession` methods the shell calls, the admitted set (A) with shape (B), the writer rule, the reload rule, the exception list with today's thirteen rows and the one standing row, the one-implementer fact, the create-class tie, the bind check, the floors, the planted theory. Land it first. (3) One operand at `WVM.Rescan.cs:788`. (4) `RecoverDeletedFile` through `AdmitPropertyWrite` and `RunAdmittedHistoryWork`, with the widened catch, the publication on the save dispatcher in a `try`, and the two Restore As catches widened. (5) The tabless Bases write admitted, its route decision taken again at its turn, its worker tracked, its continuations on the save dispatcher, its completion reconciling a tab that raced open. (6) `StartTrackedWork`, then the tabless review toggle admitted through `INoteSaveChain`, its route decision taken again at its turn, its publication settling the operation on every path. (7) The create-class theory. (8) The fault, teardown and settle facts. Every fact is written first and seen red, on today's code or by its mutation; every fact waits on a condition and holds work with `HeldWork`. Delete each census row in the commit that fixes its route. Add the two contract addenda and regenerate the ledger. Check CR counts before editing each C# file and run `dotnet format --verify-no-changes --include` on the changed files. A census hit this spec does not list is a sibling: join it here if it is single-path, else give it a dated row and say so. If any route turns out to need a new sentence, stop and put it to the lead. Review by plan §4 rule 9: a fresh red team with `24_red_team_protocol.md`, the diff and this spec, then Codex rounds until it approves; record both. PR body: `Refs #1889` with no closing word before the number, the facts with their red and green results, the mutations, the census rows deleted and left, the sentences each route speaks, "Found and fixed here", `not delivered`, and the count. Commit: `fix(windows): a deleted file's recovery, a tabless cell edit and a tabless task toggle wait for the note's admitted save, and a census holds every note writer to the chain`.
