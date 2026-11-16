@@ -2,7 +2,7 @@
 
 Issues: #1900, #1709. Size S. Lanes: rust, windows (the app job; a change under `crates/` runs the lane in full), swift (compile only, plus a11y-check, which a `.swift` change starts). AT: — (no sentence changes on Windows). Wave: C2, slot 3. Depends on: nothing. Parallel with: CB-3 then CB-5, CB-6. Decision: CD41, answered 2026-11-16 (plan §3.1): the row lists with size 0 and the modified time core holds, and a marked row is filed for Milestone W. Interlock: `crates/slate-core/src/session.rs` goes CB-8, CB-9b, CB-12, CB-31, CB-33, CB-45b. CB-6 edits `RescanTests.cs`, so this chunk's Windows twin goes in `RescanTests.ChangeFeed.cs`. Review: a red team, then Codex adversarial-review rounds until it approves (plan §4 rule 9; the chunk changes product code).
 
-Written 2026-11-16 from `reading/03_save_chain_lifecycle.md:289-367` (#1900) and `reading/02_ci_and_runner.md:411-444` (#1709), with every line re-read at 5b060297 (plan §2.6). `session.rs` has not changed since. The implementer re-reads each line before editing.
+*2026-11-16:* delivered by #1966; the five corrections its principal reported are applied below. Written 2026-11-16 from `reading/03_save_chain_lifecycle.md:289-367` (#1900) and `reading/02_ci_and_runner.md:411-444` (#1709), with every line re-read at 5b060297 (plan §2.6). `session.rs` has not changed since. The implementer re-reads each line before editing.
 
 `T/` below is `apps/slate-windows/tests/SlateWindows.Tests/`; `S/` is `apps/slate-windows/src/SlateWindows/`.
 
