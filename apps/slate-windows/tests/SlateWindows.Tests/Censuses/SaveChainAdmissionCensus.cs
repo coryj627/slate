@@ -980,6 +980,41 @@ public sealed class SaveChainAdmissionCensus
     public void OnlyTheCoordinatorIsANotesSaveChain() =>
         Assert.Equal(["WorkspaceSaveCoordinator"], Shell.Value.Reading.ChainImplementers);
 
+    // ---- The create class is tied to its fact -----------------------------
+
+    private const string CreateClassFact = "AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther";
+
+    /// <summary>The exclusive creators the shell calls outside the chain are
+    /// exempt as a class (CD5(c)) on the strength of one theory, so its rows
+    /// are exactly those creators: a new creator called outside the chain,
+    /// or a row for one no longer called, fails here.</summary>
+    [Fact]
+    public void EveryUnadmittedCreatorIsInTheCreateClassFact()
+    {
+        Reading reading = Shell.Value.Reading;
+        HashSet<string> admitted = AdmittedNodes(reading);
+        string[] outside = [.. reading.Sites
+            .Where(site => site.Kind == SiteKind.Session
+                && ExclusiveCreators.Contains(site.Name)
+                && !AdmittedCreators.Contains(site.Name)
+                && !IsAdmitted(site, admitted))
+            .Select(site => site.Name)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+        MethodInfo? fact = typeof(SaveChainAdmissionTests).GetMethod(CreateClassFact);
+        Assert.True(fact is not null, $"SaveChainAdmissionTests.{CreateClassFact} does not exist.");
+        string[] proved = [.. fact.GetCustomAttributesData()
+            .Where(attribute => attribute.AttributeType == typeof(InlineDataAttribute))
+            .Select(attribute => ((IReadOnlyCollection<CustomAttributeTypedArgument>)attribute.ConstructorArguments[0].Value!).First().Value as string ?? string.Empty)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+        Assert.True(
+            outside.SequenceEqual(proved),
+            $"The shell calls these exclusive creators outside the save chain: [{string.Join(", ", outside)}]. "
+            + $"{CreateClassFact} has rows for: [{string.Join(", ", proved)}]. Add a row for a new creator (the create "
+            + "first and the tab's save first), or admit it and name it in AdmittedCreators.");
+    }
+
     // ---- Fail closed, and the floors --------------------------------------
 
     /// <summary>Sources the rules read whether or not they hold a site

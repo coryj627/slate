@@ -1357,7 +1357,7 @@ public sealed class SaveChainAdmissionTests
             : Vault.WithADeletedNote("restore-as-faults-deleted", "gone.md", Gone);
         var alerts = new ConcurrentQueue<string>();
         var answers = new ConcurrentQueue<(bool Ok, string? Refusal)>();
-        HistoryVersionRow? version = what == "version" ? RestoreSetup(h).V1 : null;
+        HistoryVersionRow? version = what == "version" ? AnOlderVersion(h) : null;
         h.Workspace.HistoryAlert = (title, message) => alerts.Enqueue($"{title}: {message}");
         h.Workspace.HistoryCreateHookForTests = () =>
             throw new InvalidOperationException("the create's core call panicked (test seam)");
@@ -1784,6 +1784,131 @@ public sealed class SaveChainAdmissionTests
         return (row, alerts);
     }
 
+    // ---- The exclusive creates (plan 47 CB-9a, #1889; CD5(c)) -----------------
+
+    /// <summary>The create class stays outside the save chain, and this is
+    /// why it may: an exclusive create at a path the reader or the namer
+    /// chose is its own check. Core refuses an occupied path, and a tab that
+    /// names the path and holds no hash saves by create too, so whichever of
+    /// the two lands second is refused and neither overwrites the other. One
+    /// row for each creator the shell calls outside the chain (the census
+    /// holds this list to them), in both orders.</summary>
+    [Theory]
+    [InlineData("CreateExclusiveReporting", false)]
+    [InlineData("CreateExclusiveReporting", true)]
+    [InlineData("RecoverDeletedFileAs", false)]
+    [InlineData("RecoverDeletedFileAs", true)]
+    [InlineData("CreateExclusiveBytes", false)]
+    [InlineData("CreateExclusiveBytes", true)]
+    public void AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther(string creator, bool saveFirst) => RunSta(() =>
+    {
+        const string Copy = "copy.md";
+        const string Imported = "imported bytes\n";
+        using Vault h = creator == "RecoverDeletedFileAs"
+            ? Vault.WithADeletedNote("create-class-deleted", "gone.md", Gone, background: false)
+            : Vault.Inline("create-class", ("a.md", "v0\n"));
+        // Restore As a version creates through CreateExclusiveReporting,
+        // Restore As a deleted file through RecoverDeletedFileAs, and an
+        // import through CreateExclusiveBytes, the session call made here.
+        HistoryVersionRow? version = creator == "CreateExclusiveReporting" ? AnOlderVersion(h) : null;
+        string created = creator switch
+        {
+            "CreateExclusiveReporting" => V1,
+            "RecoverDeletedFileAs" => Gone,
+            _ => Imported,
+        };
+        var answers = new List<(bool Ok, string? Refusal)>();
+        void Create()
+        {
+            switch (creator)
+            {
+                case "CreateExclusiveReporting":
+                    h.Workspace.CommitRestoreAsVersion(
+                        version!.ContentHashAfter, version.AbsoluteDate, Copy, (ok, refusal) => answers.Add((ok, refusal)));
+                    break;
+                case "RecoverDeletedFileAs":
+                    h.Workspace.CommitRestoreAsDeleted("gone.md", Copy, (ok, refusal) => answers.Add((ok, refusal)));
+                    break;
+                default:
+                    try
+                    {
+                        _ = h.Session.CreateExclusiveBytes(Copy, System.Text.Encoding.UTF8.GetBytes(Imported));
+                        answers.Add((true, null));
+                    }
+                    catch (VaultException.DestinationExists)
+                    {
+                        answers.Add((false, "A file already exists at copy.md."));
+                    }
+                    break;
+            }
+        }
+
+        WorkspaceTabViewModel ghost = h.OpenNow(Copy);
+        Assert.Null(ghost.SavedContentHash);
+        ghost.Text = Edit;
+        if (version is not null)
+        {
+            // The History panel followed the ghost tab when it opened; the
+            // version being restored is a.md's.
+            h.Workspace.History.NoteChanged("a.md");
+            Assert.Equal("a.md", h.Workspace.History.Path);
+        }
+        if (saveFirst)
+        {
+            Task<bool> first = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => first.IsCompleted && h.Workspace.SavesIdle, "the ghost tab's save");
+            Assert.True(first.Result);
+
+            Create();
+            (bool ok, string? refusal) = Assert.Single(answers);
+            Assert.False(ok, "the create overwrote the file the tab's save created");
+            Assert.StartsWith("A file already exists at", refusal, StringComparison.Ordinal);
+            Assert.Equal(Edit, h.Read(Copy));
+            return;
+        }
+
+        var held = new HeldWork(hook => ghost.SaveWriteHookForTests = hook);
+        try
+        {
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the ghost tab's save reaching its hold before its write");
+            h.Events.Clear();
+
+            Create();
+            (bool ok, string? refusal) = Assert.Single(answers);
+            Assert.True(ok, $"premise: the create was refused: {refusal}");
+            Assert.Equal(created, h.Read(Copy));
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the save after the create");
+            Assert.False(save.Result, "the ghost tab's save overwrote the created file");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveBlocked);
+            Assert.Equal(created, h.Read(Copy));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ghost.SaveWriteHookForTests = null;
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>a.md with two saved versions, v1 then v2 on disk, its tab
+    /// clean and the History panel listing it; v1's row. As
+    /// <see cref="RestoreSetup"/>, waiting on conditions only.</summary>
+    private static HistoryVersionRow AnOlderVersion(Vault h)
+    {
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        tab.Text = V1;
+        SaveNow(h, tab);
+        string v1 = tab.SavedContentHash!;
+        tab.Text = V2;
+        SaveNow(h, tab);
+        h.Workspace.History.NoteChanged("a.md");
+        h.PumpUntil(() => Version(h, v1) is not null, "the history rows loading");
+        return Version(h, v1)!;
+    }
+
     // ---- Teardown -------------------------------------------------------------
 
     /// <summary>Contract 35 A-1: teardown joins an admitted restore's worker
@@ -1942,9 +2067,10 @@ public sealed class SaveChainAdmissionTests
     {
         private readonly FixtureVault _fixture;
         private readonly VaultSession _session;
+        private bool _workspaceDisposed;
 
         public Vault(string label, params (string Path, string Text)[] files)
-            : this(label, earlierSession: null, files)
+            : this(label, background: true, earlierSession: null, files)
         {
         }
 
@@ -1953,9 +2079,11 @@ public sealed class SaveChainAdmissionTests
         /// list when a session opens, so the note is listed, and can be
         /// recovered, in this one (the two-session shape of
         /// <c>HistoryPanelTests</c>).</summary>
-        public static Vault WithADeletedNote(string label, string path, string text, params (string Path, string Text)[] files) =>
+        public static Vault WithADeletedNote(
+            string label, string path, string text, bool background = true, params (string Path, string Text)[] files) =>
             new(
                 label,
+                background,
                 earlier =>
                 {
                     _ = earlier.SaveText(path, text, expectedContentHash: null);
@@ -1965,7 +2093,14 @@ public sealed class SaveChainAdmissionTests
                 },
                 files);
 
-        private Vault(string label, Action<VaultSession>? earlierSession, (string Path, string Text)[] files)
+        /// <summary>A vault whose workspace runs its interaction work inline
+        /// (a History create and its publication, on the calling thread). A
+        /// tab's save still writes on a worker and publishes on the pumped
+        /// dispatcher, so it can be held.</summary>
+        public static Vault Inline(string label, params (string Path, string Text)[] files) =>
+            new(label, background: false, earlierSession: null, files);
+
+        private Vault(string label, bool background, Action<VaultSession>? earlierSession, (string Path, string Text)[] files)
         {
             _fixture = FixtureVault.Create(0, label);
             foreach ((string path, string text) in files)
@@ -1989,8 +2124,18 @@ public sealed class SaveChainAdmissionTests
                 _session.ScanInitial(cancel);
             }
             Workspace = new WorkspaceViewModel(
-                _session, _fixture.Root, () => [], Events.Add, startInteractionBackgroundWork: true);
-            Assert.True(Workspace.StartsInteractionBackgroundWorkForTests);
+                _session, _fixture.Root, () => [], Announce, startInteractionBackgroundWork: background);
+            Assert.Equal(background, Workspace.StartsInteractionBackgroundWorkForTests);
+        }
+
+        /// <summary>Runs before each announcement is recorded: a fact makes
+        /// the announcer throw here.</summary>
+        public Action<A11yEvent>? BeforeAnnounce { get; set; }
+
+        private void Announce(A11yEvent spoken)
+        {
+            BeforeAnnounce?.Invoke(spoken);
+            Events.Add(spoken);
         }
 
         public string Root => _fixture.Root;
@@ -2080,11 +2225,22 @@ public sealed class SaveChainAdmissionTests
             }
         }
 
+        /// <summary>The workspace's teardown, once: a fact that disposes
+        /// the workspace itself leaves the session to <see cref="Dispose"/>.</summary>
+        public void DisposeWorkspace()
+        {
+            if (!_workspaceDisposed)
+            {
+                _workspaceDisposed = true;
+                Workspace.Dispose();
+            }
+        }
+
         public void Dispose()
         {
             try
             {
-                Workspace.Dispose();
+                DisposeWorkspace();
                 _session.Dispose();
             }
             finally
