@@ -525,7 +525,8 @@ static ABANDONED_RENDERS: AtomicUsize = AtomicUsize::new(0);
 /// an estimated width or is skipped, and the render still succeeds: after
 /// a panic inside a measurement, later labels are laid out from estimated
 /// widths. Every error 0.3.1 returns is a parse diagnosis, so with it
-/// only the test-fault seam reaches this flag.
+/// only a seam reaches this flag: the test-fault seam, and in core's test
+/// build the `#[cfg(test)]` render seam.
 static RENDERER_POISONED: AtomicBool = AtomicBool::new(false);
 
 /// What a diagram whose render panicked says (#1631). Both hosts show it
@@ -708,18 +709,22 @@ struct UpstreamError {
 
 impl UpstreamError {
     /// Reads a renderer error where its typed chain still exists, on the
-    /// render thread: `text` is the error's own message and `chain` is
-    /// every link of it, outermost first (`anyhow::Error::chain`).
-    fn from_chain<'a>(
-        text: String,
-        chain: impl Iterator<Item = &'a (dyn std::error::Error + 'static)>,
-    ) -> Self {
-        let mut error = UpstreamError::from_text(text);
-        for link in chain {
-            error.parse_diagnosis |= link.is::<mermaid_rs_renderer::ParseError>();
-            error.names_poisoned_lock |= names_a_poisoned_lock(&link.to_string());
+    /// render thread. `E` is `anyhow::Error`, which this crate does not
+    /// name: its `Display` is its own, outermost message, and its links
+    /// are walked here by `source`, outermost first, which is the walk
+    /// `anyhow::Error::chain` makes. Every link is read, so the facts and
+    /// the render thread share one walk.
+    fn read<E>(error: &E) -> Self
+    where
+        E: std::fmt::Display + AsRef<dyn std::error::Error + 'static>,
+    {
+        let mut read = UpstreamError::from_text(error.to_string());
+        let outermost: &(dyn std::error::Error + 'static) = error.as_ref();
+        for link in std::iter::successors(Some(outermost), |link| link.source()) {
+            read.parse_diagnosis |= link.is::<mermaid_rs_renderer::ParseError>();
+            read.names_poisoned_lock |= names_a_poisoned_lock(&link.to_string());
         }
-        error
+        read
     }
 
     /// An error that is only text, never a parse diagnosis: a
@@ -781,7 +786,13 @@ static RENDER_SEAM: std::sync::Mutex<Option<RenderSeam>> = std::sync::Mutex::new
 ///   `SLATE_TEST_FAULT_DIAGRAM_POISON`: `RENDERER_POISONED` is
 ///   process-wide and has no reset outside core's test build, so every
 ///   diagram fact after it in the same test host would fail.
+///
+/// This one makes the render it names panic.
 const FAULT_DIAGRAM_PANIC_ENV: &str = "SLATE_TEST_FAULT_DIAGRAM_PANIC";
+
+/// The seam's other variable, under the rules written on
+/// [`FAULT_DIAGRAM_PANIC_ENV`]: the render it names returns an upstream
+/// error that names a poisoned lock.
 const FAULT_DIAGRAM_POISON_ENV: &str = "SLATE_TEST_FAULT_DIAGRAM_POISON";
 
 /// The panic `SLATE_TEST_FAULT_DIAGRAM_PANIC` raises.
@@ -861,9 +872,9 @@ type RenderThreadOutcome = std::thread::Result<Result<String, UpstreamError>>;
 /// Thin shim around the actual mermaid-rs-renderer call, run on a
 /// thread of its own with `MERMAID_RENDER_STACK_BYTES` of stack. The
 /// upstream returns an `anyhow::Error`, which we don't depend on
-/// directly: the render thread keeps its text and whether it is a parse
-/// diagnosis (`UpstreamError`), so the rest of the module deals with
-/// plain values.
+/// directly: the render thread keeps its text, whether it is a parse
+/// diagnosis and whether its chain names a poisoned lock
+/// (`UpstreamError`), so the rest of the module deals with plain values.
 ///
 /// #1580: the render is waited on for at most the per-diagram budget, or
 /// what is left of the note's when that is shorter. Past it the call
@@ -927,8 +938,7 @@ fn mermaid_renderer_render(
                     DiagramFault::None => {}
                 }
                 // The chain is read here, where the typed error still exists.
-                mermaid_rs_renderer::render(&source)
-                    .map_err(|e| UpstreamError::from_chain(e.to_string(), e.chain()))
+                mermaid_rs_renderer::render(&source).map_err(|e| UpstreamError::read(&e))
             }));
             // A panic sets nothing (#1631): a waited-on render's is raised
             // again by its caller, and an abandoned render's has no caller and
@@ -2228,11 +2238,12 @@ mod tests {
         }
     }
 
-    /// An error's chain, outermost first, as `anyhow::Error::chain` walks it.
-    fn chain_of<'a>(
-        error: &'a (dyn std::error::Error + 'static),
-    ) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
-        std::iter::successors(Some(error), |link| link.source())
+    /// As `anyhow::Error` gives its outermost link, so `UpstreamError::read`
+    /// takes this error the way it takes the renderer's.
+    impl AsRef<dyn std::error::Error + 'static> for UnderContext {
+        fn as_ref(&self) -> &(dyn std::error::Error + 'static) {
+            self
+        }
     }
 
     /// A lock's error under a context shows only the context as its own
@@ -2256,7 +2267,11 @@ mod tests {
             "premise: the error's own text names the lock: {shown:?}"
         );
 
-        let error = UpstreamError::from_chain(shown, chain_of(&wrapped));
+        let error = UpstreamError::read(&wrapped);
+        assert_eq!(
+            error.text, shown,
+            "the reason shown is the error's own text"
+        );
         assert!(!error.parse_diagnosis);
         assert!(
             error.names_poisoned_lock,
@@ -2288,7 +2303,7 @@ mod tests {
             source: Box::new(diagnosis),
         };
 
-        let error = UpstreamError::from_chain(wrapped.to_string(), chain_of(&wrapped));
+        let error = UpstreamError::read(&wrapped);
         assert!(
             error.names_poisoned_lock,
             "premise: the diagnosis no longer quotes the participant's name"
@@ -2330,9 +2345,16 @@ mod tests {
             let guard = FaultSeamGuard {
                 _renderer: renderer,
             };
-            // SAFETY: the renderer test lock is held, and every fact that
-            // writes one of these two variables does so under it. The value
-            // is a word no other fixture's source contains.
+            // SAFETY: `set_var` is sound when no other thread reads or writes
+            // the environment at the same time except through std, whose
+            // own readers and writers take its lock (on Windows the call is
+            // always sound). Under `cargo test` other facts run on other
+            // threads, and a C library's `getenv` on one of them does not
+            // take std's lock: that is the exposure the fault guard in
+            // `session/tests/common.rs` has for the same calls, and
+            // nextest's process per fact removes it in CI. The renderer
+            // test lock keeps other writers of these two variables out; it
+            // is not what makes the call sound.
             unsafe { std::env::set_var(name, value) };
             guard
         }
@@ -2341,8 +2363,9 @@ mod tests {
     impl Drop for FaultSeamGuard<'_> {
         fn drop(&mut self) {
             for name in [FAULT_DIAGRAM_PANIC_ENV, FAULT_DIAGRAM_POISON_ENV] {
-                // SAFETY: the borrow outlives this guard, so the renderer
-                // test lock is still held, on return and while unwinding.
+                // SAFETY: as for `set_var` in `set`. The borrow outlives this
+                // guard, so the renderer test lock still keeps other writers
+                // of these two variables out, on return and while unwinding.
                 unsafe { std::env::remove_var(name) };
             }
         }
