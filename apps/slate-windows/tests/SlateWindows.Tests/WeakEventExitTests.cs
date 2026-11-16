@@ -34,16 +34,22 @@ public sealed class WeakEventExitTests
     [Fact]
     public void LeftoverWeakEventTablesDelayAProcessExitOnlyWithoutTheSwitch()
     {
+        // Each exit is measured twice, in turn, and the smaller reading of
+        // each kind is kept: load only lengthens a reading, so the smaller
+        // is the truer, and a stall in one measurement no longer decides
+        // the fact. What is left is both readings of one kind stalled.
         TimeSpan without = ExitAfterReady(withSwitch: false);
         TimeSpan with = ExitAfterReady(withSwitch: true);
+        without = TimeSpan.FromTicks(Math.Min(without.Ticks, ExitAfterReady(withSwitch: false).Ticks));
+        with = TimeSpan.FromTicks(Math.Min(with.Ticks, ExitAfterReady(withSwitch: true).Ticks));
 
         Assert.True(
             without >= TimeSpan.FromMilliseconds(Tables * 300 * 0.8),
             $"{Tables} leftover tables cost {without.TotalMilliseconds:F0} ms at exit without the switch: WPF no longer waits for each, so this fact no longer shows the switch matters");
         // What the switch saves is asserted as the difference of the two
-        // exits, taken on one machine under one load: load common to both
-        // cancels, where it would not in a ratio or under a fixed ceiling.
-        // The switch must save at least half of the tables' cost.
+        // smaller readings: load common to both cancels, where it would not
+        // in a ratio or under a fixed ceiling. The switch must save at least
+        // half of the tables' cost.
         Assert.True(
             without - with >= TimeSpan.FromMilliseconds(Tables * 300 / 2),
             $"the exit took {with.TotalMilliseconds:F0} ms with the switch set and {without.TotalMilliseconds:F0} ms without: "
