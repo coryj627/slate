@@ -15,7 +15,8 @@ This check collects every docs path the lane reads and fails if the list does
 not match a path, or if `on.pull_request` carries a list of its own. It reads:
 
 * string literals and `"docs", "plans"|"help", ...` path chains in the
-  Windows sources (`apps/slate-windows/**/*.cs`), resolving same-file string
+  Windows sources (`apps/slate-windows/**/*.cs`), in any case and with
+  either separator, resolving same-file string
   constants, plus literals shaped like a docs/plans-relative path
   (`NN_name.md`, `NN_name/...`), so a helper such as `ReadPlan(SpecDoc)` is
   covered through its constant;
@@ -24,32 +25,36 @@ not match a path, or if `on.pull_request` carries a list of its own. It reads:
 * the checklist and contract links in `at_navigation_map.md`, which the AT
   navigation map census opens relative to its folder;
 * the docs paths in the string literals of the scripts the workflow runs, as
-  `python` or `python3`, with or without `-I`: a whole path
+  `python` or `python3`, with or without switches such as `-I`: a whole path
   (`"docs/plans/38_notification_dispatcher_contracts.md"`), or one a script
   joins segment by segment (`os.path.join(ROOT, "docs", "plans",
   "34_canvas_contracts.md")`, the same as a tuple, a list or `/` operands).
 
 A directory path (no file extension) requires the whole folder to be covered.
-A path is checked where it lands, not as it is spelled: each `..` resolved,
-either separator read, and each name in the checkout's own case, because
-Windows opens a file in any case and GitHub matches the list with case. A
-path built from a helper's parameter
-is resolved through every call of that helper in the same file; a call whose
-argument is not a string literal or same-file constant, or a helper with no
-call, fails the check, naming the file, so a new kind of dynamic read is
-reviewed rather than silently missed.
+Every read, whichever scan found it, is checked where it lands, not as it is
+spelled: each `..` resolved, either separator read, and each name in the
+checkout's own case, because Windows opens a file in any case and GitHub
+matches the list with case.
 
-That holds for the Windows sources only. The scan of a script reads two
-shapes and no other: a string literal that starts `docs/plans` or
-`docs/help`, and a run of string literals that starts `"docs"`, then one
-that starts `plans` or `help`, and runs to the end of its call, tuple, list
-or `/` expression. A docs path a script builds any other way is not seen:
-through a variable, an f-string or a concatenation, through nested joins or
-`Path("docs") / ...`, or in a call that takes another argument after the
-chain. A chain with a segment that is not a string literal is skipped whole,
-never read as its literal prefix, because `"docs", "plans", name` is not a
-read of the folder docs/plans. A script the scan cannot parse fails the
-check.
+In the Windows sources, a path built from a helper's parameter is resolved
+through every call of that helper in the same file; a call whose argument is
+not a string literal or same-file constant, or a helper with no call, fails
+the check, naming the file, so a new kind of dynamic read is reviewed rather
+than silently missed.
+
+The scan of a script is weaker. It reads two shapes and no other: a string
+literal that starts `docs/plans` or `docs/help`, and a run of string
+literals that starts `"docs"`, then one that starts `plans` or `help`, and
+runs to the end of its call, tuple, list or `/` expression. Its blind spot is
+a path built from a value: an f-string, a chain with a segment that is not a
+string literal, `Path("docs") / ...` or a join inside a join is not seen at
+all. Such a chain is skipped whole, never read as its literal prefix,
+because `"docs", "plans", name` is not a read of the folder docs/plans. A
+literal that is only the fixed part of a path is read as itself all the
+same: `"docs/plans/" + name` reads the folder docs/plans, and
+`"docs/plans/%s.md" % name` a file of that name, so the check fails and the
+read is looked at. A script the scan cannot parse fails the check.
+
 Exit 0 when every path is covered by the one list; exit 1 with the problems
 otherwise.
 """
@@ -79,12 +84,17 @@ AT_MAP_DIR = "docs/plans/18_windows_port"
 _CONST = re.compile(
     r'(?:const\s+string|static\s+(?:readonly\s+)?string)\s+(\w+)\s*(?:=|=>)\s*"([^"\\]+)"\s*;'
 )
-_CHAIN = re.compile(r'"docs"\s*,\s*"(plans|help)"((?:\s*,\s*(?:"[^"\\]*"|\w+))*)')
-_CHAIN_ARG = re.compile(r'"([^"\\]*)"|(\w+)')
-_DOCS_LITERAL = re.compile(r'"(docs/(?:plans|help)/[^"\\\s]+)"')
+# In any case and with either separator, as Windows opens a path: `\` in a
+# verbatim string, `\\` in a regular one. landing() gives each read the
+# checkout's spelling before it is checked.
+_SEPARATOR = r'(?:/|\\{1,2})'
+_CHAIN = re.compile(r'"(?i:docs)"\s*,\s*"((?i:plans|help))"((?:\s*,\s*(?:@?"[^"]*"|\w+))*)')
+_CHAIN_ARG = re.compile(r'@?"([^"]*)"|(\w+)')
+_DOCS_LITERAL = re.compile(r'"((?i:docs)' + _SEPARATOR + r'(?i:plans|help)' + _SEPARATOR + r'[^"\s]+)"')
 _PLAN_RELATIVE = re.compile(r'"(\d\d_[A-Za-z0-9_-]+(?:\.md|/[^"\\\s]+))"')
 _MAP_LINK = re.compile(r'(?<![\w/.])((?:\.\./)?(?:reports|specs)/[A-Za-z0-9_./-]+\.md|\.\./\d\d_[A-Za-z0-9_-]+\.md)')
-_SCRIPT_RUN = re.compile(r'python3?(?:\s+-I)?\s+(scripts/[A-Za-z0-9_./-]+\.py)')
+# `python`, `python3` or `python3.13`, then any switches (`-I`, `-B`, `-X utf8`), then the script.
+_SCRIPT_RUN = re.compile(r'python3?(?:\.\d+)?(?:\s+-(?:[XW]\s*\S+|[A-Za-z]+))*\s+(scripts/[A-Za-z0-9_./-]+\.py)')
 
 
 _METHOD = re.compile(r"(\w+)\s*\(([^()]*)\)\s*(?:=>|\{)")
@@ -157,6 +167,11 @@ def requirement(path: str) -> str:
     return path if "." in last else f"{path}/any/file.md"
 
 
+def _split(value: str) -> list[str]:
+    """A literal's path segments, split at either separator."""
+    return [segment for segment in re.split(r"[/\\]+", value) if segment]
+
+
 def source_reads(repo: Path) -> tuple[dict[str, set[str]], list[str]]:
     reads: dict[str, set[str]] = {}
     unresolved: list[str] = []
@@ -173,7 +188,7 @@ def source_reads(repo: Path) -> tuple[dict[str, set[str]], list[str]]:
                 if value is None:
                     dynamic = (name, position == len(args) - 1)
                     break
-                parts.extend(segment for segment in value.split("/") if segment)
+                parts.extend(_split(value))
             if dynamic is None:
                 reads.setdefault("/".join(parts), set()).add(rel)
                 continue
@@ -190,10 +205,9 @@ def source_reads(repo: Path) -> tuple[dict[str, set[str]], list[str]]:
                 )
                 continue
             for value in values:
-                path = parts + [segment for segment in value.split("/") if segment]
-                reads.setdefault("/".join(path), set()).add(rel)
+                reads.setdefault("/".join(parts + _split(value)), set()).add(rel)
         for path in _DOCS_LITERAL.findall(text):
-            reads.setdefault(path.split("#", 1)[0], set()).add(rel)
+            reads.setdefault("/".join(_split(path.split("#", 1)[0])), set()).add(rel)
         for relative in _PLAN_RELATIVE.findall(text):
             reads.setdefault(f"docs/plans/{relative.split('#', 1)[0]}", set()).add(rel)
     return reads, unresolved
@@ -234,20 +248,26 @@ def _segments(node: ast.expr) -> list[str] | None:
     separator (the app job's scripts run on Windows); None for anything else."""
     if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
         return None
-    return [segment for segment in node.value.replace("\\", "/").split("/") if segment not in ("", ".")]
+    return [segment for segment in _split(node.value) if segment != "."]
 
 
 def _under_docs(first: str, second: str) -> bool:
-    # Without case, as Windows opens it. The path is reported as it is spelled,
-    # and the list, which GitHub matches with case, decides whether it is covered.
+    # Without case, as Windows opens it. landing() then gives the path the
+    # checkout's spelling, which is the one GitHub matches the list against.
     return first.lower() == "docs" and second.lower() in ("plans", "help")
 
 
 def _division_operands(node: ast.expr) -> list[ast.expr]:
     """`a / b / c` as [a, b, c]: the operator joins path segments."""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        return _division_operands(node.left) + [node.right]
-    return [node]
+    operands: list[ast.expr] = []
+    while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        operands.append(node.right)
+        node = node.left
+    return [node] + operands[::-1]
+
+
+# The strings Python builds from fixed text and values: f-strings, and template strings from 3.14.
+_BUILT_STRINGS = tuple(kind for kind in (ast.JoinedStr, getattr(ast, "TemplateStr", None)) if kind)
 
 
 def script_paths(tree: ast.AST) -> list[str]:
@@ -256,8 +276,9 @@ def script_paths(tree: ast.AST) -> list[str]:
     A whole path: one literal that starts `docs/plans` or `docs/help`, with
     either separator and no white space (`"docs/help"`, or the same path
     written with backslashes). It is read as itself, whatever stands beside it.
-    The fixed text of an f-string is not one: `f"docs/plans/{name}.md"` names
-    neither the folder docs/plans nor any file the scan can know.
+    The fixed text of an f-string or a template string is not one:
+    `f"docs/plans/{name}.md"` names neither the folder docs/plans nor any file
+    the scan can know.
 
     A chain: the literal `"docs"`, then one that starts `plans` or `help`, and
     the string literals after it, as the arguments of a call, the items of a
@@ -271,8 +292,8 @@ def script_paths(tree: ast.AST) -> list[str]:
     inner: set[int] = set()
     fragments: set[int] = set()
     for node in ast.walk(tree):  # a parent before its children
-        if isinstance(node, ast.JoinedStr):
-            # The fixed text of an f-string is part of a path the scan cannot name, not a path.
+        if isinstance(node, _BUILT_STRINGS):
+            # Its fixed text is part of a path the scan cannot name, not a path.
             fragments.update(id(value) for value in node.values)
         whole = None if id(node) in fragments else _segments(node)
         if whole is not None and len(whole) >= 2 and _under_docs(whole[0], whole[1]) and not re.search(r"\s", node.value):
@@ -307,20 +328,21 @@ def script_paths(tree: ast.AST) -> list[str]:
 
 def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], list[str]]:
     """The docs paths the scripts the workflow runs name, and the scripts the
-    scan could not parse. A script is one run as `python` or `python3`, with or
-    without `-I`."""
+    scan could not parse. A script is one run as `python` or `python3`, with
+    or without switches such as `-I`."""
     reads: dict[str, set[str]] = {}
     unparsed: list[str] = []
     for script in sorted(set(_SCRIPT_RUN.findall(workflow_text))):
         path = repo / script
         if not path.is_file() or path.name == Path(__file__).name:
             continue
-        # The parsed script, not its text: a path in a comment or a docstring is not a read.
-        # Its bytes, so Python reads a byte-order mark or a coding line as it does when it runs the script.
+        # The parsed script, not its text: a path in a comment, or in a docstring that says more than the path,
+        # is not a read. Its bytes, so Python reads a byte-order mark or a coding line as it does when it runs
+        # the script.
         try:
             tree = ast.parse(path.read_bytes())
-        except (SyntaxError, ValueError) as error:
-            where = f"line {error.lineno}: {error.msg}" if isinstance(error, SyntaxError) else str(error)
+        except (SyntaxError, ValueError, RecursionError) as error:
+            where = f"line {error.lineno}: {error.msg}" if isinstance(error, SyntaxError) and error.lineno else str(error) or type(error).__name__
             unparsed.append(
                 f"{script}: cannot be parsed ({where}), so the docs paths it names were "
                 "not checked; the docs census job's Python must be able to read every script the workflow runs"

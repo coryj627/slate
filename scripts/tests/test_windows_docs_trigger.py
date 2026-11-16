@@ -207,7 +207,9 @@ class CheckFacts(unittest.TestCase):
     def test_a_script_run_as_python_dash_i_is_scanned(self):
         # #1699: the app job runs its generators as `python -I scripts/...`, and the scan read only `python3 scripts/...`.
         script = 'DOC = "docs/plans/43_mac_backlog_delivery/x.md"\n'
-        for command in ("python3", "python", "python -I", "python3 -I", "python  -I"):
+        for command in ("python3", "python", "python -I", "python3 -I", "python  -I",
+                        # Any other switch, and a versioned interpreter, run the script just the same.
+                        "python -B", "python -u -I", "python -X utf8", "python -W error -I", "python3.13"):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
                 problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow(command), script=script))
                 self.assertTrue(any("docs/plans/43_mac_backlog_delivery/x.md" in p and "scripts/reader.py" in p
@@ -263,6 +265,30 @@ class CheckFacts(unittest.TestCase):
             with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
                 problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
                 self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+
+    def test_a_windows_source_s_docs_path_is_read_with_either_separator_and_in_any_case(self):
+        landed = "docs/plans/43_mac_backlog_delivery/x.md"
+        for source in ('File.ReadAllText(Path.Combine(Root, @"docs\\plans\\43_mac_backlog_delivery\\x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "docs\\\\plans\\\\43_mac_backlog_delivery\\\\x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "Docs/Plans/43_mac_backlog_delivery/x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "Docs", "Plans", "43_mac_backlog_delivery", "x.md"));',
+                       'File.ReadAllText(Path.Combine(Root, "docs", "plans", @"43_mac_backlog_delivery\\x.md"));'):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), source=source))
+                self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
+
+    def test_a_sentence_that_starts_with_a_docs_path_is_not_a_read(self):
+        script = 'MESSAGE = "docs/plans/43_mac_backlog_delivery/x.md is stale; regenerate it"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
+    @unittest.skipUnless(hasattr(trigger.ast, "TemplateStr"), "template strings arrive with Python 3.14")
+    def test_a_path_built_in_a_template_string_invents_no_read(self):
+        script = 'DOC = t"docs/plans/{name}.md"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script)
+            self.assertEqual(({}, []), trigger.script_reads(repo, script_workflow("python -I")))
 
     def test_a_list_entry_in_another_case_does_not_cover_the_document(self):
         # GitHub matches the list with case. A script that spells a document in another case reads it on Windows
