@@ -25,14 +25,24 @@
 // Enqueue), never `abandoned`. An admission node is a node of its own,
 // admitted whatever holds it, and only two things make one: a lambda that
 // stands as the operation argument (its body is the operation), and a method
-// group that does (its target is the node's one callee). Parentheses, casts
-// and a null-forgiving mark are looked through, and each result of a
-// conditional is read the same way. Everything else in or around an admission
-// call runs, or may run, where the call stands, before any ticket exists, and
-// belongs to the node that holds the call: a call in the operation argument
-// (a factory that returns the operation), a conditional's condition, a method
-// group's receiver, a property read for a delegate, any lambda inside one of
-// those, the receiver of the admission call, and its other arguments.
+// group that does (its target is the node's one callee). What stands as the
+// operation is read from the bound value of the argument that fills the
+// parameter (IArgumentOperation.Value), never from how it is written. Between
+// the parameter and a lambda (IAnonymousFunctionOperation) or a method group
+// (IMethodReferenceOperation) only a form that hands a value on and runs no
+// code may stand: a delegate creation, and a conversion that is an identity,
+// an implicit reference conversion, a lambda's or a method group's conversion
+// to a delegate, or a conditional's own, with no operator method. Each result
+// of a conditional is read the same way. Parentheses and a null-forgiving
+// mark are no operations. Anything else between them (a user-defined
+// conversion, which can run the delegate it is given; a call; a creation of a
+// wrapper; an await; a switch expression; a coalesce) admits nothing, and a
+// lambda under it is an ordinary lambda of the node that holds the call.
+// Everything else in or around an admission call runs, or may run, where the
+// call stands, before any ticket exists, and belongs to that node too: a
+// conditional's condition, a method group's receiver, a property read for a
+// delegate, the receiver of the admission call, and its other arguments (the
+// path, `abandoned`), none of which is unwrapped or read at all.
 //
 // The edges. They are drawn from the bound operation tree of every body,
 // initialiser and attribute (SemanticModel.GetOperation), never from syntax
@@ -63,12 +73,21 @@
 //     and the Deconstruct of a deconstruction.
 // The sites (a call to a session method, a reload of a tab) are found from
 // the same operations, so one reached as a method group is a site too.
-// Syntax is read for three things only. To find the admission calls and what
-// stands as their operation. For shape (B) and rule 3's "asked before". And
-// as a fallback where no operation stands, which is source that does not
-// compile: such a call is weighed by its candidates, and one spelled as a
-// session method that binds to nothing fails rule 1. A fact holds the shell
-// to none of these (TheShellsCallsAreAllReadFromOperations).
+// Syntax is read for these and nothing else. To find the invocation
+// expressions that are admission calls; what each is handed is then read from
+// its operation, and one with no operation fails rule 1. For the tests that
+// are about a place in the source: which lambda or member holds a call; which
+// names in a member read a local (shape (B): every name bound to the local
+// that is not the left of a plain assignment is a read, so any other use
+// counts against the shape); and rule 3's "asked before" (the asking call is
+// a bound IInvocationOperation, stands earlier in the member, and stands in a
+// body that holds the reload). And as a fallback where no operation stands,
+// which is source that does not compile: such a call is weighed by its
+// candidates, and one spelled as a session method that binds to nothing fails
+// rule 1. A fact holds the shell to no fallback read
+// (TheShellsCallsAreAllReadFromOperations). Rule 3's other test, a save
+// ticket among the member's parameters, is read from the declared symbol: the
+// coordinator's own SaveTicket type, not a type of that name.
 //
 // The admitted set is the least set that holds every admission node and
 // every node that has a caller and whose callers are all in the set. A call
@@ -99,17 +118,19 @@
 //         on a type that is enumerable (a collection initialiser or
 //         expression). The edges above are drawn for these all the same;
 //         this is the floor under them; or
-//   (B) it stands in a lambda assigned to a local, and every read of that
-//       local in the member is handed to an admission call as its operation
+//   (B) it stands in a lambda assigned to a local of a delegate type, through
+//       those same forms only, and every read of that local in the member
+//       is handed to an admission call as its operation
 //       or stands in an admission lambda (the property write's shape: the
 //       write is built first and handed to the admitted operation). The
 //       lambda is assigned in the local's declaration or in a statement of
 //       its own, never in an expression whose value is used.
 // A delegate that reaches an admission call any other way is not followed
 // back to the code it was made from: one that arrives as a parameter, or from
-// a field, a property, a call, an element of a collection or a delegate
-// creation, and a local function passed by name. A write there counts as its
-// maker's, so the rule names it even where it does run inside the ticket.
+// a field, a property, a call or an element of a collection, a local of a
+// type that is no delegate, and a local function passed by name. A write
+// there counts as its maker's, so the rule names it even where it does run
+// inside the ticket.
 // The same cost falls on the members (A) never admits: a write in a
 // constructor, an accessor, an operator or a pattern member is named even
 // where its every call stands inside a ticket.
@@ -550,24 +571,28 @@ public sealed class SaveChainAdmissionCensus
         {
             // The admission arguments first: every node below is placed
             // against them.
-            foreach (InvocationExpressionSyntax invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            foreach (InvocationExpressionSyntax written in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                foreach (IMethodSymbol method in Bound(invocation))
+                IMethodSymbol[] bound = Bound(written);
+                if (!bound.Any(method => AdmissionParameter(method) is not null))
                 {
-                    if (AdmissionParameter(method) is not { } parameter)
-                    {
-                        continue;
-                    }
-                    reading.AdmissionCalls.Add((file, LineOf(invocation)));
-                    if (ArgumentFor(invocation, method, parameter) is not { } argument)
-                    {
-                        reading.Unbound.Add(new Violation(
-                            file, LineOf(invocation), MemberOf(invocation).Name, method.Name,
-                            $"the census cannot find the argument this admission call hands to `{parameter}`"));
-                        continue;
-                    }
-                    AdmitWhatStandsIn(argument);
+                    continue;
                 }
+                reading.AdmissionCalls.Add((file, LineOf(written)));
+                // What the call is handed is read from its bound operation:
+                // the value of the argument that fills the parameter. An
+                // admission call with no such operation (it does not
+                // compile) admits nothing, and fails rule 1.
+                if (model.GetOperation(written) is IInvocationOperation invocation
+                    && AdmissionParameter(invocation.TargetMethod) is { } parameter
+                    && invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Name == parameter) is { } handed)
+                {
+                    AdmitWhatStandsIn(handed.Value);
+                    continue;
+                }
+                reading.Unbound.Add(new Violation(
+                    file, LineOf(written), MemberOf(written).Name, bound[0].Name,
+                    "the census cannot read the operation this admission call is handed"));
             }
 
             // The calls, from the bound operation tree of every body,
@@ -601,7 +626,7 @@ public sealed class SaveChainAdmissionCensus
                     case InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax or ConstructorInitializerSyntax:
                         WalkTheTreeOf(node);
                         if (!_seen.Contains(node)
-                            && Weigh(node, Bound(node), node is InvocationExpressionSyntax invocation ? CalleeName(invocation) : null))
+                            && Weigh(node, Bound(node), node is InvocationExpressionSyntax called ? CalleeName(called) : null))
                         {
                             reading.ReadFromSyntax.Add($"{file}:{LineOf(node)}: {node}");
                         }
@@ -865,50 +890,95 @@ public sealed class SaveChainAdmissionCensus
             _ => written,
         };
 
-        /// <summary>What an operation argument admits. A lambda: its body is
-        /// the operation. A method group: its target is, and the name is the
-        /// node that calls it. A local: the lambda assigned to it is weighed
-        /// by shape (B). Parentheses, casts and a null-forgiving mark are
-        /// looked through, and each result of a conditional is read this
-        /// way. Everything else in the argument runs, or may run, where the
-        /// admission call stands, before any ticket exists, and so stays
-        /// with the node that holds the call: a call (a factory that returns
-        /// the operation), a conditional's condition, a method group's
-        /// receiver, a property or a field read for a delegate, and any
-        /// lambda inside one of those.</summary>
-        private void AdmitWhatStandsIn(ExpressionSyntax written)
+        /// <summary>What an operation argument admits, read from its bound
+        /// value and never from how it is written. A lambda: its body is the
+        /// operation. A method group: its target is, and the name is the
+        /// node that calls it. A local of a delegate type: the lambda
+        /// assigned to it is weighed by shape (B). Between the parameter and
+        /// any of those, only a form that hands its value on and runs no
+        /// code may stand (<see cref="HandsItsValueOn"/>), and each result
+        /// of a conditional is read this way. Anything else (a user-defined
+        /// conversion, a call, a creation of a wrapper, an await, a switch
+        /// expression, a coalesce) runs, or may run, where the admission
+        /// call stands, before any ticket exists, and admits nothing: a
+        /// lambda under it is an ordinary lambda of the node that holds the
+        /// call.</summary>
+        private void AdmitWhatStandsIn(IOperation value)
         {
-            switch (written)
+            switch (value)
             {
-                case ParenthesizedExpressionSyntax parenthesized:
-                    AdmitWhatStandsIn(parenthesized.Expression);
+                case IDelegateCreationOperation creation:
+                    AdmitWhatStandsIn(creation.Target);
                     return;
-                case CastExpressionSyntax cast:
-                    AdmitWhatStandsIn(cast.Expression);
+                case IConversionOperation conversion when RunsNoCode(conversion):
+                    AdmitWhatStandsIn(conversion.Operand);
                     return;
-                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } forgiven:
-                    AdmitWhatStandsIn(forgiven.Operand);
-                    return;
-                case ConditionalExpressionSyntax conditional:
+                case IConditionalOperation { WhenFalse: { } otherwise } conditional:
                     AdmitWhatStandsIn(conditional.WhenTrue);
-                    AdmitWhatStandsIn(conditional.WhenFalse);
+                    AdmitWhatStandsIn(otherwise);
                     return;
-                case AnonymousFunctionExpressionSyntax function:
-                    Admit(function);
+                case IAnonymousFunctionOperation function:
+                    Admit(function.Syntax);
                     return;
-                case IdentifierNameSyntax local when model.GetSymbolInfo(local).Symbol is ILocalSymbol:
-                    _ = _localsHandedOver.Add(local);
+                case IMethodReferenceOperation reference:
+                    Admit(NamePart(Bare(reference.Syntax)));
+                    return;
+                case ILocalReferenceOperation { Local.Type.TypeKind: TypeKind.Delegate } local:
+                    _ = _localsHandedOver.Add(Bare(local.Syntax));
                     return;
             }
-            SimpleNameSyntax? group = written switch
+        }
+
+        /// <summary>A conversion that runs no code: an identity, an implicit
+        /// reference conversion, a lambda's or a method group's conversion
+        /// to a delegate, or the conversion of a conditional to the type it
+        /// is handed to (each of its results carries its own), with no
+        /// operator method. A user-defined conversion can run the delegate
+        /// it is given.</summary>
+        private static bool RunsNoCode(IConversionOperation conversion)
+        {
+            if (conversion.OperatorMethod is not null)
             {
-                SimpleNameSyntax name => name,
-                MemberAccessExpressionSyntax access => access.Name,
-                _ => null,
-            };
-            if (group is not null && Bound(written).Length > 0)
+                return false;
+            }
+            Conversion kind = conversion.GetConversion();
+            return !kind.IsUserDefined
+                && (kind.IsIdentity
+                    || (kind.IsImplicit && kind.IsReference)
+                    || kind.IsMethodGroup
+                    || kind.IsAnonymousFunction
+                    || kind.IsConditionalExpression);
+        }
+
+        /// <summary>True when <paramref name="parent"/> does nothing with
+        /// <paramref name="child"/> but hand its value on: a delegate
+        /// creation over it, a conversion of it that runs no code, a
+        /// conditional it is a result of.</summary>
+        private static bool HandsItsValueOn(IOperation parent, IOperation child) => parent switch
+        {
+            IDelegateCreationOperation creation => creation.Target == child,
+            IConversionOperation conversion => conversion.Operand == child && RunsNoCode(conversion),
+            IConditionalOperation conditional => conditional.Condition != child,
+            _ => false,
+        };
+
+        /// <summary>The expression under parentheses and a null-forgiving
+        /// mark, neither of which is an operation.</summary>
+        private static SyntaxNode Bare(SyntaxNode written)
+        {
+            while (true)
             {
-                Admit(group);
+                switch (written)
+                {
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        written = parenthesized.Expression;
+                        break;
+                    case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } forgiven:
+                        written = forgiven.Operand;
+                        break;
+                    default:
+                        return written;
+                }
             }
         }
 
@@ -1034,20 +1104,49 @@ public sealed class SaveChainAdmissionCensus
                 NodeOf(node),
                 name,
                 declaration is not null && HandedToAnAdmission(node, declaration),
-                declaration is BaseMethodDeclarationSyntax method && method.ParameterList.Parameters.Any(parameter =>
-                    parameter.Type is { } type && model.GetTypeInfo(type).Type is { Name: "SaveTicket" }),
+                declaration is BaseMethodDeclarationSyntax method
+                    && model.GetDeclaredSymbol(method) is IMethodSymbol holder
+                    && holder.Parameters.Any(parameter => IsTheSaveTicket(parameter.Type)),
                 declaration is not null && declaration.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
-                    call.SpanStart < node.SpanStart && Bound(call).Any(AsksTheChain)));
+                    call.SpanStart < node.SpanStart
+                    && model.GetOperation(call) is IInvocationOperation asked
+                    && AsksTheChain(asked.TargetMethod)
+                    && StandsInABodyThatHolds(call, node, declaration)));
         }
 
-        private static bool AsksTheChain(IMethodSymbol method) =>
-            (method.Name == "HasAdmittedSaveFor" && IsShellType(method.ContainingType, "WorkspaceSaveCoordinator"))
-            || (method.Name == "KeepsBufferOnReseat" && IsShellType(method.ContainingType, "WorkspaceViewModel"));
+        /// <summary>The coordinator's own ticket type, by its symbol: a type
+        /// that only shares the name holds nothing.</summary>
+        private static bool IsTheSaveTicket(ITypeSymbol type) =>
+            type is INamedTypeSymbol { Name: "SaveTicket" } ticket && IsShellType(ticket.ContainingType, "WorkspaceSaveCoordinator");
+
+        /// <summary>The call that asks the chain, by its bound target: one
+        /// that binds to no single method asks nothing.</summary>
+        private static bool AsksTheChain(IMethodSymbol bound)
+        {
+            IMethodSymbol method = (bound.ReducedFrom ?? bound).OriginalDefinition;
+            return (method.Name == "HasAdmittedSaveFor" && IsShellType(method.ContainingType, "WorkspaceSaveCoordinator"))
+                || (method.Name == "KeepsBufferOnReseat" && IsShellType(method.ContainingType, "WorkspaceViewModel"));
+        }
+
+        /// <summary>"Before" is a place in the source, so it is read from
+        /// syntax; but the asking call must stand in a body that holds the
+        /// reload. One asked inside another lambda or local function need
+        /// never have run when the reload does.</summary>
+        private static bool StandsInABodyThatHolds(SyntaxNode call, SyntaxNode reload, SyntaxNode declaration)
+        {
+            SyntaxNode? body = call.Ancestors()
+                .TakeWhile(ancestor => ancestor != declaration)
+                .FirstOrDefault(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+            return body is null || reload.Ancestors().Contains(body);
+        }
 
         /// <summary>Shape (B): the call stands in a lambda assigned to a
-        /// local, and every read of that local in the member is handed to an
-        /// admission call as its operation or stands in an admission
-        /// lambda.</summary>
+        /// local of a delegate type, and every read of that local in the
+        /// member is handed to an admission call as its operation or stands
+        /// in an admission lambda. A read is every name that binds to the
+        /// local and is not the left of a plain assignment, so any other
+        /// use of it (a call, a `ref`, a compound assignment) counts
+        /// against the shape.</summary>
         private bool HandedToAnAdmission(SyntaxNode node, SyntaxNode declaration)
         {
             foreach (AnonymousFunctionExpressionSyntax function in node.Ancestors()
@@ -1075,29 +1174,35 @@ public sealed class SaveChainAdmissionCensus
             name.Parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } assignment
             && assignment.Left == name;
 
+        /// <summary>The local a lambda is assigned to, read from the bound
+        /// operations: the lambda is the value of the local's initialiser,
+        /// or of an assignment that is a statement of its own (one whose
+        /// value is used, called at once say, hands the lambda on unseen),
+        /// through nothing but forms that hand a value on and run no code,
+        /// and the local is of a delegate type.</summary>
         private ILocalSymbol? LocalAssigned(AnonymousFunctionExpressionSyntax function)
         {
-            ExpressionSyntax written = function;
-            while (written.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            IOperation? value = model.GetOperation(function);
+            if (value is IDelegateCreationOperation { Target: IAnonymousFunctionOperation made })
             {
-                written = (ExpressionSyntax)written.Parent;
+                value = made;
             }
-            return written.Parent switch
+            if (value is not IAnonymousFunctionOperation)
             {
-                EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } =>
-                    model.GetDeclaredSymbol(declarator) as ILocalSymbol,
-                // Only an assignment that is a statement of its own: one
-                // whose value is used (called at once, say) hands the lambda
-                // on unseen.
-                AssignmentExpressionSyntax
-                {
-                    RawKind: (int)SyntaxKind.SimpleAssignmentExpression,
-                    Parent: ExpressionStatementSyntax,
-                } assignment
-                    when assignment.Right == written =>
-                    model.GetSymbolInfo(assignment.Left).Symbol as ILocalSymbol,
+                return null;
+            }
+            while (value.Parent is { } parent && HandsItsValueOn(parent, value))
+            {
+                value = parent;
+            }
+            ILocalSymbol? local = value.Parent switch
+            {
+                IVariableInitializerOperation { Parent: IVariableDeclaratorOperation declarator } => declarator.Symbol,
+                ISimpleAssignmentOperation { Target: ILocalReferenceOperation target, Parent: IExpressionStatementOperation } assignment
+                    when assignment.Value == value => target.Local,
                 _ => null,
             };
+            return local is { Type.TypeKind: TypeKind.Delegate } ? local : null;
         }
 
         private bool InsideTheTab(SyntaxNode node) => node.Ancestors().OfType<BaseTypeDeclarationSyntax>()
@@ -1276,22 +1381,6 @@ public sealed class SaveChainAdmissionCensus
             ("WorkspaceSaveCoordinator", "Enqueue") when IsShellType(method.ContainingType, "WorkspaceSaveCoordinator") => "start",
             _ => null,
         };
-    }
-
-    private static ExpressionSyntax? ArgumentFor(InvocationExpressionSyntax invocation, IMethodSymbol method, string parameter)
-    {
-        int ordinal = method.Parameters.FirstOrDefault(candidate => candidate.Name == parameter)?.Ordinal ?? -1;
-        SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
-        for (int index = 0; index < arguments.Count; index++)
-        {
-            if (arguments[index].NameColon is { } named
-                ? named.Name.Identifier.ValueText == parameter
-                : index == ordinal)
-            {
-                return arguments[index].Expression;
-            }
-        }
-        return null;
     }
 
     private static bool IsShellType(ITypeSymbol? type, string name) =>
@@ -1736,6 +1825,7 @@ public sealed class SaveChainAdmissionCensus
     [Theory]
     [MemberData(nameof(PlantedRoutes))]
     [MemberData(nameof(LanguageCalls))]
+    [MemberData(nameof(WhatStandsAsTheOperation))]
     public void TheRulesSeeAPlantedRoute(string form, string planted, string expected)
     {
         Reading read = Planted(planted);
@@ -2185,6 +2275,116 @@ public sealed class SaveChainAdmissionCensus
             problems.Any(problem => problem.StartsWith(expected, StringComparison.Ordinal)),
             $"{form}: the rows answered it. Problems found:\n" + string.Join("\n", problems));
     }
+
+    // ---- What stands as the operation, by its bound value -----------------
+
+    /// <summary>A wrapper type whose conversion from a delegate runs the
+    /// delegate, before any admission call receives anything.</summary>
+    private const string WrapperType =
+        "internal sealed class PlantedWrapper(Func<Task> inner)\n{\n"
+        + "public Func<Task> Inner => inner;\n"
+        + "public static implicit operator PlantedWrapper(Func<Task> inner) { _ = inner(); return new PlantedWrapper(inner); }\n"
+        + "public static implicit operator Func<Task>(PlantedWrapper wrapper) => wrapper.Inner;\n}\n";
+
+    private static string BesideAWrapper(string members) => InAClass(members).Replace(PlantedPrelude, PlantedPrelude + WrapperType);
+
+    private const string AWriterLambda = "() => { " + AWrite + " return Task.CompletedTask; }";
+
+    /// <summary>Codex round 4, as a class: what stands as the operation is
+    /// read from the argument's bound value, so a conversion that can run
+    /// code admits nothing. The reload rows hold rule 3's two tests to the
+    /// bound symbol the same way.</summary>
+    public static TheoryData<string, string, string> WhatStandsAsTheOperation() => new()
+    {
+        // Unjoined: something that can run code stands between the lambda
+        // and the parameter.
+        {
+            "a lambda cast through a wrapper whose conversion runs it, and cast back, as the operation",
+            BesideAWrapper("void PlantedM() { _ = chain.Admit(\"a.md\", (Func<Task>)(PlantedWrapper)(Func<Task>)(" + AWriterLambda + ")); }"),
+            "unjoined"
+        },
+        {
+            "a method cast through a wrapper whose conversion runs it, and cast back, as the operation",
+            BesideAWrapper(
+                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", (Func<Task>)(PlantedWrapper)(Func<Task>)PlantedWrite); }"),
+            "unjoined"
+        },
+        {
+            "a lambda in the creation of a wrapper that converts to the operation with no cast written",
+            BesideAWrapper("void PlantedM() { _ = chain.Admit(\"a.md\", new PlantedWrapper(" + AWriterLambda + ")); }"),
+            "unjoined"
+        },
+        {
+            "a lambda assigned to a local of a wrapper type, the local then passed as the operation",
+            BesideAWrapper(
+                "void PlantedM() { PlantedWrapper operation = (Func<Task>)(" + AWriterLambda + "); _ = chain.Admit(\"a.md\", operation); }"),
+            "unjoined"
+        },
+        {
+            // Not followed, so it fails closed.
+            "a lambda in an arm of a switch expression passed as the operation",
+            InAClass(
+                "void PlantedM(bool first) { _ = chain.Admit(\"a.md\", first switch { true => " + AWriterLambda
+                + ", _ => () => Task.CompletedTask }); }"),
+            "unjoined"
+        },
+
+        // Joined: nothing but a delegate creation, a conversion that runs no
+        // code, or parentheses stands between.
+        {
+            "a writer lambda cast to its own delegate type and parenthesised, as the operation",
+            InAClass("void PlantedM() { _ = chain.Admit(\"a.md\", (((Func<Task>)(" + AWriterLambda + ")))); }"),
+            "joined"
+        },
+        {
+            "a writer lambda in a delegate creation passed as the operation",
+            InAClass("void PlantedM() { _ = chain.Admit(\"a.md\", new Func<Task>(" + AWriterLambda + ")); }"),
+            "joined"
+        },
+        {
+            "a method in a delegate creation passed as the operation",
+            InAClass(
+                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                + "void PlantedM() { _ = chain.Admit(\"a.md\", new Func<Task>(PlantedWrite)); }"),
+            "joined"
+        },
+        {
+            "a writer lambda in a local of another delegate type, passed as the operation through a reference conversion",
+            InAClass(
+                "void PlantedM() { Func<Task<int>> operation = () => { " + AWrite + " return Task.FromResult(1); }; "
+                + "_ = chain.Admit(\"a.md\", operation); }"),
+            "joined"
+        },
+        {
+            "a writer lambda cast to its delegate type where it is assigned to a local, the local passed as the operation",
+            InAClass(
+                "void PlantedM() { Func<Task> operation = (Func<Task>)(" + AWriterLambda + "); _ = chain.Admit(\"a.md\", operation); }"),
+            "joined"
+        },
+
+        // Rule 3's tests, by the bound symbol.
+        {
+            "a reload in a method with a parameter of another type named SaveTicket",
+            InAClass("void PlantedM(WorkspaceTabViewModel tab, SaveTicket other) { _ = other; tab.ReplaceItem(tab.Item); }")
+                .Replace(PlantedPrelude, PlantedPrelude + "internal sealed class SaveTicket { }\n"),
+            "unguarded"
+        },
+        {
+            "the chain asked in a lambda that does not hold the reload",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) { Func<bool> ask = () => saves.HasAdmittedSaveFor(\"a.md\"); _ = ask; "
+                + "tab.ReplaceItem(tab.Item); }"),
+            "unguarded"
+        },
+        {
+            "the chain asked and the reload in one lambda",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) { Action both = () => { if (!saves.HasAdmittedSaveFor(\"a.md\")) "
+                + "{ tab.ReplaceItem(tab.Item); } }; both(); }"),
+            "guarded"
+        },
+    };
 
     // ---- The calls the language makes -------------------------------------
 
