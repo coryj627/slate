@@ -164,12 +164,19 @@ Describe 'windows.yml routing through the router' {
         $job | Should -Not -Match 'needs\.route'
         foreach ($text in 'format fs=fat32 quick', 'format fs=exfat quick', 'format fs=ntfs quick label=SlateNoLetter', 'remove all noerr',
             'SLATE_WEAK_VOLUME_FAT32', 'SLATE_WEAK_VOLUME_EXFAT', 'SLATE_NO_LETTER_VOLUME',
-            "--skip `$skipped", 'weak_volume_case_only_rename_keeps_the_entry',
+            'cmd /c ver', 'weak_volume_case_only_rename_keeps_the_entry',
             'a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers',
+            'a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_agreeing',
             'a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames', '--ignored --test-threads=1', 'detach vdisk') {
             $job.Contains($text) | Should -BeTrue -Because "the job needs $text"
         }
+        $job | Should -Not -Match '--skip' -Because 'the case-only fact runs again (#1727)'
         $steps = Get-Steps $job
+        # The session facts run when the provider facts' step failed, so one
+        # run reports both gated case-only facts (#1727).
+        $session = @($steps | Where-Object { $_.Contains('--lib held_root_windows -- --ignored --list') })
+        $session.Count | Should -Be 1
+        ($session[0] -split '\r?\n')[1] | Should -BeExactly '        if: ${{ !cancelled() }}' -Because 'a failed provider fact does not hide the session facts'
         $detach = @($steps | Where-Object { $_.Contains('detach vdisk') })
         $detach.Count | Should -Be 1
         $detach[0] | Should -Match '(?m)^        if: \$\{\{ always\(\) \}\}[ \t]*\r?$' -Because 'the VHDs are detached even when a fact fails'

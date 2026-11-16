@@ -317,3 +317,144 @@ fn a_case_only_folder_note_rename_succeeds() {
     assert_eq!(index_paths(&session, "files"), strings(&["docs/docs.md"]));
     assert_eq!(index_paths(&session, "dirs"), strings(&["docs"]));
 }
+
+// ---- Plan 47 CB-13 (#1727, CD7): a case-only rename the volume ignored ----
+
+/// The owner's sentence for a case-only rename the volume did not apply
+/// (CD7), written out here and not read from the product, so this file is a
+/// golden against core's copy.
+#[cfg(windows)]
+fn case_only_refusal(stored: &str, requested: &str) -> String {
+    format!(
+        "This drive keeps the capitalization a file was created with, so {stored} was not renamed to {requested}."
+    )
+}
+
+/// The names in the vault's root folder, `.slate` aside, sorted. A listing,
+/// because an existence check is case-blind on an aliasing volume.
+#[cfg(windows)]
+fn root_listing(root: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != ".slate")
+        .collect();
+    names.sort();
+    names
+}
+
+/// #1727: FAT32 and exFAT have been seen to report a case-only rename as
+/// done and keep the old spelling. The seam stands in for such a volume on
+/// NTFS: the rename is refused in the owner's sentence, for a file and for a
+/// folder with its note, and the index, the other note's link and the
+/// volume's own names stay as they were. With the seam off both renames
+/// succeed.
+#[cfg(windows)]
+#[test]
+fn a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes() {
+    let mut env = fault_guard();
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("Note.md", b"# note\n").unwrap();
+        provider.write_file("Other.md", b"[[Note]]\n").unwrap();
+        provider.create_dir("Docs").unwrap();
+        provider.write_file("Docs/Docs.md", b"# docs\n").unwrap();
+        provider.write_file("Docs/Inner.md", b"# inner\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let files_before = strings(&["Docs/Docs.md", "Docs/Inner.md", "Note.md", "Other.md"]);
+    assert_eq!(index_paths(&session, "files"), files_before);
+    assert_eq!(index_paths(&session, "dirs"), strings(&["Docs"]));
+
+    // The seam matches a provider by a substring of its root path: this
+    // vault's own temporary folder name, which no other vault has.
+    let vault_name = tmp
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    env.set("SLATE_TEST_CASE_ONLY_RENAME_IGNORED", &vault_name);
+    let renamed_names = ["Note.md", "note.md", "Docs", "docs"];
+    for path in renamed_names {
+        assert!(
+            !session.provider.is_own_echo(path),
+            "premise: nothing has recorded {path} as this provider's echo"
+        );
+    }
+
+    let error = session
+        .rename_file("Note.md", "note.md")
+        .expect_err("a case-only rename the volume ignored is refused, not reported as done");
+    assert!(
+        matches!(
+            &error,
+            VaultError::InvalidArgument { message }
+                if *message == case_only_refusal("Note.md", "note.md")
+        ),
+        "{error:?}"
+    );
+    let error = session
+        .rename_folder_with_note("Docs", "docs")
+        .expect_err("a folder's case-only rename the volume ignored is refused too");
+    assert!(
+        matches!(
+            &error,
+            VaultError::InvalidArgument { message }
+                if *message == case_only_refusal("Docs", "docs")
+        ),
+        "{error:?}"
+    );
+
+    // A refusal follows a kernel call that reported success, and a volume
+    // may raise change events for a rename it did not keep. Both spellings
+    // are recorded as this provider's own echo, so those events start no
+    // catch-up scan. (The seam makes no kernel call; what the real volumes
+    // raise is the gated weak-volume fact's record.)
+    for path in renamed_names {
+        assert!(
+            session.provider.is_own_echo(path),
+            "{path} is not this provider's echo after the refusal"
+        );
+    }
+
+    // Nothing else changed: the rows, the other note's link, the names.
+    assert_eq!(index_paths(&session, "files"), files_before);
+    assert_eq!(index_paths(&session, "dirs"), strings(&["Docs"]));
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("Other.md")).unwrap(),
+        "[[Note]]\n"
+    );
+    assert_eq!(
+        root_listing(tmp.path()),
+        strings(&["Docs", "Note.md", "Other.md"])
+    );
+    assert_eq!(
+        root_listing(&tmp.path().join("Docs")),
+        strings(&["Docs.md", "Inner.md"])
+    );
+
+    // With the seam off the volume applies the rename and core reports it.
+    env.clear("SLATE_TEST_CASE_ONLY_RENAME_IGNORED");
+    let report = session.rename_file("Note.md", "note.md").unwrap();
+    assert_eq!(
+        report.moved,
+        vec![("Note.md".to_string(), "note.md".to_string())]
+    );
+    let report = session.rename_folder_with_note("Docs", "docs").unwrap();
+    assert!(
+        report
+            .moved
+            .contains(&("Docs/Docs.md".to_string(), "docs/docs.md".to_string())),
+        "{:?}",
+        report.moved
+    );
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["Other.md", "docs/Inner.md", "docs/docs.md", "note.md"])
+    );
+    assert_eq!(index_paths(&session, "dirs"), strings(&["docs"]));
+    assert_eq!(
+        root_listing(tmp.path()),
+        strings(&["Other.md", "docs", "note.md"])
+    );
+}

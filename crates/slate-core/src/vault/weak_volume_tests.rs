@@ -479,50 +479,162 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
     }
 }
 
+/// The owner's sentence for a case-only rename the volume did not apply
+/// (plan 47 CB-13, CD7), written out here and not read from the product, so
+/// this file is a golden against core's copy.
+fn case_only_refusal(stored: &str, requested: &str) -> String {
+    format!(
+        "This drive keeps the capitalization a file was created with, so {stored} was not renamed to {requested}."
+    )
+}
+
+/// The case-only renames the gated fact makes on each volume: #1727's five
+/// file-name shapes, then a folder that holds one file.
+const CASE_ONLY_CASES: [(&str, &str, bool); 6] = [
+    ("Note.md", "note.md", false),
+    ("UPPER.MD", "upper.md", false),
+    ("lower.md", "Lower.md", false),
+    ("Long Note.md", "long note.md", false),
+    ("MIXED.MD", "MIXED.md", false),
+    ("Docs", "docs", true),
+];
+
+/// Plan 47 CB-13 (#1727): each case-only rename either lands, with the
+/// listing holding the requested spelling, or is refused in core's sentence
+/// with the listing holding the old one. A reported success that kept the
+/// old spelling is the breach. In both outcomes there is one entry, its
+/// bytes are intact, and the provider's `canonical_path` reads the leaf the
+/// listing shows. An SMB share must rename. Every case on every volume is
+/// recorded before anything is asserted, so one volume's answer does not
+/// hide the next.
 fn case_only_rename_keeps_the_entry(volumes: &[(VolumeKind, PathBuf)]) {
+    let mut breaches: Vec<String> = Vec::new();
     for (kind, volume) in volumes {
         let scratch = Scratch::new(volume, "case");
         let provider = scratch.provider();
-        scratch.write("Note.md", b"note");
-        let before = identity_on(*kind, &provider, "Note.md");
-        provider
-            .rename("Note.md", "note.md")
-            .unwrap_or_else(|error| panic!("{kind:?}: case-only rename: {error:?}"));
-        assert_eq!(scratch.listing(), ["note.md"], "{kind:?}");
-        assert_eq!(scratch.read("note.md"), b"note", "{kind:?}");
-        let Some(before) = before else {
-            observed!(
-                "OBSERVED {kind:?} case-only: one entry, new spelling (no FileIdInfo, so the listing is the proof)"
-            );
-            continue;
+        let aliases = |name: &str| -> Vec<String> {
+            scratch
+                .listing()
+                .into_iter()
+                .filter(|listed| listed.eq_ignore_ascii_case(name))
+                .collect()
         };
-        let after = identity_on(*kind, &provider, "note.md").expect("the identity answered before");
-        assert_eq!(
-            after, before,
-            "{kind:?}: the case-only rename changed the identity"
-        );
+        let mut the_identity_inverse_applies = false;
+        for (from, to, is_folder) in CASE_ONLY_CASES {
+            let case = format!("{kind:?} case-only {from} -> {to}");
+            if is_folder {
+                std::fs::create_dir(scratch.0.join(from))
+                    .unwrap_or_else(|error| panic!("{case}: {error}"));
+                scratch.write(&format!("{from}/Inner.md"), b"inner");
+            } else {
+                scratch.write(from, from.as_bytes());
+            }
+            let before = identity_on(*kind, &provider, from);
+
+            let outcome = provider.rename(from, to);
+
+            let listed = aliases(to);
+            let canonical = provider.canonical_path(to);
+            let leaf = match &canonical {
+                Ok(Some(path)) => path.rsplit('/').next().map(str::to_owned),
+                _ => None,
+            };
+            let seen = format!("listing {listed:?}, canonical_path {canonical:?}");
+            let renamed = match &outcome {
+                Ok(()) if listed == [to] => {
+                    observed!("OBSERVED {case}: renamed ({seen})");
+                    true
+                }
+                Ok(()) => {
+                    observed!(
+                        "OBSERVED {case}: REPORTED SUCCESS AND KEPT {} ({seen})",
+                        listed.join(", ")
+                    );
+                    breaches.push(format!("{case}: reported success and kept {listed:?}"));
+                    false
+                }
+                Err(VaultError::InvalidArgument { message })
+                    if listed == [from] && *message == case_only_refusal(from, to) =>
+                {
+                    observed!("OBSERVED {case}: refused: {message} ({seen})");
+                    false
+                }
+                Err(error) => {
+                    observed!("OBSERVED {case}: failed: {error:?} ({seen})");
+                    breaches.push(format!(
+                        "{case}: neither renamed nor refused in core's sentence: {error:?} ({seen})"
+                    ));
+                    false
+                }
+            };
+            if *kind == VolumeKind::Smb && !renamed {
+                breaches.push(format!("{case}: an SMB share must rename"));
+            }
+            if listed.len() != 1 {
+                breaches.push(format!("{case}: one entry expected, found {listed:?}"));
+            }
+            if leaf.as_deref() != listed.first().map(String::as_str) {
+                breaches.push(format!(
+                    "{case}: canonical_path reads the leaf {leaf:?}, the listing shows {listed:?}"
+                ));
+            }
+            let (kept, expected): (_, &[u8]) = if is_folder {
+                (scratch.0.join(to).join("Inner.md"), b"inner")
+            } else {
+                (scratch.0.join(to), from.as_bytes())
+            };
+            let bytes = std::fs::read(&kept);
+            if !matches!(&bytes, Ok(bytes) if bytes == expected) {
+                breaches.push(format!("{case}: the bytes are not intact: {bytes:?}"));
+            }
+            if let (true, Some(before)) = (renamed, &before) {
+                let after = provider.mutation_identity(to);
+                if !matches!(&after, Ok(after) if after == before) {
+                    breaches.push(format!(
+                        "{case}: the case-only rename changed the identity {before}: {after:?}"
+                    ));
+                }
+            }
+            if from == "Note.md" {
+                the_identity_inverse_applies = renamed && before.is_some();
+            }
+        }
+        if !the_identity_inverse_applies {
+            continue;
+        }
 
         // The provider's rename may retry a case-only alias WITH replacement
         // when the volume reports the alias occupied; the identity inverse
         // makes only the no-replace call. That it performs the same case-only
         // rename proves the no-replace call alone does it on this volume.
+        let case = format!("{kind:?} case-only Other.md -> other.md by the identity inverse");
         scratch.write("Other.md", b"other");
-        let other = identity_on(*kind, &provider, "Other.md").expect("the identity answered");
-        provider
-            .rename_if_identity("Other.md", "other.md", &other)
-            .unwrap_or_else(|error| {
-                panic!("{kind:?}: the no-replace call refused a case-only rename: {error:?}")
-            });
-        assert_eq!(scratch.listing(), ["note.md", "other.md"], "{kind:?}");
-        assert_eq!(
-            identity_on(*kind, &provider, "other.md").as_deref(),
-            Some(other.as_str()),
-            "{kind:?}"
-        );
-        observed!(
-            "OBSERVED {kind:?} case-only: one entry, new spelling, identity kept; the no-replace call alone renames the alias"
-        );
+        let Some(other) = identity_on(*kind, &provider, "Other.md") else {
+            breaches.push(format!(
+                "{case}: the identity answered for Note.md and not for Other.md"
+            ));
+            continue;
+        };
+        let outcome = provider.rename_if_identity("Other.md", "other.md", &other);
+        let listed = aliases("other.md");
+        let after = provider.mutation_identity("other.md");
+        observed!("OBSERVED {case}: {outcome:?} (listing {listed:?})");
+        if outcome.is_err() || listed != ["other.md"] {
+            breaches.push(format!(
+                "{case}: the no-replace call alone did not rename the alias: {outcome:?}, listing {listed:?}"
+            ));
+        }
+        if !matches!(&after, Ok(after) if *after == other) {
+            breaches.push(format!(
+                "{case}: the identity changed from {other}: {after:?}"
+            ));
+        }
     }
+    assert!(
+        breaches.is_empty(),
+        "case-only renames that broke the rule:\n  {}",
+        breaches.join("\n  ")
+    );
 }
 
 fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathBuf)]) {
