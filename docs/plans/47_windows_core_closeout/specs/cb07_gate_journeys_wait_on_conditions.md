@@ -4,6 +4,8 @@ Issues: #1788. Size M. Lanes: windows (the app job for the census and the pin; t
 
 `G/` is `apps/slate-windows/tests/SlateWindows.AccessibilityTests/`, `T/` is `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` is `apps/slate-windows/src/SlateWindows/`. `SAT.cs` is `G/ShellAccessibilityTests.cs`.
 
+*2026-11-16:* the owner answered CD3 as recommended (plan 47 §3.1): yes. #1788 closes as a second sighting of #1865 once the pin is green on `main`; a red pin still stops the chunk and sends the product fix back to the owner.
+
 ## Goal
 
 A gate journey measures or asserts when the state it needs has arrived, not after a fixed time. A journey that checks "nothing moved" counts reads that saw it in place. No gate read can refuse the app's rename over a file, which is how the gate lost a save for the product it was measuring. `TestWaitCensus` keeps both closed. #1788 closes on #1870's fix, a pin, and a gate that leaves the app's log behind when a save never lands.
