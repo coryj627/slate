@@ -2024,8 +2024,9 @@ second model shard waited for a slot.
 A fact that times out once on the home pool is read against
 `C:\slate-ci\logs` before it is filed as a flake (plan 47 §4 rule 6). The
 job's log says when the fact ran. The orchestrator's log says what the
-host did to the other slot in those minutes. A cache commit or a VM start
-inside the fact's bound goes into the issue with the timeout.
+host did with its slots in those minutes. A cache commit or a VM start
+inside or just before the fact's bound goes into the issue with the
+timeout.
 
 The evidence lives in three places, for three lengths of time:
 
@@ -2038,8 +2039,9 @@ The evidence lives in three places, for three lengths of time:
 The host's log exists on the host alone and is deleted after 30 days
 (`LogRetentionDays`), so its lines are copied into the issue when the
 timeout is read. Each file is named for the host's local date, and each
-timestamp carries its offset from UTC. This prints every entry between
-two UTC times:
+timestamp carries its offset from UTC. This prints the first line of each
+entry between two UTC times. An entry that spans lines continues without
+a timestamp, and those lines are not printed:
 
 ```powershell
 $from = [datetimeoffset]'2026-11-06T02:03:00Z'
@@ -2051,11 +2053,13 @@ Get-Content C:\slate-ci\logs\orchestrator-*.log |
 A timeout that could take no stack also says two things in its message
 (#1843): the longest stretch the test process's heartbeat thread went
 without running during the body, and how long the collector paused the
-process. A long gap beside a commit or a VM start in the host's log says
-the whole process or VM stopped. A short gap says the process kept
-running while the fact's own thread was held. The heartbeat runs at the
-highest priority, so it cannot show a fact thread that was starved while
-the process ran.
+process then. Both are measured from before the body's thread starts to
+the moment its bound passes, so the wait for a stack and the dump are not
+in them. A long gap is what a stop of the whole process or VM would
+leave, once the collector's pause beside it is set aside. A short gap
+says the process as a whole kept running, and the reading cannot tell
+whether the fact's thread was busy, blocked or starved: the heartbeat
+runs at the highest priority, ahead of the fact's thread.
 
 #### The timeout of 2026-11-06 (#1843)
 
@@ -2092,10 +2096,13 @@ The two logs on one clock:
 | 02:05:06 | host | The model shard's job was claimed. |
 | 02:06:04 | job | The dump (61.7 s) and the unwind were over, and the failure was reported. |
 
-The host was not idle. The fact's bound began 20 s after a cache commit
-on the other slot and ran beside the start of the next VM there. That is
-what a job VM stalled on disk would look like, and it is not proof of
-one. The dump expired with its artifact, and the fact was rewritten the
-next day (#1853), so the cause of this timeout is not known. Of the job's
-three times in the table, the first is worked back from the report and
-the fact's 2 min 13 s. The other two are read from the job's log.
+The host was not idle. The fact's bound began about 20 s after the Rust
+job's VM committed its cache generation and about 8 s after the model
+shard's VM was provisioned on slot 2, and that VM was handed off while
+the bound ran. A job VM stalled on disk by that work would look like
+this, and the timeline is not proof of one. The four lines do not say
+which slot the Rust job's VM or the app job's VM held. The dump expired
+with its artifact, and the fact was rewritten the next day (#1853), so
+the cause of this timeout is not known. Of the job's three times in the
+table, the first is worked back from the report and the fact's
+2 min 13 s. The other two are read from the job's log.

@@ -9,8 +9,8 @@ namespace SlateWindows.Tests;
 /// #1843: one thread for the whole test process that does nothing but note
 /// the time, ten times a second. A fact that times out without giving up
 /// its stack (<see cref="StaThread"/>) reads the longest stretch in which
-/// this thread did not run while the fact's body did, and says it in the
-/// timeout's message.
+/// this thread did not run between the body's start and the passing of
+/// its bound, and says it in the timeout's message.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,13 +24,21 @@ namespace SlateWindows.Tests;
 /// <para>
 /// What a reading can say. The thread runs at the highest priority, so a
 /// busy machine starves it after the process's other threads. A long gap
-/// therefore means the process as a whole did not run: a stalled machine
-/// or VM, a suspended process, or a garbage collection, which stops this
-/// thread with every other managed one. The timeout prints the collector's
-/// pause beside the gap for that reason. A short gap rules those out. A
-/// reading cannot tell a starved fact thread from a healthy one, since
+/// is therefore what a stop of the whole process would leave: a stalled
+/// machine or VM, a suspended process, or a garbage collection, which
+/// stops this thread with every other managed one. The timeout prints the
+/// collector's pause beside the gap for that reason. A long gap is not
+/// proof of such a stop. This thread alone can also miss beats, on a hard
+/// page fault or while threads above its priority elsewhere in the VM hold
+/// every processor. A short gap says the process as a whole kept running.
+/// A reading cannot tell a starved fact thread from a healthy one, since
 /// this thread runs ahead of both, and it does not say how many other
 /// threads were held.
+/// </para>
+/// <para>
+/// What a reading covers. A fact opens a window before its thread starts
+/// and reads it up to the moment its bound passed. The wait for a stack
+/// and the dump come after that moment and are not in the reading.
 /// </para>
 /// <para>
 /// The thread sets no apartment state and makes no dispatcher and no
@@ -100,7 +108,9 @@ internal static class Heartbeat
                 Priority = ThreadPriority.Highest,
                 Name = ThreadName,
             };
-            thread.Start();
+            // Unsafe: the thread outlives its first caller and must not keep
+            // that caller's execution context (its test and culture) alive.
+            thread.UnsafeStart();
             Volatile.Write(ref s_thread, thread);
             Volatile.Write(ref s_ring, ring);
             return ring;
@@ -119,8 +129,8 @@ internal static class Heartbeat
         }
     }
 
-    /// <summary>A stretch of time that began when it was opened and ends at
-    /// each reading.</summary>
+    /// <summary>A stretch of time that began when it was opened. Its reader
+    /// names where it ends.</summary>
     internal readonly struct Window
     {
         private readonly Ring _ring;
@@ -132,10 +142,15 @@ internal static class Heartbeat
             _from = from;
         }
 
-        /// <summary>The longest stretch since the window opened in which the
-        /// thread recorded no beat. The stretch still open now counts.</summary>
-        internal TimeSpan LongestGap() =>
-            Stopwatch.GetElapsedTime(0, _ring.LongestGap(_from, Stopwatch.GetTimestamp()));
+        /// <summary>The longest stretch between the window's opening and
+        /// <paramref name="to"/>, a <see cref="Stopwatch"/> timestamp, in
+        /// which the thread recorded no beat. The stretch still open at
+        /// <paramref name="to"/> counts up to it. Nothing after it counts,
+        /// whenever the reading is taken: a timed-out fact names the moment
+        /// its bound passed, and what stops the thread after that (the wait
+        /// for a stack, the dump) is not read as part of the body.</summary>
+        internal TimeSpan LongestGapUntil(long to) =>
+            Stopwatch.GetElapsedTime(0, _ring.LongestGap(_from, to));
     }
 
     /// <summary>The newest beats, as timestamps in the order they came, and
@@ -212,7 +227,7 @@ internal static class Heartbeat
                     long beat = _beats[(_total - back) % _beats.Length];
                     if (beat > to)
                     {
-                        // Recorded after the reader took its time.
+                        // Recorded after the window's end.
                         continue;
                     }
                     if (beat <= from)

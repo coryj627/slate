@@ -612,9 +612,11 @@ public sealed class StaThreadTests : IDisposable
         SaysWhatItsHeartbeatSaw(TimeOutASleepingBody, "the body has no dispatcher to pump.");
 
     /// <summary>#1843: createdump suspends every thread of the process while
-    /// it writes, the heartbeat's included: a reading taken after it would
-    /// show the write as a stall. So the heartbeat is read first, and its
-    /// sentence stands before the one that names the file.</summary>
+    /// it writes, the heartbeat's included, and that must never read as a
+    /// stall of the body. The reading covers the time up to the bound alone
+    /// (<c>HeartbeatTests.AGapAfterTheWindowsEndIsNotCounted</c>), and it is
+    /// also taken first: its sentence stands before the one that names the
+    /// file.</summary>
     [Fact]
     public void TheHeartbeatIsReadBeforeTheDumpIsTaken()
     {
@@ -694,9 +696,10 @@ public sealed class StaThreadTests : IDisposable
     }
 
     /// <summary>#1843: with no seam, the gap is the heartbeat thread's own.
-    /// The body's window is at least its 200 ms bound and the thread beats
-    /// every 100 ms, so some stretch of the window with no beat in it is
-    /// about 100 ms or longer, and the sentence never reads 0.0 s.</summary>
+    /// The body's window runs from its thread's start to the passing of its
+    /// 200 ms bound and the thread beats every 100 ms, so some stretch of
+    /// the window with no beat in it is about 100 ms or longer, and the
+    /// sentence never reads 0.0 s.</summary>
     [Fact]
     public void WithNoSeamATimeoutReadsTheHeartbeatThreadItself()
     {
@@ -730,6 +733,119 @@ public sealed class StaThreadTests : IDisposable
         }
 
         Assert.Contains("bound 0.2 s;", timedOut.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>#1843: each heartbeat sentence is true as printed. "Not
+    /// stalled for longer than that" needs a number no smaller than the gap,
+    /// so that sentence rounds the gap up to a tenth of a second. "Missed"
+    /// needs one no larger, so that sentence rounds it down. Which sentence
+    /// it is goes by the gap itself against
+    /// <see cref="StaThread.StalledGap"/>, never by the printed number.</summary>
+    [Fact]
+    public void TheHeartbeatsSentencesAreTrueAsPrinted()
+    {
+        const string KeptRunningFor5 =
+            " The heartbeat thread kept running during the body: its longest gap was 5.0 s, so the process as a whole was not stalled for longer than that.";
+        const string Missed5 =
+            " The heartbeat thread missed 5.0 s in one gap during the body, which a stall of the whole process would explain.";
+        (TimeSpan Gap, string Says)[] cases =
+        [
+            (TimeSpan.FromMilliseconds(110), " The heartbeat thread kept running during the body: its longest gap was 0.2 s, so the process as a whole was not stalled for longer than that."),
+            (TimeSpan.FromMilliseconds(4960), KeptRunningFor5),
+            (StaThread.StalledGap - TimeSpan.FromTicks(1), KeptRunningFor5),
+            (StaThread.StalledGap, Missed5),
+            (TimeSpan.FromMilliseconds(5090), Missed5),
+        ];
+
+        // Every case is run, so one failure names each gap that is printed
+        // wrongly.
+        string[] wrong = [.. cases
+            .Select(expected => (expected.Gap, expected.Says, Message: TimedOutWithAGapOf(expected.Gap)))
+            .Where(timedOut => !timedOut.Message.Contains(timedOut.Says, StringComparison.Ordinal))
+            .Select(timedOut => $"a gap of {timedOut.Gap:c} should read \"{timedOut.Says}\", and the message is: {timedOut.Message}")];
+        Assert.True(wrong.Length == 0, string.Join(Environment.NewLine, wrong));
+    }
+
+    /// <summary>The message of a sleeping body's timeout, with the
+    /// heartbeat's seam answering <paramref name="gap"/>.</summary>
+    private static string TimedOutWithAGapOf(TimeSpan gap)
+    {
+        StaThread.LongestGapForTests = () => gap;
+        return TimeOutASleepingBody().Message;
+    }
+
+    /// <summary>#1843: the collector's pause in the message is the body's
+    /// own, counted from the body's start, not the process's since it began.
+    /// The process is first made to pause for a second in forced
+    /// collections. A body that then sleeps for its 200 ms bound and
+    /// allocates nothing has next to no pause of its own, so its message
+    /// must not carry the second.</summary>
+    [Fact]
+    public void TheCollectorsPauseIsCountedFromTheBodysStart()
+    {
+        TimeSpan enough = TimeSpan.FromSeconds(1);
+        const int Cap = 50_000;
+        int collections = 0;
+        while (GC.GetTotalPauseDuration() < enough && collections < Cap)
+        {
+            GC.Collect();
+            collections++;
+        }
+        TimeSpan before = GC.GetTotalPauseDuration();
+        Assert.True(
+            before >= enough,
+            $"premise: after {collections} forced collections the process has paused for {before.TotalMilliseconds:0} ms in all, short of the {enough.TotalMilliseconds:0} ms this fact needs");
+
+        Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+        Match paused = Regex.Match(timedOut.Message, @" Garbage collection paused the process for (\d+\.\d) s of the body;");
+        Assert.True(paused.Success, $"the timeout's message has no collector's sentence: {timedOut.Message}");
+        double printed = double.Parse(paused.Groups[1].Value, CultureInfo.InvariantCulture);
+        Assert.True(
+            printed <= 0.5,
+            $"the body slept for its 200 ms bound, and its message counts {printed:0.0} s of pause; the process had paused for {before.TotalSeconds:0.0} s before the body started: {timedOut.Message}");
+    }
+
+    /// <summary>#1843: a diagnostic never changes the timeout's path. A
+    /// reading that throws becomes a sentence, and the timeout still cancels
+    /// the body's token, waits for it to unwind and fails the fact with its
+    /// own message.</summary>
+    [Fact]
+    public void AReadingThatThrowsIsASentenceAndTheTimeoutRunsItsCourse()
+    {
+        StaThread.LongestGapForTests = () => throw new InvalidOperationException("the gap could not be had");
+        CancellationToken read = default;
+        using var started = new ManualResetEventSlim(false);
+        StaThread.AfterStartForTests = () => Assert.True(started.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        Exception? thrown;
+        try
+        {
+            thrown = Record.Exception(() => StaThread.Run(
+                () =>
+                {
+                    read = StaThread.Current;
+                    started.Set();
+                    Thread.Sleep(TimeSpan.FromMilliseconds(600));
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body only slept",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+        }
+
+        Xunit.Sdk.XunitException timedOut = Assert.IsType<Xunit.Sdk.XunitException>(thrown);
+        Assert.Contains("the body only slept (thread sta-fact-", timedOut.Message, StringComparison.Ordinal);
+        Assert.Contains("bound 0.2 s;", timedOut.Message, StringComparison.Ordinal);
+        Assert.Contains("and the body unwound.)", timedOut.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            " The heartbeat and the collector could not be read (InvalidOperationException: the gap could not be had).",
+            timedOut.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("dump", timedOut.Message, StringComparison.Ordinal);
+        Assert.True(read.IsCancellationRequested, "the reading threw, and the body's token was never cancelled");
     }
 
     /// <summary>#1843: the collector records a memory load at each

@@ -44,8 +44,10 @@ namespace SlateWindows.Tests;
 /// <see cref="ReleaseTextServices"/>: WPF's own teardown of the thread's
 /// text services and render context (#1855), and then WPF's own
 /// <c>StopListening</c> on the thread's shut-down listeners, which takes
-/// them off the process's exit (#1826). Neither takes a window down, and
-/// the dispatcher of a body that returned in time is not shut down. Tearing
+/// them off the process's exit (#1826). The window and layout handlers are
+/// left alone, so no window the fact showed is taken down and the
+/// foreground stays where it was, and the dispatcher of a body that
+/// returned in time is not shut down. Tearing
 /// a thread's windows down while it lives (a dispatcher shutdown disposes
 /// them) hands the foreground to another process's window, after which the
 /// next fact's <c>Window.Activate</c> is refused and every focus-dependent
@@ -62,8 +64,9 @@ namespace SlateWindows.Tests;
 /// a pump wedged in a frame unwinds through the body's own disposals; the
 /// fact fails here instead of at the job's limit. A timeout that takes no
 /// stack says how long the process's heartbeat thread went without running
-/// during the body, and how long the collector paused the process (#1843,
-/// <see cref="Heartbeat"/>). A body that unwinds
+/// during the body, and how long the collector paused the process then
+/// (#1843, <see cref="Heartbeat"/>): both are measured from before the
+/// body's thread starts to the moment its bound passes. A body that unwinds
 /// within <see cref="UnwindGrace"/> still has its classes unregistered; one
 /// that does not is running beside every later fact, so
 /// <see cref="LeakedDispatcherGuardAttribute"/> fails each of them
@@ -336,7 +339,8 @@ internal static class StaThread
         };
         thread.SetApartmentState(ApartmentState.STA);
         // #1843: what a timeout that takes no stack reads is measured from
-        // here, before the thread starts, so the body lies inside it.
+        // here, before the thread starts, to the moment the bound passes
+        // below, so the body's time lies inside it and nothing later does.
         Heartbeat.Window beats = Heartbeat.OpenWindow();
         TimeSpan pausedBefore = GC.GetTotalPauseDuration();
         thread.Start();
@@ -344,15 +348,19 @@ internal static class StaThread
         TimeSpan limit = timeout ?? DefaultTimeout;
         if (!thread.Join(limit))
         {
+            // The window closes here. The wait for a stack and the dump come
+            // after it, so a stall during either is not read as the body's.
+            long boundPassed = System.Diagnostics.Stopwatch.GetTimestamp();
+            TimeSpan paused = GC.GetTotalPauseDuration() - pausedBefore;
             Dispatcher? dispatcher = Volatile.Read(ref owner) is { } started ? Dispatcher.FromThread(started) : null;
             (string stack, bool taken) = StackOf(thread, dispatcher);
             if (!taken)
             {
-                // Read before the dump is taken: createdump suspends every
-                // thread of the process while it writes, the heartbeat's
-                // included, and a reading taken after it would show the
-                // write as a stall.
-                stack += HeartbeatSaw(beats) + CollectorSawSince(pausedBefore);
+                // Taken before the dump is, and of the time up to the bound
+                // alone: createdump suspends every thread of the process
+                // while it writes, the heartbeat's included, and that must
+                // never read as a stall of the body.
+                stack += ReadingOf(beats, boundPassed, paused);
                 stack += DumpOnTimeout(name);
             }
             // After the stack, the reading and the dump, so a body that stops
@@ -406,45 +414,73 @@ internal static class StaThread
     /// longest gap of a thread that kept running.</summary>
     internal static readonly TimeSpan StalledGap = TimeSpan.FromSeconds(5);
 
-    /// <summary>#1843: what the process's heartbeat thread saw while a body
-    /// that gave no stack ran (<see cref="Heartbeat"/>): the longest stretch
-    /// it went without running. The job log keeps the sentence for 90 days,
-    /// so it outlives the dump.</summary>
-    /// <remarks>The sentence says what was measured and no more. A stall of
-    /// the whole process is named only as what a long gap would explain.
-    /// One heartbeat cannot say how many other threads were held, and
-    /// because it runs at the highest priority it cannot tell a starved fact
-    /// thread from a healthy one.</remarks>
-    private static string HeartbeatSaw(Heartbeat.Window beats)
+    /// <summary>#1843: what a timeout that took no stack measured of its
+    /// body's time, from before the body's thread started to
+    /// <paramref name="boundPassed"/>: the heartbeat's sentence
+    /// (<see cref="HeartbeatSaw"/>), then the collector's
+    /// (<see cref="CollectorSaw"/>) for the <paramref name="paused"/> it
+    /// counted in that time. A collection stops the heartbeat's thread too,
+    /// so its pause stands beside the heartbeat's gap. The job log keeps
+    /// both sentences for 90 days, so they outlive the dump.</summary>
+    /// <remarks>A failure is a sentence too, as the dump's is: a diagnostic
+    /// never changes the timeout's path (the cancel, the dispatcher's
+    /// shutdown, the unwind join, the class cleanup).</remarks>
+    private static string ReadingOf(Heartbeat.Window beats, long boundPassed, TimeSpan paused)
     {
-        TimeSpan gap = LongestGapForTests is { } answer ? answer() : beats.LongestGap();
+        try
+        {
+            TimeSpan gap = LongestGapForTests is { } answer ? answer() : beats.LongestGapUntil(boundPassed);
+            GCMemoryInfo last = GC.GetGCMemoryInfo();
+            return HeartbeatSaw(gap) + CollectorSaw(paused, last.Index, last.MemoryLoadBytes, last.TotalAvailableMemoryBytes);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return $" The heartbeat and the collector could not be read ({exception.GetType().Name}: {exception.Message}).";
+        }
+    }
+
+    /// <summary>The heartbeat's sentence for the longest
+    /// <paramref name="gap"/> its thread left during the body
+    /// (<see cref="Heartbeat"/>).</summary>
+    /// <remarks>
+    /// <para>
+    /// The sentence says what was measured and no more. A stall of the whole
+    /// process is named only as what a long gap would explain. One heartbeat
+    /// cannot say how many other threads were held, and because it runs at
+    /// the highest priority it cannot tell a starved fact thread from a
+    /// healthy one.
+    /// </para>
+    /// <para>
+    /// Each sentence is true as printed. The gap is printed in whole tenths
+    /// of a second, counted in ticks: rounded down where the sentence says
+    /// the thread missed that long, and up where it says the process was
+    /// not stalled for longer. Which sentence it is goes by the gap itself
+    /// against <see cref="StalledGap"/>, so a gap one tick short of it
+    /// reads "kept running ... 5.0 s".
+    /// </para>
+    /// </remarks>
+    private static string HeartbeatSaw(TimeSpan gap)
+    {
+        const long Tenth = TimeSpan.TicksPerSecond / 10;
         return gap >= StalledGap
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $" The heartbeat thread missed {gap.TotalSeconds:0.0} s in one gap during the body, which a stall of the whole process would explain.")
-            : string.Create(
-                CultureInfo.InvariantCulture,
-                $" The heartbeat thread kept running during the body: its longest gap was {gap.TotalSeconds:0.0} s, so the process as a whole was not stalled for longer than that.");
+            ? $" The heartbeat thread missed {Tenths(gap.Ticks / Tenth)} s in one gap during the body, which a stall of the whole process would explain."
+            : $" The heartbeat thread kept running during the body: its longest gap was {Tenths((gap.Ticks + Tenth - 1) / Tenth)} s, so the process as a whole was not stalled for longer than that.";
     }
 
-    /// <summary>#1843: what the collector did while a body that gave no
-    /// stack ran: how long it paused the process since
-    /// <paramref name="pausedBefore"/> was read, and the memory load it
-    /// recorded at its last collection. A collection stops the heartbeat's
-    /// thread too, so its pause stands beside the heartbeat's gap.</summary>
-    private static string CollectorSawSince(TimeSpan pausedBefore)
-    {
-        GCMemoryInfo last = GC.GetGCMemoryInfo();
-        return CollectorSaw(
-            GC.GetTotalPauseDuration() - pausedBefore, last.Index, last.MemoryLoadBytes, last.TotalAvailableMemoryBytes);
-    }
+    /// <summary>A count of tenths as seconds with one decimal, in the
+    /// invariant culture.</summary>
+    private static string Tenths(long tenths) =>
+        string.Create(CultureInfo.InvariantCulture, $"{tenths / 10}.{tenths % 10}");
 
-    /// <summary>The collector's sentence, from what it reported. The memory
-    /// load is the share of <paramref name="availableBytes"/> in use
-    /// (<paramref name="loadBytes"/>) when the last collection ran. The
-    /// collector records one at each collection, so before the first
-    /// (<paramref name="collections"/> is 0) there is none, and the sentence
-    /// says that instead of a load of 0 %.</summary>
+    /// <summary>The collector's sentence, from what it reported:
+    /// <paramref name="paused"/> is how long it paused the process during
+    /// the body. The memory load is the machine's, as the collector recorded
+    /// it at the process's last collection of any kind, which can be earlier
+    /// than the body: the share of <paramref name="availableBytes"/> in use
+    /// (<paramref name="loadBytes"/>) then. The collector records one at
+    /// each collection, so before the first (<paramref name="collections"/>
+    /// is 0) there is none, and the sentence says that instead of a load of
+    /// 0 %.</summary>
     internal static string CollectorSaw(TimeSpan paused, long collections, long loadBytes, long availableBytes) =>
         collections > 0
             ? string.Create(

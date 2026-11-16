@@ -44,10 +44,10 @@ public sealed class HeartbeatTests
         Assert.Equal(700, ring.LongestGap(from: 1000, to: 1700));
     }
 
-    /// <summary>The read itself ends the last stretch: a thread that stopped
-    /// and has not run again has missed everything up to now.</summary>
+    /// <summary>The window's end closes the last stretch: a thread that
+    /// stopped and had not run again by then missed everything up to it.</summary>
     [Fact]
-    public void TheGapStillOpenAtTheReadIsCounted()
+    public void TheGapStillOpenAtTheWindowsEndIsCounted()
     {
         Heartbeat.Ring ring = Beating(capacity: 16, 100, 200);
 
@@ -65,6 +65,29 @@ public sealed class HeartbeatTests
         Heartbeat.Ring ring = Beating(capacity: 3, 1000, 1100, 1200, 1300);
 
         Assert.Equal(100, ring.LongestGap(from: 0, to: 1350));
+    }
+
+    /// <summary>A window is read up to the end its reader names, and what
+    /// happened after that end is not the window's. Here the thread beat
+    /// for 200 ms, missed nearly nine seconds and beat again. A window that
+    /// ended 50 ms after the second beat saw one interval as its longest
+    /// gap: a timed-out body's window ends when its bound passes, so a stall
+    /// during the wait for its stack, or during the dump, is not read as a
+    /// stall during the body.</summary>
+    [Fact]
+    public void AGapAfterTheWindowsEndIsNotCounted()
+    {
+        long second = System.Diagnostics.Stopwatch.Frequency;
+        long opened = System.Diagnostics.Stopwatch.GetTimestamp() - (10 * second);
+        var ring = new Heartbeat.Ring(capacity: 16, first: opened);
+        ring.Beat(opened + (second / 10));
+        ring.Beat(opened + (2 * second / 10));
+        ring.Beat(opened + (9 * second));
+        var window = new Heartbeat.Window(ring, opened);
+
+        TimeSpan gap = window.LongestGapUntil(opened + (25 * second / 100));
+
+        Assert.Equal(System.Diagnostics.Stopwatch.GetElapsedTime(0, second / 10), gap);
     }
 
     /// <summary>The thread must never hold the test process's exit (xUnit
@@ -103,7 +126,7 @@ public sealed class HeartbeatTests
         Assert.True(
             SpinWait.SpinUntil(() => Heartbeat.Beats >= before + 3, TimeSpan.FromSeconds(30)),
             "the heartbeat thread recorded no beat in 30 s");
-        TimeSpan gap = window.LongestGap();
+        TimeSpan gap = window.LongestGapUntil(System.Diagnostics.Stopwatch.GetTimestamp());
         Assert.True(gap >= Heartbeat.Interval / 2, $"three beats came, but the window's longest gap reads {gap.TotalMilliseconds:0} ms");
     }
 
