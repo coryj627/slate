@@ -81,6 +81,8 @@ jobs:
       label: ${{ steps.route.outputs.label }}
       route: ${{ steps.route.outputs.route }}
     steps:
+      - name: Probe, the routing fails (never merged)
+        run: exit 1
       - name: Checkout the route script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
