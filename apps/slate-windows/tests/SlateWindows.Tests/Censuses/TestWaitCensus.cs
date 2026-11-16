@@ -136,7 +136,6 @@ public sealed class TestWaitCensus
     /// that change merges.</summary>
     private static readonly (string File, string Type, string Reason, string Dated)[] GatesStillDisposed =
     [
-        ("SlateWindows.Tests/SaveChainAdmissionTests.cs", "Peers", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/CommandPaletteTests.Shell.cs", "PaletteShellHost", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/PumpedSaveReentrancyTests.cs", "Host", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/ConnectionsLeafTests.Receiver.cs", "ParkedFetch", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
@@ -161,7 +160,6 @@ public sealed class TestWaitCensus
             "its gates park a save's write and the sidebar's tree reads; Lifecycle.Dispose joins the sidebar's work and "
             + "the workspace's save workers before it disposes the session",
             "2026-11-16"),
-        ("SlateWindows.Tests/SaveChainAdmissionTests.cs", "Peers", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
         ("SlateWindows.Tests/CommandPaletteTests.Shell.cs", "PaletteShellHost", "#1673's sibling: fixed later in the change that adds this rule", "2026-11-16"),
     ];
 
