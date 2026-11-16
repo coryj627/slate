@@ -40,9 +40,12 @@ public sealed class WeakEventExitTests
         Assert.True(
             without >= TimeSpan.FromMilliseconds(Tables * 300 * 0.8),
             $"{Tables} leftover tables cost {without.TotalMilliseconds:F0} ms at exit without the switch: WPF no longer waits for each, so this fact no longer shows the switch matters");
+        // The two exits are compared with each other, on one machine under
+        // one load, not with a fixed ceiling a busy runner can pass.
         Assert.True(
-            with < TimeSpan.FromMilliseconds(Tables * 300 / 3),
-            $"the exit took {with.TotalMilliseconds:F0} ms with the switch set: WPF no longer honours {Switch}");
+            with < without / 2,
+            $"the exit took {with.TotalMilliseconds:F0} ms with the switch set and {without.TotalMilliseconds:F0} ms without: "
+            + $"WPF no longer honours {Switch}");
     }
 
     /// <summary>From the probe's "ready" (its tables made) to its exit.</summary>
