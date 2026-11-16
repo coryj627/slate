@@ -36,15 +36,58 @@ enum LinkSpec {
     External,
 }
 
-/// Strategy for one link spec. Names are short lowercase ascii so the
-/// generated paths stay vault-relative-friendly and the test stays
-/// fast (no time spent on weird Unicode normalization).
+/// The device stems `FsVaultProvider::write_file` refuses on Windows, as
+/// the note-name pattern can spell them: it refuses `aux.md` and the rest,
+/// and it is right to (#1963). `com0` and `lpt0` are not here because the
+/// provider accepts them (`windows_path_validator_accepts_device_name_near_misses`).
+const WINDOWS_RESERVED_DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Strategy for one note name, which the properties below write as
+/// `{name}.md`. Names are short lowercase ascii so the generated paths
+/// stay vault-relative-friendly and the test stays fast (no time spent on
+/// weird Unicode normalization). A reserved device name is never drawn, on
+/// any platform, so the cases are the same everywhere.
+fn note_name() -> impl Strategy<Value = String> {
+    "[a-z][a-z0-9]{0,5}".prop_filter("a Windows reserved device name", |name| {
+        !WINDOWS_RESERVED_DEVICE_NAMES.contains(&name.as_str())
+    })
+}
+
+/// Strategy for one link spec.
 fn link_spec_strategy() -> impl Strategy<Value = LinkSpec> {
     prop_oneof![
-        "[a-z][a-z0-9]{0,5}".prop_map(LinkSpec::Resolvable),
-        "[a-z][a-z0-9]{0,5}".prop_map(LinkSpec::Unresolvable),
+        note_name().prop_map(LinkSpec::Resolvable),
+        note_name().prop_map(LinkSpec::Unresolvable),
         Just(LinkSpec::External),
     ]
+}
+
+/// #1963: `backlinks_contain_every_other_source` once drew `aux` and failed
+/// on Windows, where the provider refuses to write `aux.md`. No property in
+/// this file is about that refusal, so the generator never draws a reserved
+/// device name, on any platform. The run is seeded: the bare pattern draws
+/// several of them within these cases.
+#[test]
+fn a_generated_note_name_is_never_a_windows_reserved_device_name() {
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = note_name();
+    let mut reserved: Vec<String> = Vec::new();
+    for _ in 0..300_000 {
+        let name = strategy.new_tree(&mut runner).unwrap().current();
+        if WINDOWS_RESERVED_DEVICE_NAMES.contains(&name.as_str()) {
+            reserved.push(name);
+        }
+    }
+    assert!(
+        reserved.is_empty(),
+        "the generator drew reserved device names: {reserved:?}"
+    );
 }
 
 /// Build a markdown body that contains exactly one link per
@@ -177,7 +220,7 @@ proptest! {
     /// across multiple files.
     #[test]
     fn backlinks_contain_every_other_source(
-        names in prop::collection::hash_set("[a-z][a-z0-9]{0,5}", 2..=4),
+        names in prop::collection::hash_set(note_name(), 2..=4),
     ) {
         // hash_set strategy already dedups; assume the lower bound.
         prop_assume!(names.len() >= 2);
