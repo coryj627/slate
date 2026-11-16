@@ -126,9 +126,12 @@ public sealed partial class ShellAccessibilityTests
                 return;
             }
 
+            Dictionary<string, (long Length, DateTime Written)> before = HotExitEntries();
             string typed = TypeIntoTheNote(process, Path.Combine(logDirectory, "slate-windows.log"));
-            // The writer's one-second debounce, with room for the store.
-            Thread.Sleep(TimeSpan.FromSeconds(3));
+            // A crash writes nothing at close, so the kill waits for the write
+            // the typing's debounce makes: an entry that is new or changed
+            // since before the typing and holds the typed words.
+            AwaitTheTypedHotExitEntry(before, Path.Combine(logDirectory, "slate-windows.log"));
             process.Kill(entireProcessTree: true);
             Assert.True(process.WaitForExit(10_000), "premise: the killed process did not exit.");
             Assert.Equal(onDisk, GateFile.ReadText(notePath));
@@ -148,6 +151,83 @@ public sealed partial class ShellAccessibilityTests
         {
             EndHotExitJourney(process, testRoot);
         }
+    }
+
+    /// <summary>The hot-exit store's published entries under this run's
+    /// device root (<c>hot-exit\v1\vaults\&lt;key&gt;\entries\&lt;id&gt;.json</c>;
+    /// a staged write is named past <c>.json</c> and is not one), each with
+    /// its length and last write time. They come from the folders' listings:
+    /// no entry is opened.</summary>
+    private static Dictionary<string, (long Length, DateTime Written)> HotExitEntries()
+    {
+        var entries = new Dictionary<string, (long Length, DateTime Written)>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var store = new DirectoryInfo(Path.Combine(ShellLaunch.Root, "hot-exit"));
+            if (store.Exists)
+            {
+                foreach (FileInfo entry in store.EnumerateFiles("*.json", SearchOption.AllDirectories))
+                {
+                    entries[entry.FullName] = (entry.Length, entry.LastWriteTimeUtc);
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // A folder went while it was listed; the next listing is whole.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return entries;
+    }
+
+    /// <summary>Waits until the store holds an entry that is new or changed
+    /// since <paramref name="before"/> and carries the typed words: the
+    /// typing's debounced write has landed. The listing is what is polled.
+    /// An entry is opened only once its listing has changed, and read once:
+    /// the store replaces an entry by rename, which a read open at that
+    /// instant would refuse (<see cref="GateFile"/>).</summary>
+    private static void AwaitTheTypedHotExitEntry(Dictionary<string, (long Length, DateTime Written)> before, string logFile)
+    {
+        string words = HotExitTyped.Trim();
+        var read = new Dictionary<string, (long Length, DateTime Written)>(StringComparer.OrdinalIgnoreCase);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            foreach ((string entry, (long Length, DateTime Written) listed) in HotExitEntries())
+            {
+                if ((before.TryGetValue(entry, out (long Length, DateTime Written) was) && was == listed)
+                    || (read.TryGetValue(entry, out (long Length, DateTime Written) seen) && seen == listed))
+                {
+                    continue;
+                }
+
+                if (GateFile.TryReadText(entry) is not { } text)
+                {
+                    continue;
+                }
+
+                read[entry] = listed;
+                if (text.Contains(words, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            Thread.Sleep(GateFile.PollInterval);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"No hot-exit entry carried \"{words}\" within 15 s of the typing, so a kill now would test nothing. "
+            + $"Entries new or changed since before the typing and read: {read.Count}. "
+            + $"The app log's last lines: {LogTail(logFile)}");
     }
 
     /// <summary>Opens <c>note.md</c>, types <see cref="HotExitTyped"/> at
