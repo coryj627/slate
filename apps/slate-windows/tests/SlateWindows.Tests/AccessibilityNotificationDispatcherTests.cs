@@ -1407,10 +1407,13 @@ public sealed class AccessibilityNotificationDispatcherTests
             window.ContentRendered += (_, _) => rendered = true;
             window.Show();
             Assert.True(PumpedDispatcher.PumpUntil(() => rendered), "the window never rendered its first frame");
-            // The launch clock first, then the fact's own. A launch clock
-            // started at construction reads what the fact's does; one started
-            // at the first frame reads the start-up hold less. Time between
-            // the two readings only adds to the difference.
+            // The launch clock first, then the fact's own. What the
+            // difference catches is a launch clock that reads zero until the
+            // first frame and then counts from construction: it passes the
+            // zero reading above and reads here what the fact's own clock
+            // does. A clock started at the first frame reads the start-up
+            // hold less. Time between the two readings only adds to the
+            // difference.
             TimeSpan sinceFirstFrame = launch.Elapsed();
             TimeSpan built = sinceConstruction.Elapsed;
             Assert.True(
