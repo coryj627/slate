@@ -2,6 +2,8 @@
 
 Issues: #1843. Size S. Lanes: windows (`SlateWindows.Tests`, the app job). AT: — (test-only). Wave: C1, slot 1. Depends on: nothing (CB-0 merges first). Parallel with: CB-2, CB-4. Decision: CD2. The owner answers it before C0 (plan §3); this spec encodes the recommendation: #1843 closes with its cause unproved, and a timed-out fact's dump stays 7 days. CD1 is overtaken by #1928. Interlock: none. `Support/StaThread.cs` is this chunk's alone; the createdump path (`StaThread.cs:431-544`) and `windows.yml` are not edited. Review: a red team, then Codex adversarial-review rounds until it approves (plan §4 rule 9; the chunk changes test logic).
 
+*2026-11-16:* the owner answered CD2 as recommended (plan 47 §3.1): #1843 closes with its cause not proved, and a timed-out fact's dump stays 7 days.
+
 `T/` below is `apps/slate-windows/tests/SlateWindows.Tests/`.
 
 ## Goal
