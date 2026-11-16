@@ -1221,8 +1221,31 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
+      # createdump does not create a missing folder. With the dump name
+      # pointing into one it prints "Invalid dump path '...' - The system
+      # cannot find the path specified. (3)" and writes nothing. A model
+      # family first creates this folder with its first checkpoint, about a
+      # second into its first case, so a test process that failed fast before
+      # then would leave no dump (#1624).
+      - name: Create the model results folder
+        run: New-Item -ItemType Directory -Force '${{ runner.temp }}\slate-model-results' | Out-Null
+
       # Partition reachable global ordinals, never the debug text filter.
       # Every shard still validates the complete inventory and exclusions.
+      # #1624: a model family is one fact, and blame's hang timer resets only
+      # between facts, so the timer measures a family. Forty-five minutes
+      # ended a routes fact that was still advancing on a loaded host (run
+      # 40119788856, a projected 62 minutes). Seventy covers that and leaves
+      # the 90-minute job 20 minutes for the build, the other families, the
+      # dump and the uploads, so the timer ends a slow run, not the job limit,
+      # and its evidence is uploaded. A case that stops advancing does not
+      # wait for the timer: ModelTestRun's stall rule names it after about
+      # five minutes of checkpoint ticks and fails fast, and the DOTNET_
+      # variables make the runtime write a full dump of that process into the
+      # results folder (the app job's Test step explains the settings). A
+      # dump is published only in the failed attempt's evidence below, and
+      # only because this job holds no secret for the test process to have
+      # read: TestHostCrashDumpCensus fails if it ever gains one.
       - name: Test (the Connections model)
         run: >-
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
@@ -1230,24 +1253,81 @@ jobs:
           --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
           --logger "trx;LogFileName=connections-model.trx"
           --results-directory "${{ runner.temp }}\slate-model-results"
-          --blame-hang-timeout 45m --blame-hang-dump-type mini
+          --blame-hang-timeout 70m --blame-hang-dump-type mini
         env:
           SLATE_MODEL_SHARD_INDEX: '${{ matrix.shard }}'
           SLATE_MODEL_SHARD_COUNT: '2'
           SLATE_MODEL_REPORT_DIR: '${{ runner.temp }}\slate-model-results'
           SLATE_MODEL_ONLY: ''
+          DOTNET_DbgEnableMiniDump: '1'
+          DOTNET_DbgMiniDumpType: '4'
+          DOTNET_DbgMiniDumpName: '${{ runner.temp }}\slate-model-results\crash-%e-%p.dmp'
+          DOTNET_CreateDumpDiagnostics: '1'
+
+      # The job log is kept longer than either artifact and is what a reader
+      # opens first, so each family's last checkpoint goes into it whatever
+      # the test adapter printed: the case and phase a stopped family was in,
+      # and an error line for one the stall rule ended (#1624). It reads
+      # files and never fails the job. A cell's name is the test's own text,
+      # so what goes into a workflow command is encoded as GitHub decodes it
+      # (%25, %0D, %0A), and a checkpoint's own text is printed on one line
+      # after its file's name. Workflows.Tests.ps1 runs this script.
+      - name: Show where each model family stopped
+        if: ${{ always() }}
+        run: |
+          $results = '${{ runner.temp }}\slate-model-results'
+          function Format-CommandData([string]$Text) { $Text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
+          $files = @(Get-ChildItem -Path $results -Filter '*.progress.txt' -File -ErrorAction SilentlyContinue | Sort-Object Name)
+          if ($files.Count -eq 0) { Write-Host "no model family wrote a checkpoint under $results" }
+          foreach ($file in $files) {
+            try {
+              $text = (Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop).Trim()
+              Write-Host "$($file.Name): $($text -replace '[\r\n]+', ' ')"
+              $progress = $text | ConvertFrom-Json -ErrorAction Stop
+              if ($progress.phase -eq 'stalled') {
+                $subject = if ($null -ne $progress.activeOrdinal) { "case $($progress.activeOrdinal) ($($progress.activeCell))" } else { 'no case active' }
+                $line = "the $($progress.family) model stalled on shard $($progress.shardIndex): $subject, phase $($progress.stalledPhase), for $([math]::Round($progress.stalledMilliseconds / 1000)) s, with $($progress.completedCases) of $($progress.selectedCases) cases completed"
+                Write-Host "::error::$(Format-CommandData $line)"
+              }
+            } catch {
+              Write-Host "::warning::$(Format-CommandData "cannot read $($file.Name): $($_.Exception.Message)")"
+            }
+          }
+          exit 0
 
       - name: Upload model timings and coverage
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           # Re-running only failed jobs retains successful sibling artifacts.
-          # A rerun replaces this shard's evidence within the same run/SHA.
+          # A rerun replaces this shard's report within the same run/SHA: the
+          # aggregator reads it by run id, whichever attempt wrote it.
           name: windows-model-${{ github.run_id }}-${{ matrix.shard }}
           overwrite: true
-          path: '${{ runner.temp }}\slate-model-results\**\*'
+          # No dump: a full one is hundreds of megabytes, and this artifact is
+          # kept 30 days and downloaded by the aggregator. One include
+          # pattern, so the artifact's root is still the results folder; an
+          # exclusion does not move it.
+          path: |
+            ${{ runner.temp }}\slate-model-results\**\*
+            !${{ runner.temp }}\slate-model-results\**\*.dmp
           if-no-files-found: error
           retention-days: 30
+
+      # Named by attempt too (#1624): "Re-run failed jobs" keeps its run id,
+      # and the rerun's report replaces the one above, which is where the
+      # dumps of run 40119788856's first attempt went. An attempt that failed
+      # or was cancelled keeps the whole folder here, dumps included. The
+      # name does not match the aggregator's pattern. Seven days, as the app
+      # job's results: it can hold a full dump.
+      - name: Upload a failed attempt's model evidence
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: slate-windows-model-evidence-${{ github.run_id }}-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}\slate-model-results\**\*'
+          if-no-files-found: warn
+          retention-days: 7
 
   windows-model:
     name: app model (windows x64)
