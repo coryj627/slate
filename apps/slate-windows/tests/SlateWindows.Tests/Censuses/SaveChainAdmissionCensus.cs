@@ -32,7 +32,9 @@
 //       member (implicitly or explicitly), that overrides, or that is virtual
 //       or abstract is never admitted this way: a call through the interface
 //       or the base binds to another symbol, so the graph does not hold all
-//       of its callers; or
+//       of its callers. Nor is a method shaped like an event handler (a
+//       sender and arguments derived from EventArgs): XAML wires such a
+//       method in generated code this census does not read; or
 //   (B) it stands in a lambda assigned to a local, and every read of that
 //       local in the member stands in an admission argument (the property
 //       write's shape: the write is built first and handed to the admitted
@@ -50,7 +52,9 @@
 // asked about the path that is reloaded: the rule sees only a call standing
 // before the reload. That a method does what its name says: every table
 // classifies by name. A write made through reflection or a dynamic call, and
-// a direct System.IO write to a vault note, are not seen. A call inside an
+// a direct System.IO write to a vault note, are not seen. A method XAML
+// wires that has no event handler's shape is not seen as wired. A call
+// inside an
 // accessor or an operator has no caller here, so it is never admitted, and
 // the rule names it.
 
@@ -198,7 +202,14 @@ public sealed class SaveChainAdmissionCensus
     /// chain: the member, the calls found in it (sorted, so a new unjoined
     /// call in a listed member still fails), why it stands, when that was
     /// written, and what ends it.</summary>
-    internal sealed record Row(string File, string Member, string[] Calls, string Reason, string Dated, string Ends);
+    /// <remarks><c>Calls</c> names each callee once for each site that calls
+    /// it in the member, over every overload of that name in the file, so a
+    /// second site of a listed callee fails as a new callee does.
+    /// <c>ExcusedCallers</c>, for a row that stands only because some caller
+    /// reaches the member outside the chain, lists those callers as
+    /// <c>File (Member)</c>: a new one fails.</remarks>
+    internal sealed record Row(
+        string File, string Member, string[] Calls, string Reason, string Dated, string Ends, string[]? ExcusedCallers = null);
 
     private const string LinkRewriteReason =
         "core rewrites the notes that link to the item and reports them, each under its own compare-and-swap, "
@@ -236,7 +247,8 @@ public sealed class SaveChainAdmissionCensus
             ["RebaselineAfterPropertyWrite"],
             "the bulk rename's reconcile reaches this fan-out outside the chain; every other caller is admitted",
             "2026-11-16",
-            "CB-9b"),
+            "CB-9b",
+            ExcusedCallers: ["WorkspaceViewModel.Properties.cs (ReconcileTabsAfterBulkRename)"]),
         new(
             "FilesSidebarViewModel.FileManagement.cs",
             "TryRenameSelected",
@@ -317,6 +329,9 @@ public sealed class SaveChainAdmissionCensus
 
     internal sealed record Violation(string File, int Line, string Member, string Name, string Text)
     {
+        /// <summary>The node the call belongs to, for a rule's site.</summary>
+        public string Node { get; init; } = string.Empty;
+
         public override string ToString() => $"{File}:{Line} ({Member}): {Text}";
     }
 
@@ -332,6 +347,9 @@ public sealed class SaveChainAdmissionCensus
         public HashSet<string> AdmissionNodes { get; } = new(StringComparer.Ordinal);
 
         public List<(string Caller, string Callee)> Edges { get; } = [];
+
+        /// <summary>A calling node, as <c>File (Member)</c>.</summary>
+        public Dictionary<string, string> NodeNames { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The methods a call can reach through another symbol: one
         /// that implements an interface member, overrides, or is virtual or
@@ -354,6 +372,10 @@ public sealed class SaveChainAdmissionCensus
                 joined.Unbound.AddRange(part.Unbound);
                 joined.ChainImplementers.AddRange(part.ChainImplementers);
                 joined.Open.UnionWith(part.Open);
+                foreach ((string node, string name) in part.NodeNames)
+                {
+                    joined.NodeNames[node] = name;
+                }
             }
             return joined;
         }
@@ -533,7 +555,9 @@ public sealed class SaveChainAdmissionCensus
                 }
                 if (!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
                 {
-                    reading.Edges.Add((NodeOf(node), Id(method)));
+                    string caller = NodeOf(node);
+                    reading.Edges.Add((caller, Id(method)));
+                    reading.NodeNames[caller] = $"{file} ({MemberOf(node).Name})";
                 }
                 if (method.ContainingType is { } owner
                     && _sessionTypes.Contains(owner.OriginalDefinition)
@@ -685,12 +709,33 @@ public sealed class SaveChainAdmissionCensus
                     || method.IsAbstract
                     || method.IsOverride
                     || !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty
+                    || IsShapedLikeAnEventHandler(method)
                     || type.AllInterfaces.Any(contract => contract.GetMembers(method.Name).OfType<IMethodSymbol>().Any(member =>
                         SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method))))
                 {
                     _ = reading.Open.Add(Id(method));
                 }
             }
+        }
+
+        /// <summary>A method with an event handler's parameters, a sender
+        /// and arguments derived from <c>EventArgs</c>. XAML wires such a
+        /// method in generated code this census does not read, so the
+        /// graph may not hold all of its callers.</summary>
+        private static bool IsShapedLikeAnEventHandler(IMethodSymbol method)
+        {
+            if (method.Parameters.Length != 2 || method.Parameters[0].Type.SpecialType != SpecialType.System_Object)
+            {
+                return false;
+            }
+            for (ITypeSymbol? type = method.Parameters[1].Type; type is not null; type = type.BaseType)
+            {
+                if (type.Name == "EventArgs" && type.ContainingNamespace?.ToDisplayString() == "System")
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static int LineOf(SyntaxNode node) => node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
@@ -871,7 +916,8 @@ public sealed class SaveChainAdmissionCensus
             .Where(site => site.Kind == SiteKind.Session && writers.Contains(site.Name) && !IsAdmitted(site, admitted))
             .Select(site => new Violation(
                 site.File, site.Line, site.Member, site.Name,
-                $"VaultSession.{site.Name} writes outside the note's save chain"))];
+                $"VaultSession.{site.Name} writes outside the note's save chain")
+            { Node = site.Node })];
     }
 
     private static HashSet<string> Writers() =>
@@ -880,6 +926,7 @@ public sealed class SaveChainAdmissionCensus
     [Fact]
     public void EveryNoteWriterCallIsAdmittedIntoItsNotesChain() =>
         AssertOnlyTheListed(
+            Shell.Value.Reading,
             UnadmittedWriters(Shell.Value.Reading, Writers()),
             [.. OutsideTheChain.Where(row => !IsAReloadRow(row))],
             "These write a note outside its save chain, so they can write beside a save admitted for the note and "
@@ -902,12 +949,14 @@ public sealed class SaveChainAdmissionCensus
             .Select(site => new Violation(
                 site.File, site.Line, site.Member, site.Name,
                 $"WorkspaceTabViewModel.{site.Name} reloads a tab from disk outside the note's save chain and "
-                + "without asking it"))];
+                + "without asking it")
+            { Node = site.Node })];
     }
 
     [Fact]
     public void EveryReloadOfATabFromDiskIsAdmittedOrAsksTheChain() =>
         AssertOnlyTheListed(
+            Shell.Value.Reading,
             UnguardedReloads(Shell.Value.Reading),
             [.. OutsideTheChain.Where(IsAReloadRow), .. NotThisClass],
             "These replace a tab's buffer from disk under whatever is admitted for its note. Run the reload inside "
@@ -916,38 +965,74 @@ public sealed class SaveChainAdmissionCensus
 
     private static bool IsAReloadRow(Row row) => row.Calls.All(ReloadMethods.Contains);
 
-    /// <summary>Fails on a violation no row explains, on a row with no
-    /// reason, date or end, and on a row that matches no violation. A row
-    /// answers a member only with the exact calls found in it.</summary>
-    private static void AssertOnlyTheListed(IReadOnlyList<Violation> found, IReadOnlyList<Row> rows, string remedy)
+    private static void AssertOnlyTheListed(Reading reading, IReadOnlyList<Violation> found, IReadOnlyList<Row> rows, string remedy)
     {
-        string[] unexplained = [.. rows
+        IReadOnlyList<string> problems = Problems(reading, found, rows);
+        Assert.True(problems.Count == 0, remedy + "\n" + string.Join("\n", problems));
+    }
+
+    /// <summary>What the rows do not answer. A violation in a member no row
+    /// lists. A callee whose count of sites in the member, over every
+    /// overload of that name in the file, differs from the count the row
+    /// lists, so a second site of a listed callee fails. For a row with
+    /// excused callers, a direct caller outside the chain that the row does
+    /// not excuse, and an excused caller that is no longer one. A row with
+    /// no reason, date or end. A row that matches no violation.</summary>
+    internal static IReadOnlyList<string> Problems(Reading reading, IReadOnlyList<Violation> found, IReadOnlyList<Row> rows)
+    {
+        List<string> problems = [.. rows
             .Where(row => string.IsNullOrWhiteSpace(row.Reason) || string.IsNullOrWhiteSpace(row.Dated) || string.IsNullOrWhiteSpace(row.Ends))
-            .Select(Named)];
-        Assert.True(unexplained.Length == 0, "Rows with no reason, no date or nothing that ends them: " + string.Join("; ", unexplained));
-
-        (string File, string Member, string Calls, Violation[] At)[] members = [.. found
-            .GroupBy(violation => (violation.File, violation.Member))
-            .Select(group => (
-                group.Key.File,
-                group.Key.Member,
-                Calls(group.Select(violation => violation.Name)),
-                group.OrderBy(violation => violation.Line).ToArray()))];
-
-        string[] offenders = [.. members
-            .Where(member => !rows.Any(row => row.File == member.File && row.Member == member.Member && Calls(row.Calls) == member.Calls))
-            .SelectMany(member => member.At.Select(violation => violation.ToString())
-                .Append($"  {member.File} ({member.Member}) holds [{member.Calls}]; no row lists exactly that."))];
-        Assert.True(offenders.Length == 0, remedy + "\n" + string.Join("\n", offenders));
-
-        string[] stale = [.. rows
-            .Where(row => !members.Any(member => row.File == member.File && row.Member == member.Member && Calls(row.Calls) == member.Calls))
-            .Select(Named)];
-        Assert.True(stale.Length == 0, "Rows that match no violation (delete them): " + string.Join("; ", stale));
+            .Select(row => $"{Named(row)}: a row with no reason, no date or nothing that ends it.")];
+        HashSet<string> admitted = AdmittedNodes(reading);
+        foreach (IGrouping<(string File, string Member), Violation> member in found
+            .GroupBy(violation => (violation.File, violation.Member)))
+        {
+            string where = $"{member.Key.File} ({member.Key.Member})";
+            Row[] listed = [.. rows.Where(row => row.File == member.Key.File && row.Member == member.Key.Member)];
+            if (listed.Length != 1)
+            {
+                problems.AddRange(member.OrderBy(violation => violation.Line).Select(violation => violation.ToString()));
+                problems.Add($"  {where} holds [{Calls(member.Select(violation => violation.Name))}]; "
+                    + (listed.Length == 0 ? "no row lists it." : "more than one row lists it."));
+                continue;
+            }
+            Row row = listed[0];
+            foreach (string callee in member.Select(violation => violation.Name).Concat(row.Calls)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal))
+            {
+                int sites = member.Count(violation => violation.Name == callee);
+                int counted = row.Calls.Count(name => name == callee);
+                if (sites != counted)
+                {
+                    problems.Add($"{where}: {callee} is called at {sites} site(s) and the row lists {counted} (lines "
+                        + string.Join(", ", member.Where(violation => violation.Name == callee).Select(violation => violation.Line).Order())
+                        + "). Join the new call to the chain, or list it in the row once for each site.");
+                }
+            }
+            if (row.ExcusedCallers is { } excused)
+            {
+                HashSet<string> nodes = new(member.Select(violation => violation.Node), StringComparer.Ordinal);
+                string[] callers = [.. reading.Edges
+                    .Where(edge => nodes.Contains(edge.Callee) && !nodes.Contains(edge.Caller) && !admitted.Contains(edge.Caller))
+                    .Select(edge => reading.NodeNames.GetValueOrDefault(edge.Caller, edge.Caller))
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)];
+                problems.AddRange(callers.Except(excused, StringComparer.Ordinal).Select(caller =>
+                    $"{where}: {caller} calls it outside the chain, and the row excuses only [{string.Join("; ", excused)}]. "
+                    + "Admit the new caller, or excuse it in the row with its reason."));
+                problems.AddRange(excused.Except(callers, StringComparer.Ordinal).Select(caller =>
+                    $"{where}: the row excuses {caller}, which no longer calls it outside the chain (take it out of the row)."));
+            }
+        }
+        problems.AddRange(rows
+            .Where(row => !found.Any(violation => violation.File == row.File && violation.Member == row.Member))
+            .Select(row => $"{Named(row)}: a row that matches no violation (delete it)."));
+        return problems;
     }
 
     private static string Calls(IEnumerable<string> names) =>
-        string.Join(", ", names.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal));
+        string.Join(", ", names.OrderBy(name => name, StringComparer.Ordinal));
 
     private static string Named(Row row) => $"{row.File} ({row.Member}) [{Calls(row.Calls)}]";
 
@@ -1086,7 +1171,7 @@ public sealed class SaveChainAdmissionCensus
 
     /// <summary>Bind <paramref name="source"/> as one more shell tree and
     /// read it. The planted source must bind, or the case proves nothing.</summary>
-    private static Reading Planted(string source, bool mustBind = true)
+    private static Reading Planted(string source, bool mustBind = true, string file = "Planted.cs")
     {
         var options = (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, options, path: "Planted.cs");
@@ -1100,7 +1185,7 @@ public sealed class SaveChainAdmissionCensus
         }
         HashSet<string> names = new(Shell.Value.MethodNames, StringComparer.Ordinal);
         names.UnionWith(DeclaredMethodNames([tree]));
-        return Read(compilation, [("Planted.cs", tree)], SessionMethods.Value, names);
+        return Read(compilation, [(file, tree)], SessionMethods.Value, names);
     }
 
     /// <summary>Each unjoined form is named and each joined form is left
@@ -1244,6 +1329,14 @@ public sealed class SaveChainAdmissionCensus
             "unjoined"
         },
         {
+            "a writer in a method shaped like an event handler, with every caller admitted",
+            InAClass(
+                "void PlantedClick(object sender, EventArgs e) { " + AWrite + " }\n"
+                + "void PlantedM() { _ = saves.Admit(\"a.md\", ticket => { PlantedClick(this, EventArgs.Empty); "
+                + "return Task.CompletedTask; }); }"),
+            "unjoined"
+        },
+        {
             "a writer called through IVaultSession in a plain method",
             InAClass("void PlantedM(IVaultSession through) { _ = through.SaveText(\"a.md\", \"text\", null); }"),
             "unjoined"
@@ -1371,6 +1464,41 @@ public sealed class SaveChainAdmissionCensus
             "a second chain"
         },
     };
+
+    /// <summary>The rows on planted source read under a real file's name,
+    /// joined with the shell's reading: a second site of a callee a row
+    /// lists, in another overload of the listed member (the count runs over
+    /// every overload, so a second call in the same body counts the same
+    /// way), and a new caller that reaches an excused member outside the
+    /// chain.</summary>
+    [Theory]
+    [InlineData(
+        "a second SaveText in another overload of PublishBasesExport",
+        "WorkspaceViewModel.Bases.cs",
+        "partial class WorkspaceViewModel { void PublishBasesExport(int planted) { _ = _session.SaveText(\"a.md\", \"text\", null); } }",
+        "WorkspaceViewModel.Bases.cs (PublishBasesExport): SaveText is called at 2 site(s) and the row lists 1")]
+    [InlineData(
+        "a second AddTagToFiles in another overload of EditTag",
+        "FilesSidebarViewModel.cs",
+        "partial class FilesSidebarViewModel { void EditTag(int planted) { Delegate add = _session.AddTagToFiles; _ = add; } }",
+        "FilesSidebarViewModel.cs (EditTag): AddTagToFiles is called at 2 site(s) and the row lists 1")]
+    [InlineData(
+        "a new caller of ReconcileTabsAfterPropertyWrite outside the chain",
+        "WorkspaceViewModel.Properties.cs",
+        "partial class WorkspaceViewModel { void PlantedCaller() { _ = ReconcileTabsAfterPropertyWrite(\"a.md\", \"hash\"); } }",
+        "WorkspaceViewModel.Properties.cs (ReconcileTabsAfterPropertyWrite): WorkspaceViewModel.Properties.cs (PlantedCaller) calls it outside the chain")]
+    public void ARowAnswersOnlyTheSitesAndTheCallersItLists(string form, string file, string members, string expected)
+    {
+        Reading all = Shell.Value.Reading.With(Planted(PlantedPrelude + members + "\n", file: file));
+        string[] problems =
+        [
+            .. Problems(all, UnadmittedWriters(all, Writers()), [.. OutsideTheChain.Where(row => !IsAReloadRow(row))]),
+            .. Problems(all, UnguardedReloads(all), [.. OutsideTheChain.Where(IsAReloadRow), .. NotThisClass]),
+        ];
+        Assert.True(
+            problems.Any(problem => problem.StartsWith(expected, StringComparison.Ordinal)),
+            $"{form}: the rows answered it. Problems found:\n" + string.Join("\n", problems));
+    }
 
     private const string PlantedWriter =
         PlantedPrelude

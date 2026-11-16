@@ -860,12 +860,23 @@ reworded.
 - **Each of the three ends.** A worker fault is the route's failed outcome
   ("Can't restore", `BasesCellEditFailed`, `TaskToggleFailed`), given once. A
   worker that ends without posting its publication still ends the
-  operation: each route has a backstop on its worker's task for a fault its
-  catch leaves alone (out of memory, stack overflow, access violation), and
-  the toggle's also covers a body its scheduler skipped. The backstop
-  speaks the route's same failure, in a `try`, and the recover's answers
-  its row that nothing happened. A publication that throws still ends the
-  operation too. Each worker is tracked,
+  operation: each of the three routes has a backstop on its worker's task
+  for a fault its catch leaves alone (out of memory, stack overflow, access
+  violation), and the toggle's also covers a body its scheduler skipped.
+  The open-note Bases cell write has the same backstop now; its worker is
+  a tab's property write, and it had none (found and fixed here). The
+  properties header's own writes go through that worker with no backstop
+  yet, which is a deferred find. A backstop speaks the route's same
+  failure, in a `try`, and the recover's answers its row that nothing
+  happened. A publication that throws still ends the operation too.
+- **A failed recover ends its operation before its alert.** The "Can't
+  restore" alert is a modal box. A close that arrives inside its loop
+  settles the saves from a frame above the box, and that settle could not
+  return while the recover's ticket was open. Nothing was written on a
+  failed recover, so the operation ends first, then the alert is shown,
+  then the row is answered, once, even when the alert throws. A save
+  queued behind may start while the alert stands. Success and
+  `DestinationExists` publish inside the ticket. Each worker is tracked,
   so teardown joins it before the session goes, and the save settle waits
   for it. A route still queued when the coordinator closes never runs.
 - **The rescan's reload** of a changed note asks the chain
@@ -890,7 +901,7 @@ reworded.
   the Bases view export onto an existing file (accepted until the owner
   answers in CB-46's table).
 
-Facts: `SaveChainAdmissionTests` (the rescan fact; fourteen for the recover,
+Facts: `SaveChainAdmissionTests` (the rescan fact; eighteen for the recover,
 the cell edit and the toggle; the create-class theory; seven for faults,
 teardown and the settle; the Restore As and repair-lease theories) and
 `SaveChainAdmissionCensus`.
