@@ -127,7 +127,12 @@ delete and the index transaction. Two classes are scope preconditions:
   whatever canonical identity the platform layer establishes. **Satisfied
   by #1077** (`docs/plans/32_canonical_file_identity_contracts.md`): every
   mutation target binds to the filesystem's stored spelling, and the
-  markers, rows, and epochs key on it.
+  markers, rows, and epochs key on it. *Corrected by #1975 (2026-11-16):*
+  that held for a save's and a delete's marker, not for a move's. A move
+  plants under both spellings before the rename, so after a case-only
+  rename one of its two markers was keyed on a spelling the volume does
+  not store. The sweep's bind step, below, settles every marker under the
+  stored spelling.
 - **Same-protocol-version precondition.** All coordinated actors sharing a
   cache must run this protocol version. Sessions older than migration 035/036
   must not stay live across an upgrade; enforcement (open-time fencing of
@@ -164,6 +169,80 @@ Six classes, all resolved in code plus one register entry:
   directory after the rename on POSIX, so the marker-clearing index commit can
   never out-live the publication it vouches for. Windows relies on NTFS
   metadata journaling (register entry 12).
+
+## The bind step (#1975, 2026-11-16)
+
+A move marks both sides of its rename before the kernel call (INV1). After
+a case-only rename (`A.md` to `a.md`), whether it landed, was refused or was
+cut short, one of the two markers names an **alias**: a spelling the volume
+resolves to a file it stores under another. The sweep repaired that marker
+by its own spelling. The read answered through the alias, no row stood under
+that exact path, and the repair inserted a second `files` row for one file
+(contract 32 I3). Planting cannot avoid it: neither spelling is known to be
+the stored one before the rename, and a crash can fall on either side of it.
+
+The sweep now **binds** each selected marker before it repairs
+(`bind_marker_to_stored_spelling_locked`). It asks the provider for the
+stored spelling of the marker's path:
+
+- **The marker's own spelling, or nothing there.** The sweep repairs the
+  path as before. A path that names nothing still converges to deletion.
+- **The lookup fails.** The error is that marker's repair error. Nothing is
+  read through the spelling that did not resolve. A file condition is
+  contained under the marker's own key and the marker stays (contract 32
+  I7); anything else fails the query, as a repair's failure does.
+- **Another spelling.** In one writer transaction a `files` row under the
+  alias is removed, as the not-found arm removes one, and the selected
+  tokens move from the alias key to the stored key. The repair that follows
+  reads the stored spelling once and clears every token under it.
+- **A move owns the stored spelling** (a HELD marker stands under it and the
+  structural lock cannot be claimed). Nothing is done for the alias marker
+  in this sweep. The per-path deferral follows the stored spelling.
+
+Checked against the invariants:
+
+- **INV1.** Unchanged. The bind step creates no divergence and plants
+  nothing.
+- **INV2.** The bind step clears nothing. A moved token is cleared where
+  every token is: by the repair's commit after a full read under the writer
+  lock, or by supersession if it is not held. A moved token takes the
+  stored row's current epoch as its `registered_epoch` (0 with no row),
+  stamped under the writer lock after the divergence it guards, so it is
+  superseded only by a full-file index commit that lands after the move. A
+  held token stays held and is never superseded.
+- **INV3.** A moved token keeps its `created_ms`: an aged one is repaired in
+  the same sweep, a held one under the same structural claim. A marker whose
+  lookup fails stays and is tried again by every later sweep.
+- **INV4.** Containment for a bound marker is keyed by the stored spelling,
+  where the rows that serve are. Before, a marker under an alias contained
+  nothing, because no row stood under its key.
+- **Token discipline (round 22).** Only the selected tokens move. Where the
+  stored key already holds the same token, the two rows merge into the
+  stronger of each column (the later `created_ms`, so held wins; the higher
+  epoch): the move cannot fail on the table's key and cannot weaken a
+  marker.
+- **Durability rule.** The bind commit precedes no filesystem mutation and
+  stays NORMAL. Losing it puts the tokens back under the alias key, where
+  the next sweep binds them again.
+- **Scanner semantics.** Removing a row under a spelling the volume does not
+  store is what a scan's prune does. The removal is not announced by an
+  event: a host is told only that the stored note was read again
+  (`Modified`). It is therefore recorded in the change feed as a scan's
+  removal is, not as an own write.
+- **Cost.** One stored-spelling lookup for each SELECTED marker. A query
+  with no marker, a fresh marker and a scan pay nothing.
+
+The two host repair routes, `reindex_path` and `repair_or_contain_path`,
+bind their path at entry as a save does, for the same reason.
+
+Found on the way and fixed with it: the directory rule of the
+final-confirmation review ("Directory rows apply the same source-Live
+rule") asked whether a folder's old path was still there, and after a
+case-only rename of its parent the old path answers as an alias. The rule
+now keeps a directory row only when its path is stored under its own
+spelling.
+
+Facts: `session/tests/canonical_identity.rs`, the section headed #1975.
 
 ## Accepted-risk register (documented, not defects)
 
@@ -229,6 +308,11 @@ Six classes, all resolved in code plus one register entry:
 - Pre-filesystem-mutation durable commits go through `commit_durably`.
 - New task-read entry points must sweep first, bind the returned orphan guard
   across the read, and read from one snapshot.
+- A repair reads a path under the spelling the volume stores (#1975). A new
+  caller of `reindex_path_locked` binds its path first; a marker is bound by
+  the sweep. A disk-truth probe that must tell "this path is still its own
+  entry" from "this path answers as an alias" asks for the stored spelling,
+  not for existence.
 - Epoch stamps may only be written by code that read the file's bytes inside
   the same transaction (or zeroed by moves). Never stamp as bookkeeping.
 - Test seams follow the `SLATE_TEST_*` env pattern, path-substring-triggered,
