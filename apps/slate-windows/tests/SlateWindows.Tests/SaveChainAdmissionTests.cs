@@ -898,6 +898,31 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>#1673's sibling: the fixture's teardown waits for a header
+    /// read it let go. The read is parked, then released by the teardown,
+    /// and stands in the hook, before its session call, until the teardown
+    /// says it is waiting or says the session is gone; the witness counts a
+    /// read let through only by the second.</summary>
+    [Fact]
+    public void DisposingThePeersWaitsForAHeaderReadItReleased() => RunSta(() =>
+    {
+        var peers = new Peers("teardown-header-read");
+        TeardownWitness teardown = peers.Teardown;
+        try
+        {
+            peers.HoldTheHeaderReadAtTeardown();
+            peers.ParkHeaderRead();
+            peers.Properties.RefreshProperties();
+            peers.H.Wait(peers.HeaderReadParked, "premise: the header's read never parked");
+        }
+        finally
+        {
+            peers.Dispose();
+        }
+
+        teardown.AssertTheTeardownWaited("the header read the fixture released");
+    });
+
     /// <summary>The header's refresh fails while the write waits: nothing is
     /// written, one PropertyEditFailed, the lease and the ticket released,
     /// and a later save still publishes.</summary>
@@ -1421,6 +1446,7 @@ public sealed class SaveChainAdmissionTests
         private readonly WorkspaceGroupViewModel _groupA;
         private readonly WorkspaceGroupViewModel _groupB;
         private int _writes;
+        private bool _holdTheHeaderReadAtTeardown;
 
         public Peers(string label, params (string Path, string Text)[] extra)
             : this(label, Note, extra)
@@ -1461,6 +1487,16 @@ public sealed class SaveChainAdmissionTests
         public int Writes => Volatile.Read(ref _writes);
 
         public ManualResetEventSlim HeaderReadParked { get; } = new();
+
+        /// <summary>#1673: what this fixture's teardown did for the header
+        /// read it let go.</summary>
+        public TeardownWitness Teardown { get; } = new();
+
+        /// <summary>#1673: a parked header read, once released, stands in
+        /// the hook (before its session call) until this fixture's teardown
+        /// waits for it or its session is gone. Let through late, it stops
+        /// there: the hook throws, which presents as a failed read.</summary>
+        public void HoldTheHeaderReadAtTeardown() => Volatile.Write(ref _holdTheHeaderReadAtTeardown, true);
 
         public PropertyRowViewModel Row(string key) => Properties.Rows.Single(row => row.Key == key);
 
@@ -1504,6 +1540,10 @@ public sealed class SaveChainAdmissionTests
             {
                 HeaderReadParked.Set();
                 _ = _readRelease.Wait(TimeSpan.FromSeconds(30));
+                if (Volatile.Read(ref _holdTheHeaderReadAtTeardown) && Teardown.Hold())
+                {
+                    throw new IOException("the header's read ran after the fixture's session was gone (test seam)");
+                }
                 if (thenFail && !failed)
                 {
                     failed = true;
@@ -1518,13 +1558,23 @@ public sealed class SaveChainAdmissionTests
         {
             _saveRelease.Set();
             _readRelease.Set();
-            B.SaveWriteHookForTests = null;
-            Properties.RefreshReadHookForTests = null;
-            H.Dispose();
-            _saveParked.Dispose();
-            _saveRelease.Dispose();
-            _readRelease.Dispose();
-            HeaderReadParked.Dispose();
+            try
+            {
+                // #1673: a header read just let go ends before the session
+                // goes. The workspace joins its save workers; nothing joins
+                // the header's read, which calls the session right after the
+                // hook returns.
+                Teardown.DrainBeforeTheSessionGoes(Properties.WhenAllWorkDrained);
+            }
+            finally
+            {
+                B.SaveWriteHookForTests = null;
+                Properties.RefreshReadHookForTests = null;
+                H.Dispose();
+                Teardown.SessionGone();
+            }
+            // The events are left to the collector: a worker still waking on
+            // one must not meet a disposed event.
         }
     }
 }

@@ -47,6 +47,10 @@ internal sealed class TestEvidence
         _axeLabels = new(FindAxeLabels);
     }
 
+    /// <summary>The project's own compilation, for a census that binds what
+    /// the test sources say (a gate's type, a fixture's own helper).</summary>
+    internal CSharpCompilation Compilation => _compilation;
+
     /// <summary>A name is evidence when it is an executable test's method
     /// name, its declaring type's name, or its file's stem — bare or
     /// qualified by any of its directories (<c>Censuses/GraphNavigatorCensus</c>).</summary>
