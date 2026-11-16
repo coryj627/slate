@@ -730,6 +730,11 @@ public sealed partial class ShellAccessibilityTests
             // Right after the landing, the item-name census included.
             AssertAxeClean(process, "rescan-watcher-removed-reader");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)

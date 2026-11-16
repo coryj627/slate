@@ -70,6 +70,11 @@ public sealed partial class ShellAccessibilityTests
                 logDirectory,
                 TimeSpan.FromSeconds(30));
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(ShellGate_WritesItsRecentsUnderTheRunsOwnRoot), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)

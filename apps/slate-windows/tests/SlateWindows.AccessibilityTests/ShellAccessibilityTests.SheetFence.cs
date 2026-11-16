@@ -153,6 +153,11 @@ public sealed partial class ShellAccessibilityTests
 
             Assert.Equal(Note, GateFile.ReadText(Path.Combine(vault, "agenda.md")));
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PromptTabTraversalStaysInTheSheet), logs);
+            throw;
+        }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
@@ -245,6 +250,11 @@ public sealed partial class ShellAccessibilityTests
                 EditorText(editor) == typed,
                 $"The note behind the sheet changed: '{EditorText(editor)}'.");
             Assert.Equal(Note, GateFile.ReadText(Path.Combine(vault, "agenda.md")));
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PromptUndoLeavesTheNoteAlone), logs);
+            throw;
         }
         finally
         {

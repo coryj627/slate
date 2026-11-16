@@ -190,6 +190,12 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement editor = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10));
             journey(process, window, automation, editor);
         }
+        catch (Exception exception) when (exception is not Xunit.Sdk.SkipException)
+        {
+            // Under the journey's name, which is what the fact handed in.
+            PreserveEvidence(name, logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)

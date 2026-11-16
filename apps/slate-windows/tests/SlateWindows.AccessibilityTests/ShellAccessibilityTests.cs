@@ -2568,7 +2568,10 @@ public sealed partial class ShellAccessibilityTests
     /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR\&lt;testName&gt;</c> (the
     /// directory the CI job uploads) before the test's <c>finally</c>
     /// deletes it. A no-op when the variable is unset; best effort, so a
-    /// copy error never replaces the failure being reported.
+    /// copy error never replaces the failure being reported. On the lane the
+    /// folder is uploaded, failed run or not, in the artifact
+    /// <c>slate-windows-accessibility-&lt;sha&gt;-&lt;attempt&gt;</c>, which is
+    /// kept 30 days: the log is <c>&lt;testName&gt;\slate-windows.log</c> there.
     /// </summary>
     /// <remarks>
     /// The app holds <c>slate-windows.log</c> open for writing, so each
@@ -3075,6 +3078,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "task-panels");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(TaskPanels_RowsToggleAndReviewCarriesTheMacShapes), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -3305,6 +3313,11 @@ public sealed partial class ShellAccessibilityTests
                 .Patterns.Invoke.Pattern.Invoke();
 
             AssertAxeClean(process, "properties-header");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(PropertiesHeader_RowsEditSheetsAndRenameCarryTheMacShapes), logDirectory);
+            throw;
         }
         finally
         {
@@ -4579,6 +4592,11 @@ public sealed partial class ShellAccessibilityTests
             _ = WaitForElement(window, "DashboardSection0Grid", TimeSpan.FromSeconds(15));
             AssertAxeClean(process, "bases-dashboard-tab");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(BasesSurfaces_GridBuilderAndLeaves_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -4912,6 +4930,11 @@ public sealed partial class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(15)),
                 "focus never landed on the new head row after the restore");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(HistorySurfaces_LeafDiffAndRestore_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -6529,6 +6552,11 @@ public sealed partial class ShellAccessibilityTests
                 + "Topic: Quarterly sync\nNotes: \n\nCafé MARKend\n",
                 saved);
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PickerPromptsCreateAndCancel_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -6953,6 +6981,11 @@ public sealed partial class ShellAccessibilityTests
             AssertTrashProgressAbsent(window, automation);
             Assert.Equal("# Keep\n", GateFile.ReadText(Path.Combine(vaultRoot, "keep.md")));
             blocker.Unlock(0, long.MaxValue);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(TrashCancellation_WhileStructuralLockIsHeld_IsReachableAndPreservesFocus), logDirectory);
+            throw;
         }
         finally
         {
@@ -7430,6 +7463,11 @@ public sealed partial class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(15)),
                 "Ctrl+Z did not undo the committed edit");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable), logDirectory);
+            throw;
         }
         finally
         {
@@ -10804,6 +10842,11 @@ public sealed partial class ShellAccessibilityTests
                 $"the show did not move the keys into the pane; focus is {DescribeFocusedElement(automation)}");
             AssertAxeClean(process, "graph-inspector");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(GraphInspector_FiltersGroupsAndForces_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is { HasExited: false })
@@ -11676,6 +11719,11 @@ public sealed partial class ShellAccessibilityTests
                 $"the leaf re-rooted from the table did not take focus; focus is {DescribeFocusedElement(automation)}");
 
             AssertAxeClean(process, "graph-connections");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(GraphConnections_LeafWalkDepthAndReRoot_AreClean), logDirectory);
+            throw;
         }
         finally
         {

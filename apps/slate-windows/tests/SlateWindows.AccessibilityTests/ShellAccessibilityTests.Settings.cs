@@ -35,6 +35,11 @@ public sealed partial class ShellAccessibilityTests
             Assert.Contains("\"theme\": \"dark\"", GateFile.ReadText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
             AssertFirstPaint(device, logs, expectLight: false, thenChoose: null);
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(ThemePreference_ChoosingLightStaysLightAcrossARestart), logs);
+            throw;
+        }
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
@@ -118,6 +123,11 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.UP);
             Retry.WhileFalse(() => ComboValue(combo) == "Slate gold", TimeSpan.FromSeconds(5));
             WaitForGold(window, expected: true);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart), logs);
+            throw;
         }
         finally
         {

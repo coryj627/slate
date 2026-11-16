@@ -239,6 +239,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "region-stops");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(RegionStops_ArrowsStayInRegion), logs);
+            throw;
+        }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }

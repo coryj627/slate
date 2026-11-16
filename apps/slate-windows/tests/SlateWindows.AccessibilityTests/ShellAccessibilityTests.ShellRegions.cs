@@ -340,6 +340,11 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && IsDescendantOf(focused, tabs), TimeSpan.FromSeconds(10)),
                 $"F6 with focus outside the open popover did not move to the tab bar. {FocusDiagnosis()}");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(EditorPopover_F6AndShiftF6StayInsideIt), logs);
+            throw;
+        }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }

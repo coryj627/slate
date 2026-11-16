@@ -95,6 +95,12 @@ public sealed partial class ShellAccessibilityTests
             AssertRaisedAsRendered(restored, HeardFrom(heard, slateId).First(line => line.DisplayString == restored.Text));
             Assert.Equal(onDisk, GateFile.ReadText(notePath));
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(HotExit_ClosingAndReopeningKeepsAnUnsavedNote), logDirectory);
+            PreserveEvidence(Path.Combine(nameof(HotExit_ClosingAndReopeningKeepsAnUnsavedNote), "relaunch"), relaunchLogDirectory);
+            throw;
+        }
         finally
         {
             EndHotExitJourney(process, testRoot);
@@ -146,6 +152,12 @@ public sealed partial class ShellAccessibilityTests
             // R-4's runtime witness at the restored, unsaved tab.
             AssertItemNamesAreSpeakable(process, "hot-exit-kill-restored");
             Assert.Equal(onDisk, GateFile.ReadText(notePath));
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(HotExit_AKilledProcessKeepsAnUnsavedNote), logDirectory);
+            PreserveEvidence(Path.Combine(nameof(HotExit_AKilledProcessKeepsAnUnsavedNote), "relaunch"), relaunchLogDirectory);
+            throw;
         }
         finally
         {
