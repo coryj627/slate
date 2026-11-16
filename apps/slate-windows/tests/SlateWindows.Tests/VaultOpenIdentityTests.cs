@@ -12,7 +12,8 @@ namespace SlateWindows.Tests;
 /// Plan 44 WB-28 (WD24): a folder whose volume gives no file identity does
 /// not open, and the reader hears core's sentence saying why (PR 1); the
 /// open refuses a null identity behind core, fail-closed, and a weak
-/// identity opens as any other (PR 2).
+/// identity opens as any other (PR 2). Plan 47 CB-10 (#1730): a switch whose
+/// new vault does not open, for any reason, returns to the welcome view once.
 /// </summary>
 public sealed class VaultOpenIdentityTests
 {
@@ -136,6 +137,218 @@ public sealed class VaultOpenIdentityTests
         {
             File.Delete(recents);
         }
+    }
+
+    /// <summary>#1730: a switch from an open vault to one whose open fails
+    /// hands the keys to the welcome view once, at the switch's close. The
+    /// failure says why and raises no second return, whichever arm catches
+    /// it and whether it fails at the open or in the scan. No vault is left
+    /// named: the path, the name and the window's title are the welcome
+    /// view's.</summary>
+    [Theory]
+    [InlineData("a vault error at the open")]
+    [InlineData("an unexpected error at the open")]
+    [InlineData("a vault error in the scan")]
+    [InlineData("an unexpected error in the scan")]
+    public async Task ASwitchWhoseOpenFailsReturnsToWelcomeOnce(string arm)
+    {
+        (Exception fault, string site, string sentence) = Fault(arm);
+        using var first = FixtureVault.Create(1, "cb10-switch-from");
+        using var second = FixtureVault.Create(1, "cb10-switch-to");
+        string recents = Path.Combine(Path.GetTempPath(), $"cb10-recents-{System.Guid.NewGuid():N}.json");
+        var store = new RecentVaultsStore(recents);
+        var announced = new List<A11yEvent>();
+        // Both seams pass through until the fact arms one of them. The armed
+        // one records how many returns had been raised when the open failed.
+        string? armed = null;
+        int returnedToWelcome = 0;
+        int returnedWhenItFailed = -1;
+        void FailWhenArmed(string phase)
+        {
+            if (Volatile.Read(ref armed) == phase)
+            {
+                Volatile.Write(ref returnedWhenItFailed, Volatile.Read(ref returnedToWelcome));
+                throw fault;
+            }
+        }
+
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            recentVaultsStore: store,
+            announce: announced.Add,
+            sessionLoadWorker: work => Task.Run(() =>
+            {
+                FailWhenArmed("scan");
+                return work();
+            }),
+            openSession: root => Task.Run(() =>
+            {
+                FailWhenArmed("open");
+                return VaultSession.OpenFilesystem(root);
+            }));
+        try
+        {
+            await lifecycle.OpenVaultAsync(first.Root);
+            Assert.True(lifecycle.IsVaultOpen, "premise: the first vault is open");
+            lifecycle.ReturnedToWelcome += (_, _) => Interlocked.Increment(ref returnedToWelcome);
+            announced.Clear();
+            Volatile.Write(ref armed, site);
+
+            await lifecycle.OpenVaultAsync(second.Root);
+
+            // The one return is the switch's close: it was raised before the
+            // open failed, and the failure raised none.
+            Assert.Equal(1, Volatile.Read(ref returnedWhenItFailed));
+            Assert.Equal(1, Volatile.Read(ref returnedToWelcome));
+            Assert.False(lifecycle.IsVaultOpen);
+            Assert.Null(lifecycle.Workspace);
+            Assert.Equal(sentence, lifecycle.StatusText);
+            A11yEvent.HostComposed said = Assert.Single(announced.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(sentence, said.Text);
+            Assert.Equal(A11yPriority.High, said.Priority);
+            AssertNoVaultIsNamed(lifecycle);
+            if (site == "open")
+            {
+                // The open never got as far as its vault-opened line or the recents.
+                Assert.DoesNotContain(announced, @event => @event is A11yEvent.VaultOpened);
+                Assert.DoesNotContain(store.Load(), recent => string.Equals(recent.Path, second.Root, System.StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                // The scan runs after the vault-opened line and the record,
+                // and the failure publishes what was recorded.
+                _ = Assert.Single(announced, @event => @event is A11yEvent.VaultOpened);
+                Assert.Equal(second.Root, lifecycle.RecentVaults[0].Path);
+            }
+        }
+        finally
+        {
+            File.Delete(recents);
+        }
+    }
+
+    /// <summary>#1730's other half: once the new vault has shown, the welcome
+    /// view has given way, so a failure after that hands the keys back to it:
+    /// it returns to the welcome view again. A switch then raises two returns,
+    /// its close and the failure after the vault showed.</summary>
+    [Fact]
+    public async Task ASwitchThatFailsAfterTheNewVaultShowedReturnsToWelcomeAgain()
+    {
+        using var first = FixtureVault.Create(1, "cb10-shown-from");
+        using var second = FixtureVault.Create(1, "cb10-shown-to");
+        string recents = Path.Combine(Path.GetTempPath(), $"cb10-recents-{System.Guid.NewGuid():N}.json");
+        var store = new RecentVaultsStore(recents);
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            recentVaultsStore: store);
+        try
+        {
+            await lifecycle.OpenVaultAsync(first.Root);
+            Assert.True(lifecycle.IsVaultOpen, "premise: the first vault is open");
+            int returnedToWelcome = 0;
+            lifecycle.ReturnedToWelcome += (_, _) => returnedToWelcome++;
+            // The publication's last step throws, once: the new vault has
+            // shown by then (WorkspaceReady is raised after IsVaultOpen).
+            bool shownWhenItThrew = false;
+            void ThrowOnce(object? sender, EventArgs e)
+            {
+                lifecycle.WorkspaceReady -= ThrowOnce;
+                shownWhenItThrew = lifecycle.IsVaultOpen;
+                throw new InvalidOperationException("injected publish failure");
+            }
+
+            lifecycle.WorkspaceReady += ThrowOnce;
+
+            await lifecycle.OpenVaultAsync(second.Root);
+
+            Assert.True(shownWhenItThrew, "premise: the failure came after the new vault showed");
+            Assert.Equal(2, returnedToWelcome);
+            Assert.False(lifecycle.IsVaultOpen);
+            Assert.Null(lifecycle.Workspace);
+            Assert.Equal("Unexpected vault error: injected publish failure", lifecycle.StatusText);
+            AssertNoVaultIsNamed(lifecycle);
+        }
+        finally
+        {
+            File.Delete(recents);
+        }
+    }
+
+    /// <summary>Found on the way to #1730: an open that fails after it named
+    /// its vault (in its scan, or while its workspace is built) left the
+    /// vault's name and path in place, so the window's title named a vault
+    /// that was not open, over the welcome view. A first open shows it as a
+    /// switch does.</summary>
+    [Theory]
+    [InlineData("a vault error in the scan")]
+    [InlineData("an unexpected error in the scan")]
+    public async Task AnOpenThatFailsAfterItNamedTheVaultLeavesNoVaultNamed(string arm)
+    {
+        (Exception fault, _, string sentence) = Fault(arm);
+        using var fixture = FixtureVault.Create(1, "cb10-named");
+        string recents = Path.Combine(Path.GetTempPath(), $"cb10-recents-{System.Guid.NewGuid():N}.json");
+        var store = new RecentVaultsStore(recents);
+        string? nameWhenItFailed = null;
+        VaultLifecycleViewModel? opening = null;
+        ScanReport FailOnceNamed()
+        {
+            Volatile.Write(ref nameWhenItFailed, Volatile.Read(ref opening)!.VaultDisplayName);
+            throw fault;
+        }
+
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            recentVaultsStore: store,
+            sessionLoadWorker: _ => Task.Run(FailOnceNamed));
+        Volatile.Write(ref opening, lifecycle);
+        try
+        {
+            await lifecycle.OpenVaultAsync(fixture.Root);
+
+            Assert.Equal(
+                RecentVault.FromPath(fixture.Root).DisplayName,
+                Volatile.Read(ref nameWhenItFailed));
+            Assert.Equal(sentence, lifecycle.StatusText);
+            Assert.False(lifecycle.IsVaultOpen);
+            AssertNoVaultIsNamed(lifecycle);
+        }
+        finally
+        {
+            File.Delete(recents);
+        }
+    }
+
+    /// <summary>The welcome view's own state: no vault path, no vault name,
+    /// and core's title for no vault and no tab.</summary>
+    private static void AssertNoVaultIsNamed(VaultLifecycleViewModel lifecycle)
+    {
+        Assert.Equal(SlateUniffiMethods.WindowTitle(null, string.Empty), lifecycle.WindowTitle);
+        Assert.Equal(string.Empty, lifecycle.VaultDisplayName);
+        Assert.Equal(string.Empty, lifecycle.VaultPath);
+    }
+
+    private static (Exception Fault, string Site, string Sentence) Fault(string arm) => arm switch
+    {
+        "a vault error at the open" => VaultFault("injected open failure", "open"),
+        "an unexpected error at the open" => (
+            new InvalidOperationException("injected open failure"),
+            "open",
+            "Unexpected vault error: injected open failure"),
+        "a vault error in the scan" => VaultFault("injected scan failure", "scan"),
+        "an unexpected error in the scan" => (
+            new InvalidOperationException("injected scan failure"),
+            "scan",
+            "Unexpected vault error: injected scan failure"),
+        _ => throw new ArgumentOutOfRangeException(nameof(arm), arm, "no such arm"),
+    };
+
+    private static (Exception Fault, string Site, string Sentence) VaultFault(string message, string site)
+    {
+        var fault = new VaultException.Io(message);
+        return (fault, site, "Could not open vault: " + SlateUniffiMethods.VaultErrorDetail(fault));
     }
 
     [Fact]
