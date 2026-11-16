@@ -39,6 +39,7 @@ public sealed partial class ReadingDiagramTests
         private readonly CancelToken _cancel;
         private readonly Window? _window;
         private readonly Thread _thread = Thread.CurrentThread;
+        private readonly List<ReadingContentViewModel> _models = [];
 
         private StageHarness(string name, string markdown, Action<ReadingContentViewModel>? configure, bool hosted)
         {
@@ -56,6 +57,7 @@ public sealed partial class ReadingDiagramTests
                 startInteractionBackgroundWork: false);
             Tab.ReadingCreatedForTests = model =>
             {
+                _models.Add(model);
                 model.DiagramStageGateForTests = Gate;
                 model.DiagramsCompleted += (document, _) => Completed.Add(document);
                 configure?.Invoke(model);
@@ -109,6 +111,19 @@ public sealed partial class ReadingDiagramTests
 
         public ReadingContentViewModel Model => Tab.Reading!;
 
+        /// <summary>#1673: what this harness's teardown did for the stage it
+        /// let go.</summary>
+        public TeardownWitness Teardown { get; } = new();
+
+        /// <summary>#1673: the stage, once released, stands in its fault
+        /// seam (past its token check, before its session call) until this
+        /// harness's teardown waits for it or its session is gone. Let
+        /// through late, it stops there: the seam answers a fault.</summary>
+        public void HoldTheStageAtTeardown() =>
+            Model.DiagramFaultForTests = () => Teardown.Hold()
+                ? new VaultException.Io("the stage ran after the harness's session was gone")
+                : null;
+
         /// <summary>The surface TextPattern every reader uses.</summary>
         public string PatternText()
         {
@@ -138,11 +153,28 @@ public sealed partial class ReadingDiagramTests
         {
             Gate.Set();
             ReadingSurface.ApplyProbeForTests = null;
-            _window?.Close();
-            Tab.Dispose();
-            Session.Dispose();
-            _cancel.Dispose();
-            _fixture.Dispose();
+            try
+            {
+                _window?.Close();
+                Tab.Dispose();
+                // #1673: a stage the gate just let go ends before the session
+                // goes. It checks its token and then calls the session, so
+                // one already past the check when the tab retired it would
+                // call a disposed session. The tab's Dispose drops its
+                // reading model, so the drain is over the models recorded as
+                // they were created; a decode in flight may take its whole
+                // tolerance (#1949), and a stage here decodes two at most.
+                Teardown.DrainBeforeTheSessionGoes(
+                    () => Task.WhenAll(_models.Select(model => model.WhenRefreshWorkDrained())),
+                    UnhurriedSvgDecodes.LandingWait(2));
+            }
+            finally
+            {
+                Session.Dispose();
+                Teardown.SessionGone();
+                _cancel.Dispose();
+                _fixture.Dispose();
+            }
         }
     }
 
@@ -199,6 +231,36 @@ public sealed partial class ReadingDiagramTests
             Array.Empty<MathBlock>(),
             session.GetDiagramBlocks("note0.md"));
         return built.Document.Blocks.OfType<Paragraph>().Single(ReadingSemantics.IsDiagramBlock);
+    }
+
+    /// <summary>#1673: the harness's teardown waits for the stage its gate
+    /// let go. The stage is released first and stands in its fault seam,
+    /// past its token check and before its session call, until the teardown
+    /// says it is waiting or says the session is gone; the witness counts a
+    /// stage let through only by the second.</summary>
+    [Fact]
+    public void DisposingTheHarnessWaitsForAStageItReleased()
+    {
+        RunSta(() =>
+        {
+            StageHarness harness = StageHarness.Open("reading-diagram-teardown", StageNote);
+            TeardownWitness teardown = harness.Teardown;
+            try
+            {
+                Assert.True(harness.Model.DiagramsPendingForTests, "premise: the stage is parked at its gate");
+                harness.HoldTheStageAtTeardown();
+                harness.Gate.Set();
+                teardown.WaitUntilEntered();
+            }
+            finally
+            {
+                harness.Dispose();
+            }
+
+            teardown.WaitUntilPassed();
+            Assert.Equal(0, teardown.LateRuns);
+            Assert.True(teardown.DrainedBeforeGone, "the harness's session went before the stage it released had ended");
+        });
     }
 
     [Fact]
