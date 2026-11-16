@@ -848,11 +848,12 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
-      # WB-17 (#1376, #1386): contracts 34 and 35 carry tables their
-      # generators write from the document and the Windows tree, generated
-      # binding included — so the checks run here, after the binding exists
-      # (the ubuntu windows-model job has none). A record moved above a
-      # pointer, or a renamed symbol, fails the lane instead of drifting.
+      # WB-17 (#1376, #1386) and #1699: contracts 34, 35 and 38 carry tables
+      # their generators write from the document and the Windows tree,
+      # generated binding included — so the checks run here, after the
+      # binding exists (the ubuntu windows-model job has none). A record
+      # moved above a pointer, a renamed symbol, or a ledger row placed by
+      # hand fails the lane instead of drifting.
       - name: Set up Python (the reconciliation checks)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -861,8 +862,17 @@ jobs:
         run: python -I scripts/canvas_reconciliation.py --check
       - name: Verify contract 35's reconciliation tables are the generator's output
         run: python -I scripts/graph_reconciliation.py --check
+      # #1699: the generator runs one fact of the Release unit build, so
+      # the step is under the device-state guard, like Test (#1331). A
+      # stale ledger prints the rows to copy into the document. It runs in
+      # both tiers of the lane (#1945): a Mac-only pull request is the one
+      # that moves ledger rows.
+      - name: Verify contract 38's trigger ledger is the generator's output
+        run: pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 -- python -I scripts/a11y_trigger_ledger.py --check
       - name: Test that the reconciliation checks catch a stale pointer
         run: python -I -m unittest discover -v -s scripts/tests -p test_reconciliation_check_flags_a_stale_pointer.py
+      - name: Test that the ledger check catches a reordered row
+        run: python -I -m unittest discover -v -s scripts/tests -p test_a11y_trigger_ledger_check_flags_a_reordered_row.py
 
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       # An STA fact that times out without pumping has the runtime's
@@ -1008,7 +1018,9 @@ jobs:
       # the workspace root. Named by run id, not by attempt (#1643): a
       # rerun of only the failed shell gate downloads what this job built
       # in an earlier attempt (run 39873324510's attempt 2 did), within the
-      # artifact's one-day retention; a rerun of this job replaces it
+      # artifact's seven days (#1647), the app results artifact's own; after
+      # that the gate's download fails with "Artifact not found", and the
+      # way out is "Re-run all jobs". A rerun of this job replaces it
       # (overwrite) before its gate runs again.
       - name: Upload FlaUI gate binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -1021,7 +1033,7 @@ jobs:
             apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/**/*
             apps/slate-windows/tools/GridConformanceHost/bin/Release/**/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
       # A census-tier pull request changes no Windows source (#1945).
       - name: Format gate (dotnet format --verify-no-changes)
@@ -1351,8 +1363,6 @@ jobs:
       - name: Test model coverage verifier
         run: python3 -m unittest discover -s scripts/tests -p test_windows_model_shards.py
 
-      # W6-2 PR F (F7, IPJ-2-1): the committed parity matrix is the
-      # generator's output for this tree — drift fails the lane.
       - name: Download every model shard report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -1475,7 +1485,9 @@ jobs:
       - name: Every Windows test that reads a census-only path carries the census trait
         run: python3 scripts/check_windows_census_trait.py
 
-      # Here, not in the model job, so the census tier checks it too: the
+      # W6-2 PR F (F7, IPJ-2-1): the committed parity matrix is the
+      # generator's output for this tree, and drift fails the lane. Here,
+      # not in the model job, so the census tier checks it too: the
       # generator reads the Mac sources and the help catalog.
       - name: Verify the parity matrix is the generator's output
         run: python3 scripts/generate-parity-matrix.py --check

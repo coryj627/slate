@@ -23,7 +23,10 @@ not match a path, or if `on.pull_request` carries a list of its own. It reads:
   census checks for existence;
 * the checklist and contract links in `at_navigation_map.md`, which the AT
   navigation map census opens relative to its folder;
-* `docs/...` literals in the scripts the workflow runs.
+* `docs/...` literals in the scripts the workflow runs, as `python` or
+  `python3`, with or without `-I`, and the paths such a script joins from
+  string literals segment by segment (`os.path.join(ROOT, "docs", "plans",
+  "34_canvas_contracts.md")`, the same as a tuple, a list or `/` operands).
 
 A directory path (no file extension) requires the whole folder to be covered.
 A path built from a helper's parameter is resolved through every call of
@@ -31,12 +34,20 @@ that helper in the same file; a call whose argument is not a string literal
 or same-file constant, or a helper with no call, fails the check, naming the
 file, so a new kind of dynamic read is reviewed rather than silently missed.
 
+That holds for the Windows sources only. The scan of a script has a blind
+spot: a docs path a script builds through anything but string literals (a
+variable, an f-string, a concatenation) is not seen. A segment chain with
+such a segment is skipped whole, never read as its literal prefix, because
+`"docs", "plans", name` is not a read of the folder docs/plans. A script
+the scan cannot parse fails the check.
+
 Exit 0 when every path is covered by the one list; exit 1 with the problems
 otherwise.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import re
@@ -63,7 +74,7 @@ _CHAIN_ARG = re.compile(r'"([^"\\]*)"|(\w+)')
 _DOCS_LITERAL = re.compile(r'"(docs/(?:plans|help)/[^"\\\s]+)"')
 _PLAN_RELATIVE = re.compile(r'"(\d\d_[A-Za-z0-9_-]+(?:\.md|/[^"\\\s]+))"')
 _MAP_LINK = re.compile(r'(?<![\w/.])((?:\.\./)?(?:reports|specs)/[A-Za-z0-9_./-]+\.md|\.\./\d\d_[A-Za-z0-9_-]+\.md)')
-_SCRIPT_RUN = re.compile(r'python3\s+(scripts/[A-Za-z0-9_./-]+\.py)')
+_SCRIPT_RUN = re.compile(r'python3?(?:\s+-I)?\s+(scripts/[A-Za-z0-9_./-]+\.py)')
 _SCRIPT_DOCS = re.compile(r'["\'](docs/(?:plans|help)(?:/[^"\'\s]*)?)["\']')
 
 
@@ -209,15 +220,82 @@ def at_map_reads(repo: Path) -> dict[str, set[str]]:
     return reads
 
 
-def script_reads(repo: Path, workflow_text: str) -> dict[str, set[str]]:
+def _literal(node: ast.expr) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _division_operands(node: ast.expr) -> list[ast.expr]:
+    """`a / b / c` as [a, b, c]: the operator joins path segments."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _division_operands(node.left) + [node.right]
+    return [node]
+
+
+def segment_chains(tree: ast.AST) -> list[str]:
+    """The docs paths a script names segment by segment: `"docs", "plans"` or
+    `"docs", "help"` and the string literals after them, as the arguments of a
+    call, the items of a tuple or list, or the operands of `/`.
+
+    A chain is read only when every segment after it is a string literal. One
+    that goes on with anything else is skipped whole: its literal prefix is
+    not the path it names (`"docs", "plans", name` is not a read of the folder
+    docs/plans).
+    """
+    sequences: list[list[ast.expr]] = []
+    inner: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            sequences.append(node.args)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            sequences.append(node.elts)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner:
+            # ast.walk yields the outermost `/` of a run first; its left operands are the same run.
+            below = node.left
+            while isinstance(below, ast.BinOp) and isinstance(below.op, ast.Div):
+                inner.add(id(below))
+                below = below.left
+            sequences.append(_division_operands(node))
+    paths: list[str] = []
+    for items in sequences:
+        at = 0
+        while at + 1 < len(items):
+            if _literal(items[at]) != "docs" or _literal(items[at + 1]) not in ("plans", "help"):
+                at += 1
+                continue
+            parts = ["docs", _literal(items[at + 1])]
+            at += 2
+            while at < len(items) and _literal(items[at]) is not None:
+                parts.extend(segment for segment in _literal(items[at]).split("/") if segment)
+                at += 1
+            if at == len(items):
+                paths.append("/".join(parts))
+    return paths
+
+
+def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], list[str]]:
+    """The docs paths the scripts the workflow runs name, and the scripts the
+    scan could not parse. A script is one run as `python` or `python3`, with or
+    without `-I`."""
     reads: dict[str, set[str]] = {}
+    unparsed: list[str] = []
     for script in sorted(set(_SCRIPT_RUN.findall(workflow_text))):
         path = repo / script
         if not path.is_file() or path.name == Path(__file__).name:
             continue
-        for found in _SCRIPT_DOCS.findall(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        for found in _SCRIPT_DOCS.findall(text):
             reads.setdefault(found.rstrip("/"), set()).add(script)
-    return reads
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as error:
+            unparsed.append(
+                f"{script}: cannot be parsed (line {error.lineno}: {error.msg}), so the docs paths it joins from "
+                "segments were not checked; the docs census job's Python must be able to read every script the workflow runs"
+            )
+            continue
+        for found in segment_chains(tree):
+            reads.setdefault(found, set()).add(script)
+    return reads, unparsed
 
 
 def check(repo: Path = REPO) -> list[str]:
@@ -234,10 +312,12 @@ def check(repo: Path = REPO) -> list[str]:
         )
 
     reads, unresolved = source_reads(repo)
-    for extra in (designation_reads(repo), at_map_reads(repo), script_reads(repo, workflow_text)):
+    from_scripts, unparsed = script_reads(repo, workflow_text)
+    for extra in (designation_reads(repo), at_map_reads(repo), from_scripts):
         for path, sources in extra.items():
             reads.setdefault(path, set()).update(sources)
     problems.extend(unresolved)
+    problems.extend(unparsed)
 
     for path in sorted(reads):
         if not covered(requirement(path), lists["push"]):

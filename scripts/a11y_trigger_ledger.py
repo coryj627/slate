@@ -14,14 +14,21 @@ second regex interpretation of C#. Bindings must already be regenerated.
 Both commands obtain a fresh inventory through the test project. --inventory
 is an explicit development shortcut for inspecting an already exported file.
 The ordinary census independently reads the current trees and committed table.
+
+The Windows lane runs --check (#1699). On a stale ledger it prints each
+differing row of the document with the generator's row under it, as a unified
+diff with no context lines, so the rows can be copied from the lane's log by
+a contributor who has no Windows Release build to run --write on.
 """
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 REPO = Path(__file__).resolve().parent.parent
@@ -113,14 +120,19 @@ def render(data: dict, config: dict) -> str:
     return "\n".join(lines + ["", END])
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
     parser.add_argument("--inventory", type=Path)
-    args = parser.parse_args()
-    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    args = parser.parse_args(argv)
+    # Nearly every row holds an em dash. The lane runs this as `python -I`,
+    # which ignores PYTHONUTF8, and a Windows pipe defaults to the ANSI code
+    # page: a row printed in it would not paste back into the document.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    config =json.loads(CONFIG.read_text(encoding="utf-8"))
     data = json.loads(args.inventory.read_text(encoding="utf-8")) if args.inventory else inventory()
     generated = render(data, config)
     original = DOCUMENT.read_bytes().decode("utf-8")
@@ -133,7 +145,20 @@ def main() -> None:
         updated = normalized.rstrip() + "\n\n" + generated + "\n"
     if args.check:
         if normalized != updated:
-            raise SystemExit("A11y trigger ledger is stale; regenerate with --write.")
+            # A contributor without a Windows Release build cannot run the
+            # generator, so the lane's log has to carry the rows to copy
+            # (#1699). The diff is of the whole document with no context
+            # lines, so each `@@` header gives a row's line number in it.
+            for line in difflib.unified_diff(normalized.split("\n"), updated.split("\n"),
+                                             fromfile=f"{DOCUMENT.name} (committed)",
+                                             tofile=f"{DOCUMENT.name} (generator)", n=0, lineterm=""):
+                print(line)
+            # The sentence goes to stderr; the rows it points at go out first.
+            sys.stdout.flush()
+            raise SystemExit(
+                "A11y trigger ledger is stale. In docs/plans/38_notification_dispatcher_contracts.md, replace each "
+                "'-' row printed above with the '+' row under it (the '@@' header gives the line), or regenerate "
+                "with --write on a Windows Release build.")
         print(f"A11y ledger current: {len(data['Keys'])} top-level keys.")
     elif args.write:
         DOCUMENT.write_bytes(updated.replace("\n", newline).encode("utf-8"))
