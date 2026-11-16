@@ -1724,9 +1724,73 @@ public sealed class SaveChainAdmissionTests
         held.AssertHeldUntilReleased();
     });
 
+    /// <summary>Found and fixed with the tabless write (the red team's
+    /// F1): a cell write that goes through a tab runs on the tab's
+    /// property-write worker, whose catch leaves out of memory, stack
+    /// overflow and access violation alone. Such a fault posts no
+    /// completion, so without a backstop the operation never ends, the
+    /// note's chain stays held and its property lease is never released.
+    /// Both ways into that worker: a tab that opened while a tabless write
+    /// waited, and a cell edit asked with the tab already open.</summary>
+    [Theory]
+    [InlineData("the tab opened while the write waited")]
+    [InlineData("the tab was open at the request")]
+    public void ABasesCellWriteThroughATabWhoseWorkerFaultsOutsideItsCatchStillEnds(string route) => RunSta(() =>
+    {
+        using var h = new Vault("cell-tab-worker-faults", ("a.md", Note), ("Notes.base", NotesBase));
+        bool openAtTheRequest = route == "the tab was open at the request";
+        WorkspaceTabViewModel? opened = openAtTheRequest ? h.OpenNow("a.md") : null;
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            opened ??= h.OpenNow("a.md");
+            opened.PropertyWriteHookForTests = () =>
+                throw new OutOfMemoryException("a fault the worker's catch does not take (test seam)");
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !h.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the cell write ending after its worker faulted");
+            Assert.True(held.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellEditFailed);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+
+            bool ran = false;
+            Task<bool> later = h.Workspace.SavesForTests.Admit("a.md", _ =>
+            {
+                ran = true;
+                return Task.CompletedTask;
+            });
+            h.PumpUntil(() => later.IsCompleted, "an operation admitted after the faulted write");
+            Assert.True(ran && later.Result, "the note's chain was still held");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            if (opened is not null)
+            {
+                opened.PropertyWriteHookForTests = null;
+            }
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>The base's row for a.md and its status column, with no tab
     /// on the note.</summary>
     private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) TablessStatusCell(Vault h)
+    {
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+        return StatusCellOf(h);
+    }
+
+    /// <summary>The base's row for a.md and its status column.</summary>
+    private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) StatusCellOf(Vault h)
     {
         BaseDocumentViewModel document = h.Workspace.BaseDocumentFor("Notes.base");
         h.PumpUntil(
@@ -1734,7 +1798,6 @@ public sealed class SaveChainAdmissionTests
             "the base's rows");
         BasesRow row = document.Result!.Rows.Single(candidate => candidate.FilePath == "a.md");
         BasesColumn column = document.Result.Columns.Single(candidate => candidate.Id == "note.status");
-        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
         h.Events.Clear();
         return (document, row, column);
     }

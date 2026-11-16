@@ -1952,11 +1952,34 @@ internal sealed partial class WorkspaceViewModel
             // The worker faulted outside the body's catch, so no publication
             // was posted: the write still fails aloud, the lease goes, and
             // the operation ends carrying the fault.
-            _ = worker.ContinueWith(
-                faulted =>
+            EndCellWriteIfTheWorkerFaults(worker, path, done);
+        }
+        catch (Exception exception)
+        {
+            ReleasePropertyWriteLease(path);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
+    }
+
+    /// <summary>The backstop of a cell write's worker, for either route. When
+    /// the worker's task faults, its body posted no completion. On the save
+    /// dispatcher, and only while the operation has not ended, the lease is
+    /// released once, the write fails aloud with the existing sentence (in a
+    /// try, so an announcer that throws changes nothing), and the operation
+    /// ends carrying the fault.</summary>
+    private void EndCellWriteIfTheWorkerFaults(Task worker, string path, TaskCompletionSource done) =>
+        _ = worker.ContinueWith(
+            faulted =>
+            {
+                Exception fault = faulted.Exception!.GetBaseException();
+                RunOnSaveDispatcher(() =>
                 {
-                    Exception fault = faulted.Exception!.GetBaseException();
-                    RunOnSaveDispatcher(() => EndTablessWrite(
+                    if (done.Task.IsCompleted)
+                    {
+                        return;
+                    }
+                    EndTablessWrite(
                         path,
                         done,
                         () =>
@@ -1966,19 +1989,12 @@ internal sealed partial class WorkspaceViewModel
                                 _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(fault)));
                             }
                         },
-                        fault));
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
-        }
-        catch (Exception exception)
-        {
-            ReleasePropertyWriteLease(path);
-            _ = done.TrySetException(exception);
-        }
-        return done.Task;
-    }
+                        fault);
+                });
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     /// <summary>The end of a tabless cell write, on the dispatcher: the
     /// lease is released where it was acquired, before anything is spoken,
@@ -2070,7 +2086,7 @@ internal sealed partial class WorkspaceViewModel
                 EndUnwritten(new A11yEvent.PropertyEditConflict(fileName));
                 return done.Task;
             }
-            _saves.TrackWorker(tab.WriteProperty(
+            Task worker = tab.WriteProperty(
                 tab.SavedContentHash,
                 expectedHash => value is null
                     ? _session.DeleteProperty(path, key, expectedHash)
@@ -2089,7 +2105,13 @@ internal sealed partial class WorkspaceViewModel
                         }
                         CompleteBasesWrite(document, row, column, value);
                     },
-                    done))));
+                    done)));
+            _saves.TrackWorker(worker);
+            // The backstop. The tab's property-write worker catches every
+            // fault but out of memory, stack overflow and access violation.
+            // One of those posts no completion, so nothing above would end
+            // the operation or release the lease.
+            EndCellWriteIfTheWorkerFaults(worker, path, done);
         }
         catch (Exception exception)
         {
