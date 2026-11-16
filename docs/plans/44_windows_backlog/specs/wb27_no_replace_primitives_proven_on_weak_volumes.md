@@ -37,6 +37,22 @@ below, it wins.
   runner (its jobs run elevated) and runs five of the six gated facts on
   both, on every lane run. The case-only fact is skipped by name until
   #1727 is fixed. SMB stays the recorded run: the job has no share.
+- **All six gated facts run on CI, 2026-11-16** (plan 47 CB-13, #1727).
+  The job no longer skips `weak_volume_case_only_rename_keeps_the_entry`.
+  The fact now makes six case-only renames per volume (five file-name
+  shapes and a folder), records each before it asserts, and accepts
+  either outcome that tells the truth: the rename landed and the listing
+  holds the requested spelling, or the provider refused it in core's
+  sentence and the listing holds the old one. A reported success that
+  kept the old spelling is the breach. It also makes each rename by hand
+  and records the stored name's two reads with the source handle still
+  open, and what the vault watcher hears around a case-only rename. The
+  job prints the Windows build its observations come from, and its
+  session facts' step runs when the provider facts' step failed. On the
+  runner's FAT32 and exFAT volumes (Windows Server 10.0.20348.5761) all
+  six renames were reported as done and not made on `main`'s product
+  code (run 43935566159), and all six are refused in core's sentence
+  with the read-back in (run 43943403456): doc 24's P-W3.
 - **A third non-ignored fact.**
   `weak_volume_gate_decides_each_kind_from_what_the_volume_reports`. The
   gate is split in two:

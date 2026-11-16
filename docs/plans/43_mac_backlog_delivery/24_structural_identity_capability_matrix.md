@@ -169,10 +169,12 @@ folder, and against a table of the reports it judges, on every machine
 | --- | --- | --- | --- | --- | --- |
 | NTFS (the temp directory) | Refused | Refused: the primitive with an occupant made before its call, and one made concurrently | Refused | One entry; identity kept | Not through the WB-27 seam. The NTFS evidence is:<br>• create: `create_exclusive_collision_preserves_winner_bytes_and_cleans_staged_temp`;<br>• rename: `rename_no_replace_atomic_refuses_occupied_destination` and `rename_no_replace_destination_creation_race_never_clobbers`, which call the primitive directly (`fs.rs`);<br>• identity and case-only: `conditional_rename_rejects_replacements_and_collisions` and `conditional_rename_handles_case_only_inverse_and_directory_moves` (`windows_entry_tests.rs`) |
 | SMB 3.1 over `\\localhost\C$` (loopback to an NTFS volume; the gate reads the protocol) | Refused by the kernel publish: `DestinationExists`, occupant unchanged, stage cleaned | Refused by the kernel: `DestinationExists`; source and occupant unchanged | Refused by the kernel: `Io(AlreadyExists)`; both entries unchanged | One entry, new spelling, `FILE_ID_INFO` unchanged. The identity inverse, which makes only the no-replace call, performs the same case-only rename | [P-W1] |
-| FAT32 (1 GB VHD, probed 2026-11-01) | Refused by the kernel publish: `DestinationExists`, occupant unchanged | Refused by the kernel; source and occupant unchanged | Not reached: no `FILE_ID_INFO` (error 87), so the identity rename refuses before the kernel call; both entries unchanged | **Reports success and keeps the old spelling** (#1727). `MoveFileEx` does the same, in every case shape tried | [P-W2] |
-| exFAT (1 GB VHD, probed 2026-11-01) | As FAT32 | As FAT32 | As FAT32 | As FAT32 (#1727) | [P-W2] |
+| FAT32 (1 GB VHD, probed 2026-11-01) | Refused by the kernel publish: `DestinationExists`, occupant unchanged | Refused by the kernel; source and occupant unchanged | Not reached: no `FILE_ID_INFO` (error 87), so the identity rename refuses before the kernel call; both entries unchanged | **The volume reports success and keeps the old spelling** (#1727), on Windows 11 10.0.26300 [P-W2] and on Windows Server 10.0.20348.5761 [P-W3]. `MoveFileEx` does the same, in every case shape tried. From plan 47 CB-13 the provider reads the stored name back and refuses the rename in core's sentence (§6) | [P-W2] [P-W3] |
+| exFAT (1 GB VHD, probed 2026-11-01) | As FAT32 | As FAT32 | As FAT32 | As FAT32 (#1727), on both machines | [P-W2] [P-W3] |
 
-No replacing rename was observed, so no refusal branch shipped.
+No replacing rename was observed, so no refusal branch shipped. The one
+refusal that did ship is not for a replacement: it is the case-only
+rename a volume reports as done and does not make (§6, plan 47 CB-13).
 
 ## 4. What an open-descriptor identity check can and cannot guarantee
 
@@ -219,8 +221,8 @@ serial number plus the 128-bit file id.
 | --- | --- | --- | --- | --- | --- |
 | NTFS | Yes (existing facts) | Yes | Yes, identity kept | Yes | Not observed: a new file at an old name gets a different id |
 | SMB over `\\localhost\C$` (Windows 11 client and server, NTFS underneath) | Yes [P-W1] | Yes, at the kernel | Yes, identity kept | Yes: the id survives a rename, and a stale identity is refused | Not observed: a new file at the old name got a different id |
-| FAT32 | Yes [P-W2] | Yes, at the kernel | **No**: reports success, the spelling is unchanged (#1727) | No `FILE_ID_INFO` (error 87). The fallback file index (`GetFileInformationByHandle`) is stable within a mount and distinct per entry, and **changes when the entry is renamed** | Not probed |
-| exFAT | Yes [P-W2] | Yes, at the kernel | **No**, as FAT32 (#1727) | As FAT32 | Not probed |
+| FAT32 | Yes [P-W2] [P-W3] | Yes, at the kernel | **No**: the volume reports success and the spelling is unchanged, for a file and for a folder (#1727). The provider refuses it (§6) | No `FILE_ID_INFO` (error 87). The fallback file index (`GetFileInformationByHandle`) is stable within a mount and distinct per entry, and **changes when the entry is renamed** | Not probed |
+| exFAT | Yes [P-W2] [P-W3] | Yes, at the kernel | **No**, as FAT32 (#1727) | As FAT32 | Not probed |
 
 ## 6. Case-only and normalization-only renames
 
@@ -283,6 +285,67 @@ name to a long name, and a long name to a long name. A retry 16 s later
 (past the file-name tunnel cache) does not change it either. The
 provider reports the rename as done, so the index and the disk
 disagree: #1727.
+
+**From plan 47 CB-13 (2026-11-16, owner decision CD7) the provider no
+longer reports that rename as done.** When the destination is the source
+under another spelling, `rename_beneath_root` reads the entry's stored
+name back after the kernel call (`windows_entry::stored_name`: an
+attribute open of the name in the pinned folder, then the last component
+of the handle's final path). Where the stored name is not the requested
+one, the rename fails with core's sentence
+(`a11y::case_only_rename_refused`): "This drive keeps the capitalization
+a file was created with, so Note.md was not renamed to note.md." The
+index row, the links and the report do not move, and both spellings are
+recorded as the provider's own echo. The rule names no file system: it
+refuses wherever the volume kept the old spelling, and NTFS and SMB over
+NTFS, which apply the rename, read back the requested name and are
+unchanged. A folder gets the same check and the same sentence with its
+own names. The rename is not made in two steps through a temporary name,
+because FAT32's file index changes on a rename (§5).
+
+What each machine showed, on FAT32 and on exFAT alike:
+
+| Case-only rename | Windows 11 10.0.26300, the owner's desktop, 2026-11-01 [P-W2] | Windows Server 10.0.20348.5761, the CI runner, 2026-11-16 [P-W3] | With the read-back in [P-W3] |
+| --- | --- | --- | --- |
+| `Note.md` → `note.md` | success reported, old spelling kept | success reported, old spelling kept | refused in core's sentence; the listing unchanged |
+| `UPPER.MD` → `upper.md` (the owner's run: `NOTE.MD` → `note.md`) | as above | as above | as above |
+| `lower.md` → `Lower.md` (the owner's run: `note.md` → `Note.md`) | as above | as above | as above |
+| `Long Note.md` → `long note.md` | as above | as above | as above |
+| `MIXED.MD` → `MIXED.md` (the owner's run: `NOTE.MD` → `NOTE.md`) | as above | as above | as above |
+| the folder `Docs` → `docs`, holding one file | not tried | success reported, old spelling kept | refused, with the folder's names: "…so Docs was not renamed to docs." |
+
+The read-back was measured where production makes it. With the source
+handle, opened under the old spelling, still open after the kernel call,
+the final-path read gave the folder's own listing in all twelve cases on
+the runner's two volumes, and so did a read of the listing itself; both
+gave the same after the handle closed [P-W3]. So the final-path read
+stays in production. The listing read is compiled for tests only
+(`windows_entry::stored_name_by_listing`), and the gated fact prints
+both beside its own listing on every run. Not measured anywhere: either
+read after a case-only rename that a FAT volume applied, because neither
+volume on either machine applied one.
+
+The vault watcher heard nothing for an ignored rename: on both volumes
+no event named `Watch.md` or `watch.md` between a file made before the
+rename and one made after it, whose events both arrived [P-W3]. A
+refusal still records both spellings as the provider's own echo, so a
+volume that did raise events for a rename it did not keep would start no
+catch-up scan.
+
+A read-back that itself fails (the entry removed or renamed from outside
+between the two calls) returns its own error. The rename is never
+reported as done on a spelling core could not read, and no echo is
+recorded, so the watcher's catch-up brings the index to what the volume
+holds.
+
+One outcome is possible by reading and was seen on no volume: a volume
+that applies a folder's case-only rename and ignores a file's. The
+compound rename of a folder with its note then renames the folder, is
+refused at the note, and rolls the folder back. Everything holds the old
+spelling and the error reads "renaming the folder note failed and the
+folder rename was rolled back: invalid argument: This drive keeps the
+capitalization a file was created with, so Docs.md was not renamed to
+docs.md."
 
 ## 7. Directories
 
@@ -429,6 +492,78 @@ New-Partition | Format-Volume -FileSystem FAT32` and `exFAT`), with
 | NTFS (control) | `NTFS` | answers | `885d7da1-007e00000025022f` | same | `885d7da1-020700000025025e` | unchanged | unchanged |
 | FAT32 | `FAT32` | error 87 | `0cda959e-00000000004042c0` | same | `0cda959e-00000000004042e0` | error 87 | `0cda959e-0000000000404360` |
 | exFAT | `exFAT` | error 87 | `c0dce383-0000000000060280` | same | `c0dce383-00000000000602e0` | error 87 | `c0dce383-0000000000060340` |
+
+**P-W3 (plan 47 CB-13, 2026-11-16).** Environment: the Windows lane's
+`rust-weak-volumes` job on a Namespace runner, Windows Server
+(`cmd /c ver`: `Microsoft Windows [Version 10.0.20348.5761]`), which
+makes a FAT32 and an exFAT VHD with `diskpart` and sets
+`SLATE_WEAK_VOLUME_FAT32` and `…_EXFAT` to a folder on each. Two
+`workflow_dispatch` runs on scratch branches, with no pull request open.
+
+- **Run 43935566159 (job 133539197985, commit 85649b43): `main`'s
+  product code with the rewritten facts.**
+  `weak_volume_case_only_rename_keeps_the_entry` makes six case-only
+  renames per volume through the provider and records each before it
+  asserts. On FAT32 and on exFAT all six, the folder included, printed
+  the same shape:
+
+  ```
+  OBSERVED Fat32 case-only Note.md -> note.md: REPORTED SUCCESS AND KEPT Note.md (listing ["Note.md"], canonical_path Ok(Some("Note.md")))
+  OBSERVED Fat32 case-only Docs -> docs: REPORTED SUCCESS AND KEPT Docs (listing ["Docs"], canonical_path Ok(Some("Docs")))
+  OBSERVED Exfat case-only MIXED.MD -> MIXED.md: REPORTED SUCCESS AND KEPT MIXED.MD (listing ["MIXED.MD"], canonical_path Ok(Some("MIXED.MD")))
+  ```
+
+  `FILE_ID_INFO` did not answer on either volume (error 87). The other
+  five provider facts passed. The session fact showed the index moving
+  while the volume kept its names:
+
+  ```
+  OBSERVED FAT32 session case-only Note.md -> note.md: REPORTED SUCCESS AND KEPT Note.md (listing ["Docs", "Note.md"], files ["Docs/Inner.md", "note.md"], dirs ["Docs"])
+  OBSERVED FAT32 session case-only Docs -> docs: REPORTED SUCCESS AND KEPT Docs (listing ["Docs", "Note.md"], files ["docs/Inner.md", "note.md"], dirs ["docs"])
+  ```
+
+  So the runner's volumes ignore the rename as the owner's desktop did
+  [P-W2], on a different Windows build.
+  That run is the facts' red phase on a real volume: one of six provider
+  facts and one of three session facts failed, on both volumes.
+- **Run 43943403456 (job 133566627722, commit 6061441e): the same facts
+  with the read-back in.** Six provider facts and three session facts
+  passed. All twelve provider cases were refused, with the listing and
+  `canonical_path` on the old spelling:
+
+  ```
+  OBSERVED Fat32 case-only Note.md -> note.md: refused: This drive keeps the capitalization a file was created with, so Note.md was not renamed to note.md. (listing ["Note.md"], canonical_path Ok(Some("Note.md")))
+  OBSERVED Exfat case-only Docs -> docs: refused: This drive keeps the capitalization a file was created with, so Docs was not renamed to docs. (listing ["Docs"], canonical_path Ok(Some("Docs")))
+  ```
+
+  The same six renames made by hand, on a source handle opened under the
+  old spelling and kept open across the read, twelve lines of this
+  shape:
+
+  ```
+  OBSERVED Fat32 read-back by hand Note.md -> note.md: kernel Ok("done"); with the source handle open, the final-path read Ok("Note.md") and the listing read Ok("Note.md"); the test's listing ["Note.md"]; the final-path read after the handle closed Ok("Note.md")
+  OBSERVED Exfat read-back by hand Docs -> docs: kernel Ok("done"); with the source handle open, the final-path read Ok("Docs") and the listing read Ok("Docs"); the test's listing ["Docs"]; the final-path read after the handle closed Ok("Docs")
+  ```
+
+  The vault watcher, on both volumes:
+
+  ```
+  OBSERVED Fat32 watcher around a case-only rename (refused: This drive keeps the capitalization a file was created with, so Watch.md was not renamed to watch.md.): events for the renamed name []; the provider's own echo: Watch.md true, watch.md true; the later file's event arrived: true
+  ```
+
+  The session fact, through `rename_file` and `rename_folder_with_note`,
+  on both volumes:
+
+  ```
+  OBSERVED FAT32 session case-only Note.md -> note.md: refused: This drive keeps the capitalization a file was created with, so Note.md was not renamed to note.md. (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["Docs/Docs.md", "Docs/Inner.md", "Note.md"], dirs ["Docs"])
+  OBSERVED FAT32 session case-only Docs -> docs: refused: This drive keeps the capitalization a file was created with, so Docs was not renamed to docs. (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["Docs/Docs.md", "Docs/Inner.md", "Note.md"], dirs ["Docs"])
+  ```
+- **SMB, local only.** The job has no share. On the loopback share of
+  P-W1 (Windows 11 10.0.26300, 2026-11-16) the fact passed with the
+  read-back in: all six cases `renamed`, each read equal to the listing
+  with the source handle open and after it closed, the watcher hearing
+  the rename's events with both spellings the provider's own echo, and
+  the identity inverse renaming its alias.
 
 ## Appendix B. Sources
 

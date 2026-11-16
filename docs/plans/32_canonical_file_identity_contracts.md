@@ -164,6 +164,14 @@ equals the resolved source's fold key — that is the legal case-only
 rename, not a collision. Today the gate refuses it (finding 7); after
 this document it succeeds, and the index row moves to the new spelling.
 
+*Addendum 2026-11-16 (plan 47 CB-13, #1727, CD7):* on Windows the
+provider reads the entry's stored spelling back after a case-only
+rename. Where the volume kept the old spelling the rename fails with
+core's sentence (`a11y::case_only_rename_refused`) and the row, the
+links and the report do not move. Facts:
+`canonical_identity::a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes`,
+`weak_volume_case_only_rename_keeps_the_entry`.
+
 **I5 — The collision gate is EXTENDED to Unicode, not retired.** The
 gate keeps its purpose (finding 7: portability across volumes) and
 gains the fold rule the tree already uses: `index_entry_case_
