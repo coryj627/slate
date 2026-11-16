@@ -273,6 +273,13 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
 
         await DrainUntilAsync(leaf.DrainForTests, () => answered.Count > 0, "the parked press was never answered");
+        // Exactly one answer is promised, so the count is read at the leaf's
+        // fixed point, not on the first answer: every tracked body ended and
+        // untracked, and every publication they posted to the owner run. A
+        // second answer posted behind the first is in the list by then.
+        await leaf.WhenPublishedAsync();
+        await DrainUntilAsync(
+            leaf.WhenPublishedAsync, () => leaf.PendingWorkForTests == 0, "the leaf never reached its fixed point");
 
         (string Key, bool Present) only = Assert.Single(answered);
         Assert.Equal("knuth1984", only.Key);
