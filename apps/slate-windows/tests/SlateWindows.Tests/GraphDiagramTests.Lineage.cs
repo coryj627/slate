@@ -928,8 +928,18 @@ public sealed partial class GraphDiagramTests
     /// converges, so steps keep coming for as long as the fact waits. The
     /// workspace, the driver and the preferences are the real ones: the save's
     /// timer runs at its production priority and window, and nothing fires its
-    /// tick by hand. The save lands while the settle still runs. No duration
-    /// is asserted, and the file is read once, after the writer has drained.</summary>
+    /// tick by hand. A settle is running, with a compute held, before the edit
+    /// is made, and the fact then waits until the save has left the
+    /// preferences and a later step and a later held compute have been
+    /// counted. No duration is asserted, and the file is read once, after the
+    /// writer has drained.</summary>
+    /// <remarks>What this fact does not catch: a dispatcher that is busy every
+    /// frame with a hosted diagram's layout, render and input (there is no
+    /// window here, so a step costs the dispatcher its apply and nothing
+    /// more); a save that is delayed and still lands inside the ten seconds;
+    /// starvation by a real window's layout or input queue; and a holder on
+    /// <c>graph.json</c> at the instant of the rename, which #1865's own facts
+    /// cover (<c>GraphConfigWriterTests</c>).</remarks>
     [Fact]
     public void AForcesEditIsSavedWhileTheDiagramIsStillSettling()
     {
@@ -953,16 +963,35 @@ public sealed partial class GraphDiagramTests
 
             TimeSpan hold = TimeSpan.FromMilliseconds(40);
             Assert.True(hold > GraphLayoutDriver.Cadence * 2, $"premise: a {hold.TotalMilliseconds} ms compute does not outlast the cadence");
-            model.InsideGateForTests = () => Thread.Sleep(hold);
+            int held = 0;
+            model.InsideGateForTests = () =>
+            {
+                Interlocked.Increment(ref held);
+                Thread.Sleep(hold);
+            };
+            // Premise: the hold stands in the settle's way before the edit is
+            // made. A settle is started and the fact waits for its first
+            // compute to enter the hold, so the edit lands on a diagram that
+            // is settling with a compute held, not on one at rest.
+            driver.StartSettle();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => Volatile.Read(ref held) > 0, TimeSpan.FromSeconds(10)),
+                "premise: the settle ran no compute through the hold, so nothing here would slow a step");
+
             host.Workspace.Inspector.SetForces(stepped);
-            Assert.True(driver.IsSettling, "premise: the edit did not restart the settle");
+            // Read after the edit: a step or a held compute counted past these
+            // came after the edit was made.
             int steps = driver.StepsForTests;
+            int heldAtTheEdit = Volatile.Read(ref held);
 
             // The wait ends when the save has left the preferences (no pending
-            // pair, no outstanding write) and the settle has issued a step
-            // since the edit. A step is part of the wait, not a later
-            // assertion: a save that lands before the first held compute's
-            // apply is pumped says nothing about the settle either way.
+            // pair, no outstanding write), the settle has issued a step since
+            // the edit and a compute has entered the hold since the edit. The
+            // last two are part of the wait, not later assertions: a save that
+            // lands before the next held compute says nothing about the settle
+            // either way, and an assertion made after the wait could fail on a
+            // loaded machine alone. The wait keeps the settle running: it
+            // restarts it whenever it has converged.
             bool saved = PumpedDispatcher.PumpUntil(
                 () =>
                 {
@@ -972,7 +1001,8 @@ public sealed partial class GraphDiagramTests
                     }
                     return !preferences.HasPendingForTests
                         && preferences.OutstandingForTests == 0
-                        && driver.StepsForTests > steps;
+                        && driver.StepsForTests > steps
+                        && Volatile.Read(ref held) > heldAtTheEdit;
                 },
                 TimeSpan.FromSeconds(10));
             Assert.True(
@@ -980,8 +1010,7 @@ public sealed partial class GraphDiagramTests
                 "the forces edit was not saved while the diagram kept settling. "
                 + $"Pending pair: {preferences.HasPendingForTests}; save timer running: {preferences.TimerEnabledForTests}; "
                 + $"outstanding writes: {preferences.OutstandingForTests}; layout steps since the edit: {driver.StepsForTests - steps}; "
-                + $"settling: {driver.IsSettling}.");
-            Assert.True(driver.IsSettling, "the settle had ended when the save landed, so the save did not land under it");
+                + $"computes held since the edit: {Volatile.Read(ref held) - heldAtTheEdit}; settling: {driver.IsSettling}.");
 
             PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
             double onDisk = new GraphConfigStore(host.Vault.Root).Read().Config.Forces.Repel;
