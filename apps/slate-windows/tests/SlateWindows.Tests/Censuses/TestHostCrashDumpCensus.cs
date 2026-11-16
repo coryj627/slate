@@ -84,17 +84,27 @@ public sealed class TestHostCrashDumpCensus
     /// no <c>secrets.</c> reference, no GITHUB_TOKEN (a run step gets it only
     /// when it is mapped in) and no id-token grant (Codoki's review of
     /// #1892). A change that adds one fails here, so it has to stop dumping
-    /// or stop publishing the dumps first.</summary>
-    [Fact]
-    public void TheJobThatPublishesTheTestProcessDumpHoldsNoSecret()
+    /// or stop publishing the dumps first. Both jobs that set the dump
+    /// variables are held to it: the app job, and each model shard, whose
+    /// stall rule fails fast and whose failed attempt uploads the dump
+    /// (#1624).</summary>
+    [Theory]
+    [InlineData("windows")]
+    [InlineData("windows-model-shard")]
+    public void TheJobThatPublishesTheTestProcessDumpHoldsNoSecret(string job)
     {
         string workflow = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), ".github", "workflows", "windows.yml"));
-        string[] found = SecretReferences(DeviceStateCensus.Job(workflow, "windows"));
+        string block = DeviceStateCensus.Job(workflow, job);
+        // The guard is about a job that dumps: one that stopped setting the
+        // variable has left this theory's data without saying so.
+        Assert.Contains("DOTNET_DbgEnableMiniDump: '1'", block, StringComparison.Ordinal);
+        string[] found = SecretReferences(block);
         Assert.True(
             found.Length == 0,
-            $"The windows job now references {string.Join(", ", found.Select(secret => $"`{secret}`"))}. Its test process "
-            + "is dumped in full into a public artifact when it fails fast (DOTNET_DbgEnableMiniDump) or a fact times out "
-            + "(StaThread), so a secret there would be published. Keep the secret out of this job, or stop uploading the dumps.");
+            $"The {job} job now references {string.Join(", ", found.Select(secret => $"`{secret}`"))}. Its test process "
+            + "is dumped in full into a public artifact when it fails fast (DOTNET_DbgEnableMiniDump), and the windows "
+            + "job's also when a fact times out (StaThread), so a secret there would be published. Keep the secret out of "
+            + "this job, or stop uploading the dumps.");
     }
 
     /// <summary>The secret guard's teeth: each kind of reference it looks for

@@ -7,7 +7,10 @@
 # main's ruleset requires, over the pause on Dependabot version updates, over
 # a11y-check.yml's gate on results whose download failed (#1575), and over the
 # .NET SDK pin every setup-dotnet step reads (#1568), over the Windows
-# lane's clippy step (#1570), and over the Windows lane's census tier (#1945).
+# lane's clippy step (#1570), over the Windows lane's census tier (#1945), and
+# over the model shards' evidence (#1624): the 70-minute timer inside the
+# 90-minute job, the dump of a test process that fails fast, the checkpoints
+# in the log, and a failed attempt's artifact named apart from the report.
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -221,6 +224,80 @@ Describe 'windows.yml app results' {
                 '          overwrite: true',
                 "          path: '`${{ runner.temp }}\slate-app-results\**\*'"))
         $windows | Should -Match (Get-Lines @("          SLATE_STA_DUMP_DIR: '`${{ runner.temp }}\slate-app-results'"))
+    }
+}
+
+Describe 'windows.yml model evidence' {
+    # #1624: one model family is one fact, and blame's timer resets only between facts, so 45 minutes ended a
+    # routes fact that was still advancing (run 40119788856). ModelTestRun's stall rule now ends a case that stops
+    # advancing in about five minutes, by failing fast; blame is the backstop for a hang the rule cannot see. The
+    # report's artifact is named without the attempt, because the aggregator reads it by run id, so a rerun
+    # replaced the failed attempt's dumps with it. They now go to an artifact of their own, named by attempt.
+    BeforeAll {
+        $script:model = Get-JobBlock $windows 'windows-model-shard'
+        $script:modelSteps = Get-Steps $model
+        function Get-ModelStep([string]$Name) {
+            @($modelSteps | Where-Object { $_ -match ('(?m)\A      - name: ' + [regex]::Escape($Name) + '[ \t]*\r?$') })
+        }
+        # A step's own lines: the comment lines that follow it introduce the next step.
+        function Get-Live([string]$Step) { @($Step -split '\r?\n' | Where-Object { $_ -notmatch '^[ \t]*#' }) -join "`n" }
+        $script:folder = '${{ runner.temp }}\slate-model-results'
+    }
+    It 'ends a model fact at 70 minutes inside the 90-minute job and dumps a test process that fails fast' {
+        $model | Should -Match (Get-JobLine 'timeout-minutes: 90') -Because 'the timer, not the job limit, ends a slow run, so its evidence is uploaded'
+        $test = @(Get-ModelStep 'Test (the Connections model)')
+        $test.Count | Should -Be 1
+        $test[0] | Should -Match (Get-Lines @('          --blame-hang-timeout 70m --blame-hang-dump-type mini'))
+        ([regex]::Matches($model, '--blame-hang-timeout')).Count | Should -Be 1 -Because 'one timer, on the one test step'
+        # The runtime's own dump of a process that fails fast, as the app job's Test step has it, into the folder
+        # the evidence step uploads. ModelTestRun.EndTheProcess is the fail-fast.
+        $test[0] | Should -Match (Get-Lines @(
+                "          DOTNET_DbgEnableMiniDump: '1'",
+                "          DOTNET_DbgMiniDumpType: '4'",
+                "          DOTNET_DbgMiniDumpName: '$folder\crash-%e-%p.dmp'",
+                "          DOTNET_CreateDumpDiagnostics: '1'"))
+        $test[0] | Should -Match (Get-Lines @("          --results-directory `"$folder`""))
+        $test[0] | Should -Match (Get-Lines @("          SLATE_MODEL_REPORT_DIR: '$folder'")) -Because 'the stall rule runs with the checkpoint flusher, which runs only with a report directory'
+    }
+    It 'keeps a failed attempt''s evidence under a name with the attempt, apart from the report the aggregator reads' {
+        $report = @(Get-ModelStep 'Upload model timings and coverage')
+        $report.Count | Should -Be 1
+        $live = Get-Live $report[0]
+        $live | Should -Match (Get-Lines @('        if: ${{ always() }}'))
+        $live | Should -Match (Get-Lines @('          name: windows-model-${{ github.run_id }}-${{ matrix.shard }}', '          overwrite: true'))
+        $live | Should -Not -Match 'run_attempt' -Because 'the aggregator downloads the report by run id, whichever attempt wrote it'
+        # No dump in the report: one include pattern, so the artifact's root stays the results folder, and the
+        # exclusion after it.
+        $live | Should -Match (Get-Lines @('          path: |', "            $folder\**\*", "            !$folder\**\*.dmp"))
+        $live | Should -Match (Get-Lines @('          retention-days: 30'))
+        (Get-JobBlock $windows 'windows-model') | Should -Match (Get-Lines @('          pattern: windows-model-${{ github.run_id }}-*'))
+
+        $evidence = @(Get-ModelStep 'Upload a failed attempt''s model evidence')
+        $evidence.Count | Should -Be 1
+        $live = Get-Live $evidence[0]
+        $live | Should -Match (Get-Lines @('        if: ${{ failure() || cancelled() }}'))
+        $live | Should -Match (Get-Lines @(
+                '          name: slate-windows-model-evidence-${{ github.run_id }}-${{ matrix.shard }}-${{ github.run_attempt }}',
+                "          path: '$folder\**\*'",
+                '          if-no-files-found: warn',
+                '          retention-days: 7'))
+        # The aggregator's pattern must not download it: a dump is not a report.
+        $name = [regex]::Match($live, '(?m)^          name: (.+?)[ \t]*\r?$').Groups[1].Value
+        $name | Should -Not -BeNullOrEmpty
+        $name | Should -Not -BeLike 'windows-model-*'
+        $live | Should -Not -Match '(?m)^          overwrite:' -Because 'no attempt replaces another''s evidence'
+
+        # The checkpoints go to the job log, which outlives both artifacts, whatever the test step did.
+        $print = @(Get-ModelStep 'Show where each model family stopped')
+        $print.Count | Should -Be 1
+        (Get-Live $print[0]) | Should -Match (Get-Lines @('        if: ${{ always() }}'))
+        $print[0] | Should -Match ([regex]::Escape("'$folder'"))
+        $print[0] | Should -Match ([regex]::Escape('*.progress.txt'))
+        $print[0] | Should -Match ([regex]::Escape('::error::'))
+        $order = 'Test (the Connections model)', 'Show where each model family stopped', 'Upload model timings and coverage', 'Upload a failed attempt''s model evidence' |
+            ForEach-Object { [array]::IndexOf($modelSteps, @(Get-ModelStep $_)[0]) }
+        $order | Should -Be @($order | Sort-Object) -Because 'the print and both uploads follow the test step'
+        $order[3] | Should -Be ($modelSteps.Count - 1) -Because 'nothing after the evidence upload can fail unrecorded'
     }
 }
 

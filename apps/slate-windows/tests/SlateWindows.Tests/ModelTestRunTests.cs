@@ -25,9 +25,9 @@ public sealed class ModelTestRunTests
     private const string InventorySha256 = "577e047fb07bb252991fcce08bade6609c512ea8e6c13f797d2c080288555066";
 
     private static ModelTestRun<Cell> Run(ModelShardConfiguration configuration, IEnumerable<Cell>? inventory = null,
-        TimeSpan? progressInterval = null) =>
+        TimeSpan? progressInterval = null, int? stallTicks = null, Action<string>? onStall = null) =>
         new("routes", inventory ?? Inventory, cell => cell.Name, cell => cell.Route, cell => cell.Exclusion, configuration,
-            progressInterval);
+            progressInterval, stallTicks, onStall);
 
     private static ModelShardConfiguration Configuration(params (string Name, string? Value)[] values)
     {
@@ -257,6 +257,165 @@ public sealed class ModelTestRunTests
             release.Set();
             running.GetAwaiter().GetResult();
         }
+    }
+
+    /// <summary>The stall rule (#1624): a checkpoint the flusher reads
+    /// unchanged for the bound's count of ticks is reported once, with its
+    /// case and phase, and the file says so. The ticks are driven by hand, so
+    /// no fact waits for one.</summary>
+    [Fact]
+    public void ACaseThatStopsAdvancingIsReportedAsStalledWithItsCellAndPhase()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 3, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing => timing.Complete());
+        var cell = run.SelectedCases[1];
+        run.RunCase(cell, timing =>
+        {
+            timing.Phase("arrangement");
+            run.FlushProgress();
+            run.FlushProgress();
+            Assert.Empty(stalls);
+            using (JsonDocument advancing = directory.ReadProgress())
+            {
+                Assert.Equal("arrangement", advancing.RootElement.GetProperty("phase").GetString());
+                Assert.False(advancing.RootElement.TryGetProperty("stalledPhase", out _),
+                    "a checkpoint that is not stalled carries a stalled phase.");
+            }
+
+            run.FlushProgress();
+            string sentence = Assert.Single(stalls);
+            Assert.Contains("The routes model stalled on shard 0 of 1", sentence, StringComparison.Ordinal);
+            Assert.Contains($"case {cell.Ordinal} ({cell.Value.Name})", sentence, StringComparison.Ordinal);
+            Assert.Contains("phase arrangement", sentence, StringComparison.Ordinal);
+            Assert.Contains("3 checkpoint ticks", sentence, StringComparison.Ordinal);
+            Assert.Contains("1 of 5 cases completed", sentence, StringComparison.Ordinal);
+            using (JsonDocument stalled = directory.ReadProgress())
+            {
+                JsonElement root = stalled.RootElement;
+                Assert.Equal("stalled", root.GetProperty("phase").GetString());
+                Assert.Equal("arrangement", root.GetProperty("stalledPhase").GetString());
+                Assert.Equal(cell.Ordinal, root.GetProperty("activeOrdinal").GetInt32());
+                Assert.Equal(cell.Value.Name, root.GetProperty("activeCell").GetString());
+                Assert.Equal(1, root.GetProperty("completedCases").GetInt32());
+                Assert.False(root.GetProperty("success").GetBoolean());
+                // The family clock read at the stall, and how much of it the
+                // phase has held: their difference is when the phase began.
+                double stalledFor = root.GetProperty("stalledMilliseconds").GetDouble();
+                Assert.InRange(stalledFor, 0, root.GetProperty("elapsedMilliseconds").GetDouble());
+            }
+
+            // The rule speaks once, and later ticks leave the stalled
+            // checkpoint in the file.
+            run.FlushProgress();
+            run.FlushProgress();
+            Assert.Single(stalls);
+            using (JsonDocument still = directory.ReadProgress())
+            {
+                Assert.Equal("stalled", still.RootElement.GetProperty("phase").GetString());
+            }
+
+            // A run that a recording callback lets go on writes its next
+            // transition as before, and is not reported a second time.
+            timing.Phase("drive");
+            run.FlushProgress();
+            run.FlushProgress();
+            run.FlushProgress();
+            Assert.Single(stalls);
+            using JsonDocument driving = directory.ReadProgress();
+            Assert.Equal("drive", driving.RootElement.GetProperty("phase").GetString());
+            Assert.False(driving.RootElement.TryGetProperty("stalledPhase", out _));
+            timing.Complete();
+        });
+    }
+
+    [Fact]
+    public void ARunThatKeepsAdvancingIsNeverReportedAsStalled()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        // The rule is armed: silence below means the run advanced, not that
+        // nothing was counting.
+        Assert.Equal(2, run.StallTicks);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        foreach (var cell in run.SelectedCases)
+        {
+            run.RunCase(cell, timing =>
+            {
+                // A transition before every tick: no checkpoint is read twice.
+                run.FlushProgress();
+                foreach (string phase in new[] { "sessionSetup", "arrangement", "drive", "settleAndVerify", "cleanup" })
+                {
+                    timing.Phase(phase);
+                    run.FlushProgress();
+                }
+                timing.Complete();
+            });
+            run.FlushProgress();
+        }
+        run.Complete();
+        // A completed family is not a stalled one, however long its process
+        // goes on to the next fact.
+        for (int tick = 0; tick < 5; tick++)
+        {
+            run.FlushProgress();
+        }
+        Assert.Empty(stalls);
+        using JsonDocument complete = directory.ReadProgress();
+        Assert.Equal("complete", complete.RootElement.GetProperty("phase").GetString());
+        Assert.False(complete.RootElement.TryGetProperty("stalledPhase", out _));
+    }
+
+    [Fact]
+    public void AStallBetweenCasesSaysNoCaseIsActive()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing => timing.Complete());
+        run.FlushProgress();
+        Assert.Empty(stalls);
+        run.FlushProgress();
+        string sentence = Assert.Single(stalls);
+        Assert.Contains("The routes model stalled on shard 0 of 1 with no case active", sentence, StringComparison.Ordinal);
+        Assert.Contains("phase caseCompleted", sentence, StringComparison.Ordinal);
+        Assert.Contains("2 checkpoint ticks", sentence, StringComparison.Ordinal);
+        Assert.Contains("1 of 5 cases completed", sentence, StringComparison.Ordinal);
+        Assert.DoesNotContain("case 1", sentence, StringComparison.Ordinal);
+        using JsonDocument stalled = directory.ReadProgress();
+        JsonElement root = stalled.RootElement;
+        Assert.Equal("stalled", root.GetProperty("phase").GetString());
+        Assert.Equal("caseCompleted", root.GetProperty("stalledPhase").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("activeOrdinal").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("activeCell").ValueKind);
+        Assert.Equal(1, root.GetProperty("completedCases").GetInt32());
+    }
+
+    /// <summary>Five minutes of the flusher's own ticks, whatever its
+    /// interval, rounded up so the rule is never early; a flusher driven by
+    /// hand has no bound unless a fact gives one.</summary>
+    [Fact]
+    public void TheDefaultStallBoundIsFiveMinutesOfTicks()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(5), ModelTestRun<Cell>.StallBound);
+        using var everySecond = Run(Configuration());
+        Assert.Equal(300, everySecond.StallTicks);
+        using var fast = Run(Configuration(), progressInterval: TimeSpan.FromMilliseconds(20));
+        Assert.Equal(15_000, fast.StallTicks);
+        using var uneven = Run(Configuration(), progressInterval: TimeSpan.FromSeconds(7));
+        Assert.Equal(43, uneven.StallTicks);
+        using var byHand = Run(Configuration(), progressInterval: Timeout.InfiniteTimeSpan);
+        Assert.Null(byHand.StallTicks);
+        // A bound below one tick would report a run that has not been read
+        // twice.
+        Assert.Throws<ArgumentOutOfRangeException>(() => Run(Configuration(), stallTicks: 0));
     }
 
     [Fact]
