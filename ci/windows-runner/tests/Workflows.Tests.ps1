@@ -10,7 +10,11 @@
 # lane's clippy step (#1570), over the Windows lane's census tier (#1945), and
 # over the model shards' evidence (#1624): the 70-minute timer inside the
 # 90-minute job, the dump of a test process that fails fast, the checkpoints
-# in the log, and a failed attempt's artifact named apart from the report.
+# in the log, and a failed attempt's artifact named apart from the report,
+# over the week the shell gate's binaries are kept (#1647), and over the
+# generated-table checks (#1699): contracts 34, 35 and 38's in the app job,
+# each with the test that shows it catching its drift, and the parity
+# matrix's in the docs census job.
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -402,6 +406,116 @@ Describe 'windows.yml FlaUI handoff' {
         $download[0] | Should -Match (Get-Lines @('          name: flaui-binaries-${{ github.run_id }}'))
         $download[0] | Should -Not -Match '(?m)^          run-id:' -Because 'the gate reads this run''s artifact'
         ($upload[0] + $download[0]) | Should -Not -Match 'run_attempt' -Because 'a rerun of the gate alone would look for an attempt the app job never uploaded'
+    }
+    # #1647: one day was chosen for a handoff inside one attempt. #1643 then named the artifact by run id so a rerun of
+    # the gate alone could reuse it, and the retention stayed. After it lapses the gate's download fails with
+    # "Artifact not found", and only "Re-run all jobs" builds the binaries again.
+    It 'keeps the binaries seven days, as long as the app job''s own results, so a rerun of the gate alone finds them after the first day' {
+        $steps = Get-Steps (Get-JobBlock $windows 'windows')
+        foreach ($name in 'Upload FlaUI gate binaries', 'Upload app test results and hang evidence') {
+            $step = @($steps | Where-Object { $_ -match ('(?m)\A      - name: ' + [regex]::Escape($name) + '[ \t]*\r?$') })
+            $step.Count | Should -Be 1 -Because "the app job has one step named $name"
+            $kept = @([regex]::Matches($step[0], '(?m)^          retention-days:[ \t]*(.*?)[ \t]*\r?$') | ForEach-Object { $_.Groups[1].Value })
+            $kept | Should -Be @('7') -Because "$name keeps seven days"
+        }
+    }
+    It 'no artifact in windows.yml, nightly.yml or the pilot is kept under seven days' {
+        $counts = @{}
+        foreach ($pair in @(@('windows.yml', $windows), @('nightly.yml', $nightly), @('windows-ci-pilot.yml', $pilot))) {
+            # Every retention line, whatever its value: an expression or a trailing comment is not a number, and fails.
+            $kept = @([regex]::Matches($pair[1], '(?m)^[ \t]*retention-days:[ \t]*(.*?)[ \t]*\r?$') | ForEach-Object { $_.Groups[1].Value })
+            $counts[$pair[0]] = $kept.Count
+            foreach ($days in $kept) {
+                $days | Should -Match '^\d+$' -Because "$($pair[0]) states each retention as a plain number of days"
+                [int]$days | Should -BeGreaterOrEqual 7 -Because "$($pair[0]) keeps no artifact for less than the week a rerun may wait"
+            }
+        }
+        $counts['windows.yml'] | Should -BeGreaterOrEqual 4 -Because 'the app results, the gate binaries, the model report and the shell evidence each state a retention'
+        $counts['nightly.yml'] | Should -BeGreaterOrEqual 1
+        $counts['windows-ci-pilot.yml'] | Should -BeGreaterOrEqual 1
+    }
+}
+
+Describe 'windows.yml generated tables' {
+    # WB-17 (#1700) and #1699: contracts 34, 35 and 38 carry tables a generator writes, and the app job checks each
+    # against its generator after the build, because each generator reads the built Windows tree. Contract 38's census
+    # compares a ledger row's sites as a set, so a row placed by hand passed until the lane ran the generator's own
+    # --check. Each check has a unit test that shows it catching its drift. The parity matrix is checked in the docs
+    # census job (#1946), which the census tier runs too.
+    BeforeAll {
+        $script:tableSteps = Get-Steps (Get-JobBlock $windows 'windows')
+        $script:ledgerStep = "Verify contract 38's trigger ledger is the generator's output"
+        function Get-NamedStep([string[]]$Steps, [string]$Name) {
+            @($Steps | Where-Object { $_ -match ('(?m)\A      - name: ' + [regex]::Escape($Name) + '[ \t]*\r?$') })
+        }
+        # A step's own lines: the comment lines after a step introduce the next one. A step that is only its name and
+        # its command has no if:, continue-on-error:, shell: or env: of its own to skip it, soften it or change what it
+        # runs. The lines are compared with their case: `python -i` is the interactive switch, which runs the script,
+        # swallows its exit and ends 0 at the end of its input.
+        function Get-OwnLines([string]$Step) {
+            @($Step -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+        }
+        function Get-StepIndex([string[]]$Steps, [string]$Name) {
+            $found = @(Get-NamedStep $Steps $Name)
+            $found.Count | Should -Be 1 -Because "there is one step named $Name"
+            [array]::IndexOf($Steps, $found[0])
+        }
+        # Nothing above a step softens it either: a job-level continue-on-error turns a red check green, and a default
+        # shell, on the job or on the workflow, can end every command with exit 0.
+        function Assert-NothingSoftensTheJob([string]$Job) {
+            $block = Get-JobBlock $windows $Job
+            $block | Should -Not -BeNullOrEmpty
+            $block | Should -Not -Match '(?m)^    (continue-on-error|defaults):' -Because "a failed check must fail the $Job job"
+            $windows | Should -Not -Match '(?m)^defaults:' -Because 'a workflow-wide default shell could swallow a failed check'
+        }
+    }
+    It 'checks contracts 34, 35 and 38''s generated tables against their generators after the build, unconditionally, before the unit suite' {
+        $checks = [ordered]@{
+            "Verify contract 34's reconciliation tables are the generator's output" = 'python -I scripts/canvas_reconciliation.py --check'
+            "Verify contract 35's reconciliation tables are the generator's output" = 'python -I scripts/graph_reconciliation.py --check'
+            # #1699: the generator runs one fact of the Release unit build, so the check is under the device-state guard.
+            $ledgerStep                                                             = 'pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 -- python -I scripts/a11y_trigger_ledger.py --check'
+        }
+        foreach ($name in $checks.Keys) {
+            $step = @(Get-NamedStep $tableSteps $name)
+            $step.Count | Should -Be 1 -Because "the app job has one step named $name"
+            Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", "        run: $($checks[$name])") -Because "$name is only its name and its command"
+        }
+        $order = @('Build', 'Set up Python (the reconciliation checks)') + @($checks.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
+        $order | Should -Be @($order | Sort-Object) -Because 'each generator reads the built tree, and a stale table fails before the unit suite spends its minutes'
+        Assert-NothingSoftensTheJob 'windows'
+        # The census tier (#1945) runs the app job too, and the ledger lists Mac construction sites. Said by name, so
+        # the reason outlives an edit of the only-lines pin above.
+        $ledger = @(Get-NamedStep $tableSteps $ledgerStep)[0]
+        $ledger | Should -Not -Match '(?m)^        if:' -Because 'a Mac-only pull request moves ledger rows, and it runs the census tier'
+        $ledger | Should -Not -Match 'outputs\.scope' -Because 'a Mac-only pull request moves ledger rows, and it runs the census tier'
+    }
+    It 'tests that each check catches its drift: a stale pointer and a reordered row' {
+        $tests = [ordered]@{
+            'Test that the reconciliation checks catch a stale pointer' = 'test_reconciliation_check_flags_a_stale_pointer.py'
+            'Test that the ledger check catches a reordered row'        = 'test_a11y_trigger_ledger_check_flags_a_reordered_row.py'
+        }
+        foreach ($name in $tests.Keys) {
+            $step = @(Get-NamedStep $tableSteps $name)
+            $step.Count | Should -Be 1 -Because "the app job has one step named $name"
+            Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", "        run: python -I -m unittest discover -v -s scripts/tests -p $($tests[$name])") -Because "$name is only its name and its command"
+            $step[0] | Should -Not -Match '(?m)^        if:' -Because 'the census tier runs the checks, so it runs their tests'
+            $step[0] | Should -Not -Match 'outputs\.scope' -Because 'the census tier runs the checks, so it runs their tests'
+        }
+        Assert-NothingSoftensTheJob 'windows'
+        $order = @($ledgerStep) + @($tests.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
+        $order | Should -Be @($order | Sort-Object) -Because 'the tests of the checks follow the checks and come before the unit suite'
+    }
+    It 'checks the parity matrix against its generator in the docs census job, unconditionally, in both tiers' {
+        # #1946 moved the step here from the model job, which the census tier skips. The census tier block pins its
+        # run: line, the job's if: and its absence from the model job; this adds that the step has no other key.
+        $docsSteps = Get-Steps (Get-JobBlock $windows 'docs-trigger')
+        $name = "Verify the parity matrix is the generator's output"
+        $step = @(Get-NamedStep $docsSteps $name)
+        $step.Count | Should -Be 1 -Because 'the docs census job has one parity matrix step'
+        Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", '        run: python3 scripts/generate-parity-matrix.py --check') -Because 'the step is only its name and its command'
+        Assert-NothingSoftensTheJob 'docs-trigger'
+        (Get-StepIndex $docsSteps 'Checkout') | Should -BeLessThan ([array]::IndexOf($docsSteps, $step[0])) -Because 'the generator reads the checked-out tree'
     }
 }
 

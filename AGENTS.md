@@ -62,6 +62,13 @@ tests) disagree, the tests and the code win.
   verb changes `docs/plans/18_windows_port/parity_matrix.md`. Rerun
   `python3 scripts/generate-parity-matrix.py`; `windows.yml` fails on drift
   (`--check`).
+- Adding, removing or moving an `A11yEvent` construction site on either host
+  changes the trigger ledger in
+  `docs/plans/38_notification_dispatcher_contracts.md`, which is generated.
+  With a Windows Release build, rerun
+  `python scripts/a11y_trigger_ledger.py --write`. Without one, push:
+  `windows.yml` fails on drift (`--check`) and prints each stale row with the
+  generator's row under it; replace the `-` rows with the `+` rows.
 - A Windows test that reads a census-only path (a Mac source, or a plan or
   help document in `census-paths`) carries `[Trait("tier", "census")]` on its
   class, and so does every test that calls a helper that reads one.
