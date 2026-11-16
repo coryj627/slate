@@ -7,7 +7,10 @@
 # main's ruleset requires, over the pause on Dependabot version updates, over
 # a11y-check.yml's gate on results whose download failed (#1575), and over the
 # .NET SDK pin every setup-dotnet step reads (#1568), over the Windows
-# lane's clippy step (#1570), and over the Windows lane's census tier (#1945).
+# lane's clippy step (#1570), over the Windows lane's census tier (#1945), and
+# over the model shards' evidence (#1624): the 70-minute timer inside the
+# 90-minute job, the dump of a test process that fails fast, the checkpoints
+# in the log, and a failed attempt's artifact named apart from the report.
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -221,6 +224,164 @@ Describe 'windows.yml app results' {
                 '          overwrite: true',
                 "          path: '`${{ runner.temp }}\slate-app-results\**\*'"))
         $windows | Should -Match (Get-Lines @("          SLATE_STA_DUMP_DIR: '`${{ runner.temp }}\slate-app-results'"))
+    }
+}
+
+Describe 'windows.yml model evidence' {
+    # #1624: one model family is one fact, and blame's timer resets only between facts, so 45 minutes ended a
+    # routes fact that was still advancing (run 40119788856). ModelTestRun's stall rule now ends a case that stops
+    # advancing in about five minutes, by failing fast; blame is the backstop for a hang the rule cannot see. The
+    # report's artifact is named without the attempt, because the aggregator reads it by run id, so a rerun
+    # replaced the failed attempt's dumps with it. They now go to an artifact of their own, named by attempt.
+    BeforeAll {
+        $script:model = Get-JobBlock $windows 'windows-model-shard'
+        $script:modelSteps = Get-Steps $model
+        function Get-ModelStep([string]$Name) {
+            @($modelSteps | Where-Object { $_ -match ('(?m)\A      - name: ' + [regex]::Escape($Name) + '[ \t]*\r?$') })
+        }
+        # A step's own lines: the comment lines that follow it introduce the next step.
+        function Get-Live([string]$Step) { @($Step -split '\r?\n' | Where-Object { $_ -notmatch '^[ \t]*#' }) -join "`n" }
+        # A step's own keys, in order: the one on its `- ` line and those at its indentation.
+        function Get-StepKeys([string]$Step) { @([regex]::Matches((Get-Live $Step), '(?m)^(?:      - |        )([A-Za-z][\w-]*):') | ForEach-Object { $_.Groups[1].Value }) }
+        $script:folder = '${{ runner.temp }}\slate-model-results'
+        # Runs a step's `run: |` script as the runner does, in a pwsh of its own, with the results folder replaced
+        # by a real one. Answers the lines it printed and its exit code.
+        function Invoke-StepScript([string]$Step, [string]$Results) {
+            $lines = @($Step -split '\r?\n')
+            $start = [array]::IndexOf($lines, '        run: |')
+            $start | Should -BeGreaterOrEqual 0 -Because 'the step has a run: | block'
+            $body = @()
+            for ($i = $start + 1; $i -lt $lines.Count -and ($lines[$i] -notmatch '\S' -or $lines[$i].StartsWith('          ')); $i++) {
+                $body += if ($lines[$i].Length -ge 10) { $lines[$i].Substring(10) } else { '' }
+            }
+            $script = ($body -join "`n").Replace($folder, $Results)
+            $script | Should -Not -Match '\$\{\{' -Because 'the folder is the only expression the script expands'
+            $file = Join-Path $TestDrive "step-$([guid]::NewGuid().ToString('N')).ps1"
+            # The runner puts this line before a pwsh step's script.
+            [IO.File]::WriteAllText($file, "`$ErrorActionPreference = 'stop'`n" + $script)
+            # No timeout: the script reads files, never the keyboard, and ends with `exit 0`.
+            $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $file 2>&1 | ForEach-Object { "$_" })
+            return @{ Output = $output; ExitCode = $LASTEXITCODE }
+        }
+    }
+    It 'ends a model fact at 70 minutes inside the 90-minute job and dumps a test process that fails fast' {
+        $model | Should -Match (Get-JobLine 'timeout-minutes: 90') -Because 'the timer, not the job limit, ends a slow run, so its evidence is uploaded'
+        $test = @(Get-ModelStep 'Test (the Connections model)')
+        $test.Count | Should -Be 1
+        $test[0] | Should -Match (Get-Lines @('          --blame-hang-timeout 70m --blame-hang-dump-type mini'))
+        ([regex]::Matches($model, '--blame-hang-timeout')).Count | Should -Be 1 -Because 'one timer, on the one test step'
+        # The runtime's own dump of a process that fails fast, as the app job's Test step has it, into the folder
+        # the evidence step uploads. ModelTestRun.EndTheProcess is the fail-fast.
+        $test[0] | Should -Match (Get-Lines @(
+                "          DOTNET_DbgEnableMiniDump: '1'",
+                "          DOTNET_DbgMiniDumpType: '4'",
+                "          DOTNET_DbgMiniDumpName: '$folder\crash-%e-%p.dmp'",
+                "          DOTNET_CreateDumpDiagnostics: '1'"))
+        $test[0] | Should -Match (Get-Lines @("          --results-directory `"$folder`""))
+        $test[0] | Should -Match (Get-Lines @("          SLATE_MODEL_REPORT_DIR: '$folder'")) -Because 'the stall rule runs with the checkpoint flusher, which runs only with a report directory'
+        # Its only keys: a step-level timeout would end it before either timer, and an if: or a continue-on-error:
+        # could skip it or turn its failure green. Each is seen when planted.
+        Get-StepKeys $test[0] | Should -Be @('name', 'run', 'env')
+        foreach ($planted in 'timeout-minutes: 30', 'continue-on-error: true', 'if: ${{ always() }}') {
+            $changed = $test[0] -replace '\A(      - name: [^\r\n]*)(\r?\n)', "`$1`$2        $planted`$2"
+            Get-StepKeys $changed | Should -Be @('name', ($planted -split ':')[0], 'run', 'env') -Because "a planted $planted is a key"
+        }
+    }
+    It 'creates the results folder directly before the test step, so a test process that fails fast before its first checkpoint keeps its dump' {
+        # createdump does not create a missing folder: it prints "Invalid dump path ... The system cannot find the
+        # path specified. (3)" and writes nothing. A family first creates the folder with its first checkpoint.
+        $create = @(Get-ModelStep 'Create the model results folder')
+        $create.Count | Should -Be 1
+        # Its only keys are the name and the command: no if:, continue-on-error: or shell override can skip or soften it.
+        $keys = @($create[0] -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+        $keys | Should -Be @('      - name: Create the model results folder', "        run: New-Item -ItemType Directory -Force '$folder' | Out-Null") -Because 'exactly the folder the dump name and both uploads use'
+        $test = @(Get-ModelStep 'Test (the Connections model)')
+        $test.Count | Should -Be 1
+        [array]::IndexOf($modelSteps, $create[0]) | Should -Be ([array]::IndexOf($modelSteps, $test[0]) - 1) -Because 'nothing between them can start a test process'
+    }
+    It 'keeps a failed attempt''s evidence under a name with the attempt, apart from the report the aggregator reads' {
+        $report = @(Get-ModelStep 'Upload model timings and coverage')
+        $report.Count | Should -Be 1
+        $live = Get-Live $report[0]
+        $live | Should -Match (Get-Lines @('        if: ${{ always() }}'))
+        $live | Should -Match (Get-Lines @('          name: windows-model-${{ github.run_id }}-${{ matrix.shard }}', '          overwrite: true'))
+        $live | Should -Not -Match 'run_attempt' -Because 'the aggregator downloads the report by run id, whichever attempt wrote it'
+        # No dump in the report: one include pattern, so the artifact's root stays the results folder, and the
+        # exclusion after it.
+        $live | Should -Match (Get-Lines @('          path: |', "            $folder\**\*", "            !$folder\**\*.dmp"))
+        $live | Should -Match (Get-Lines @('          retention-days: 30'))
+        (Get-JobBlock $windows 'windows-model') | Should -Match (Get-Lines @('          pattern: windows-model-${{ github.run_id }}-*'))
+
+        $evidence = @(Get-ModelStep 'Upload a failed attempt''s model evidence')
+        $evidence.Count | Should -Be 1
+        $live = Get-Live $evidence[0]
+        $live | Should -Match (Get-Lines @('        if: ${{ failure() || cancelled() }}'))
+        $live | Should -Match (Get-Lines @(
+                '          name: slate-windows-model-evidence-${{ github.run_id }}-${{ matrix.shard }}-${{ github.run_attempt }}',
+                "          path: '$folder\**\*'",
+                '          if-no-files-found: warn',
+                '          retention-days: 7'))
+        # The aggregator's pattern must not download it: a dump is not a report.
+        $name = [regex]::Match($live, '(?m)^          name: (.+?)[ \t]*\r?$').Groups[1].Value
+        $name | Should -Not -BeNullOrEmpty
+        $name | Should -Not -BeLike 'windows-model-*'
+        $live | Should -Not -Match '(?m)^          overwrite:' -Because 'no attempt replaces another''s evidence'
+
+        # The checkpoints go to the job log, which outlives both artifacts, whatever the test step did.
+        $print = @(Get-ModelStep 'Show where each model family stopped')
+        $print.Count | Should -Be 1
+        (Get-Live $print[0]) | Should -Match (Get-Lines @('        if: ${{ always() }}'))
+        $print[0] | Should -Match ([regex]::Escape("'$folder'"))
+        $print[0] | Should -Match ([regex]::Escape('*.progress.txt'))
+        $print[0] | Should -Match ([regex]::Escape('::error::'))
+        $order = 'Create the model results folder', 'Test (the Connections model)', 'Show where each model family stopped', 'Upload model timings and coverage', 'Upload a failed attempt''s model evidence' |
+            ForEach-Object { [array]::IndexOf($modelSteps, @(Get-ModelStep $_)[0]) }
+        $order | Should -Not -Contain -1
+        $order | Should -Be @($order | Sort-Object) -Because 'the folder exists before the test step, and the print and both uploads follow it'
+        $order[4] | Should -Be ($modelSteps.Count - 1) -Because 'nothing after the evidence upload can fail unrecorded'
+    }
+    It 'prints each family''s last checkpoint into the log, with an error line for a stalled one, and never fails the job' {
+        # The step's own script, run on three checkpoints: one the stall rule wrote, one of a family that
+        # completed, and one that is not JSON.
+        $print = @(Get-ModelStep 'Show where each model family stopped')
+        $print.Count | Should -Be 1
+        $results = Join-Path $TestDrive 'slate-model-results'
+        New-Item -ItemType Directory -Force $results | Out-Null
+        # A cell's name is the test's own text. GitHub decodes %25, %0D and %0A in a workflow command's data, so a
+        # percent sign or a line break in a name is encoded that way, never passed through.
+        [IO.File]::WriteAllText((Join-Path $results 'composed-shard-0.progress.txt'),
+            '{"family":"composed","shardIndex":0,"shardCount":2,"selectedCases":69,"completedCases":3,"activeOrdinal":7,"activeCell":"odd 100% cell\r\nsecond line","phase":"stalled","success":false,"elapsedMilliseconds":300400.5,"stalledPhase":"arrangement","stalledMilliseconds":299600.2}')
+        [IO.File]::WriteAllText((Join-Path $results 'routes-shard-0.progress.txt'),
+            '{"family":"routes","shardIndex":0,"shardCount":2,"selectedCases":6194,"completedCases":6194,"activeOrdinal":null,"activeCell":null,"phase":"complete","success":true,"elapsedMilliseconds":250000.5}')
+        [IO.File]::WriteAllText((Join-Path $results 'reroot-shard-0.progress.txt'), '{"family":')
+        $ran = Invoke-StepScript $print[0] $results
+        $ran.ExitCode | Should -Be 0
+        @($ran.Output | Where-Object { $_ -like '::error::*' }) | Should -Be @(
+            '::error::the composed model stalled on shard 0: case 7 (odd 100%25 cell%0D%0Asecond line), phase arrangement, for 300 s, with 3 of 69 cases completed')
+        $warnings = @($ran.Output | Where-Object { $_ -like '::warning::*' })
+        $warnings.Count | Should -Be 1
+        $warnings[0] | Should -BeLike '::warning::cannot read reroot-shard-0.progress.txt: *'
+        @($ran.Output | Where-Object { $_ -like '::*' }).Count | Should -Be 2 -Because 'a checkpoint''s own text never starts a line'
+        @($ran.Output | Where-Object { $_ -like 'routes-shard-0.progress.txt: *"phase":"complete"*' }).Count | Should -Be 1
+        @($ran.Output | Where-Object { $_ -like 'composed-shard-0.progress.txt: *"phase":"stalled"*' }).Count | Should -Be 1
+        # A job that failed before any family wrote a checkpoint, or before the folder existed.
+        $none = Invoke-StepScript $print[0] (Join-Path $TestDrive 'no-such-folder')
+        $none.ExitCode | Should -Be 0
+        @($none.Output | Where-Object { $_ -like '::*' }).Count | Should -Be 0
+        # A reader that held a checkpoint's file through the stall leaves the old phase in it, and ModelTestRun
+        # writes the stalled checkpoint beside it as <family>-shard-<n>.stalled.progress.txt. The pair gets its one
+        # error line.
+        $held = Join-Path $TestDrive 'held'
+        New-Item -ItemType Directory -Force $held | Out-Null
+        [IO.File]::WriteAllText((Join-Path $held 'reroot-shard-1.progress.txt'),
+            '{"family":"reroot","shardIndex":1,"shardCount":2,"selectedCases":272,"completedCases":4,"activeOrdinal":9,"activeCell":"held cell","phase":"drive","success":false,"elapsedMilliseconds":1200.5}')
+        [IO.File]::WriteAllText((Join-Path $held 'reroot-shard-1.stalled.progress.txt'),
+            '{"family":"reroot","shardIndex":1,"shardCount":2,"selectedCases":272,"completedCases":4,"activeOrdinal":9,"activeCell":"held cell","phase":"stalled","success":false,"elapsedMilliseconds":302000.5,"stalledPhase":"drive","stalledMilliseconds":300800}')
+        $pair = Invoke-StepScript $print[0] $held
+        $pair.ExitCode | Should -Be 0
+        @($pair.Output | Where-Object { $_ -like '::*' }) | Should -Be @(
+            '::error::the reroot model stalled on shard 1: case 9 (held cell), phase drive, for 301 s, with 4 of 272 cases completed')
+        @($pair.Output | Where-Object { $_ -like 'reroot-shard-1.progress.txt: *"phase":"drive"*' }).Count | Should -Be 1
     }
 }
 
