@@ -317,3 +317,1110 @@ fn a_case_only_folder_note_rename_succeeds() {
     assert_eq!(index_paths(&session, "files"), strings(&["docs/docs.md"]));
     assert_eq!(index_paths(&session, "dirs"), strings(&["docs"]));
 }
+
+// ---- #1975: a marker under an alias spelling adds no second row (I3) ----
+
+/// The names in a folder of the vault, `.slate` aside, sorted. A listing,
+/// because an existence check is case-blind on an aliasing volume.
+#[cfg(windows)]
+fn root_listing(root: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != ".slate")
+        .collect();
+    names.sort();
+    names
+}
+
+/// Contract 32 I3 after a case-only rename (found by plan 47 CB-13's step
+/// 0, #1975): the rename plants a marker under each spelling, and the next
+/// vault-wide task query sweeps them. One file keeps one row, under the
+/// spelling the volume holds, and no marker is left.
+#[test]
+fn a_case_only_rename_leaves_one_row_after_the_next_task_query() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_file("A.md", "a.md").unwrap();
+    bind_history(&session, "a.md", "kept-1975");
+
+    session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(10))
+        .unwrap();
+
+    assert_eq!(index_paths(&session, "files"), strings(&["a.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        Vec::<String>::new()
+    );
+    // The row is the note's own, read again in place: the sweep removes a
+    // row only under a spelling the volume does not store.
+    assert_eq!(
+        history_binding(&session, "a.md").as_deref(),
+        Some("kept-1975")
+    );
+}
+
+/// Gives the `files` row under `path` a history binding. A read of the note
+/// updates the row in place and keeps the binding; a row that was removed
+/// and inserted again has none, whatever id it was given.
+fn bind_history(session: &VaultSession, path: &str, name: &str) {
+    let conn = session.conn.lock().unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE files SET oplog_name = ?2 WHERE path = ?1",
+            rusqlite::params![path, name],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "premise: a row stands under {path}");
+}
+
+/// The history binding of the `files` row under `path`.
+fn history_binding(session: &VaultSession, path: &str) -> Option<String> {
+    let conn = session.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT oplog_name FROM files WHERE path = ?1",
+        rusqlite::params![path],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// The same after a case-only rename that failed (#1975): a holder that
+/// shares no deletion refuses the rename's own open after both markers are
+/// planted. The next vault-wide task query leaves the one row under the old
+/// spelling and no marker.
+#[cfg(windows)]
+#[test]
+fn a_failed_case_only_rename_leaves_one_row_after_the_next_task_query() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(tmp.path().join("A.md"))
+        .unwrap();
+    let outcome = session.rename_file("A.md", "a.md");
+    drop(holder);
+    assert!(
+        outcome.is_err(),
+        "premise: the holder refuses the rename: {outcome:?}"
+    );
+    assert_eq!(root_listing(tmp.path()), strings(&["A.md"]));
+
+    session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(10))
+        .unwrap();
+
+    assert_eq!(index_paths(&session, "files"), strings(&["A.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        Vec::<String>::new()
+    );
+}
+
+/// The vault-wide task list as `path: text`, in the order the query gives.
+fn vault_tasks(session: &VaultSession) -> Vec<String> {
+    session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|task| format!("{}: {}", task.path, task.task.text))
+        .collect()
+}
+
+fn no_markers() -> Vec<String> {
+    Vec::new()
+}
+
+/// A marker as a mover or a writer leaves one: held, as a move plants it
+/// before the kernel call, or aged, as a move leaves it when it lands.
+fn plant_marker(session: &VaultSession, path: &str, held: bool) {
+    let created_ms = if held {
+        VaultSession::HELD_MOVE_MARKER_MS
+    } else {
+        1
+    };
+    let conn = session.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO text_write_intents(path, created_ms, token, registered_epoch)
+         VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+        rusqlite::params![path, created_ms, fresh_intent_token()],
+    )
+    .unwrap();
+}
+
+/// A marker with a token and a registration epoch the fact chooses.
+fn plant_marker_as(session: &VaultSession, path: &str, token: i64, held: bool, epoch: i64) {
+    let created_ms = if held {
+        VaultSession::HELD_MOVE_MARKER_MS
+    } else {
+        1
+    };
+    let conn = session.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO text_write_intents(path, created_ms, token, registered_epoch)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![path, created_ms, token, epoch],
+    )
+    .unwrap();
+}
+
+/// Every marker as (path, token, held, registered epoch), by path and token.
+fn marker_rows(session: &VaultSession) -> Vec<(String, i64, bool, i64)> {
+    let conn = session.conn.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT path, token, created_ms, registered_epoch FROM text_write_intents
+             ORDER BY path, token",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)? == VaultSession::HELD_MOVE_MARKER_MS,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
+/// Records every file-change notification, in the order it arrives.
+#[derive(Default)]
+struct ChangeRecorder {
+    changes: std::sync::Mutex<Vec<FileChangeEvent>>,
+}
+
+impl VaultEventListener for ChangeRecorder {
+    fn on_error(&self, _code: EventErrorCode, _path: String, _message: String) {}
+    fn on_file_change(&self, event: FileChangeEvent) {
+        self.changes.lock().unwrap().push(event);
+    }
+}
+
+impl ChangeRecorder {
+    fn on(session: &VaultSession) -> Arc<ChangeRecorder> {
+        let recorder = Arc::new(ChangeRecorder::default());
+        session.register_event_listener(recorder.clone());
+        recorder
+    }
+
+    /// The notifications so far as `Kind path`, or `Kind path <- previous`
+    /// for one that carries a previous path, taken out of the record.
+    fn take(&self) -> Vec<String> {
+        self.changes
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|event| match event.previous_path {
+                Some(previous) => format!("{:?} {} <- {previous}", event.kind, event.path),
+                None => format!("{:?} {}", event.kind, event.path),
+            })
+            .collect()
+    }
+}
+
+/// A second `files` row for `stored` under `alias`, with its task rows, as
+/// the sweep wrote one before #1975 was fixed.
+fn plant_alias_row(session: &VaultSession, stored: &str, alias: &str) {
+    let conn = session.conn.lock().unwrap();
+    let columns = |table: &str, skip: &[&str]| -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .unwrap();
+        let names = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+        names
+            .map(|name| name.unwrap())
+            .filter(|name| !skip.contains(&name.as_str()))
+            .collect()
+    };
+    let file_columns = columns("files", &["id", "path", "name"]).join(", ");
+    conn.execute(
+        &format!(
+            "INSERT INTO files (path, name, {file_columns})
+             SELECT ?1, ?2, {file_columns} FROM files WHERE path = ?3"
+        ),
+        rusqlite::params![alias, leaf_name(alias), stored],
+    )
+    .unwrap();
+    let task_columns = columns("tasks", &["file_id"]).join(", ");
+    conn.execute(
+        &format!(
+            "INSERT INTO tasks (file_id, {task_columns})
+             SELECT (SELECT id FROM files WHERE path = ?1), {task_columns}
+             FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?2)"
+        ),
+        rusqlite::params![alias, stored],
+    )
+    .unwrap();
+}
+
+/// A folder's case-only rename plants one marker pair for each file in it.
+/// After the next vault-wide task query each file keeps one row, each task
+/// is listed once, and no marker is left.
+#[test]
+fn a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_query() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("Docs/Note.md", b"- [ ] one\n").unwrap();
+        provider
+            .write_file("Docs/Sub/Inner.md", b"- [ ] two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_folder("Docs", "docs").unwrap();
+
+    let mut tasks = vault_tasks(&session);
+    tasks.sort();
+    assert_eq!(
+        tasks,
+        strings(&["docs/Note.md: one", "docs/Sub/Inner.md: two"])
+    );
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["docs/Note.md", "docs/Sub/Inner.md"])
+    );
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// The same after a folder's case-only rename that failed: a holder on one
+/// file inside refuses the folder's rename after every marker is planted.
+#[cfg(windows)]
+#[test]
+fn a_folders_failed_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_query() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("Docs/Note.md", b"- [ ] one\n").unwrap();
+        provider.write_file("Docs/Two.md", b"- [ ] two\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(tmp.path().join("Docs").join("Note.md"))
+        .unwrap();
+    let outcome = session.rename_folder("Docs", "docs");
+    drop(holder);
+    assert!(
+        outcome.is_err(),
+        "premise: the holder refuses the folder's rename: {outcome:?}"
+    );
+    assert_eq!(root_listing(tmp.path()), strings(&["Docs"]));
+
+    let mut tasks = vault_tasks(&session);
+    tasks.sort();
+    assert_eq!(tasks, strings(&["Docs/Note.md: one", "Docs/Two.md: two"]));
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["Docs/Note.md", "Docs/Two.md"])
+    );
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// A folder renamed with its note makes two hops, so the note has markers
+/// under three spellings. It keeps one row.
+#[test]
+fn a_case_only_folder_note_rename_leaves_one_row_after_the_next_task_query() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("Docs/Docs.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_folder_with_note("Docs", "docs").unwrap();
+
+    assert_eq!(vault_tasks(&session), strings(&["docs/docs.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["docs/docs.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// Undo is the same rename the other way, with its own marker pair.
+#[test]
+fn an_undone_case_only_rename_leaves_one_row_after_the_next_task_query() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let report = session.rename_file("A.md", "a.md").unwrap();
+    session.undo_structural(report.op_id).unwrap();
+
+    assert_eq!(vault_tasks(&session), strings(&["A.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["A.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// A task query between a case-only rename and its undo leaves the undo
+/// working. Before #1975 was fixed the query's second row made the undo's
+/// index update fail on the path's uniqueness, as a database error.
+#[test]
+fn a_case_only_rename_is_undone_after_a_task_query() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let report = session.rename_file("A.md", "a.md").unwrap();
+    vault_tasks(&session);
+
+    let undone = session.undo_structural(report.op_id);
+    assert!(undone.is_ok(), "the undo is refused: {undone:?}");
+
+    assert_eq!(vault_tasks(&session), strings(&["A.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["A.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// A mover that stopped after the volume applied its case-only rename and
+/// before its index commit leaves the row under the old spelling and a held
+/// marker under each. The next task query's sweep leaves one row, under the
+/// spelling the volume holds.
+#[test]
+fn a_case_only_rename_the_volume_applied_and_the_index_never_recorded_leaves_one_row() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    plant_marker(&session, "A.md", true);
+    plant_marker(&session, "a.md", true);
+    std::fs::rename(tmp.path().join("A.md"), tmp.path().join("a.md")).unwrap();
+
+    assert_eq!(vault_tasks(&session), strings(&["a.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["a.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// One note's task list, asked for under the spelling the note had before
+/// a case-only rename, sweeps that spelling's marker alone. It adds no row.
+#[test]
+fn a_notes_tasks_asked_for_under_its_old_spelling_add_no_row() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_file("A.md", "a.md").unwrap();
+
+    session.tasks_for_file("A.md").unwrap();
+
+    assert_eq!(index_paths(&session, "files"), strings(&["a.md"]));
+}
+
+/// The sweep after a case-only rename tells a host that the note changed,
+/// once, under the spelling the volume holds, and nothing else. On a volume
+/// that keeps case the rename was a plain one: the old name is gone, and the
+/// sweep reports it deleted first, as it always has.
+#[test]
+fn the_sweep_after_a_case_only_rename_reports_the_stored_spelling_once() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_file("A.md", "a.md").unwrap();
+    // The volume says which it is: the old spelling still opens the note
+    // only where spellings alias.
+    let aliasing = tmp.path().join("A.md").is_file();
+    let recorder = ChangeRecorder::on(&session);
+
+    vault_tasks(&session);
+
+    let expected: &[&str] = if aliasing {
+        &["Modified a.md"]
+    } else {
+        &["Deleted A.md", "Modified a.md"]
+    };
+    assert_eq!(recorder.take(), strings(expected));
+}
+/// A provider that stands in for an aliasing volume on any platform: one
+/// alias spelling reaches the file stored under another. It can also fail
+/// the stored-spelling lookup for one path, as an unreachable volume does,
+/// and it counts the lookups it is asked for.
+struct OneAliasProvider {
+    inner: FsVaultProvider,
+    alias: &'static str,
+    stored: &'static str,
+    lookup_fails_for: std::sync::Mutex<Option<&'static str>>,
+    lookups: std::sync::atomic::AtomicUsize,
+}
+
+impl OneAliasProvider {
+    fn through<'a>(&self, relative: &'a str) -> &'a str {
+        if relative == self.alias {
+            self.stored
+        } else {
+            relative
+        }
+    }
+}
+
+impl VaultProvider for OneAliasProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(self.through(relative))
+    }
+    fn read_file_with_cap(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>, VaultError> {
+        self.inner
+            .read_file_with_cap(self.through(relative), max_bytes)
+    }
+    fn read_in_vault_with_cap(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        self.inner
+            .read_in_vault_with_cap(self.through(relative), max_bytes)
+    }
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(self.through(relative), contents)
+    }
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(self.through(relative))
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(self.through(relative))
+    }
+    fn mutation_path_kind(&self, path: &str) -> Result<Option<EntryKind>, VaultError> {
+        self.inner.mutation_path_kind(self.through(path))
+    }
+    fn mutation_path_exists(&self, path: &str) -> Result<bool, VaultError> {
+        self.inner.mutation_path_exists(self.through(path))
+    }
+    fn canonical_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.lookup_fails_for.lock().unwrap() == Some(path) {
+            return Err(VaultError::Io(std::io::Error::other(
+                "test: the stored spelling cannot be read",
+            )));
+        }
+        self.inner.canonical_path(self.through(path))
+    }
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+/// A scanned vault that stores `stored.md`, on a provider that also reaches
+/// it as `ALIAS.md`.
+fn one_alias_vault() -> (tempfile::TempDir, Arc<OneAliasProvider>, VaultSession) {
+    one_alias_vault_named("stored.md", "ALIAS.md")
+}
+
+/// The same vault under names of the fact's own. A fact that sets a fault
+/// variable needs them: a fault matches a path by substring in every
+/// session of the test process.
+fn one_alias_vault_named(
+    stored: &'static str,
+    alias: &'static str,
+) -> (tempfile::TempDir, Arc<OneAliasProvider>, VaultSession) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(stored), b"- [ ] one\n").unwrap();
+    let provider = Arc::new(OneAliasProvider {
+        inner: FsVaultProvider::new(tmp.path().to_path_buf()),
+        alias,
+        stored,
+        lookup_fails_for: std::sync::Mutex::new(None),
+        lookups: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let session = VaultSession::open(
+        Arc::clone(&provider) as Arc<dyn VaultProvider>,
+        SessionConfig::new(tmp.path().join(".slate")),
+    )
+    .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(index_paths(&session, "files"), strings(&[stored]));
+    (tmp, provider, session)
+}
+
+/// The rule itself, on every platform: a marker under a spelling the volume
+/// resolves to a file stored under another spelling is settled by reading
+/// the stored spelling. No row is added and the marker is cleared.
+#[test]
+fn a_marker_under_an_alias_is_settled_by_reading_the_stored_spelling() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_marker(&session, "ALIAS.md", false);
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// Write-intent INV2 at the bind step: a marker under an alias is never
+/// cleared while the write it guards could still be unindexed. The file
+/// holds bytes the index has not read. While the stored spelling cannot be
+/// read, the marker stands (moved onto the stored spelling's key) and the
+/// note serves no tasks, never the stale ones (INV4). The first read that
+/// lands indexes the bytes and clears the marker with them.
+#[test]
+fn a_marker_under_an_alias_is_cleared_only_with_the_files_bytes_indexed() {
+    let mut env = fault_guard();
+    let (tmp, _provider, session) = one_alias_vault_named("indexed1975.md", "INDEXED1975.md");
+    plant_marker(&session, "INDEXED1975.md", false);
+    std::fs::write(tmp.path().join("indexed1975.md"), b"- [ ] one\n- [ ] two\n").unwrap();
+
+    // The fault names the stored spelling alone (it matches by case).
+    env.set("SLATE_TEST_FAULT_REINDEX", "indexed1975");
+    assert_eq!(vault_tasks(&session), no_markers());
+    assert_eq!(index_paths(&session, "files"), strings(&["indexed1975.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["indexed1975.md"])
+    );
+
+    env.clear("SLATE_TEST_FAULT_REINDEX");
+    assert_eq!(
+        vault_tasks(&session),
+        strings(&["indexed1975.md: one", "indexed1975.md: two"])
+    );
+    assert_eq!(index_paths(&session, "files"), strings(&["indexed1975.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// The move itself, with tokens on both keys. A held token and an aged
+/// token under the alias, and under the stored spelling an aged token that
+/// carries the held one's number. After the bind step every token stands
+/// under the stored spelling: the shared number is one row and it is held
+/// (the stronger of the two), and the aged token carries the stored row's
+/// current epoch, so the quarantine cannot call it superseded by a read
+/// that came before the move. The read is made to fail so the tokens can
+/// be seen; once it lands they are all cleared.
+#[test]
+fn a_moved_marker_keeps_its_age_and_takes_the_stored_rows_epoch() {
+    let mut env = fault_guard();
+    let (_tmp, _provider, session) = one_alias_vault_named("moved1975.md", "MOVED1975.md");
+    let stored_epoch: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT index_epoch FROM files WHERE path = 'moved1975.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert!(
+        stored_epoch > 0,
+        "premise: the scan stamped the stored row's epoch"
+    );
+    // An aged token registered before the stored row's last full read: on
+    // its old epoch the quarantine would delete it without a read.
+    plant_marker_as(&session, "MOVED1975.md", 11, false, 0);
+    plant_marker_as(&session, "MOVED1975.md", 22, true, 0);
+    plant_marker_as(&session, "moved1975.md", 22, false, 0);
+
+    env.set("SLATE_TEST_FAULT_REINDEX", "moved1975");
+    assert_eq!(vault_tasks(&session), no_markers());
+    assert_eq!(index_paths(&session, "files"), strings(&["moved1975.md"]));
+    assert_eq!(
+        marker_rows(&session),
+        vec![
+            ("moved1975.md".to_string(), 11, false, stored_epoch),
+            ("moved1975.md".to_string(), 22, true, stored_epoch),
+        ]
+    );
+
+    env.clear("SLATE_TEST_FAULT_REINDEX");
+    assert_eq!(vault_tasks(&session), strings(&["moved1975.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["moved1975.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// A marker under a path that names nothing is settled as it always was:
+/// the lookup answers nothing, the read finds nothing, the row goes, the
+/// marker is cleared and the host hears the path deleted.
+#[test]
+fn a_marker_under_a_path_that_names_nothing_is_settled_as_before() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("gone1975.md", b"- [ ] one\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    std::fs::remove_file(tmp.path().join("gone1975.md")).unwrap();
+    plant_marker(&session, "gone1975.md", false);
+    let recorder = ChangeRecorder::on(&session);
+
+    assert_eq!(vault_tasks(&session), no_markers());
+    assert_eq!(index_paths(&session, "files"), no_markers());
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+    assert_eq!(recorder.take(), strings(&["Deleted gone1975.md"]));
+}
+
+/// What the bind step costs: one stored-spelling lookup for each marker
+/// the sweep selected, and none anywhere else. A task query with no marker
+/// asks for none, a marker too fresh to be selected asks for none, and a
+/// scan asks for none.
+#[test]
+fn the_stored_spelling_is_looked_up_once_for_each_selected_marker_and_never_otherwise() {
+    let (_tmp, provider, session) = one_alias_vault();
+    let lookups = || provider.lookups.load(std::sync::atomic::Ordering::SeqCst);
+    let after_open = lookups();
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+    vault_tasks(&session);
+    assert_eq!(lookups(), after_open, "no marker, no lookup");
+
+    // A writer's marker, registered now: in flight, never selected.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES ('ALIAS.md', ?1, 7, 0)",
+            rusqlite::params![now_ms()],
+        )
+        .unwrap();
+    }
+    vault_tasks(&session);
+    assert_eq!(lookups(), after_open, "a fresh marker is not looked up");
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("DELETE FROM text_write_intents", []).unwrap();
+    }
+
+    plant_marker(&session, "ALIAS.md", false);
+    plant_marker(&session, "stored.md", false);
+    vault_tasks(&session);
+    assert_eq!(lookups(), after_open + 2, "one lookup for each marker");
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+
+    vault_tasks(&session);
+    assert_eq!(lookups(), after_open + 2, "settled markers cost nothing");
+}
+
+/// Contract 32 I7 at the sweep: when the stored spelling cannot be looked
+/// up, the marker stays, nothing is read through the spelling that did not
+/// resolve, no row is added, and the task query still answers. The marker
+/// is settled by the first sweep that can look the spelling up.
+#[test]
+fn a_marker_whose_stored_spelling_cannot_be_looked_up_stays_and_adds_no_row() {
+    let (_tmp, provider, session) = one_alias_vault();
+    plant_marker(&session, "ALIAS.md", false);
+    *provider.lookup_fails_for.lock().unwrap() = Some("ALIAS.md");
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["ALIAS.md"])
+    );
+
+    *provider.lookup_fails_for.lock().unwrap() = None;
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// The write-intent protocol's per-path deferral follows the stored
+/// spelling: while an active move holds the structural lock and a held
+/// marker stands under the stored spelling, a marker under an alias of it
+/// waits too. Both are settled once the move is over.
+#[test]
+fn a_marker_under_an_alias_waits_while_a_move_owns_the_stored_spelling() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_marker(&session, "stored.md", true);
+    plant_marker(&session, "ALIAS.md", false);
+
+    let active_move = VaultStructuralLock::acquire(&session.interior).unwrap();
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["ALIAS.md", "stored.md"])
+    );
+    drop(active_move);
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// The other half of that rule: a held marker under the stored spelling
+/// whose mover is gone (the structural lock is free) holds nothing up. One
+/// note's own sweep sees only the alias marker; it claims the lock, as the
+/// sweep does for a held marker under its own key, and settles the alias
+/// marker in that same sweep. The held marker is the vault-wide sweep's.
+#[test]
+fn a_notes_own_sweep_claims_the_lock_to_settle_a_marker_under_its_alias() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_marker(&session, "stored.md", true);
+    plant_marker(&session, "ALIAS.md", false);
+
+    session.tasks_for_file("ALIAS.md").unwrap();
+
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["stored.md"])
+    );
+    assert_eq!(
+        marker_rows(&session)
+            .iter()
+            .map(|(_, _, held, _)| *held)
+            .collect::<Vec<_>>(),
+        vec![true],
+        "the held marker under the stored spelling is left for its own sweep"
+    );
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// A database an earlier build damaged: the second row is already there
+/// and a marker under its spelling is swept again (a second rename, or an
+/// undo). The row under the alias goes and the task is listed once. The
+/// stored row is the one that was there, read again.
+///
+/// A host hears one thing and no more: the stored note was read again
+/// (`Modified`, as after every repair). Nothing is sent for the alias
+/// path. `Deleted` would tell a reader that a file on disk is gone, and
+/// `Renamed` onto a spelling a host already holds (both rows were listed)
+/// would put two open buffers on one path.
+#[test]
+fn a_row_an_earlier_build_left_under_an_alias_goes_when_its_marker_is_swept() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_alias_row(&session, "stored.md", "ALIAS.md");
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["ALIAS.md", "stored.md"]),
+        "premise: the damaged database holds both rows"
+    );
+    bind_history(&session, "stored.md", "kept-1975");
+    plant_marker(&session, "ALIAS.md", false);
+    let recorder = ChangeRecorder::on(&session);
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+    assert_eq!(
+        history_binding(&session, "stored.md").as_deref(),
+        Some("kept-1975")
+    );
+    assert_eq!(recorder.take(), strings(&["Modified stored.md"]));
+}
+
+/// The other way a row comes to stand under an alias: a mover stopped after
+/// the volume applied its case-only rename, so the only row is under the
+/// old spelling and nothing is under the stored one. The sweep removes that
+/// row, reads the stored spelling and gives it its row. A host hears the
+/// same one thing: the stored note's `Modified`.
+#[test]
+fn a_row_a_stopped_move_left_under_an_alias_goes_and_the_stored_spelling_gets_its_row() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET path = 'ALIAS.md', name = 'ALIAS.md' WHERE path = 'stored.md'",
+            [],
+        )
+        .unwrap();
+    }
+    plant_marker(&session, "ALIAS.md", true);
+    plant_marker(&session, "stored.md", true);
+    let recorder = ChangeRecorder::on(&session);
+
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+    assert_eq!(recorder.take(), strings(&["Modified stored.md"]));
+}
+
+/// What a host's change feed holds after the sweep removed a row under an
+/// alias. The removal is not announced by an event, so it is not one of the
+/// session's own announced writes: the next window carries it as one file
+/// removed, exactly as it carries a scan's removal of that row. The feed
+/// must not claim an announcement that was never made, or no host would
+/// ever hear that the row went. The read of the stored note is announced
+/// (`Modified`), so it is not in the window.
+#[test]
+fn a_row_removed_from_under_an_alias_is_in_the_hosts_next_change_feed_window() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_alias_row(&session, "stored.md", "ALIAS.md");
+    plant_marker(&session, "ALIAS.md", false);
+    session.register_change_feed().unwrap();
+
+    vault_tasks(&session);
+
+    let window = session
+        .change_feed_window(None, &CancelToken::new())
+        .unwrap();
+    let page = session
+        .change_feed_page(&window.token, None, 100, &CancelToken::new())
+        .unwrap();
+    let records: Vec<String> = page
+        .records
+        .iter()
+        .map(|record| format!("{:?} {}", record.effect, record.path))
+        .collect();
+    assert_eq!(records, strings(&["Removed ALIAS.md"]));
+    assert_eq!((window.changed, window.removed), (0, 1));
+}
+/// A marker under an alias with no row under it, which is every case-only
+/// rename that ran to its end: nothing is sent for the alias. A host hears
+/// the stored note read again, once.
+#[test]
+fn a_marker_under_an_alias_with_no_row_sends_nothing_for_the_alias() {
+    let (_tmp, _provider, session) = one_alias_vault();
+    plant_marker(&session, "ALIAS.md", false);
+    plant_marker(&session, "stored.md", false);
+    let recorder = ChangeRecorder::on(&session);
+
+    vault_tasks(&session);
+
+    assert_eq!(recorder.take(), strings(&["Modified stored.md"]));
+}
+
+/// The same database with no marker left: the next full scan removes the
+/// row under the alias, and its task rows and its search row go with it.
+/// This held before #1975 was fixed; it is pinned here because it is the
+/// only repair a database gets once the markers are gone.
+#[test]
+fn a_scan_removes_a_row_an_earlier_build_left_under_an_alias() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("stored.md", b"- [ ] one zebrafish\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    plant_alias_row(&session, "stored.md", "STORED.md");
+    assert_eq!(
+        index_paths(&session, "files"),
+        strings(&["STORED.md", "stored.md"]),
+        "premise: the damaged database holds both rows"
+    );
+    assert_eq!(fts_match_count(&session, "zebrafish"), 2);
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        vault_tasks(&session),
+        strings(&["stored.md: one zebrafish"])
+    );
+    assert_eq!(fts_match_count(&session, "zebrafish"), 1);
+}
+
+/// A vault whose root keeps `A.md` and `a.md` as two files, scanned, or
+/// `None` where the volume cannot: a Linux volume as it is, and on Windows a
+/// folder switched to case-sensitive names, which needs the Windows
+/// Subsystem for Linux feature and no elevation.
+fn two_files_by_case_vault() -> Option<(tempfile::TempDir, VaultSession)> {
+    let tmp = tempfile::tempdir().unwrap();
+    #[cfg(windows)]
+    {
+        let switched = std::process::Command::new("fsutil")
+            .args(["file", "setCaseSensitiveInfo"])
+            .arg(tmp.path())
+            .arg("enable")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !switched {
+            // This machine cannot make a case-sensitive folder.
+            return None;
+        }
+    }
+    std::fs::write(tmp.path().join("A.md"), b"- [ ] upper\n").unwrap();
+    std::fs::write(tmp.path().join("a.md"), b"- [ ] lower\n").unwrap();
+    let names = std::fs::read_dir(tmp.path()).unwrap().count();
+    if names != 2 {
+        // This volume keeps one file for `A.md` and `a.md`.
+        return None;
+    }
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    Some((tmp, session))
+}
+
+/// Two real files whose names differ only by case are two files: a marker
+/// under each is settled by reading each, and both rows stay, each the row
+/// it was. The volume says which spellings are aliases; no case rule does
+/// (contract 32 I1).
+///
+/// Where the volume cannot hold both names the fact has nothing to run on.
+/// It says which happened, so a run's output shows whether it ran.
+// The line printed is the fact's own record and names no vault path; #507's
+// no-stdout rule is for slate-core itself.
+#[allow(clippy::disallowed_macros)]
+#[test]
+fn two_files_whose_names_differ_only_by_case_keep_two_rows() {
+    let Some((_tmp, session)) = two_files_by_case_vault() else {
+        println!(
+            "two_files_whose_names_differ_only_by_case_keep_two_rows: SKIPPED, this volume cannot hold both names"
+        );
+        return;
+    };
+    println!(
+        "two_files_whose_names_differ_only_by_case_keep_two_rows: RAN on a folder that holds both names"
+    );
+    assert_eq!(index_paths(&session, "files"), strings(&["A.md", "a.md"]));
+    bind_history(&session, "A.md", "upper-1975");
+    bind_history(&session, "a.md", "lower-1975");
+    plant_marker(&session, "A.md", false);
+    plant_marker(&session, "a.md", false);
+    let recorder = ChangeRecorder::on(&session);
+
+    let mut tasks = vault_tasks(&session);
+    tasks.sort();
+    assert_eq!(tasks, strings(&["A.md: upper", "a.md: lower"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["A.md", "a.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+    assert_eq!(
+        (
+            history_binding(&session, "A.md"),
+            history_binding(&session, "a.md"),
+        ),
+        (
+            Some("upper-1975".to_string()),
+            Some("lower-1975".to_string()),
+        )
+    );
+    assert_eq!(
+        recorder.take(),
+        strings(&["Modified A.md", "Modified a.md"])
+    );
+}
+
+/// The two repair routes a host calls with a path of its own bind it as a
+/// save does (contract 32 I2 and I3): through an alias they read the stored
+/// row again and add none. On every platform, through the stand-in
+/// provider, and on a real volume where it aliases.
+#[test]
+fn a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none() {
+    let (tmp, _provider, session) = one_alias_vault();
+    std::fs::write(tmp.path().join("stored.md"), b"- [ ] one\n- [ ] two\n").unwrap();
+    session.reindex_path("ALIAS.md").unwrap();
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        vault_tasks(&session),
+        strings(&["stored.md: one", "stored.md: two"])
+    );
+
+    std::fs::write(tmp.path().join("stored.md"), b"- [ ] three\n").unwrap();
+    let outcome = session.repair_or_contain_path("ALIAS.md").unwrap();
+    assert_eq!(outcome, TaskIndexRepairOutcome::Repaired);
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: three"]));
+
+    let Some((_tmp, session)) = aliasing_vault() else {
+        return;
+    };
+    session.reindex_path("notes/alpha.md").unwrap();
+    assert_eq!(index_paths(&session, "files"), strings(&["Notes/Alpha.md"]));
+    let outcome = session.repair_or_contain_path("notes/alpha.md").unwrap();
+    assert_eq!(outcome, TaskIndexRepairOutcome::Repaired);
+    assert_eq!(index_paths(&session, "files"), strings(&["Notes/Alpha.md"]));
+}
+
+/// Contract 32 I7 at the host's repair routes: a lookup that fails reads
+/// nothing through the spelling that did not resolve and adds no row.
+/// `reindex_path` hands the failure back. `repair_or_contain_path` answers
+/// `Contained`, as for any file it cannot read, and leaves an aged marker
+/// under the spelling the host gave, which the next sweep that can look the
+/// spelling up settles under the stored one.
+#[test]
+fn a_hosts_repair_whose_lookup_fails_reads_nothing_and_adds_no_row() {
+    let (_tmp, provider, session) = one_alias_vault();
+    *provider.lookup_fails_for.lock().unwrap() = Some("ALIAS.md");
+
+    assert!(matches!(
+        session.reindex_path("ALIAS.md"),
+        Err(VaultError::Io(_))
+    ));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+
+    let outcome = session.repair_or_contain_path("ALIAS.md").unwrap();
+    assert_eq!(outcome, TaskIndexRepairOutcome::Contained);
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(
+        index_paths(&session, "text_write_intents"),
+        strings(&["ALIAS.md"])
+    );
+
+    *provider.lookup_fails_for.lock().unwrap() = None;
+    assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
+    assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
+}
+
+/// Found on the way (#1975's design, item b): a folder's case-only rename
+/// moves the rows of the folders inside it too. Before the fix the index
+/// update asked the volume whether `Docs/Sub` was still there, the alias
+/// answered yes, and the row stayed under the old spelling, so the Files
+/// tree showed no folder inside `docs` until the next scan.
+#[test]
+fn a_folders_case_only_rename_moves_the_rows_of_the_folders_inside_it() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Docs/Sub/Inner.md", b"# inner\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.rename_folder("Docs", "docs").unwrap();
+
+    assert_eq!(
+        index_paths(&session, "dirs"),
+        strings(&["docs", "docs/Sub"])
+    );
+    let listing = session
+        .list_dir_children("docs", Paging::first(10))
+        .unwrap();
+    let folders: Vec<String> = listing.dirs.into_iter().map(|dir| dir.path).collect();
+    assert_eq!(folders, strings(&["docs/Sub"]));
+}
+
+/// What the rule that D4 narrowed is for (write-intent protocol, the
+/// final-confirmation review: "Directory rows apply the same source-Live
+/// rule so file and directory trees cannot split"): a folder inside the
+/// moved one that is there again under its own old path when the index is
+/// updated, because a save recreated it after the rename, keeps its row.
+/// Moving that row would leave the files saved there with no folder row.
+#[test]
+fn a_folder_recreated_at_its_old_path_keeps_its_row_through_a_folder_move() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("f1975/sub/a.md", b"# a\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        index_paths(&session, "dirs"),
+        strings(&["f1975", "f1975/sub"])
+    );
+
+    // The folder moved on disk, and a save then recreated the inner folder
+    // at its old path.
+    std::fs::rename(tmp.path().join("f1975"), tmp.path().join("g1975")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("f1975").join("sub")).unwrap();
+    {
+        let mut conn = session.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        rename_prefix_in_index(
+            &tx,
+            session.provider.as_ref(),
+            "f1975",
+            "g1975",
+            &[("f1975/sub/a.md".to_string(), "g1975/sub/a.md".to_string())],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    assert_eq!(
+        index_paths(&session, "dirs"),
+        strings(&["f1975/sub", "g1975"])
+    );
+}
