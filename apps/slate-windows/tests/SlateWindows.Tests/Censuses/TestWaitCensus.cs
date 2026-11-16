@@ -2550,8 +2550,6 @@ public sealed class TestWaitCensus
     [
         ("AccessibilityNotificationDispatcherTests.cs", "TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction", 1,
             "no-wait-witness: nearest word; the launch clock, read after the first frame, is held under the start-up hold"),
-        ("CanvasEndToEndTests.cs", "LargeCanvasOpensNavigatesAndWindowsUnderBudget", 4,
-            "no-wait-witness: nearest word; four cold budgets (open, first derivation, pan, navigator), each one reading"),
         ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesTreeQueryAndDrainsAtOnce", 1,
             "no-wait-witness: none shown yet; the candidate is observed(), read straight after Dispose"),
         ("ConnectionsLeafTests.Rescan.cs", "AClosesTeardownCancelsTheProbesGraphQueryAndDrainsAtOnce", 1,
