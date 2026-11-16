@@ -1265,7 +1265,7 @@ public sealed class SaveChainAdmissionTests
     {
         using var h = Vault.WithADeletedNote("recover-behind-ghost-save", "gone.md", Gone);
         (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
-        WorkspaceTabViewModel ghost = h.Open("gone.md");
+        WorkspaceTabViewModel ghost = h.OpenNow("gone.md");
         Assert.Null(ghost.SavedContentHash);
         var held = new HeldWork(hook => ghost.SaveWriteHookForTests = hook);
         var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
@@ -1307,7 +1307,7 @@ public sealed class SaveChainAdmissionTests
     {
         using var h = Vault.WithADeletedNote("save-behind-recover", "gone.md", Gone);
         (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
-        WorkspaceTabViewModel ghost = h.Open("gone.md");
+        WorkspaceTabViewModel ghost = h.OpenNow("gone.md");
         var held = new HeldWork(hook => h.Workspace.HistoryCreateHookForTests = hook);
         var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
         try
@@ -1383,6 +1383,185 @@ public sealed class SaveChainAdmissionTests
             h.ReleaseAndDrain();
         }
     });
+
+    // ---- A Bases cell edit on a note with no tab (plan 47 CB-9a, #1889) -------
+
+    /// <summary>A cell edit on a note with no tab takes the note's property
+    /// lease and a ticket in the note's chain: nothing is written until the
+    /// operation admitted before it ends, and then it writes once.</summary>
+    [Fact]
+    public void ATablessBasesCellEditWaitsForAnOperationAdmittedForTheNoteAndWritesOnce() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-behind-op", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int writes = 0;
+        h.Workspace.BasesTablessWriteHookForTests = () => Interlocked.Increment(ref writes);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, Volatile.Read(ref writes));
+            Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.True(h.Workspace.PropertyWriteInFlightFor("a.md"), "the lease was not held while the write waited");
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.BasesCellSaved) && h.Workspace.SavesIdle,
+                "the cell write after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal(1, Volatile.Read(ref writes));
+            Assert.Contains("status: done", h.Read("a.md"), StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+            Assert.False(h.Workspace.PropertyWriteInFlightFor("a.md"));
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The route is decided again at the write's turn. A tab that
+    /// opened on the note while the write waited takes it: a clean tab
+    /// writes on its saved hash and is rebaselined, and a dirty tab refuses
+    /// with the dirty-note sentence. Either way the tabless write does not
+    /// run too.</summary>
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("dirty")]
+    public void ATablessBasesCellEditWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute(string tab) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-tab-opened-" + tab, ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int tablessWrites = 0;
+        int tabWrites = 0;
+        h.Workspace.BasesTablessWriteHookForTests = () => Interlocked.Increment(ref tablessWrites);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            opened.PropertyWriteHookForTests = () => Interlocked.Increment(ref tabWrites);
+            if (tab == "dirty")
+            {
+                opened.Text = Note + "An unsaved line.\n";
+            }
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => tab == "dirty" ? e is A11yEvent.HostComposed : e is A11yEvent.BasesCellSaved),
+                "the write's turn on the tab that opened");
+            Assert.True(held.Result);
+            Assert.Equal(0, Volatile.Read(ref tablessWrites));
+            if (tab == "dirty")
+            {
+                Assert.Equal(0, Volatile.Read(ref tabWrites));
+                Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+                _ = Assert.Single(
+                    h.Events.OfType<A11yEvent.HostComposed>(),
+                    line => line.Text == "Save the note before editing properties. The editor has unsaved changes in a.md.");
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellSaved);
+            }
+            else
+            {
+                Assert.Equal(1, Volatile.Read(ref tabWrites));
+                string written = h.Read("a.md");
+                Assert.Contains("status: done", written, StringComparison.Ordinal);
+                Assert.Equal(written, opened.Text);
+                Assert.False(opened.IsExternallyStale);
+                Assert.False(opened.IsDirty);
+                _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The other direction: the tabless write is held before its
+    /// core call when a tab opens on the note and saves. The save waits for
+    /// the write's publication, which rebaselines the tab that raced open,
+    /// so the save then finds a clean tab on the written bytes.</summary>
+    [Fact]
+    public void ASaveStartedUnderATablessBasesCellEditWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-tabless-cell", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int writes = 0;
+        var held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook is null
+            ? null
+            : () =>
+            {
+                _ = Interlocked.Increment(ref writes);
+                hook();
+            });
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(Note, opened.Text);
+            string? textWhenTheSavePublished = null;
+            Task<bool> save = opened.SaveAsync(onSaved: () => textWhenTheSavePublished = opened.Text, announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the cell write");
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Events.Any(e => e is A11yEvent.BasesCellSaved) && h.Workspace.SavesIdle,
+                "the cell write and then the save");
+            Assert.True(save.Result);
+            Assert.Equal(1, Volatile.Read(ref writes));
+            string written = h.Read("a.md");
+            Assert.Contains("status: done", written, StringComparison.Ordinal);
+            Assert.Equal(written, textWhenTheSavePublished);
+            Assert.Equal(written, opened.Text);
+            Assert.False(opened.IsExternallyStale);
+            Assert.False(opened.IsDirty);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict or A11yEvent.PropertyEditConflict);
+            Assert.False(h.Workspace.PropertyWriteInFlightFor("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The base's row for a.md and its status column, with no tab
+    /// on the note.</summary>
+    private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) TablessStatusCell(Vault h)
+    {
+        BaseDocumentViewModel document = h.Workspace.BaseDocumentFor("Notes.base");
+        h.PumpUntil(
+            () => document.Result?.Rows.Any(row => row.FilePath == "a.md") == true,
+            "the base's rows");
+        BasesRow row = document.Result!.Rows.Single(candidate => candidate.FilePath == "a.md");
+        BasesColumn column = document.Result.Columns.Single(candidate => candidate.Id == "note.status");
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+        h.Events.Clear();
+        return (document, row, column);
+    }
 
     /// <summary>The deleted note's row, loaded, and the alerts the workspace
     /// raises from here on.</summary>
@@ -1624,6 +1803,17 @@ public sealed class SaveChainAdmissionTests
             Workspace.OpenPath(path, WorkspaceOpenTarget.NewTab);
             Settle();
             Events.RemoveRange(before, Events.Count - before);
+            return Workspace.Groups.SelectMany(group => group.Tabs).Last(tab => tab.Path == path);
+        }
+
+        /// <summary>A new tab on the path, waited for by one drained turn of
+        /// the dispatcher and no fixed time. What its open speaks is left in
+        /// <see cref="Events"/>: a fact that counts events clears them, or
+        /// asks for the kinds it means.</summary>
+        public WorkspaceTabViewModel OpenNow(string path)
+        {
+            Workspace.OpenPath(path, WorkspaceOpenTarget.NewTab);
+            PumpedDispatcher.Drain();
             return Workspace.Groups.SelectMany(group => group.Tabs).Last(tab => tab.Path == path);
         }
 

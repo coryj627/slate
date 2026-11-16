@@ -190,13 +190,6 @@ public sealed class SaveChainAdmissionCensus
     private static readonly Row[] OutsideTheChain =
     [
         new(
-            "WorkspaceViewModel.Bases.cs",
-            "BasesTablessWriteBody",
-            ["DeleteProperty", "SetProperty"],
-            "a cell edit on a note with no tab writes under the note's property lease only, on the bounded drain",
-            "2026-11-16",
-            "CB-9a"),
-        new(
             "Panels/TasksReviewViewModel.cs",
             "ToggleTask",
             ["ToggleTaskStatus"],

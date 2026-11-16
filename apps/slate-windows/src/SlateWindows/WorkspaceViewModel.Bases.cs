@@ -1872,10 +1872,7 @@ internal sealed partial class WorkspaceViewModel
             // the whole operation (one write per path at a time, any
             // origin).
             string path = row.FilePath;
-            (WorkspaceTabViewModel Tab, int Identity)[] requestTabs = [.. Groups
-                .SelectMany(group => group.Tabs)
-                .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))
-                .Select(candidate => (candidate, candidate.ItemIdentity))];
+            (WorkspaceTabViewModel Tab, int Identity)[] requestTabs = TabsShowing(path);
             AdmitPropertyWrite(
                 path,
                 () => BasesCellWriteAdmitted(document, row, column, key, value, requestTabs),
@@ -1885,22 +1882,128 @@ internal sealed partial class WorkspaceViewModel
         // Tabless: direct write, no expected hash (mac parity), but
         // under the same note-scoped lease — two rapid cell edits on
         // one note must serialize, not race last-writer-wins (red
-        // team round 1). Off the dispatcher in production; inline in
-        // synchronous tests.
+        // team round 1). Plan 47 CB-9a (#1889): the write joins the
+        // note's save chain too, as the open-note route does: it never
+        // writes beside a save or an operation admitted before it, and
+        // a save asked for after it waits for its publication. The
+        // lease is held from here to the operation's end.
         if (!TryAcquirePropertyWriteLease(row.FilePath))
         {
             AnnounceWriteInFlightRefusal();
             return;
         }
-        if (!_startInteractionBackgroundWork)
+        string tabless = row.FilePath;
+        AdmitPropertyWrite(
+            tabless,
+            () => BasesTablessWriteAdmitted(document, row, column, key, value),
+            () => ReleasePropertyWriteLease(tabless));
+    }
+
+    /// <summary>The tabs on <paramref name="path"/>, each with the document
+    /// it shows now.</summary>
+    private (WorkspaceTabViewModel Tab, int Identity)[] TabsShowing(string path) => [.. Groups
+        .SelectMany(group => group.Tabs)
+        .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))
+        .Select(candidate => (candidate, candidate.ItemIdentity))];
+
+    /// <summary>Plan 47 CB-9a (#1889): the admitted cell write on a note that
+    /// had no tab when the edit was asked, run once every save and operation
+    /// admitted for the note before it has ended. The route is decided again
+    /// here. A Markdown tab on the note by now takes the open-note route's
+    /// gates on that tab (<see cref="BasesCellWriteAdmitted"/>): a tabless
+    /// request named a path and never a document, so the tab's own identity
+    /// at this turn is the one it is handed. Still no tab: the write runs on
+    /// its worker, tracked by the save coordinator, so teardown joins it
+    /// before the session goes. The operation ends with the write's
+    /// publication; every exit releases the lease.</summary>
+    private Task BasesTablessWriteAdmitted(
+        BaseDocumentViewModel document,
+        BasesRow row,
+        BasesColumn column,
+        string key,
+        PropertyValue? value)
+    {
+        string path = row.FilePath;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
         {
-            BasesTablessWriteBody(document, row, column, key, value);
+            if (_workspaceDisposed || _saves.IsClosed)
+            {
+                ReleasePropertyWriteLease(path);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (Groups.SelectMany(group => group.Tabs).Any(candidate =>
+                candidate.IsMarkdown && string.Equals(candidate.Path, path, StringComparison.Ordinal)))
+            {
+                return BasesCellWriteAdmitted(document, row, column, key, value, TabsShowing(path));
+            }
+            Action? hook = BasesTablessWriteHookForTests;
+            if (!_startInteractionBackgroundWork)
+            {
+                BasesTablessWriteBody(document, row, column, key, value, hook, done);
+                return done.Task;
+            }
+            Task worker = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value, hook, done));
+            _saves.TrackWorker(worker);
+            // The bounded drain as well: a base document's own teardown
+            // waits this write's session touch out (codex round 5).
+            TrackRetiredBasesWork(worker);
+            // The worker faulted outside the body's catch, so no publication
+            // was posted: the write still fails aloud, the lease goes, and
+            // the operation ends carrying the fault.
+            _ = worker.ContinueWith(
+                faulted =>
+                {
+                    Exception fault = faulted.Exception!.GetBaseException();
+                    RunOnSaveDispatcher(() => EndTablessWrite(
+                        path,
+                        done,
+                        () =>
+                        {
+                            if (!_workspaceDisposed)
+                            {
+                                _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(fault)));
+                            }
+                        },
+                        fault));
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+        catch (Exception exception)
+        {
+            ReleasePropertyWriteLease(path);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
+    }
+
+    /// <summary>The end of a tabless cell write, on the dispatcher: the
+    /// lease is released where it was acquired, before anything is spoken,
+    /// and the operation ends whether or not <paramref name="publish"/>
+    /// throws.</summary>
+    private void EndTablessWrite(string path, TaskCompletionSource done, Action publish, Exception? fault = null)
+    {
+        ReleasePropertyWriteLease(path);
+        try
+        {
+            publish();
+        }
+        catch (Exception exception)
+        {
+            _ = done.TrySetException(exception);
             return;
         }
-        // TRACKED: the bounded teardown drain must wait this write's
-        // session touch out before disposal (codex round 5).
-        TrackRetiredBasesWork(
-            Task.Run(() => BasesTablessWriteBody(document, row, column, key, value)));
+        if (fault is null)
+        {
+            _ = done.TrySetResult();
+        }
+        else
+        {
+            _ = done.TrySetException(fault);
+        }
     }
 
     /// <summary>#1657: the admitted cell write on an open note, run once
@@ -1996,23 +2099,34 @@ internal sealed partial class WorkspaceViewModel
         return done.Task;
     }
 
+    /// <summary>Plan 47 CB-9a test seam: runs on the tabless cell write's
+    /// worker before its core call. A fact holds the write there, counts it,
+    /// or throws.</summary>
+    internal Action? BasesTablessWriteHookForTests { get; set; }
+
+    /// <summary>The tabless cell write's worker half and its publication.
+    /// The write keeps a null expected hash: a Bases row carries no content
+    /// hash, and core applies the change as a read, an edit and a write
+    /// under one lock, so admitted behind a save it lands on the bytes that
+    /// save published. Both publications run on the save chain's dispatcher
+    /// and end the operation (<paramref name="done"/>) on every path.</summary>
     private void BasesTablessWriteBody(
         BaseDocumentViewModel document,
         BasesRow row,
         BasesColumn column,
         string key,
-        PropertyValue? value)
+        PropertyValue? value,
+        Action? hook,
+        TaskCompletionSource done)
     {
+        string path = row.FilePath;
+        SaveReport report;
         try
         {
-            if (value is null)
-            {
-                _ = _session.DeleteProperty(row.FilePath, key, expectedContentHash: null);
-            }
-            else
-            {
-                _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash: null);
-            }
+            hook?.Invoke();
+            report = value is null
+                ? _session.DeleteProperty(path, key, expectedContentHash: null)
+                : _session.SetProperty(path, key, value, expectedContentHash: null);
         }
         catch (Exception failure) when (failure
             is not OutOfMemoryException
@@ -2023,28 +2137,31 @@ internal sealed partial class WorkspaceViewModel
             // team round 2): any worker failure must still release the
             // note-scoped lease — a stranded entry refuses every later
             // property write to this note, panel rows included,
-            // forever.
-            RunOnDispatcher(() =>
+            // forever — and end the admitted operation.
+            RunOnSaveDispatcher(() => EndTablessWrite(path, done, () =>
             {
-                _ = _propertyWritePaths.Remove(row.FilePath);
                 if (!_workspaceDisposed)
                 {
                     _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure)));
                 }
-            });
+            }));
             return;
         }
-        RunOnDispatcher(() =>
+        RunOnSaveDispatcher(() => EndTablessWrite(path, done, () =>
         {
-            // Released on the dispatcher, where it was acquired; a
-            // completion landing after teardown must not refresh or
+            // A completion landing after teardown must not refresh or
             // announce into a dead workspace (codex round 5).
-            _ = _propertyWritePaths.Remove(row.FilePath);
-            if (!_workspaceDisposed)
+            if (_workspaceDisposed)
             {
-                CompleteBasesWrite(document, row, column, value);
+                return;
             }
-        });
+            // Contract 8, for the one property write that skipped it: a
+            // tab that opened on the note while the write ran loaded the
+            // bytes from before it. A clean one is rebaselined to the
+            // written bytes; a dirty one is marked stale and told so.
+            _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
+            CompleteBasesWrite(document, row, column, value);
+        }));
     }
 
     /// <summary>The one post-write funnel (contract C9): bump the
