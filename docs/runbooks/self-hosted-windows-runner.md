@@ -2053,9 +2053,13 @@ Get-Content C:\slate-ci\logs\orchestrator-*.log |
 A timeout that could take no stack also says two things in its message
 (#1843): the longest stretch the test process's heartbeat thread went
 without running during the body, and how long the collector paused the
-process then. Both are measured from before the body's thread starts to
-the moment its bound passes, so the wait for a stack and the dump are not
-in them. A long gap is what a stop of the whole process or VM would
+process then. The gap is measured from before the body's thread starts to
+its deadline, so a stall after the bound, the wait for a stack and the
+dump are not in it. The pause is the collector's total from the same
+start to the moment the waiting runner ran again, since the runtime gives
+a total and no times: a collection or a suspension in progress when the
+bound passed is counted whole. A long gap is what a stop of the whole
+process or VM would
 leave, once the collector's pause beside it is set aside. A short gap
 says the process as a whole kept running, and the reading cannot tell
 whether the fact's thread was busy, blocked or starved: the heartbeat

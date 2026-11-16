@@ -9,8 +9,8 @@ namespace SlateWindows.Tests;
 /// #1843: one thread for the whole test process that does nothing but note
 /// the time, ten times a second. A fact that times out without giving up
 /// its stack (<see cref="StaThread"/>) reads the longest stretch in which
-/// this thread did not run between the body's start and the passing of
-/// its bound, and says it in the timeout's message.
+/// this thread did not run between the body's start and its deadline, and
+/// says it in the timeout's message.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,8 +37,14 @@ namespace SlateWindows.Tests;
 /// </para>
 /// <para>
 /// What a reading covers. A fact opens a window before its thread starts
-/// and reads it up to the moment its bound passed. The wait for a stack
-/// and the dump come after that moment and are not in the reading.
+/// and reads it up to its deadline: the start of the runner's wait plus
+/// the bound, wherever the runner itself was when it next ran. The wait
+/// for a stack and the dump come after the deadline and are not in the
+/// gap. The collector's pause printed beside the gap cannot be cut the
+/// same way, since the runtime gives a total and no times: it is the
+/// collector's total from the window's opening to the moment the waiting
+/// runner ran again, so a collection or a suspension in progress when the
+/// bound passed is counted whole.
 /// </para>
 /// <para>
 /// The thread sets no apartment state and makes no dispatcher and no
@@ -146,9 +152,10 @@ internal static class Heartbeat
         /// <paramref name="to"/>, a <see cref="Stopwatch"/> timestamp, in
         /// which the thread recorded no beat. The stretch still open at
         /// <paramref name="to"/> counts up to it. Nothing after it counts,
-        /// whenever the reading is taken: a timed-out fact names the moment
-        /// its bound passed, and what stops the thread after that (the wait
-        /// for a stack, the dump) is not read as part of the body.</summary>
+        /// whenever the reading is taken: a timed-out fact names its
+        /// deadline, and what stops the thread after that (a runner late to
+        /// run again, the wait for a stack, the dump) is not read as part of
+        /// the body.</summary>
         internal TimeSpan LongestGapUntil(long to) =>
             Stopwatch.GetElapsedTime(0, _ring.LongestGap(_from, to));
     }

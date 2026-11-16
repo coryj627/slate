@@ -65,8 +65,9 @@ namespace SlateWindows.Tests;
 /// fact fails here instead of at the job's limit. A timeout that takes no
 /// stack says how long the process's heartbeat thread went without running
 /// during the body, and how long the collector paused the process then
-/// (#1843, <see cref="Heartbeat"/>): both are measured from before the
-/// body's thread starts to the moment its bound passes. A body that unwinds
+/// (#1843, <see cref="Heartbeat"/>): the gap is measured from before the
+/// body's thread starts to its deadline, and the pause from there to the
+/// moment the waiting runner runs again. A body that unwinds
 /// within <see cref="UnwindGrace"/> still has its classes unregistered; one
 /// that does not is running beside every later fact, so
 /// <see cref="LeakedDispatcherGuardAttribute"/> fails each of them
@@ -121,8 +122,31 @@ internal static class StaThread
     internal static Action? BeforeBodyForTests { get; set; }
 
     /// <summary>Test seam (#1843): answers in place of the heartbeat's
-    /// longest gap.</summary>
-    internal static Func<TimeSpan>? LongestGapForTests { get; set; }
+    /// longest gap. It is handed the end of the window the reading covers,
+    /// as a <see cref="System.Diagnostics.Stopwatch"/> timestamp.</summary>
+    internal static Func<long, TimeSpan>? LongestGapForTests { get; set; }
+
+    /// <summary>Test seam (#1843): runs right after the runner's Join has
+    /// timed out, before anything is noted or read, so a witness can make
+    /// the runner late, as a suspended process would.</summary>
+    internal static Action? AfterBoundForTests { get; set; }
+
+    /// <summary>#1843: where the window a timed-out body's reading covers
+    /// ends, as a <see cref="System.Diagnostics.Stopwatch"/> timestamp: the
+    /// deadline, which is the start of the runner's wait
+    /// (<paramref name="joinStarted"/>) plus its <paramref name="limit"/>,
+    /// and never later than <paramref name="now"/>.</summary>
+    /// <remarks>The moment the waiting runner next runs is not the moment
+    /// the bound passed. A process suspended from second 55 to second 120 of
+    /// a 60 s bound resumes its runner a minute late, and 5 s of that stall
+    /// lay inside the bound. The arithmetic is 128 bits wide, so the longest
+    /// bound a wait accepts, about 24 days, cannot overflow it.</remarks>
+    internal static long WindowEnd(long joinStarted, TimeSpan limit, long now)
+    {
+        Int128 waited = Math.Max(0, now - joinStarted);
+        Int128 bound = (Int128)limit.Ticks * System.Diagnostics.Stopwatch.Frequency / TimeSpan.TicksPerSecond;
+        return joinStarted + (long)Int128.Clamp(bound, 0, waited);
+    }
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
@@ -339,18 +363,24 @@ internal static class StaThread
         };
         thread.SetApartmentState(ApartmentState.STA);
         // #1843: what a timeout that takes no stack reads is measured from
-        // here, before the thread starts, to the moment the bound passes
-        // below, so the body's time lies inside it and nothing later does.
+        // here, before the thread starts, to the deadline below, so the
+        // body's time lies inside it and nothing later does.
         Heartbeat.Window beats = Heartbeat.OpenWindow();
         TimeSpan pausedBefore = GC.GetTotalPauseDuration();
         thread.Start();
         AfterStartForTests?.Invoke();
         TimeSpan limit = timeout ?? DefaultTimeout;
+        long joinStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!thread.Join(limit))
         {
-            // The window closes here. The wait for a stack and the dump come
-            // after it, so a stall during either is not read as the body's.
-            long boundPassed = System.Diagnostics.Stopwatch.GetTimestamp();
+            AfterBoundForTests?.Invoke();
+            // The heartbeat's window closes at the deadline, not at this
+            // moment, which is later by however long this thread took to run
+            // again. The wait for a stack and the dump come after both, so a
+            // stall during either is not read as the body's.
+            long boundPassed = WindowEnd(joinStarted, limit, System.Diagnostics.Stopwatch.GetTimestamp());
+            // The collector gives one total and no times, so its pause cannot
+            // be cut at the deadline: it is the total up to this moment.
             TimeSpan paused = GC.GetTotalPauseDuration() - pausedBefore;
             Dispatcher? dispatcher = Volatile.Read(ref owner) is { } started ? Dispatcher.FromThread(started) : null;
             (string stack, bool taken) = StackOf(thread, dispatcher);
@@ -415,21 +445,33 @@ internal static class StaThread
     internal static readonly TimeSpan StalledGap = TimeSpan.FromSeconds(5);
 
     /// <summary>#1843: what a timeout that took no stack measured of its
-    /// body's time, from before the body's thread started to
-    /// <paramref name="boundPassed"/>: the heartbeat's sentence
-    /// (<see cref="HeartbeatSaw"/>), then the collector's
-    /// (<see cref="CollectorSaw"/>) for the <paramref name="paused"/> it
-    /// counted in that time. A collection stops the heartbeat's thread too,
-    /// so its pause stands beside the heartbeat's gap. The job log keeps
-    /// both sentences for 90 days, so they outlive the dump.</summary>
-    /// <remarks>A failure is a sentence too, as the dump's is: a diagnostic
-    /// never changes the timeout's path (the cancel, the dispatcher's
-    /// shutdown, the unwind join, the class cleanup).</remarks>
+    /// body's time: the heartbeat's sentence (<see cref="HeartbeatSaw"/>),
+    /// then the collector's (<see cref="CollectorSaw"/>). A collection stops
+    /// the heartbeat's thread too, so its pause stands beside the
+    /// heartbeat's gap. The job log keeps both sentences for 90 days, so
+    /// they outlive the dump.</summary>
+    /// <remarks>
+    /// <para>
+    /// The two cover slightly different times. The heartbeat's gap is read
+    /// from before the body's thread started to
+    /// <paramref name="boundPassed"/>, the deadline
+    /// (<see cref="WindowEnd"/>). The collector gives a total and no times,
+    /// so <paramref name="paused"/> is its total from before the body's
+    /// thread started to the moment the waiting runner ran again: a
+    /// collection or a suspension in progress when the bound passed is
+    /// counted whole.
+    /// </para>
+    /// <para>
+    /// A failure is a sentence too, as the dump's is: a diagnostic never
+    /// changes the timeout's path (the cancel, the dispatcher's shutdown,
+    /// the unwind join, the class cleanup).
+    /// </para>
+    /// </remarks>
     private static string ReadingOf(Heartbeat.Window beats, long boundPassed, TimeSpan paused)
     {
         try
         {
-            TimeSpan gap = LongestGapForTests is { } answer ? answer() : beats.LongestGapUntil(boundPassed);
+            TimeSpan gap = LongestGapForTests is { } answer ? answer(boundPassed) : beats.LongestGapUntil(boundPassed);
             GCMemoryInfo last = GC.GetGCMemoryInfo();
             return HeartbeatSaw(gap) + CollectorSaw(paused, last.Index, last.MemoryLoadBytes, last.TotalAvailableMemoryBytes);
         }
@@ -473,8 +515,8 @@ internal static class StaThread
         string.Create(CultureInfo.InvariantCulture, $"{tenths / 10}.{tenths % 10}");
 
     /// <summary>The collector's sentence, from what it reported:
-    /// <paramref name="paused"/> is how long it paused the process during
-    /// the body. The memory load is the machine's, as the collector recorded
+    /// <paramref name="paused"/> is how long it paused the process over the
+    /// body's time, counted as <see cref="ReadingOf"/> says. The memory load is the machine's, as the collector recorded
     /// it at the process's last collection of any kind, which can be earlier
     /// than the body: the share of <paramref name="availableBytes"/> in use
     /// (<paramref name="loadBytes"/>) then. The collector records one at
