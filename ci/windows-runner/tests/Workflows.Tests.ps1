@@ -5,7 +5,8 @@
 # over what branch-cleanup.yml owns (the weekly claude/* branch report;
 # its script's behaviour is BranchCleanup.Tests.ps1), over the PR gate that
 # main's ruleset requires, over the pause on Dependabot version updates, over
-# a11y-check.yml's gate on results whose download failed (#1575), and over the
+# a11y-check.yml's gate on results whose download failed (#1575) and its score
+# comment when no score is computed (#1616), and over the
 # .NET SDK pin every setup-dotnet step reads (#1568), over the Windows
 # lane's clippy step (#1570), over the Windows lane's census tier (#1945), and
 # over the model shards' evidence (#1624): the 70-minute timer inside the
@@ -641,9 +642,9 @@ Describe 'a11y-check.yml' {
             '          rm -f a11y-results.json a11y-results.sarif'))
         $discard | Should -Not -Match '(?m)^        continue-on-error:' -Because 'a discard that fails must stop the job before anything reads the files'
         # Every later step that reads the files is guarded on their existence, and none comes before the discard.
+        # The comment step reads the score file only when the floor computed a score from it (#1616, the fact below).
         foreach ($reader in @(
-                @('Upload SARIF to GitHub Code Scanning', "        if: hashFiles('a11y-results.sarif') != ''"),
-                @('Post score summary on PR', "        if: github.event_name == 'pull_request' && hashFiles('a11y-results.json') != ''"))) {
+                , @('Upload SARIF to GitHub Code Scanning', "        if: hashFiles('a11y-results.sarif') != ''"))) {
             $index = [array]::IndexOf($steps, @($steps | Where-Object { $_ -match ('(?m)^      - name: ' + [regex]::Escape($reader[0])) })[0])
             $index | Should -BeGreaterThan ($download + 1) -Because "$($reader[0]) must run after the discard"
             $steps[$index] | Should -Match (Get-Lines @($reader[1]))
@@ -652,34 +653,478 @@ Describe 'a11y-check.yml' {
         $floor.Count | Should -Be 1
         [array]::IndexOf($steps, $floor[0]) | Should -BeGreaterThan ($download + 1)
         # The floor always runs and always fails without results: no if:, no continue-on-error:, and each
-        # missing-results branch is a setFailed that returns.
+        # missing-results branch is a noScore (a setFailed that also tells the comment step, #1616) that returns.
         $floor[0] | Should -Not -Match '(?m)^        (if|continue-on-error):' -Because 'a skipped or softened floor turns a discarded download green'
         $floor[0] | Should -Match (Get-Lines @(
             '          RESULTS_DOWNLOAD: ${{ steps.results.outcome }}',
             '          RESULTS_DISCARDED: ${{ steps.discard.outputs.discarded }}',
             '          ANALYZE_RESULT: ${{ needs.analyze.result }}'))
-        $floor[0] | Should -Match (Get-Lines @(
+        $floor[0] | Should -MatchExactly (Get-Lines @(
             '            if (!fs.existsSync(resultsPath)) {',
             "              if (process.env.RESULTS_DISCARDED === 'true') {",
-            '                core.setFailed('))
-        $floor[0] | Should -Match (Get-Lines @(
+            '                noScore('))
+        $floor[0] | Should -MatchExactly (Get-Lines @(
             '                  `the "Download the analysis results" step.`',
             '                );',
             '                return;',
             '              }',
             "              if (process.env.RESULTS_DOWNLOAD === 'failure' && process.env.ANALYZE_RESULT === 'success') {",
-            '                core.setFailed('))
-        $floor[0] | Should -Match (Get-Lines @(
+            '                noScore('))
+        # A skipped analysis (the routing failed) has its own sentence, before the default one.
+        $floor[0] | Should -MatchExactly (Get-Lines @(
             '                  `computed. See the "Download the analysis results" step.`',
             '                );',
             '                return;',
             '              }',
-            '              core.setFailed('))
-        $missing = [regex]::Match($floor[0], '(?s)if \(!fs\.existsSync\(resultsPath\)\) \{.*?const results = JSON\.parse').Value
+            "              if (process.env.ANALYZE_RESULT === 'skipped') {",
+            '                noScore('))
+        $floor[0] | Should -MatchExactly (Get-Lines @(
+            '                  `The analysis did not run, so no score was computed. See the "Route mac jobs" job.`',
+            '                );',
+            '                return;',
+            '              }',
+            '              noScore('))
+        # The default branch ends the block: nothing after it reads a file that is not there.
+        $floor[0] | Should -MatchExactly (Get-Lines @(
+            '                `never reached it. See the "SwiftUI Accessibility Check" job.`',
+            '              );',
+            '              return;',
+            '            }',
+            '            let results;'))
+        $missing = [regex]::Match($floor[0], '(?s)if \(!fs\.existsSync\(resultsPath\)\) \{.*?let results;').Value
         $missing | Should -Not -BeNullOrEmpty
         $missing | Should -Not -Match 'core\.(warning|notice|info)\(' -Because 'every missing-results branch fails the check'
-        ([regex]::Matches($missing, 'core\.setFailed\(')).Count | Should -Be 3
-        ([regex]::Matches($missing, '(?m)^[ ]+return;[ \t]*\r?$')).Count | Should -Be 3
+        ([regex]::Matches($missing, 'core\.setFailed\(')).Count | Should -Be 0 -Because 'a bare setFailed would leave the comment step without the sentence'
+        ([regex]::Matches($missing, '(?<![\w.])noScore\(')).Count | Should -Be 4
+        ([regex]::Matches($missing, '(?m)^[ ]+return;[ \t]*\r?$')).Count | Should -Be 4
+    }
+    # #1616: when the floor computes no score, the bot's comment must not go on showing an old score beside the red
+    # check. The floor step words every such outcome once, through noScore, and hands the sentence to the comment
+    # step, which rewrites the bot's comment with it and creates none where there was none (plan 47, CD4).
+    It 'when no score is computed, the comment step rewrites the bot''s comment with the floor''s sentence and never creates one, and malformed results fail in one plain sentence' {
+        $job = Get-JobBlock $a11y 'a11y-check'
+        $steps = Get-Steps $job
+        $floor = @($steps | Where-Object { $_ -match '(?m)^      - name: Enforce score floor' })
+        $floor.Count | Should -Be 1
+        $floorAt = [array]::IndexOf($steps, $floor[0])
+        $floor = $floor[0]
+        # 1. The floor has an id, and one helper sets both outputs and fails the step with the same sentence.
+        $floor | Should -MatchExactly (Get-Lines @('      - name: Enforce score floor', '        id: floor'))
+        $floor | Should -MatchExactly (Get-Lines @(
+            '          script: |',
+            '            const noScore = (reason) => {',
+            "              core.setOutput('computed', 'false');",
+            "              core.setOutput('reason', reason);",
+            '              core.setFailed(reason);',
+            '            };'))
+        # 2. Ten outcomes have no score, and each returns as soon as it is worded. The three setFailed calls
+        # left are the helper's own and the two verdicts.
+        $calls = [regex]::Matches($floor, '(?<![\w.])noScore\(')
+        $calls.Count | Should -Be 10
+        ([regex]::Matches($floor, '(?<![\w.])noScore\((?:(?!\);[ \t]*\r?\n)[\s\S])*\);[ \t]*\r?\n[ ]+return;[ \t]*\r?\n')).Count |
+            Should -Be 10 -Because 'a noScore that does not return goes on to compute a verdict'
+        ([regex]::Matches($floor, 'core\.setFailed\(')).Count | Should -Be 3
+        # 3. Results that do not parse fail in one sentence, and a JSON null is read as results with no score.
+        $floor | Should -MatchExactly (Get-Lines @(
+            '            let results;',
+            '            try {',
+            "              results = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));",
+            '            } catch (error) {',
+            '              noScore(',
+            '                `${resultsPath} could not be read as JSON (${error.message}); no score was computed. See the analysis job.`',
+            '              );',
+            '              return;',
+            '            }',
+            '            const s = (results && results.score) || {};'))
+        ([regex]::Matches($floor, 'JSON\.parse')).Count | Should -Be 1
+        # 4. A score is computed only after every check on it has passed: once, after the last noScore, directly
+        # before the log line and the two verdicts.
+        ([regex]::Matches($floor, 'core\.setOutput\(')).Count | Should -Be 3
+        $computedAt = $floor.IndexOf("core.setOutput('computed', 'true');")
+        $computedAt | Should -BeGreaterThan $calls[9].Index
+        $floor | Should -MatchExactly (Get-Lines @(
+            "            core.setOutput('computed', 'true');",
+            '            core.info(`Score: ${score} / Minimum: ${min} / Errors: ${errors}`);'))
+        @([regex]::Matches($floor, 'core\.setFailed\(') | Where-Object { $_.Index -gt $computedAt }).Count | Should -Be 2
+        # 5. A skipped analysis has its own sentence, and the job it names is the routing job's name.
+        $floor | Should -MatchExactly (Get-Lines @(
+            "              if (process.env.ANALYZE_RESULT === 'skipped') {",
+            '                noScore(',
+            '                  `The analysis did not run, so no score was computed. See the "Route mac jobs" job.`',
+            '                );',
+            '                return;',
+            '              }'))
+        (Get-JobBlock $a11y 'route') | Should -MatchExactly (Get-JobLine 'name: Route mac jobs')
+        # 6. The comment step runs after the floor, on every pull request run that is not cancelled, and reads
+        # the floor's two outputs through env: and nowhere else.
+        $comment = @($steps | Where-Object { $_ -match '(?m)^      - name: Post score summary on PR' })
+        $comment.Count | Should -Be 1
+        [array]::IndexOf($steps, $comment[0]) | Should -BeGreaterThan $floorAt -Because 'the comment says what the floor found'
+        $comment = $comment[0]
+        $comment | Should -MatchExactly (Get-Lines @(
+            '      - name: Post score summary on PR',
+            "        if: `${{ !cancelled() && github.event_name == 'pull_request' }}"))
+        ([regex]::Matches($comment, '(?m)^        if:')).Count | Should -Be 1
+        $comment | Should -MatchExactly (Get-Lines @(
+            '        env:',
+            '          SCORE_COMPUTED: ${{ steps.floor.outputs.computed }}',
+            '          NO_SCORE_REASON: ${{ steps.floor.outputs.reason }}',
+            '        with:',
+            '          script: |',
+            "            const marker = '<!-- slate-a11y-score -->';",
+            "            const computed = process.env.SCORE_COMPUTED === 'true';"))
+        $comment | Should -Not -Match 'hashFiles' -Because 'a comment step that skips without the file leaves the old score up'
+        $comment | Should -MatchExactly (Get-Lines @('        continue-on-error: true')) -Because 'reporting never replaces the floor''s verdict'
+        $comment.Substring($comment.IndexOf('          script: |')) | Should -Not -Match '\$\{\{' -Because 'the outputs reach the script through env:'
+        ([regex]::Matches($job, 'steps\.floor\.')).Count | Should -Be 2
+        ([regex]::Matches($a11y, 'steps\.floor\.')).Count | Should -Be 2
+        # 7. The score file is read once, inside the branch a computed score opens.
+        ([regex]::Matches($comment, 'readFileSync')).Count | Should -Be 1
+        ([regex]::Matches($comment, '(?<![\w.])fs\.')).Count | Should -Be 1
+        $branchAt = $comment.IndexOf('            if (computed) {')
+        $elseAt = $comment.IndexOf('            } else {')
+        $branchAt | Should -BeGreaterThan 0
+        $elseAt | Should -BeGreaterThan $branchAt
+        $comment.IndexOf('readFileSync') | Should -BeGreaterThan $branchAt
+        $comment.IndexOf('readFileSync') | Should -BeLessThan $elseAt
+        # 8. Both bodies end with the marker, and the finder pages through every comment and takes the
+        # workflow's own: by either heading (a comment written before the marker existed) or by the marker.
+        ([regex]::Matches($comment, [regex]::Escape('<!-- slate-a11y-score -->'))).Count | Should -Be 1
+        ([regex]::Matches($comment, (Get-Lines @('                marker,', "              ].join('\n');")))).Count | Should -Be 2
+        $comment | Should -MatchExactly (Get-Lines @(
+            '            const comments = await github.paginate(github.rest.issues.listComments, {',
+            '              owner: context.repo.owner,',
+            '              repo: context.repo.repo,',
+            '              issue_number: context.issue.number,',
+            '              per_page: 100,',
+            '            });'))
+        $comment | Should -Not -Match 'github\.rest\.issues\.listComments\(' -Because 'one page is 30 comments, and a second score comment is created past it'
+        $comment | Should -MatchExactly (Get-Lines @(
+            "            const tag = '## $([char]0x2705) Accessibility score';",
+            "            const altTag = '## $([char]0x274C) Accessibility score';"))
+        $comment | Should -MatchExactly (Get-Lines @(
+            "              return c.user?.login === 'github-actions[bot]' &&",
+            '                (text.startsWith(tag) || text.startsWith(altTag) || text.includes(marker));'))
+        $comment | Should -MatchExactly (Get-Lines @('                `${altTag}: not computed`,'))
+        # 9. A comment is created only for a computed score; with none and no comment, the step says so.
+        ([regex]::Matches($comment, 'createComment')).Count | Should -Be 1
+        ([regex]::Matches($comment, 'updateComment')).Count | Should -Be 1
+        $comment | Should -Not -Match 'deleteComment'
+        $comment | Should -MatchExactly (Get-Lines @('            if (existing) {', '              await github.rest.issues.updateComment({'))
+        $comment | Should -MatchExactly (Get-Lines @('            } else if (computed) {', '              await github.rest.issues.createComment({'))
+        $comment | Should -MatchExactly (Get-Lines @(
+            '            } else {',
+            "              core.info('No score was computed and this pull request has no score comment; none is created.');",
+            '            }'))
+        # 10. The job runs when a same-repo pull request's analysis was skipped (the routing failed), so the
+        # comment is rewritten there too. A fork and a push to main skip as before.
+        $job | Should -MatchExactly (Get-JobLine "if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && (needs.analyze.result != 'skipped' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}")
+    }
+    Context 'the score job''s two scripts, run' {
+        # The text pins above cannot show what the scripts do. Here the floor's and the comment step's
+        # github-script bodies run under node, as the action runs them (an async function handed github, context,
+        # core and require), with the toolkit faked: what the floor says for each kind of results, and what the
+        # comment step then does to the pull request's comments.
+        BeforeAll {
+            $script:node = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+            # A step's script: block, its lines dedented.
+            function Get-StepScript([string]$Name) {
+                $step = @(Get-Steps (Get-JobBlock $a11y 'a11y-check') | Where-Object { $_ -match ('(?m)^      - name: ' + [regex]::Escape($Name) + '[ \t]*\r?$') })[0]
+                if (-not $step) { return '' }
+                $at = [regex]::Match($step, '(?m)^          script: \|[ \t]*\r?\n')
+                if (-not $at.Success) { return '' }
+                $lines = @()
+                foreach ($line in ($step.Substring($at.Index + $at.Length) -split '\r?\n')) {
+                    if ($line -match '^            ') { $lines += $line.Substring(12) } elseif ($line.Trim()) { break } else { $lines += '' }
+                }
+                return ($lines -join "`n") + "`n"
+            }
+            $script:harness = @'
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+const script = fs.readFileSync(process.argv[2], 'utf8');
+const cases = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+const home = process.cwd();
+const names = ['MIN_SCORE', 'RESULTS_DOWNLOAD', 'RESULTS_DISCARDED', 'ANALYZE_RESULT', 'SCORE_COMPUTED',
+  'NO_SCORE_REASON', 'A11Y_PATHS', 'GITHUB_SERVER_URL', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID'];
+(async () => {
+  const out = [];
+  for (const c of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a11y-score-'));
+    if (typeof c.file === 'string') fs.writeFileSync(path.join(dir, 'a11y-results.json'), c.file);
+    for (const name of names) delete process.env[name];
+    for (const [name, value] of Object.entries(c.env || {})) if (value !== null) process.env[name] = value;
+    const r = { outputs: {}, failed: [], info: [], updated: [], created: [], paged: [], thrown: null };
+    const core = {
+      setOutput: (name, value) => { r.outputs[name] = value; },
+      setFailed: (message) => { r.failed.push(String(message)); },
+      info: (message) => { r.info.push(String(message)); },
+    };
+    const listComments = async () => { throw new Error('listComments was called for one page'); };
+    const github = {
+      paginate: async (method, params) => {
+        if (method !== listComments) throw new Error('paginate was handed another method');
+        r.paged.push(params);
+        return c.comments || [];
+      },
+      rest: { issues: {
+        listComments,
+        updateComment: async (params) => { r.updated.push(params); },
+        createComment: async (params) => { r.created.push(params); },
+      } },
+    };
+    const context = { repo: { owner: 'o', repo: 'r' }, issue: { number: 7 } };
+    process.chdir(dir);
+    try {
+      await new AsyncFunction('github', 'context', 'core', 'require', script)(github, context, core, require);
+    } catch (error) {
+      r.thrown = String(error && error.message);
+    }
+    process.chdir(home);
+    fs.rmSync(dir, { recursive: true, force: true });
+    out.push(r);
+  }
+  fs.writeFileSync(process.argv[4], JSON.stringify(out));
+})().catch((error) => { console.error(error); process.exit(1); });
+'@
+            # Runs a step's script once for each case and returns what each run did.
+            function Invoke-StepScript([string]$Name, [object[]]$Cases) {
+                $body = Get-StepScript $Name
+                $body | Should -Not -BeNullOrEmpty -Because "the step '$Name' has a script"
+                $dir = Join-Path $TestDrive ([guid]::NewGuid().ToString('n'))
+                $null = New-Item -ItemType Directory $dir
+                [IO.File]::WriteAllText((Join-Path $dir 'harness.js'), $harness)
+                [IO.File]::WriteAllText((Join-Path $dir 'script.js'), $body)
+                [IO.File]::WriteAllText((Join-Path $dir 'cases.json'), (ConvertTo-Json -InputObject @($Cases) -Depth 8))
+                $log = & $node (Join-Path $dir 'harness.js') (Join-Path $dir 'script.js') (Join-Path $dir 'cases.json') (Join-Path $dir 'out.json') 2>&1
+                $LASTEXITCODE | Should -Be 0 -Because "the harness ran: $log"
+                return @(Get-Content -Raw -Encoding utf8 (Join-Path $dir 'out.json') | ConvertFrom-Json)
+            }
+            function Skip-WithoutNode {
+                if ($node) { return $false }
+                if ($env:GITHUB_ACTIONS -eq 'true') { throw 'node is required on CI' }
+                Set-ItResult -Skipped -Because 'no node on PATH'
+                return $true
+            }
+            $script:marker = '<!-- slate-a11y-score -->'
+            $script:pass = [string][char]0x2705
+            $script:fail = [string][char]0x274C
+            function New-Results($Score, $Errors) {
+                ConvertTo-Json -Compress -Depth 4 @{ score = @{ score = $Score; grade = 'A+'; totalErrors = $Errors; totalWarnings = 0; failedCriteria = @() } }
+            }
+            function New-Comment([int]$Id, [string]$Login, [string]$Type, [string]$Body) { @{ id = $Id; user = @{ login = $Login; type = $Type }; body = $Body } }
+            $script:fillers = @(1..130 | ForEach-Object { New-Comment $_ 'someone' 'User' "comment $_" })
+            $script:commentEnv = @{ MIN_SCORE = '100'; A11Y_PATHS = 'apps/x'; GITHUB_SERVER_URL = 'https://github.example'; GITHUB_REPOSITORY = 'o/r'; GITHUB_RUN_ID = '42' }
+        }
+        It 'the floor says one sentence for each way the results can be missing, and computes no score' {
+            if (Skip-WithoutNode) { return }
+            $cases = @(
+                @{ Expect = 'were discarded and no score was computed'; env = @{ MIN_SCORE = '100'; RESULTS_DISCARDED = 'true'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'success' } },
+                @{ Expect = 'results could not be downloaded, so no score was computed'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'success' } },
+                @{ Expect = '^The analysis did not run, so no score was computed\. See the "Route mac jobs" job\.$'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'skipped' } },
+                @{ Expect = '^a11y-results\.json was not produced'; env = @{ MIN_SCORE = '100'; RESULTS_DOWNLOAD = 'failure'; ANALYZE_RESULT = 'failure' } })
+            $runs = Invoke-StepScript 'Enforce score floor' $cases
+            $runs.Count | Should -Be $cases.Count
+            for ($i = 0; $i -lt $cases.Count; $i++) {
+                $because = "case $i ($($cases[$i].Expect))"
+                $runs[$i].thrown | Should -BeNullOrEmpty -Because $because
+                $runs[$i].outputs.computed | Should -BeExactly 'false' -Because $because
+                $runs[$i].outputs.reason | Should -MatchExactly $cases[$i].Expect -Because $because
+                @($runs[$i].failed).Count | Should -Be 1 -Because $because
+                $runs[$i].failed[0] | Should -BeExactly $runs[$i].outputs.reason -Because $because
+            }
+        }
+        It 'results that are not JSON, or hold no valid score, fail the floor in one sentence, with no throw and no score' {
+            if (Skip-WithoutNode) { return }
+            $notJson = '^a11y-results\.json could not be read as JSON \(.+\); no score was computed\. See the analysis job\.$'
+            $noNumber = '^a11y-check score must be a finite number from 0 through 100; got '
+            $cases = @(
+                @{ file = 'garbage'; Expect = $notJson },
+                @{ file = ''; Expect = $notJson },
+                @{ file = "{`n  `"score`": {`n"; Expect = $notJson },
+                @{ file = 'null'; Expect = $noNumber },
+                @{ file = '[]'; Expect = $noNumber },
+                @{ file = '"text"'; Expect = $noNumber },
+                @{ file = '7'; Expect = $noNumber },
+                @{ file = '{"score":null}'; Expect = $noNumber },
+                @{ file = '{"score":{"score":"100","totalErrors":0}}'; Expect = $noNumber },
+                @{ file = (New-Results 150 0); Expect = $noNumber },
+                @{ file = (New-Results -1 0); Expect = $noNumber },
+                @{ file = (New-Results 100 -1); Expect = '^a11y-check totalErrors must be a non-negative integer; got ' },
+                @{ file = (New-Results 100 1.5); Expect = '^a11y-check totalErrors must be a non-negative integer; got ' },
+                @{ file = (New-Results 100 0); Expect = '^MIN_SCORE is unset or empty$'; env = @{ MIN_SCORE = ' ' } },
+                @{ file = (New-Results 100 0); Expect = '^MIN_SCORE is unset or empty$'; env = @{ } },
+                @{ file = (New-Results 100 0); Expect = '^MIN_SCORE must be a number; got '; env = @{ MIN_SCORE = '90%' } },
+                @{ file = (New-Results 100 0); Expect = '^MIN_SCORE must be from 0 through 100; got 101$'; env = @{ MIN_SCORE = '101' } })
+            foreach ($case in $cases) { if (-not $case.ContainsKey('env')) { $case.env = @{ MIN_SCORE = '100' } } }
+            $runs = Invoke-StepScript 'Enforce score floor' $cases
+            $runs.Count | Should -Be $cases.Count
+            for ($i = 0; $i -lt $cases.Count; $i++) {
+                $because = "case $i ($($cases[$i].file))"
+                $runs[$i].thrown | Should -BeNullOrEmpty -Because $because
+                $runs[$i].outputs.computed | Should -BeExactly 'false' -Because $because
+                $runs[$i].outputs.reason | Should -MatchExactly $cases[$i].Expect -Because $because
+                $runs[$i].outputs.reason | Should -Not -Match '[\r\n]' -Because $because
+                @($runs[$i].failed).Count | Should -Be 1 -Because $because
+                $runs[$i].failed[0] | Should -BeExactly $runs[$i].outputs.reason -Because $because
+            }
+        }
+        It 'a valid score is computed whether or not it passes the floor' {
+            if (Skip-WithoutNode) { return }
+            $cases = @(
+                @{ file = (New-Results 100 0); env = @{ MIN_SCORE = '100' } },
+                @{ file = (New-Results 100 2); env = @{ MIN_SCORE = '100' }; Expect = '^a11y-check reported 2 error\(s\)' },
+                @{ file = (New-Results 99.96 0); env = @{ MIN_SCORE = '100' }; Expect = '^Accessibility score 99\.96 is below minimum threshold 100$' },
+                @{ file = (New-Results 0 0); env = @{ MIN_SCORE = ' 0 ' } })
+            $runs = Invoke-StepScript 'Enforce score floor' $cases
+            for ($i = 0; $i -lt $cases.Count; $i++) {
+                $because = "case $i ($($cases[$i].file))"
+                $runs[$i].thrown | Should -BeNullOrEmpty -Because $because
+                $runs[$i].outputs.computed | Should -BeExactly 'true' -Because $because
+                $runs[$i].outputs.PSObject.Properties.Name | Should -Not -Contain 'reason' -Because $because
+                if ($cases[$i].Expect) {
+                    @($runs[$i].failed).Count | Should -Be 1 -Because $because
+                    $runs[$i].failed[0] | Should -MatchExactly $cases[$i].Expect -Because $because
+                }
+                else { @($runs[$i].failed).Count | Should -Be 0 -Because $because }
+            }
+        }
+        It 'a computed score creates the comment where there is none, and rewrites the workflow''s own wherever it is among the comments' {
+            if (Skip-WithoutNode) { return }
+            $computed = $commentEnv + @{ SCORE_COMPUTED = 'true' }
+            $old = New-Comment 900 'github-actions[bot]' 'Bot' "## $pass Accessibility score: 100.0 / 100 (A+)`n`nwritten before the marker existed"
+            $notComputed = New-Comment 901 'github-actions[bot]' 'Bot' "## $fail Accessibility score: not computed`n`n$marker"
+            $byMarker = New-Comment 902 'github-actions[bot]' 'Bot' "A heading some later change gave it`n`n$marker"
+            $cases = @(
+                @{ file = (New-Results 100 0); env = $computed; comments = $fillers },
+                @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $old) },
+                @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $notComputed) },
+                @{ file = (New-Results 100 0); env = $computed; comments = @($fillers + $byMarker) },
+                @{ file = (New-Results 100 2); env = $computed; comments = @($old) },
+                # 99.96 prints as 100.0; the heading still says what the floor said.
+                @{ file = (New-Results 99.96 0); env = $computed; comments = @($old) })
+            $runs = Invoke-StepScript 'Post score summary on PR' $cases
+            foreach ($run in $runs) {
+                $run.thrown | Should -BeNullOrEmpty
+                @($run.paged).Count | Should -Be 1
+                $run.paged[0].per_page | Should -Be 100
+                $run.paged[0].issue_number | Should -Be 7
+            }
+            @($runs[0].updated).Count | Should -Be 0
+            @($runs[0].created).Count | Should -Be 1
+            $runs[0].created[0].issue_number | Should -Be 7
+            $runs[0].created[0].body | Should -MatchExactly "^## $pass Accessibility score: 100\.0 / 100 \(A\+\)\n"
+            $runs[0].created[0].body.EndsWith("`n`n$marker", [StringComparison]::Ordinal) | Should -BeTrue
+            foreach ($i in 1..5) {
+                @($runs[$i].created).Count | Should -Be 0 -Because "case $i has a comment to rewrite"
+                @($runs[$i].updated).Count | Should -Be 1 -Because "case $i has a comment to rewrite"
+                $runs[$i].updated[0].comment_id | Should -Be (900, 901, 902, 900, 900)[$i - 1]
+                $runs[$i].updated[0].body.EndsWith("`n`n$marker", [StringComparison]::Ordinal) | Should -BeTrue
+            }
+            foreach ($i in 1..3) { $runs[$i].updated[0].body | Should -MatchExactly "^## $pass Accessibility score: 100\.0 / 100 \(A\+\)\n" }
+            $runs[4].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 100\.0 / 100 \(A\+\)\n"
+            $runs[5].updated[0].body | Should -MatchExactly "^## $fail Accessibility score: 100\.0 / 100 \(A\+\)\n" -Because 'the floor failed 99.96, so the heading does not show a pass'
+        }
+        It 'no score rewrites the workflow''s own comment with the floor''s sentence and a link to the run, and reads no results' {
+            if (Skip-WithoutNode) { return }
+            $old = New-Comment 900 'github-actions[bot]' 'Bot' "## $pass Accessibility score: 100.0 / 100 (A+)"
+            $sentence = 'The analysis did not run, so no score was computed. See the "Route mac jobs" job.'
+            $cases = @(
+                # Results on disk that would throw if they were read, and would read as a pass if they were trusted.
+                @{ file = 'garbage'; env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = $sentence }; comments = @($fillers + $old) },
+                @{ file = (New-Results 100 0); env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = $sentence }; comments = @($old) },
+                # The floor did not run, or stopped before it reported: no outputs at all.
+                @{ file = (New-Results 100 0); env = $commentEnv; comments = @($old) },
+                @{ file = (New-Results 100 0); env = $commentEnv + @{ SCORE_COMPUTED = 'TRUE' }; comments = @($old) },
+                @{ file = (New-Results 100 0); env = $commentEnv + @{ SCORE_COMPUTED = ''; NO_SCORE_REASON = "  `n " }; comments = @($old) })
+            $runs = Invoke-StepScript 'Post score summary on PR' $cases
+            for ($i = 0; $i -lt $cases.Count; $i++) {
+                $because = "case $i"
+                $runs[$i].thrown | Should -BeNullOrEmpty -Because $because
+                @($runs[$i].created).Count | Should -Be 0 -Because $because
+                @($runs[$i].updated).Count | Should -Be 1 -Because $because
+                $runs[$i].updated[0].comment_id | Should -Be 900 -Because $because
+                $said = if ($i -lt 2) { $sentence } else { 'The score floor step did not report a result.' }
+                $runs[$i].updated[0].body | Should -BeExactly (@(
+                        "## $fail Accessibility score: not computed",
+                        '',
+                        '```text',
+                        $said,
+                        '```',
+                        '',
+                        'The check is red, and any score this comment showed before is out of date. See [the run](https://github.example/o/r/actions/runs/42).',
+                        '',
+                        $marker) -join "`n") -Because $because
+            }
+        }
+        It 'no score creates no comment where the workflow has none' {
+            if (Skip-WithoutNode) { return }
+            $cases = @(
+                @{ env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = 'a sentence' }; comments = @() },
+                @{ env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = 'a sentence' }; comments = $fillers },
+                @{ env = $commentEnv; comments = $fillers })
+            $runs = Invoke-StepScript 'Post score summary on PR' $cases
+            foreach ($run in $runs) {
+                $run.thrown | Should -BeNullOrEmpty
+                @($run.created).Count | Should -Be 0
+                @($run.updated).Count | Should -Be 0
+                @($run.info) | Should -Contain 'No score was computed and this pull request has no score comment; none is created.'
+            }
+        }
+        It 'the floor''s sentence reaches the comment as data: one fenced line with no backtick, 500 characters at most' {
+            if (Skip-WithoutNode) { return }
+            $tick = [string][char]96
+            $old = New-Comment 900 'github-actions[bot]' 'Bot' "## $pass Accessibility score: 100.0 / 100 (A+)"
+            $hostile = "a11y-results.json could not be read as JSON (Unexpected token $tick, `"$tick$tick$tick`r`n$tick$tick$tick`n@owner <!-- x -->`t[x](http://example.invalid)$([char]0x2028)$([char]0x1b)[31m " + ('z' * 600)
+            $pair = ('y' * 499) + [char]::ConvertFromUtf32(0x1F600) + 'tail'
+            $cases = @(
+                @{ env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = $hostile }; comments = @($old) },
+                @{ env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = $pair }; comments = @($old) })
+            $runs = Invoke-StepScript 'Post score summary on PR' $cases
+            foreach ($run in $runs) {
+                $run.thrown | Should -BeNullOrEmpty
+                @($run.updated).Count | Should -Be 1
+                $lines = $run.updated[0].body -split "`n"
+                $lines.Count | Should -Be 9 -Because 'the sentence adds no line to the body'
+                $lines[2] | Should -BeExactly '```text'
+                $lines[4] | Should -BeExactly '```'
+                $lines[3] | Should -Not -Match $tick
+                $lines[3] | Should -Not -Match '[\x00-\x1f\x7f-\x9f  ]'
+                [Globalization.StringInfo]::new($lines[3]).LengthInTextElements | Should -BeLessOrEqual 500
+                @($lines | Where-Object { $_ -match "^\s*$tick$tick$tick" }).Count | Should -Be 2
+                $lines[8] | Should -BeExactly $marker
+            }
+            $runs[0].updated[0].body -split "`n" | Select-Object -Index 3 | Should -MatchExactly "^a11y-results\.json could not be read as JSON \(Unexpected token ', `"''' ''' @owner <!-- x --> \[x\]\(http://example\.invalid\) \[31m z+$"
+            # A cut at 500 never leaves half of a character.
+            ($runs[1].updated[0].body -split "`n")[3] | Should -BeExactly (('y' * 499) + [char]::ConvertFromUtf32(0x1F600))
+        }
+        It 'takes only the workflow''s own comment: not another bot''s that quotes the marker, not a person''s under the heading, and a comment with no author or no text does not stop it' {
+            if (Skip-WithoutNode) { return }
+            $others = @(
+                (New-Comment 1 'codoki-pr-intelligence[bot]' 'Bot' "A review that quotes the workflow: const marker = '$marker';"),
+                (New-Comment 2 'codoki-pr-intelligence[bot]' 'Bot' "## $pass Accessibility score: 100.0 / 100 (A+)`n`n$marker"),
+                (New-Comment 3 'someone' 'User' "## $pass Accessibility score: 100.0 / 100 (A+)`n`n$marker"),
+                @{ id = 4; user = $null; body = "## $fail Accessibility score: not computed`n`n$marker" },
+                @{ id = 5; user = @{ login = 'github-actions[bot]'; type = 'Bot' }; body = $null },
+                @{ id = 6; user = @{ login = 'github-actions[bot]'; type = 'Bot' } },
+                (New-Comment 7 'github-actions[bot]' 'Bot' 'Another workflow''s comment.'))
+            $own = New-Comment 900 'github-actions[bot]' 'Bot' "## $fail Accessibility score: not computed`n`n$marker"
+            $cases = @(
+                @{ env = $commentEnv + @{ SCORE_COMPUTED = 'false'; NO_SCORE_REASON = 'a sentence' }; comments = $others },
+                @{ file = (New-Results 100 0); env = $commentEnv + @{ SCORE_COMPUTED = 'true' }; comments = $others },
+                @{ file = (New-Results 100 0); env = $commentEnv + @{ SCORE_COMPUTED = 'true' }; comments = @($others + $own) })
+            $runs = Invoke-StepScript 'Post score summary on PR' $cases
+            foreach ($run in $runs) { $run.thrown | Should -BeNullOrEmpty }
+            @($runs[0].created).Count | Should -Be 0
+            @($runs[0].updated).Count | Should -Be 0
+            @($runs[1].created).Count | Should -Be 1
+            @($runs[1].updated).Count | Should -Be 0
+            @($runs[2].created).Count | Should -Be 0
+            @($runs[2].updated).Count | Should -Be 1
+            $runs[2].updated[0].comment_id | Should -Be 900
+        }
     }
 }
 
