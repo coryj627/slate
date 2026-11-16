@@ -1102,6 +1102,46 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>#1955: the drawing template is one object for the whole
+    /// process, and WPF keeps a template with the thread that built it until
+    /// it is sealed. It was sealed only when a drawn formula first took it,
+    /// so when the first thread to build a math element drew none, every
+    /// formula drawn on a later thread failed for the rest of the process and
+    /// its note did not load. A template another thread built, on a thread
+    /// that has since ended, serves a math element here, and so does the
+    /// type's own template, which a drawing as content takes.</summary>
+    [Fact]
+    public void TheDrawingTemplateServesAThreadOtherThanItsBuilders()
+    {
+        // The builder's thread also makes an element that draws nothing, as
+        // the first fact to make one did: when no fact before this one has
+        // touched the type, this thread builds the type's own template.
+        System.Windows.Controls.ControlTemplate template = StaThread.Run(
+            () =>
+            {
+                _ = new ReadingMathElement("x", string.Empty, "x", string.Empty);
+                return ReadingMathElement.NewDrawingTemplate();
+            },
+            TimeSpan.FromSeconds(60),
+            "STA test body timed out.");
+        RunSta(() =>
+        {
+            var element = new ReadingMathElement("x", "<math><mi>x</mi></math>", "x", string.Empty)
+            {
+                Template = template,
+            };
+            Assert.True(element.ApplyTemplate());
+            Assert.NotNull(element.Scroller);
+
+            var drawn = new ReadingMathElement("x", "<math><mi>x</mi></math>", "x", string.Empty)
+            {
+                Content = new System.Windows.Shapes.Path(),
+            };
+            Assert.True(drawn.ApplyTemplate());
+            Assert.NotNull(drawn.Scroller);
+        });
+    }
+
     /// <summary>
     /// W3-2 MathPrefs parity: preferences persist across view-model
     /// lifetimes, announce through the canonical vocabulary, reject
