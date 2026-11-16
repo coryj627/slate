@@ -193,12 +193,14 @@ public sealed partial class ConnectionsLeafTests
                 (_, ManualResetEventSlim parked, Func<bool> observed) = ParkTheProbesTreeQuery(host, vault, cancellation.Token);
                 using (parked)
                 {
-                    var clock = System.Diagnostics.Stopwatch.StartNew();
                     host.Workspace.Dispose();
-                    TimeSpan took = clock.Elapsed;
 
+                    // Read straight after the teardown: the parked query saw
+                    // its cancellation and ended inside the teardown's drain.
+                    // A teardown that only waited its bound out leaves the
+                    // query parked and this false, so no elapsed time is
+                    // asserted.
                     Assert.True(observed(), "the teardown never cancelled the native query");
-                    Assert.True(took < TimeSpan.FromSeconds(5), $"the teardown froze for {took}");
                 }
             }
             finally
@@ -294,12 +296,11 @@ public sealed partial class ConnectionsLeafTests
                 (ManualResetEventSlim parked, Func<bool> observed) = ParkTheProbesGraphQuery(host, vault, cancellation.Token);
                 using (parked)
                 {
-                    var clock = System.Diagnostics.Stopwatch.StartNew();
                     host.Workspace.Dispose();
-                    TimeSpan took = clock.Elapsed;
 
+                    // Read straight after the teardown, as in the tree
+                    // query's fact: no elapsed time is asserted.
                     Assert.True(observed(), "the teardown never cancelled the native graph query");
-                    Assert.True(took < TimeSpan.FromSeconds(5), $"the teardown froze for {took}");
                 }
             }
             finally

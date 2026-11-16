@@ -76,10 +76,11 @@ public sealed class PumpedDispatcherTests
             }
         }
         Starve();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // The drain's own TimeoutException says its bound ended it, and the
+        // runner's bound below fails a drain that never returns. No elapsed
+        // time is asserted.
         Assert.Throws<TimeoutException>(() => PumpedDispatcher.Drain(TimeSpan.FromMilliseconds(300)));
         starving = false;
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the bounded drain took {clock.Elapsed}");
     }, TimeSpan.FromSeconds(30), "the bounded drain blocked");
 
     /// <summary>The post-exhaustion hang, reproduced: a dispatcher whose

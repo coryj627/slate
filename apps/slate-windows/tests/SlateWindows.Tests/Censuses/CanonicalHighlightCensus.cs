@@ -168,7 +168,12 @@ public class CanonicalHighlightCensus
             {
                 window.Show();
                 window.UpdateLayout();
-                RunDispatcherFor(TimeSpan.FromMilliseconds(200));
+                // The shown editor attaches its coordinator when it loads.
+                // The pump waits for that, not for a fixed time.
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(
+                        () => editor.HighlightingForCensus is AvalonHighlightingCoordinator, TimeSpan.FromSeconds(10)),
+                    "the shown editor never attached its highlighting coordinator");
                 AvalonHighlightingCoordinator coordinator = Assert.IsType<AvalonHighlightingCoordinator>(
                     editor.HighlightingForCensus);
                 PumpUntilRefreshed(coordinator, 0, "show");

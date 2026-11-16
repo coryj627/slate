@@ -1594,10 +1594,18 @@ public sealed partial class RescanTests
         {
             h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
             h.Context.Drain();
-            leaf.BeforeUntrackForTests = _ => held.Wait(TimeSpan.FromSeconds(60));
-            var clock = Stopwatch.StartNew();
+            int untracked = 0;
+            leaf.BeforeUntrackForTests = ended =>
+            {
+                held.Wait(TimeSpan.FromSeconds(60));
+                Interlocked.Increment(ref untracked);
+            };
             h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the rescan took {clock.Elapsed.TotalSeconds:0.0} s");
+            // The rescan is back and no untracking has returned from the
+            // seam, so the rescan did not wait for one. No elapsed time is
+            // asserted: a rescan that did wait is still out when the
+            // harness's own bound ends, or comes back with this count at one.
+            Assert.Equal(0, Volatile.Read(ref untracked));
             Assert.True(leaf.PendingWorkForTests > 0, "the probe's ended work is still listed");
         }
         finally
@@ -1630,15 +1638,23 @@ public sealed partial class RescanTests
         {
             h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
             h.Context.RunUntil(() => leaf.DrainForTests().IsCompleted && leaf.PendingWorkForTests == 0, "the open's quiet");
-            leaf.BeforeUntrackForTests = _ => held.Wait(TimeSpan.FromSeconds(60));
+            int untracked = 0;
+            leaf.BeforeUntrackForTests = ended =>
+            {
+                held.Wait(TimeSpan.FromSeconds(60));
+                Interlocked.Increment(ref untracked);
+            };
             h.Workspace.NotifyGraphOfVaultChange();
             h.Context.RunUntil(
                 () => leaf.PendingWorkForTests > 0 && leaf.DrainForTests().IsCompleted,
                 "the probe's work ending, still listed");
-            var clock = Stopwatch.StartNew();
             disposed = true;
             h.Dispose();
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the close took {clock.Elapsed.TotalSeconds:0.0} s");
+            // The close is back and no untracking has returned from the
+            // seam, so the close did not wait for one. A close that waits
+            // comes back only when the seam's hold runs out, with this count
+            // at one. No elapsed time is asserted.
+            Assert.Equal(0, Volatile.Read(ref untracked));
         }
         finally
         {

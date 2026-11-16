@@ -943,7 +943,9 @@ dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks `
 `CanvasEndToEndTests.LargeCanvasOpensNavigatesAndWindowsUnderBudget`
 (the real `VaultSession` + the document view-model, `synchronousForTests`,
 `Stopwatch`; the fact asserts every budget so a regression fails CI, and
-the recorded values show the headroom):
+the recorded values show the headroom). Since plan 47 CB-6 the fact
+asserts the median of five warm readings (`WallClockBudget`), so the
+recorded values below, each a single cold reading, are history:
 
 | Measure | Recorded | Budget | Notes |
 |---|---:|---:|---|

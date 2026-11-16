@@ -311,56 +311,79 @@ public sealed class CanvasEndToEndTests : IDisposable
     /// 50 ms over fifty steps. `Stopwatch` on the derivation and the
     /// navigator the app runs; the draw and the UIA re-frame ride the app
     /// and the journeys (HD-D1). The measurements are printed as BENCH
-    /// lines for the §K roll-up, pasted never typed.</summary>
+    /// lines for the §K roll-up, pasted never typed. Since plan 47 CB-6
+    /// each of the four is the median of five warm readings
+    /// (<see cref="WallClockBudget"/> says why warm and why the median): a
+    /// single cold reading measured the runner as much as the code.</summary>
     [Fact]
     public void LargeCanvasOpensNavigatesAndWindowsUnderBudget()
     {
         const string large = "large_2000.canvas";
         File.Copy(CommittedFixture(large), Path.Combine(_fixture.Root, large));
 
-        var open = Stopwatch.StartNew();
-        CanvasDocumentViewModel document = Open(large);
-        open.Stop();
-        Assert.Equal(2000, document.Outline.Count);
-        Assert.True(
-            open.ElapsedMilliseconds < 500,
-            $"opening the 2,000-node canvas took {open.ElapsedMilliseconds} ms");
+        // One sample opens a fresh document, stops the clock, checks its
+        // rows and shuts it down.
+        double openMs = WallClockBudget.WarmMedian(() =>
+        {
+            var clock = Stopwatch.StartNew();
+            CanvasDocumentViewModel opened = Open(large);
+            clock.Stop();
+            Assert.Equal(2000, opened.Outline.Count);
+            opened.Shutdown();
+            return clock.Elapsed;
+        }).TotalMilliseconds;
+        Assert.True(openMs < 500, $"opening the 2,000-node canvas took {openMs:F1} ms");
 
+        CanvasDocumentViewModel document = Open(large);
+        Assert.Equal(2000, document.Outline.Count);
         CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
         CanvasViewportState viewport = CanvasViewportState.Seed().WithViewSize(1600, 1200);
         ImmutableHashSet<CanvasPeerKey> none = [];
 
-        var first = Stopwatch.StartNew();
-        int materialized = CanvasPeerTopology.Derive(population, viewport, none).Placements.Count;
-        first.Stop();
+        int materialized = 0;
+        double firstMs = WallClockBudget.WarmMedian(() =>
+        {
+            var clock = Stopwatch.StartNew();
+            materialized = CanvasPeerTopology.Derive(population, viewport, none).Placements.Count;
+            clock.Stop();
+            return clock.Elapsed;
+        }).TotalMilliseconds;
         Assert.True(materialized > 0, "the first window materialised nothing");
         Assert.True(materialized < 600, $"windowing must bound the UIA tree; {materialized} placements");
-        Assert.True(first.Elapsed.TotalMilliseconds < 500, $"first windowed derivation {first.Elapsed.TotalMilliseconds:F3} ms");
+        Assert.True(firstMs < 500, $"first windowed derivation {firstMs:F3} ms");
 
-        var pans = Stopwatch.StartNew();
-        for (int hop = 1; hop <= 10; hop++)
+        double panMs = WallClockBudget.WarmMedian(() =>
         {
-            _ = CanvasPeerTopology.Derive(
-                population, viewport.PannedTo(-400 * hop, -250 * hop), none).Placements.Count;
-        }
-        pans.Stop();
-        double panMs = pans.Elapsed.TotalMilliseconds / 10;
+            var clock = Stopwatch.StartNew();
+            for (int hop = 1; hop <= 10; hop++)
+            {
+                _ = CanvasPeerTopology.Derive(
+                    population, viewport.PannedTo(-400 * hop, -250 * hop), none).Placements.Count;
+            }
+            clock.Stop();
+            return clock.Elapsed;
+        }).TotalMilliseconds / 10;
         Assert.True(panMs < 100, $"pan window hop averaged {panMs:F3} ms");
 
+        // Fifty steps a sample, on the one kept document: each sample walks
+        // on from where the last one stopped.
         document.SelectNode(document.Outline[0].NodeId, announce: false);
-        var steps = Stopwatch.StartNew();
-        for (int step = 0; step < 50; step++)
+        double navMs = WallClockBudget.WarmMedian(() =>
         {
-            document.Navigator.NextCard();
-        }
-        steps.Stop();
-        double navMs = steps.Elapsed.TotalMilliseconds / 50;
+            var clock = Stopwatch.StartNew();
+            for (int step = 0; step < 50; step++)
+            {
+                document.Navigator.NextCard();
+            }
+            clock.Stop();
+            return clock.Elapsed;
+        }).TotalMilliseconds / 50;
         Assert.True(navMs < 50, $"navigator step averaged {navMs:F3} ms");
         Assert.NotEqual(document.Outline[0].NodeId, document.Selection.Selected);
 
         Console.WriteLine(
-            $"BENCH canvas_e2e open_2000={open.Elapsed.TotalMilliseconds:F1}ms "
-            + $"first_windowed_derivation_2000={first.Elapsed.TotalMilliseconds:F3}ms materialized={materialized} "
+            $"BENCH canvas_e2e open_2000={openMs:F1}ms "
+            + $"first_windowed_derivation_2000={firstMs:F3}ms materialized={materialized} "
             + $"pan_window_hop_2000={panMs:F3}ms nav_step_2000={navMs:F3}ms");
         document.Shutdown();
     }

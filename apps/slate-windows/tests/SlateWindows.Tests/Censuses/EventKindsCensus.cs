@@ -98,12 +98,22 @@ public class EventKindsCensus
         // Dispatch arrived off the test thread (scanner / worker threads).
         Assert.Contains(recorder.ThreadIds, id => id != Environment.CurrentManagedThreadId);
 
-        // Unregister seals the stream; unknown tokens are a no-op.
+        // Unregister seals the stream; unknown tokens are a no-op. A second
+        // listener stays registered through the silent save and hears a
+        // sentinel saved after it: saves fan out in order, so once the
+        // sentinel's change has arrived the silent save's fan-out is over,
+        // and the sealed count is read after it, not after a fixed sleep.
+        var stillListening = new EventRecorder();
+        ulong stillRegistered = session.RegisterEventListener(stillListening);
         session.UnregisterEventListener(registration);
         int sealedCount = recorder.TotalCount;
         session.SaveText("post-unregister.md", "silent\n", null);
-        Thread.Sleep(400);
+        session.SaveText("sentinel.md", "heard\n", null);
+        Assert.True(
+            Waiting.WaitFor(() => stillListening.Locked(r => r.FileChanges.Any(change => change.Path == "sentinel.md")), 10_000),
+            "the listener still registered never heard the sentinel save");
         Assert.Equal(sealedCount, recorder.TotalCount);
+        session.UnregisterEventListener(stillRegistered);
         session.UnregisterEventListener(9_999_999);
     }
 
