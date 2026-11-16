@@ -1632,6 +1632,58 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>A pin of the present behaviour, not the wanted one (issue
+    /// #1980). A Bases row carries no file identity, so a cell edit on a
+    /// note with no tab names a path and nothing else. While the edit waits
+    /// its turn, the note is renamed away and another note is created at
+    /// the path. At its turn the edit lands on the note that is at the path
+    /// now: the property is written into the new note, the renamed note is
+    /// untouched, and the cell's saved sentence is spoken once. When #1980
+    /// gives the row an identity this fact turns into a refusal: nothing is
+    /// written, and the reader hears that the row no longer matches.</summary>
+    [Fact]
+    public void ATablessBasesCellEditLandsOnTheNoteAtItsPathAtItsTurnEvenWhenThatNoteWasReplaced() => RunSta(() =>
+    {
+        const string Replacement = "---\nstatus: other\n---\n\nAnother note at the path.\n";
+        using var h = new Vault("tabless-cell-note-replaced", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            // The note the row was read from moves away, and another takes
+            // its path, while the edit waits.
+            _ = h.Session.RenameFile("a.md", "b.md");
+            _ = h.Session.SaveText("a.md", Replacement, expectedContentHash: null);
+            Assert.Equal(Note, h.Read("b.md"));
+            Assert.Equal(Replacement, h.Read("a.md"));
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => e is A11yEvent.BasesCellSaved or A11yEvent.BasesCellRowNoLongerMatches or A11yEvent.BasesCellEditFailed),
+                "the cell edit's outcome at its turn");
+            Assert.True(held.Result);
+            string atThePath = h.Read("a.md");
+            Assert.Contains("status: done", atThePath, StringComparison.Ordinal);
+            Assert.Contains("Another note at the path.", atThePath, StringComparison.Ordinal);
+            Assert.Equal(Note, h.Read("b.md"));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellRowNoLongerMatches or A11yEvent.BasesCellEditFailed
+                or A11yEvent.PropertyEditConflict);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>The route is decided again at the write's turn. A tab that
     /// opened on the note while the write waited takes it: a clean tab
     /// writes on its saved hash and is rebaselined, and a dirty tab refuses
