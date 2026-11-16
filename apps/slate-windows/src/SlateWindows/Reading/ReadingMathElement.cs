@@ -154,8 +154,9 @@ internal sealed class ReadingMathElement : ContentControl
     }
 
     /// <summary>Sealed here (#1955). WPF keeps an unsealed template with the thread that
-    /// built it, and this one is built once for the process, by whichever thread first
-    /// touches the type. Sealed, it belongs to no thread, so any thread's formula takes it.</summary>
+    /// built it, and the type's own is built once for the process, by whichever thread
+    /// first touches the type. Sealed, it belongs to no thread, so any thread's formula
+    /// takes it.</summary>
     internal static ControlTemplate NewDrawingTemplate()
     {
         var scroller = new FrameworkElementFactory(typeof(FormulaScroller), ScrollerName);
