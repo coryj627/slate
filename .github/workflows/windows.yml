@@ -1221,6 +1221,15 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
+      # createdump does not create a missing folder. With the dump name
+      # pointing into one it prints "Invalid dump path '...' - The system
+      # cannot find the path specified. (3)" and writes nothing. A model
+      # family first creates this folder with its first checkpoint, about a
+      # second into its first case, so a test process that failed fast before
+      # then would leave no dump (#1624).
+      - name: Create the model results folder
+        run: New-Item -ItemType Directory -Force '${{ runner.temp }}\slate-model-results' | Out-Null
+
       # Partition reachable global ordinals, never the debug text filter.
       # Every shard still validates the complete inventory and exclusions.
       # #1624: a model family is one fact, and blame's hang timer resets only

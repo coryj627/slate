@@ -259,6 +259,18 @@ Describe 'windows.yml model evidence' {
         $test[0] | Should -Match (Get-Lines @("          --results-directory `"$folder`""))
         $test[0] | Should -Match (Get-Lines @("          SLATE_MODEL_REPORT_DIR: '$folder'")) -Because 'the stall rule runs with the checkpoint flusher, which runs only with a report directory'
     }
+    It 'creates the results folder directly before the test step, so a test process that fails fast before its first checkpoint keeps its dump' {
+        # createdump does not create a missing folder: it prints "Invalid dump path ... The system cannot find the
+        # path specified. (3)" and writes nothing. A family first creates the folder with its first checkpoint.
+        $create = @(Get-ModelStep 'Create the model results folder')
+        $create.Count | Should -Be 1
+        # Its only keys are the name and the command: no if:, continue-on-error: or shell override can skip or soften it.
+        $keys = @($create[0] -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+        $keys | Should -Be @('      - name: Create the model results folder', "        run: New-Item -ItemType Directory -Force '$folder' | Out-Null") -Because 'exactly the folder the dump name and both uploads use'
+        $test = @(Get-ModelStep 'Test (the Connections model)')
+        $test.Count | Should -Be 1
+        [array]::IndexOf($modelSteps, $create[0]) | Should -Be ([array]::IndexOf($modelSteps, $test[0]) - 1) -Because 'nothing between them can start a test process'
+    }
     It 'keeps a failed attempt''s evidence under a name with the attempt, apart from the report the aggregator reads' {
         $report = @(Get-ModelStep 'Upload model timings and coverage')
         $report.Count | Should -Be 1
@@ -294,10 +306,11 @@ Describe 'windows.yml model evidence' {
         $print[0] | Should -Match ([regex]::Escape("'$folder'"))
         $print[0] | Should -Match ([regex]::Escape('*.progress.txt'))
         $print[0] | Should -Match ([regex]::Escape('::error::'))
-        $order = 'Test (the Connections model)', 'Show where each model family stopped', 'Upload model timings and coverage', 'Upload a failed attempt''s model evidence' |
+        $order = 'Create the model results folder', 'Test (the Connections model)', 'Show where each model family stopped', 'Upload model timings and coverage', 'Upload a failed attempt''s model evidence' |
             ForEach-Object { [array]::IndexOf($modelSteps, @(Get-ModelStep $_)[0]) }
-        $order | Should -Be @($order | Sort-Object) -Because 'the print and both uploads follow the test step'
-        $order[3] | Should -Be ($modelSteps.Count - 1) -Because 'nothing after the evidence upload can fail unrecorded'
+        $order | Should -Not -Contain -1
+        $order | Should -Be @($order | Sort-Object) -Because 'the folder exists before the test step, and the print and both uploads follow it'
+        $order[4] | Should -Be ($modelSteps.Count - 1) -Because 'nothing after the evidence upload can fail unrecorded'
     }
 }
 

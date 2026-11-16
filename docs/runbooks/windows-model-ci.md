@@ -104,7 +104,8 @@ ticks and the completed count, and ends the process with
 `Environment.FailFast`. The stalled thread is in synchronous code and cannot be
 unwound. The model step sets the `DOTNET_DbgEnableMiniDump` variables, so the
 runtime writes a full dump of every thread to `crash-<process>-<pid>.dmp` in the
-results folder. The rule counts ticks, not wall time: a suspended machine adds
+results folder, which the job creates before the test step because the runtime's
+dump writer does not create a missing one. The rule counts ticks, not wall time: a suspended machine adds
 none, and a starved thread pool makes the rule later, never early. Five minutes
 is ten times the longest bounded wait inside a case (30 seconds). The rule never
 speaks after a family completed or under a debugger, and it runs only where
