@@ -30,8 +30,10 @@ not match a path, or if `on.pull_request` carries a list of its own. It reads:
   "34_canvas_contracts.md")`, the same as a tuple, a list or `/` operands).
 
 A directory path (no file extension) requires the whole folder to be covered.
-A path is checked where it lands, with each `..` resolved and either
-separator read, not as it is spelled. A path built from a helper's parameter
+A path is checked where it lands, not as it is spelled: each `..` resolved,
+either separator read, and each name in the checkout's own case, because
+Windows opens a file in any case and GitHub matches the list with case. A
+path built from a helper's parameter
 is resolved through every call of that helper in the same file; a call whose
 argument is not a string literal or same-file constant, or a helper with no
 call, fails the check, naming the file, so a new kind of dynamic read is
@@ -324,6 +326,30 @@ def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], l
     return reads, unparsed
 
 
+def landing(repo: Path, path: str) -> str:
+    """Where a read lands: each `..` resolved, either separator read, and each
+    folder and file spelled as the checkout spells it.
+
+    The lane runs on Windows, which opens `Docs/Plans/X.md` as readily as the
+    file's own spelling, and GitHub matches the path list with case. A read
+    is checked under the name a change to the file would carry. From the first
+    segment the checkout does not have, the rest stays as it is spelled.
+    """
+    segments = posixpath.normpath(path.replace("\\", "/")).split("/")
+    here, out = repo, []
+    for index, segment in enumerate(segments):
+        try:
+            names = [entry.name for entry in here.iterdir()]
+        except OSError:
+            names = []
+        matches = [segment] if segment in names else [name for name in names if name.lower() == segment.lower()]
+        if len(matches) != 1:
+            return "/".join(out + segments[index:])
+        out.append(matches[0])
+        here = here / matches[0]
+    return "/".join(out)
+
+
 def check(repo: Path = REPO) -> list[str]:
     """Return the problems found; empty when the trigger is complete."""
     workflow_text = (repo / WORKFLOW).read_text(encoding="utf-8")
@@ -344,7 +370,7 @@ def check(repo: Path = REPO) -> list[str]:
     reads: dict[str, set[str]] = {}
     for extra in (from_sources, designation_reads(repo), at_map_reads(repo), from_scripts):
         for path, sources in extra.items():
-            reads.setdefault(posixpath.normpath(path.replace("\\", "/")), set()).update(sources)
+            reads.setdefault(landing(repo, path), set()).update(sources)
     problems.extend(unresolved)
     problems.extend(unparsed)
 

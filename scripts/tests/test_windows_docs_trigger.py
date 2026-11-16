@@ -252,17 +252,32 @@ class CheckFacts(unittest.TestCase):
                 self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
 
     def test_a_script_s_docs_path_is_read_with_either_separator_and_in_any_case(self):
-        # Windows opens docs\plans\x.md and Docs/Plans/x.md alike. Each is reported as it lands, and the list, which
-        # GitHub matches by case, covers neither spelling here.
-        for script, landed in (
-                ('DOC = ROOT / r"docs\\plans\\43_mac_backlog_delivery\\x.md"\n', "docs/plans/43_mac_backlog_delivery/x.md"),
-                ('DOC = os.path.join(ROOT, "docs", r"plans\\43_mac_backlog_delivery", "x.md")\n', "docs/plans/43_mac_backlog_delivery/x.md"),
-                ('DOC = os.path.join(ROOT, "docs" "/plans/43_mac_backlog_delivery/x.md")\n', "docs/plans/43_mac_backlog_delivery/x.md"),
-                ('DOC = os.path.join(ROOT, "Docs", "Plans", "43_mac_backlog_delivery", "x.md")\n', "Docs/Plans/43_mac_backlog_delivery/x.md"),
-                ('DOC = ROOT / "DOCS/PLANS/43_mac_backlog_delivery/x.md"\n', "DOCS/PLANS/43_mac_backlog_delivery/x.md")):
+        # Windows opens docs\plans\x.md and Docs/Plans/x.md alike. Each is reported as the checkout spells it, as far
+        # as the checkout has it: the fixture has docs/plans, and no 43_mac_backlog_delivery under it.
+        landed = "docs/plans/43_mac_backlog_delivery/x.md"
+        for script in ('DOC = ROOT / r"docs\\plans\\43_mac_backlog_delivery\\x.md"\n',
+                       'DOC = os.path.join(ROOT, "docs", r"plans\\43_mac_backlog_delivery", "x.md")\n',
+                       'DOC = os.path.join(ROOT, "docs" "/plans/43_mac_backlog_delivery/x.md")\n',
+                       'DOC = os.path.join(ROOT, "Docs", "Plans", "43_mac_backlog_delivery", "x.md")\n',
+                       'DOC = ROOT / "DOCS/PLANS/43_mac_backlog_delivery/x.md"\n'):
             with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
                 problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
                 self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+
+    def test_a_list_entry_in_another_case_does_not_cover_the_document(self):
+        # GitHub matches the list with case. A script that spells a document in another case reads it on Windows
+        # all the same, and an entry spelled the script's way would never match a change to the real file.
+        listed = WORKFLOW.replace("      - 'docs/plans/*.md'\n", "      - 'docs/plans/*.md'\n      - 'Docs/Plans/43_Backlog/Notes.md'\n")
+        workflow = listed + "    steps:\n      - name: Check\n        run: python -I scripts/reader.py\n"
+        for script in ('DOC = ROOT / "Docs" / "Plans" / "43_Backlog" / "Notes.md"\n',
+                       'DOC = ROOT / "Docs/Plans/43_Backlog/Notes.md"\n'):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=workflow, script=script)
+                (repo / "docs/plans/43_backlog").mkdir()
+                (repo / "docs/plans/43_backlog/notes.md").write_text("notes\n", encoding="utf-8")
+                problems = trigger.check(repo)
+                self.assertTrue(any(p.startswith("docs/plans/43_backlog/notes.md is read") and "scripts/reader.py" in p
+                                    for p in problems), problems)
 
     def test_a_whole_path_literal_beside_other_arguments_is_read_as_itself(self):
         # open("docs/plans/a.md", "r") reads a.md, not a folder named a.md/r.
