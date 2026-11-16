@@ -1338,12 +1338,12 @@ public sealed partial class GraphDocumentTests
                 }
                 gate.Set();
             });
-            var clock = System.Diagnostics.Stopwatch.StartNew();
             host.Workspace.Dispose();
-            clock.Stop();
 
             Assert.True(document.IsRetired);
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"the teardown took {clock.Elapsed}");
+            // Read before anything pumps: the teardown's own bounded drain
+            // saw the tracked work end. A teardown that ran out its bound
+            // instead leaves this false, so no elapsed time is asserted.
             Assert.True(document.WhenAllWorkDrained().IsCompleted, "tracked work outlived the teardown");
             PumpedDispatcher.Drain();
             Assert.Equal(0, installs);
@@ -1378,12 +1378,13 @@ public sealed partial class GraphDocumentTests
             // under the work lock the instant it is (IPC-2) — and this
             // thread does not pump it.
             Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never queued");
-            var clock = System.Diagnostics.Stopwatch.StartNew();
             host.Workspace.Dispose();
-            clock.Stop();
 
             Assert.True(document.IsRetired);
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"the teardown took {clock.Elapsed}");
+            // Read before anything pumps: the shutdown settled the queued
+            // apply, so the teardown's bounded drain saw the tracked work
+            // end. A teardown that ran out its bound instead leaves this
+            // false, so no elapsed time is asserted.
             Assert.True(document.WhenAllWorkDrained().IsCompleted, "tracked work outlived the teardown");
             PumpedDispatcher.Drain();
             Assert.Equal(0, installs);

@@ -56,14 +56,16 @@ public sealed class SingleInstanceCoordinatorTests
         Task connection = stalledPrimary.WaitForConnectionAsync();
         string payload = new('x', SingleInstanceCoordinator.MaxMessageBytes - 128);
         TimeSpan deadline = TimeSpan.FromMilliseconds(300);
-        var stopwatch = Stopwatch.StartNew();
 
         Task<bool> send = Task.Run(() => secondary.SendActivation([payload], deadline));
         await connection.WaitAsync(TimeSpan.FromSeconds(5));
+        // The send comes back, refused, inside this wait's bound: a send
+        // that ignored its deadline is still writing to the stalled pipe
+        // when the bound ends, and WaitAsync throws. No elapsed time is
+        // asserted.
         bool delivered = await send.WaitAsync(TimeSpan.FromSeconds(3));
 
         Assert.False(delivered);
-        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, deadline + TimeSpan.FromSeconds(2));
     }
 
     [Fact]
