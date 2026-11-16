@@ -359,7 +359,9 @@ internal static class StaThread
             // on its token has not left before any of them is taken.
             string cancelled = Cancel(cancellation);
             dispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
-            string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its timeout token was cancelled{cancelled} and its dispatcher was told to shut down";
+            string what = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its timeout token was cancelled{cancelled} and its dispatcher was told to shut down");
             if (thread.Join(unwindGrace ?? UnwindGrace))
             {
                 string? left = FreeClasses(name, Volatile.Read(ref exit));

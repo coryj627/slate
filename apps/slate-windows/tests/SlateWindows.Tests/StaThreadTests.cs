@@ -711,6 +711,27 @@ public sealed class StaThreadTests : IDisposable
             $"the heartbeat thread's gap reads as nothing, so it is not that thread's: {timedOut.Message}");
     }
 
+    /// <summary>The message's own number, its bound, is written in the
+    /// invariant culture, as the heartbeat's and the collector's are: on a
+    /// machine that writes 0,2 the job log reads as CI's does.</summary>
+    [Fact]
+    public void ATimeoutsMessageWritesItsBoundInTheInvariantCulture()
+    {
+        CultureInfo culture = CultureInfo.CurrentCulture;
+        Xunit.Sdk.XunitException timedOut;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            timedOut = TimeOutASleepingBody();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+        }
+
+        Assert.Contains("bound 0.2 s;", timedOut.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>#1843: the collector records a memory load at each
     /// collection and has none before its first. The sentence says so then,
     /// rather than print a load of 0 %.</summary>
