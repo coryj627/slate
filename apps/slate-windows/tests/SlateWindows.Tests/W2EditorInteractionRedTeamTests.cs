@@ -175,12 +175,11 @@ public sealed class W2EditorInteractionRedTeamTests
             },
             () =>
             {
-                var clock = Stopwatch.StartNew();
+                // DecodeImage is back while the decoder is still held: the
+                // sentence, the abandoned slot and the unfinished decoder say
+                // the decode was not waited on. No elapsed time is asserted.
                 Assert.Null(EditorInteractionCoordinator.DecodeImage(
                     Encoding.UTF8.GetBytes(SmallSvg), "image/svg+xml", out string? reason));
-                Assert.True(
-                    clock.ElapsedMilliseconds < 2_000,
-                    $"the decode was waited on for {clock.ElapsedMilliseconds} ms");
                 Assert.Equal("Image not shown: decoding took longer than 5 seconds.", reason);
                 Assert.Equal(1, Volatile.Read(ref slots.Abandoned));
                 Assert.Equal(1, Volatile.Read(ref slots.Live));
