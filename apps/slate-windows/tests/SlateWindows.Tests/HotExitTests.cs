@@ -1440,6 +1440,15 @@ public sealed class HotExitTests
         Assert.Equal(delay, HotExitWriter.DebounceDelay);
     }
 
+    /// <summary>Plan 47 CB-7: the shell gate's killed-process journey waits up
+    /// to 15 seconds for the typed entry to be stored before it kills, where
+    /// it used to sleep 3. A wait that long would let a much longer debounce
+    /// through, so the window's production value is pinned here: changing it
+    /// is a decision, made with that journey's bound in view.</summary>
+    [Fact]
+    public void TheDebounceIsOneSecondInProduction() =>
+        Assert.Equal(TimeSpan.FromSeconds(1), HotExitWriter.DebounceDelay);
+
     [Fact]
     public void CloseVaultThatKeepsTheCopiesSpeaksOneCloseLine()
     {
