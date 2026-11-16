@@ -26,6 +26,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "contracts-citations")]
+[Trait("tier", "census")]
 public sealed class ContractsCitationCensus
 {
     private const string ContractsDoc = "34_canvas_contracts.md";

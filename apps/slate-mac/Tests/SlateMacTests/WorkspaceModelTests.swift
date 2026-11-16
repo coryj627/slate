@@ -108,12 +108,14 @@ final class WorkspaceModelTests: XCTestCase {
         // entries. Never park one spelling's buffer under the other's tab.
         workspace.snapshotActiveTab(
             text: "draft", baseline: "saved", contentHash: "hash",
+            baselineIdentity: .none,
             hasUnsavedChanges: true, saveError: nil, saveConflict: nil,
             loadedFilePath: decomposed)
         XCTAssertNil(workspace.document(for: tabID))
 
         workspace.snapshotActiveTab(
             text: "draft", baseline: "saved", contentHash: "hash",
+            baselineIdentity: .none,
             hasUnsavedChanges: true, saveError: nil, saveConflict: nil,
             loadedFilePath: composed)
         XCTAssertEqual(workspace.document(for: tabID)?.text, "draft")

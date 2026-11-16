@@ -464,6 +464,16 @@ struct WorkspaceModel: Hashable {
         return opened
     }
 
+    /// Plan 43 PR 29 §5: appends a restored tab, with its own id, to the
+    /// active group without activating it (a group with no active tab
+    /// shows it).
+    mutating func appendTabToActiveGroup(_ tab: WorkspaceTab) {
+        updateGroup(activeGroupID) { group in
+            group.tabs.append(tab)
+            if group.activeTabID == nil { group.activeTabID = tab.id }
+        }
+    }
+
     /// Replace the active tab's item in place (single-click open into the
     /// current tab). Falls back to `openTab` when the group is empty. The
     /// dedup rule still applies: if the item is already open in the group,

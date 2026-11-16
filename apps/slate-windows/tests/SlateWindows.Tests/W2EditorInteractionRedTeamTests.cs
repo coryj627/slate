@@ -485,7 +485,8 @@ public sealed class W2EditorInteractionRedTeamTests
         // The budget "ends" only after the decode has finished entirely.
         EditorInteractionCoordinator.SvgDecodeWaitForTests = handle =>
         {
-            Assert.Equal(0u, WaitForSingleObject(handle, 10_000));
+            // As long as a real decode may take here (#1949).
+            Assert.Equal(0u, WaitForSingleObject(handle, UnhurriedSvgDecodes.Milliseconds));
             WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
             return 0x102;
         };

@@ -8,6 +8,7 @@ using uniffi.slate_uniffi;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "editor-peer-doctrine")]
+[Trait("tier", "census")]
 public sealed class EditorPeerDoctrineCensus
 {
     [Fact]

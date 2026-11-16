@@ -19,6 +19,7 @@ namespace SlateWindows.Tests.Censuses;
 /// named run.
 /// </summary>
 [Trait("census", "w-c-matrix-graph")]
+[Trait("tier", "census")]
 public sealed class WcMatrixGraphEvidenceCensus
 {
     private sealed record Surface(

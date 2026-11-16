@@ -12,6 +12,7 @@ namespace SlateWindows.Tests;
 /// a live declaration and reports drift that is not there. Both are
 /// failures, and only one of them is loud.
 /// </remarks>
+[Trait("tier", "census")]
 public sealed class SwiftSourceTests
 {
     [Fact]

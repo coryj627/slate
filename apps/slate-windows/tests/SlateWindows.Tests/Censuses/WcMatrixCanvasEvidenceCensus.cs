@@ -20,6 +20,7 @@ namespace SlateWindows.Tests.Censuses;
 /// row the manifest does not know.
 /// </summary>
 [Trait("census", "w-c-matrix-canvas")]
+[Trait("tier", "census")]
 public sealed class WcMatrixCanvasEvidenceCensus
 {
     private sealed record Peer(string Class, string[] ControlTypes, string[] Patterns);

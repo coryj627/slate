@@ -3264,6 +3264,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         set => svgDecodeBudgetMillisecondsForTests = value;
     }
 
+    /// <summary>Test seam: the budget of every decode in this process whose
+    /// caller hasn't set <see cref="SvgDecodeBudgetMillisecondsForTests"/>,
+    /// on any thread (#1949). The unit-test host sets it as it loads, so a
+    /// slow job VM's real decode runs to its end instead of returning the
+    /// timeout sentence to a fact about something else; the facts about the
+    /// budget set their own or stub the wait. Never set by the app.</summary>
+    internal static int? SvgDecodeBudgetDefaultMillisecondsForTests { get; set; }
+
     [ThreadStatic]
     private static Func<byte[], Func<long, bool>, byte[]?>? svgDecodeBodyForTests;
 
@@ -3397,7 +3405,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // waiting (#1581). Any other result is a failed wait, logged, and
         // Join still keeps the results from being read before the decode
         // ends.
-        uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests ?? (SvgDecodeBudgetSeconds * 1000));
+        uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests
+            ?? SvgDecodeBudgetDefaultMillisecondsForTests
+            ?? (SvgDecodeBudgetSeconds * 1000));
         uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
             ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, budget);
         if (waited == NativeMethods.WaitTimeout)

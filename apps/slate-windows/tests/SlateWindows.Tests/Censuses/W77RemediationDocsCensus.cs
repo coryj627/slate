@@ -25,6 +25,7 @@ using System.Text.RegularExpressions;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "w7-7-remediation-docs")]
+[Trait("tier", "census")]
 public sealed partial class W77RemediationDocsCensus
 {
     private const string SpecDoc = "18_windows_port/specs/w7_7_nvda_matrix_remediation_spec.md";

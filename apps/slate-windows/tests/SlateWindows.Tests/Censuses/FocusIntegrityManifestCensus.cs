@@ -78,6 +78,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "focus-integrity-manifest")]
+[Trait("tier", "census")]
 public sealed class FocusIntegrityManifestCensus
 {
     private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";

@@ -557,8 +557,39 @@ struct MainSplitView: View {
         }
     }
 
-    private var splitViewWithAlerts: some View {
+    /// Plan 43 PR 29 (owner call D-1): a close the store has not confirmed —
+    /// a discard or a retirement it owes. Core's message and core's three
+    /// labels; Cancel keeps the vault open.
+    private var splitViewWithHotExitDiscardAlert: some View {
         splitViewWithVaultCloseAlert
+        .alert(
+            Text(appState.pendingHotExitDiscard?.message ?? ""),
+            isPresented: Binding(
+                get: { appState.pendingHotExitDiscard != nil },
+                set: { presented in
+                    if !presented, appState.pendingHotExitDiscard != nil {
+                        appState.resolveHotExitDiscardPending(.cancel)
+                    }
+                }),
+            presenting: appState.pendingHotExitDiscard
+        ) { prompt in
+            Button(prompt.tryAgain) {
+                appState.resolveHotExitDiscardPending(.tryAgain)
+                alertFocusReturn = .editor
+            }
+            Button(prompt.closeKeepingCopies) {
+                appState.resolveHotExitDiscardPending(.closeKeepingCopies)
+                alertFocusReturn = .editor
+            }
+            Button(prompt.cancel, role: .cancel) {
+                appState.resolveHotExitDiscardPending(.cancel)
+                alertFocusReturn = .editor
+            }
+        }
+    }
+
+    private var splitViewWithAlerts: some View {
+        splitViewWithHotExitDiscardAlert
         // Property-edit conflict alert. Mirrors the editor-save
         // conflict alert above but scopes the message + actions to
         // a single key edit (Milestone I / #168). Same three-button
@@ -946,8 +977,10 @@ struct MainSplitView: View {
         .onAppear {
             let sidebarNotice = appState.sidebarVaultPrefsNotice
                 .map { " \($0.localizedDescription)" } ?? ""
-            postAccessibilityAnnouncement(
-                .vaultOpened(vaultTitle: vaultTitle, sidebarNotice: sidebarNotice))
+            // Plan 43 PR 29 §5: the opening line, then core's restore
+            // sentences, from one seam; the launch's waits for the app to
+            // settle so VoiceOver hears it.
+            appState.announceVaultOpenedOnMount(vaultTitle: vaultTitle, sidebarNotice: sidebarNotice)
         }
     }
 
@@ -1318,20 +1351,21 @@ struct MainSplitView: View {
     private func pendingNavigationAlertMessage() -> Text {
         let name = filename(of: appState.loadedFilePath ?? "")
         let question = "Save changes to " + name + "?"
-        guard let reason = appState.pendingNavigationSaveDisabledReason else {
-            return Text(question)
-        }
-        return Text(question + "\n\n" + reason)
+        let notKept = appState.pendingNavigation == .closeVault ? appState.hotExitPromptNotice : nil
+        return Text(
+            ([question] + [appState.pendingNavigationSaveDisabledReason, notKept].compactMap { $0 })
+                .joined(separator: "\n\n"))
     }
 
     private func vaultCloseAlertMessage(count: Int) -> Text {
         let subject = count == 1 ? "1 note has" : String(count) + " notes have"
         let question = subject
             + " unsaved changes. Save all changes before closing the vault?"
-        guard let reason = appState.pendingVaultCloseSaveAllDisabledReason else {
-            return Text(question)
-        }
-        return Text(question + "\n\n" + reason)
+        return Text(
+            ([question]
+                + [appState.pendingVaultCloseSaveAllDisabledReason, appState.hotExitPromptNotice]
+                .compactMap { $0 })
+                .joined(separator: "\n\n"))
     }
 
     private var vaultTitle: String {
