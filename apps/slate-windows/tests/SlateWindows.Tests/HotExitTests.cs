@@ -52,20 +52,33 @@ public sealed class HotExitTests
     public void AChangedSnapshotIsWrittenAfterTheDebounce()
     {
         using var host = new HotExitHost();
-        host.Open();
-        WorkspaceTabViewModel tab = host.OpenNote("a.md");
-        tab.Text += "one";
-        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "the first edit was never kept");
+        // The fact's own debounce, five times the product's: the pump below
+        // asserts "not written yet", and inside one second a busy runner
+        // that overshot the pump would turn the fact red with the writer
+        // right.
+        TimeSpan debounce = HotExitWriter.DebounceDelay;
+        HotExitWriter.DebounceDelay = TimeSpan.FromSeconds(5);
+        try
+        {
+            host.Open();
+            WorkspaceTabViewModel tab = host.OpenNote("a.md");
+            tab.Text += "one";
+            host.PumpUntil(() => host.StoredText(tab) == tab.Text, "the first edit was never kept");
 
-        tab.Text += "two";
-        host.PumpFor(TimeSpan.FromMilliseconds(200));
-        Assert.DoesNotContain("two", host.StoredText(tab), StringComparison.Ordinal);
-        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "the debounce never wrote");
-        HotExitEntry entry = host.StoredEntry(tab)!;
-        Assert.Equal("a.md", entry.Path);
-        Assert.Equal(tab.SavedContentHash, entry.BaselineHash);
-        Assert.Equal(tab.FileIdentity, entry.BaselineFileId);
-        Assert.NotNull(entry.BaselineFileId);
+            tab.Text += "two";
+            host.PumpFor(TimeSpan.FromMilliseconds(200));
+            Assert.DoesNotContain("two", host.StoredText(tab), StringComparison.Ordinal);
+            host.PumpUntil(() => host.StoredText(tab) == tab.Text, "the debounce never wrote");
+            HotExitEntry entry = host.StoredEntry(tab)!;
+            Assert.Equal("a.md", entry.Path);
+            Assert.Equal(tab.SavedContentHash, entry.BaselineHash);
+            Assert.Equal(tab.FileIdentity, entry.BaselineFileId);
+            Assert.NotNull(entry.BaselineFileId);
+        }
+        finally
+        {
+            HotExitWriter.DebounceDelay = debounce;
+        }
     }
 
     [Fact]
@@ -1002,12 +1015,26 @@ public sealed class HotExitTests
         host.PumpUntil(() => !host.Store.HasUnresolved(host.Key), "the adoption never resolved");
         // The outage: the retirement of a Discard by navigation errors.
         bool outage = true;
+        int refused = 0;
         host.Store.BeforeCallForTests = call =>
-            Volatile.Read(ref outage) && call.Kind == HotExitCallKind.Retire ? new HotExitFault.Io() : null;
+        {
+            if (Volatile.Read(ref outage) && call.Kind == HotExitCallKind.Retire)
+            {
+                Interlocked.Increment(ref refused);
+                return new HotExitFault.Io();
+            }
+            return null;
+        };
         host.TabPrompt = _ => WorkspaceDirtyNavigationDecision.Discard;
         host.Workspace.OpenPath("b.md");
         host.PumpUntil(() => back.Path == "b.md", "the tab never re-pointed");
-        host.PumpFor(TimeSpan.FromMilliseconds(100));
+        // The retirement has met the outage and is still owed. The pump
+        // waits for the refused call, not for a fixed time: an owed call is
+        // unresolved from the moment it is queued, so that alone would not
+        // say the outage had been met.
+        host.PumpUntil(
+            () => Volatile.Read(ref refused) > 0 && host.Store.HasUnresolved(host.Key),
+            "premise: the retirement never met the outage");
         Assert.True(host.Store.HasUnresolved(host.Key), "premise: the retirement is parked");
         Volatile.Write(ref outage, false);
 

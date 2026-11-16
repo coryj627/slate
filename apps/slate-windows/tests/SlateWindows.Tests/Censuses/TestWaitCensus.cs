@@ -2245,7 +2245,7 @@ public sealed class TestWaitCensus
 
     /// <summary>A floor for each name a project calls, sites or not. Counted
     /// on 2026-11-16, after the unit project's sweep (plan 47 CB-6): 64
-    /// Thread.Sleep, 42 Task.Delay, 33 PumpFor and 5 RunDispatcherFor in the
+    /// Thread.Sleep, 42 Task.Delay, 32 PumpFor and 5 RunDispatcherFor in the
     /// unit project, and 51 Thread.Sleep in the gate's, which calls none of
     /// the other three. Fewer means the rule lost sight of that name, not
     /// that the project waits less.</summary>
@@ -2262,8 +2262,8 @@ public sealed class TestWaitCensus
     /// word that says why it is not a wait on a condition and, after the
     /// colon, what it holds. The census first read 80 sites here, on
     /// 2026-11-16, and the sweep that followed (plan 47 CB-6) left 67. Read
-    /// with arrow-bodied helpers counted, the list held 69 on 2026-11-16:
-    /// 26 Thread.Sleep, 8 Task.Delay and 35 fixed pumps. An entry that names
+    /// with arrow-bodied helpers counted, the list held 68 on 2026-11-16:
+    /// 26 Thread.Sleep, 8 Task.Delay and 34 fixed pumps. An entry that names
     /// a missing seam stays until the product has one.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] UnitFixedDelays =
     [
@@ -2302,7 +2302,8 @@ public sealed class TestWaitCensus
         ("CitationAsyncInterleavingTests.cs", "AReloadPublishesTheClearBeforeTheNewReadLands", 1,
             "quiesce: 40 drains of the leaf, so the first load's publications are all in before they are counted"),
         ("HistoryAsyncInterleavingTests.cs", "QuiesceAsync", 1, "quiesce: 10 drains, since a drained body can queue follow-up work"),
-        ("HotExitTests.cs", "AChangedSnapshotIsWrittenAfterTheDebounce", 1, "late-arrival: inside the debounce the second edit is not written"),
+        ("HotExitTests.cs", "AChangedSnapshotIsWrittenAfterTheDebounce", 1,
+            "late-arrival: 200 ms into the fact's own 5 s debounce the second edit is not written"),
         ("HotExitTests.cs", "ALateDiscardNeverReKeepsTheTextItDiscarded", 1, "late-arrival: after the discard resolves nothing keeps the text again"),
         ("HotExitTests.cs", "AFenceHoldsUntilTheCoveredTabsAreClassified", 2,
             "late-arrival: with the fence held, and after its release, the discarded text is not stored"),
@@ -2321,7 +2322,6 @@ public sealed class TestWaitCensus
             "deliberate-hold: a gap between the clean tab and the next edit while the first claim is held"),
         ("HotExitTests.cs", "ALateClaimNeverDisplacesANewerEpisode", 1, "late-arrival: no second claim starts while the first is held"),
         ("HotExitTests.cs", "AClaimForAReaderEndedEpisodeIsRetired", 1, "deliberate-hold: the claim stays held while the reader ends the episode"),
-        ("HotExitTests.cs", "ARetriedRetirementNeverDisplacesASuccessor", 1, "late-arrival: the errored retirement stays parked"),
         ("HotExitTests.cs", "AnErroredClaimIsRetriedWithItsOwnIncarnation", 1,
             "deliberate-hold: a gap for the errored claim's outcome to reach the writer before the next edit; "
             + "the writer has no seam that says an outcome was applied"),
