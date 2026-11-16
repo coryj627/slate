@@ -1102,6 +1102,29 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>#1955: the drawing template is one object for the whole
+    /// process, and WPF keeps a template with the thread that built it until
+    /// it is sealed. It was sealed only when a drawn formula first took it,
+    /// so when the first thread to build a math element drew none, every
+    /// formula drawn on a later thread failed for the rest of the process and
+    /// its note did not load. A template another thread built, on a thread
+    /// that has since ended, serves a formula here.</summary>
+    [Fact]
+    public void TheDrawingTemplateServesAThreadOtherThanItsBuilders()
+    {
+        System.Windows.Controls.ControlTemplate template = StaThread.Run(
+            ReadingMathElement.NewDrawingTemplate, TimeSpan.FromSeconds(60), "STA test body timed out.");
+        RunSta(() =>
+        {
+            var element = new ReadingMathElement("x", "<math><mi>x</mi></math>", "x", string.Empty)
+            {
+                Template = template,
+            };
+            Assert.True(element.ApplyTemplate());
+            Assert.NotNull(element.Scroller);
+        });
+    }
+
     /// <summary>
     /// W3-2 MathPrefs parity: preferences persist across view-model
     /// lifetimes, announce through the canonical vocabulary, reject
