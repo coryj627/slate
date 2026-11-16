@@ -106,6 +106,20 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }
     }
 
+    /// <summary>Drains until <paramref name="reached"/> holds: a wait on
+    /// the state the next assertion reads, where a counted loop of drains
+    /// waited a fixed while. Ten seconds bound it.</summary>
+    private static async Task DrainUntilAsync(Func<Task> drain, Func<bool> reached, string what)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!reached())
+        {
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), what);
+            await drain();
+            await Task.Delay(2);
+        }
+    }
+
     /// <summary>The workspace constructor starts the first note's
     /// citation load (SyncPanels) and the vault's source seeding
     /// (SetBibliographySources) as two independent background
@@ -258,11 +272,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         _ = session.SetBibliographySources(session.CitationsPrefs().Sources);
         seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
 
-        for (int round = 0; round < 40; round++)
-        {
-            await leaf.DrainForTests();
-            await Task.Delay(2);
-        }
+        await DrainUntilAsync(leaf.DrainForTests, () => answered.Count > 0, "the parked press was never answered");
 
         (string Key, bool Present) only = Assert.Single(answered);
         Assert.Equal("knuth1984", only.Key);
@@ -771,11 +781,8 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
 
         workspace.ReloadBibliography();
         Volatile.Write(ref reloading, 0);
-        for (int round = 0; round < 40; round++)
-        {
-            await workspace.SeedWorkForTests;
-            await Task.Delay(2);
-        }
+        await DrainUntilAsync(
+            () => workspace.SeedWorkForTests, () => Volatile.Read(ref ranInline) != -1, "the reload's seed never ran");
 
         Assert.NotEqual(-1, Volatile.Read(ref ranInline));
         Assert.Equal(0, Volatile.Read(ref ranInline));
@@ -813,11 +820,10 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             held.Release();
         }
 
-        for (int round = 0; round < 40; round++)
-        {
-            await workspace.SeedWorkForTests;
-            await Task.Delay(2);
-        }
+        await DrainUntilAsync(
+            () => workspace.SeedWorkForTests,
+            () => workspace.ReloadBibliographyCommand.CanExecute(null),
+            "the released reload never finished");
         held.AssertHeldUntilReleased();
         Assert.True(workspace.ReloadBibliographyCommand.CanExecute(null));
     }
@@ -911,11 +917,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         leaf.EnsureLoaded();
         Volatile.Write(ref ensuring, 0);
 
-        for (int round = 0; round < 40; round++)
-        {
-            await leaf.DrainForTests();
-            await Task.Delay(2);
-        }
+        await DrainUntilAsync(leaf.DrainForTests, () => Volatile.Read(ref ranInline) != -1, "the gated body never ran");
 
         Assert.NotEqual(-1, Volatile.Read(ref ranInline));
         Assert.Equal(0, Volatile.Read(ref ranInline));
@@ -953,7 +955,6 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // The parked work completes rather than hanging forever...
         Task drained = leaf.DrainForTests();
         Assert.Same(drained, await Task.WhenAny(drained, Task.Delay(5_000)));
-        await Task.Delay(20);
         // ...without ever touching the session.
         Assert.Equal(0, Volatile.Read(ref bodyRuns));
     }
