@@ -343,6 +343,16 @@ class CheckFacts(unittest.TestCase):
             problems = trigger.check(repo)
         self.assertTrue(any("scripts/reader.py" in p and "cannot be parsed" in p for p in problems), problems)
 
+    def test_a_script_python_runs_is_a_script_the_scan_reads(self):
+        # Python reads a source file's byte-order mark and its coding line, so the scan does too.
+        document = "docs/plans/43_mac_backlog_delivery/x.md"
+        for label, source in (("a byte-order mark", b"\xef\xbb\xbf" + f'DOC = "{document}"\n'.encode("utf-8")),
+                              ("a coding line", f'# -*- coding: latin-1 -*-\nNAME = "caf\xe9"\nDOC = "{document}"\n'.encode("latin-1"))):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                repo = make_repo(Path(tmp), workflow=script_workflow("python -I"), script="")
+                (repo / "scripts/reader.py").write_bytes(source)
+                self.assertEqual(({document: {"scripts/reader.py"}}, []), trigger.script_reads(repo, script_workflow("python -I")))
+
 
 if __name__ == "__main__":
     unittest.main()

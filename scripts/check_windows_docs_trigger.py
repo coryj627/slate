@@ -316,11 +316,13 @@ def script_reads(repo: Path, workflow_text: str) -> tuple[dict[str, set[str]], l
         if not path.is_file() or path.name == Path(__file__).name:
             continue
         # The parsed script, not its text: a path in a comment or a docstring is not a read.
+        # Its bytes, so Python reads a byte-order mark or a coding line as it does when it runs the script.
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError as error:
+            tree = ast.parse(path.read_bytes())
+        except (SyntaxError, ValueError) as error:
+            where = f"line {error.lineno}: {error.msg}" if isinstance(error, SyntaxError) else str(error)
             unparsed.append(
-                f"{script}: cannot be parsed (line {error.lineno}: {error.msg}), so the docs paths it names were "
+                f"{script}: cannot be parsed ({where}), so the docs paths it names were "
                 "not checked; the docs census job's Python must be able to read every script the workflow runs"
             )
             continue
