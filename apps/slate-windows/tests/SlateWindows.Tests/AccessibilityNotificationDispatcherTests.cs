@@ -1378,9 +1378,13 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// Codex round 2: OD-7's launch window is measured from the FIRST FRAME,
     /// not from construction. Production's clock over a real window reads
     /// zero until the window has rendered — however long construction and
-    /// start-up took — and starts then. The fact's own clock starts before
-    /// the dispatcher's is built, so the two readings taken after the first
-    /// frame differ by the start-up hold; a busy runner only widens that.
+    /// start-up took — and starts then. The fact's own clock starts once the
+    /// launch seams are built and before the start-up hold. After the first
+    /// frame the launch clock is read between two readings of the fact's
+    /// own, taken again until the two stand close together. A launch clock
+    /// that counts from construction then reads no less than the fact's
+    /// first reading, and one started at the first frame reads the hold
+    /// less than its second, however the runner stalls.
     /// </summary>
     [Fact]
     public void TheLaunchWindowStartsAtTheFirstFrameNotAtConstruction() => RunSta(() =>
@@ -1397,8 +1401,11 @@ public sealed class AccessibilityNotificationDispatcherTests
         };
         try
         {
-            var sinceConstruction = Stopwatch.StartNew();
             AccessibilityNotificationDispatcher.LaunchSeams launch = AccessibilityNotificationDispatcher.LaunchSeams.ForProduction(status);
+            // Started after the launch seams are built: a launch clock that
+            // counts from construction is then never behind this one, so a
+            // pause between the two lines cannot make it look right.
+            var sinceBuilt = Stopwatch.StartNew();
             TimeSpan startUp = TimeSpan.FromMilliseconds(250);
             Thread.Sleep(startUp);
             Assert.Equal(TimeSpan.Zero, launch.Elapsed());
@@ -1407,18 +1414,32 @@ public sealed class AccessibilityNotificationDispatcherTests
             window.ContentRendered += (_, _) => rendered = true;
             window.Show();
             Assert.True(PumpedDispatcher.PumpUntil(() => rendered), "the window never rendered its first frame");
-            // The launch clock first, then the fact's own. What the
-            // difference catches is a launch clock that reads zero until the
-            // first frame and then counts from construction: it passes the
-            // zero reading above and reads here what the fact's own clock
-            // does. A clock started at the first frame reads the start-up
-            // hold less. Time between the two readings only adds to the
-            // difference.
-            TimeSpan sinceFirstFrame = launch.Elapsed();
-            TimeSpan built = sinceConstruction.Elapsed;
+            // The launch clock is read between two readings of the fact's
+            // own, and the three are taken again while the two stand more
+            // than a quarter of the hold apart. What the difference catches
+            // is a launch clock that reads zero until the first frame and
+            // then counts from construction: it passes the zero reading
+            // above, and here it reads no less than the first of the two, so
+            // its difference from the second is no wider than the bracket. A
+            // clock started at the first frame reads at least the hold less.
+            // A pause anywhere moves neither answer.
+            TimeSpan before;
+            TimeSpan sinceFirstFrame;
+            TimeSpan after;
+            var tries = Stopwatch.StartNew();
+            do
+            {
+                before = sinceBuilt.Elapsed;
+                sinceFirstFrame = launch.Elapsed();
+                after = sinceBuilt.Elapsed;
+                Assert.True(
+                    after - before <= startUp / 4 || tries.Elapsed < TimeSpan.FromSeconds(10),
+                    "the runner never gave the two readings a narrow bracket");
+            }
+            while (after - before > startUp / 4);
             Assert.True(
-                built - sinceFirstFrame >= startUp / 2,
-                $"the launch window counted construction: it read {sinceFirstFrame} when {built} had passed since construction, "
+                after - sinceFirstFrame >= startUp / 2,
+                $"the launch window counted construction: it read {sinceFirstFrame} when {after} had passed since its seams were built, "
                 + $"{startUp} of it start-up");
             Assert.True(
                 SpinWait.SpinUntil(() => launch.Elapsed() > sinceFirstFrame, TimeSpan.FromSeconds(10)),
