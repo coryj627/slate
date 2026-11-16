@@ -1556,7 +1556,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        string fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "editor_semantics.md"));
+        string fixture = GateFile.ReadFixture("fixtures", "editor_semantics.md");
         File.WriteAllText(Path.Combine(vaultRoot, "note.md"), fixture);
         Process? process = null;
         try

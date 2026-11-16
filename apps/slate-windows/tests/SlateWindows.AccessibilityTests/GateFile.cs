@@ -7,9 +7,10 @@ using System.Text;
 namespace SlateWindows.AccessibilityTests;
 
 /// <summary>
-/// How the shell gate reads a file the app writes (plan 47 CB-7, #1788). The
-/// unit project's <c>TestWaitCensus</c> rule 4 refuses any other read in
-/// this project.
+/// How the shell gate reads a file the app writes (plan 47 CB-7, #1788), and
+/// a fixture that travels with its own binaries. The unit project's
+/// <c>TestWaitCensus</c> rule 4 refuses any other read in this project, with
+/// no exemption.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -157,6 +158,62 @@ internal static class GateFile
             betweenReads?.Invoke();
             Thread.Sleep(PollInterval);
         }
+    }
+
+    /// <summary>The text of a fixture that travels with the test binaries:
+    /// the file at <paramref name="relativeParts"/> under
+    /// <c>AppContext.BaseDirectory</c>, read once. This is the gate's one
+    /// way to read a fixture. Rule 4 used to let a read through when its
+    /// path was written as the base directory combined with constants, and
+    /// what such a path really is cannot be told from how the call is
+    /// written: <c>Path.Combine</c> drops the base for a rooted part, and
+    /// <c>..</c> parts climb out of it. So the path is built here, and
+    /// checked when it is built. A part that is empty or rooted throws,
+    /// naming the part. A path that ends outside the base directory, or at
+    /// it, once its <c>..</c> parts are resolved throws, naming where it
+    /// ends. A <c>..</c> that stays under the base is let through: where the
+    /// path ends is what is checked.</summary>
+    internal static string ReadFixture(params string[] relativeParts) => ReadText(FixturePath(relativeParts));
+
+    private static string FixturePath(string[] relativeParts)
+    {
+        ArgumentNullException.ThrowIfNull(relativeParts);
+        if (relativeParts.Length == 0)
+        {
+            throw new ArgumentException("A fixture needs at least one part under the base directory.", nameof(relativeParts));
+        }
+
+        foreach (string part in relativeParts)
+        {
+            if (string.IsNullOrEmpty(part))
+            {
+                throw new ArgumentException("A fixture's part is empty.", nameof(relativeParts));
+            }
+
+            if (Path.IsPathRooted(part))
+            {
+                throw new ArgumentException(
+                    $"A fixture's part must be relative, and \"{part}\" is rooted: Path.Combine would drop the base directory for it.",
+                    nameof(relativeParts));
+            }
+        }
+
+        string root = Path.GetFullPath(AppContext.BaseDirectory);
+        if (!Path.EndsInDirectorySeparator(root))
+        {
+            root += Path.DirectorySeparatorChar;
+        }
+
+        string full = Path.GetFullPath(Path.Combine([root, .. relativeParts]));
+        if (full.Length <= root.Length || !full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"A fixture lives under the base directory, and \"{string.Join(Path.DirectorySeparatorChar, relativeParts)}\" ends at "
+                + $"{full}, which is not under {root}",
+                nameof(relativeParts));
+        }
+
+        return full;
     }
 
     private static string Decode(byte[] bytes)

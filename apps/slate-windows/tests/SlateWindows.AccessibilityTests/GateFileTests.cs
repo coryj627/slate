@@ -209,4 +209,58 @@ public sealed class GateFileTests : IDisposable
         Assert.Contains(absent, missing.Message, StringComparison.Ordinal);
         Assert.Equal(0, refusals);
     }
+
+    /// <summary>A fixture is read from under the base directory, by its
+    /// parts: the text is what the file there holds.</summary>
+    [Fact]
+    public void AFixtureIsReadFromUnderTheBaseDirectory()
+    {
+        string there = Path.Combine(AppContext.BaseDirectory, "fixtures", "chords.json");
+
+        Assert.Equal(File.ReadAllText(there), GateFile.ReadFixture("fixtures", "chords.json"));
+    }
+
+    /// <summary>A rooted part is refused by name before anything is read:
+    /// <c>Path.Combine</c> would drop the base directory for it, and the
+    /// read would be of whatever file the part names.</summary>
+    [Fact]
+    public void AFixturePartThatIsRootedIsRefusedByName()
+    {
+        string outside = NewFile("a file the app could own");
+
+        ArgumentException rooted = Assert.Throws<ArgumentException>(() => GateFile.ReadFixture("fixtures", outside));
+        Assert.Contains(outside, rooted.Message, StringComparison.Ordinal);
+        Assert.Contains("rooted", rooted.Message, StringComparison.Ordinal);
+
+        // Rooted without a drive, and on a drive without a root.
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture(@"\vault\note.md"));
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture("C:note.md"));
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture("fixtures", string.Empty));
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture());
+    }
+
+    /// <summary>Parts that climb out of the base directory are refused,
+    /// whether <c>..</c> is a part of its own or inside one, and the message
+    /// says where the path ends. The base directory itself is no fixture.</summary>
+    [Fact]
+    public void AFixturePathThatLeavesTheBaseDirectoryIsRefused()
+    {
+        ArgumentException climbed = Assert.Throws<ArgumentException>(() => GateFile.ReadFixture("..", "..", "vault", "note.md"));
+        Assert.Contains("not under", climbed.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "vault", "note.md")), climbed.Message, StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture(@"fixtures\..\..\vault\note.md"));
+        Assert.Throws<ArgumentException>(() => GateFile.ReadFixture("fixtures", ".."));
+    }
+
+    /// <summary>A <c>..</c> that stays under the base directory is let
+    /// through: what is checked is where the path ends, not how it is
+    /// spelled.</summary>
+    [Fact]
+    public void AFixturePathThatClimbsAndStaysUnderTheBaseIsRead()
+    {
+        Assert.Equal(
+            GateFile.ReadFixture("fixtures", "chords.json"),
+            GateFile.ReadFixture("fixtures", "..", "fixtures", "chords.json"));
+    }
 }
