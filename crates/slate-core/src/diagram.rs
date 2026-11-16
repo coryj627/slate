@@ -513,11 +513,34 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 /// Renders abandoned past their budget that are still running (#1580).
 static ABANDONED_RENDERS: AtomicUsize = AtomicUsize::new(0);
 
-/// Set after the renderer panics, indicating the process-global
-/// `TEXT_MEASURER` mutex inside `mermaid-rs-renderer` is poisoned.
-/// All subsequent renders will fail, so we short-circuit with a
-/// clear message instead of letting them produce opaque errors.
+/// Set, for the life of the process, only by a renderer error that names
+/// a poisoned lock (`names_a_poisoned_lock`) and is not the renderer's
+/// parse diagnosis. A std lock stays poisoned until the process ends, so
+/// every later render would fail the same way; they are refused at once
+/// with one sentence that says so. A panic never sets it (#1631).
+///
+/// mermaid-rs-renderer 0.3.1 has one lock, its text measurer's, taken per
+/// measurement. When that lock is poisoned each measurement falls back to
+/// an estimated width or is skipped, and the render still succeeds: after
+/// a panic inside a measurement, later labels are laid out from estimated
+/// widths. Every error 0.3.1 returns is a parse diagnosis, so with it
+/// only the test-fault seam reaches this flag.
 static RENDERER_POISONED: AtomicBool = AtomicBool::new(false);
+
+/// What a diagram whose render panicked says (#1631). Both hosts show it
+/// verbatim as the failed state's reason, above the diagram's source, as
+/// they show [`render_time_exceeded_message`]'s sentences.
+const RENDER_PANICKED_MESSAGE: &str =
+    "Diagram not drawn: the renderer failed on this diagram. The source follows.";
+
+/// Whether an upstream error's text names a poisoned lock, in std's own
+/// words: `PoisonError`, as its `Debug` prints it (`PoisonError { .. }`),
+/// or `poisoned lock`, as its `Display` does (`poisoned lock: another
+/// task failed inside`). Case-sensitive, and nothing looser: the word
+/// "poison" alone is a diagram's own text more often than a lock's.
+fn names_a_poisoned_lock(text: &str) -> bool {
+    text.contains("PoisonError") || text.contains("poisoned lock")
+}
 
 /// Wrap the renderer call with structural validation of the input
 /// (audit #245 M1). `mermaid-rs-renderer` 0.2 returns `Ok(svg)` for
@@ -597,10 +620,13 @@ fn render_mermaid_with_validation(
 /// pipeline's contract is that bad input becomes a typed
 /// `RenderFailed`, not a crashed scanner thread.
 ///
-/// Audit #246: the renderer holds a process-global `Mutex` internally.
-/// If a panic occurs while the lock is held, the mutex is poisoned for
-/// the rest of the process. We track this via `RENDERER_POISONED` and
-/// short-circuit all future renders with a clear message.
+/// A panic fails its own diagram and nothing else: the next render is
+/// attempted (#1631). Audit #246 refused every later render after a
+/// panic, on the premise that a panic under the renderer's process-global
+/// `Mutex` left it unusable. That is not true of mermaid-rs-renderer
+/// 0.3.1 (see `RENDERER_POISONED`), so the refusal is kept for one case:
+/// an upstream error that is not a parse diagnosis and names a poisoned
+/// lock.
 fn try_render_mermaid(
     source: &str,
     budgets: DiagramBudgets,
@@ -627,9 +653,14 @@ fn try_render_mermaid(
         // final, never classified as the renderer's.
         Ok(Err(RendererError::Bounded(message))) => Err(RenderError::Failed(message)),
         Ok(Err(RendererError::Busy(message))) => Err(RenderError::Busy(message)),
-        Ok(Err(RendererError::Upstream(msg))) => {
+        Ok(Err(RendererError::Upstream(UpstreamError {
+            text: msg,
+            parse_diagnosis,
+        }))) => {
             let lower = msg.to_ascii_lowercase();
-            if lower.contains("poison") {
+            // A parse diagnosis is about this diagram's source and may quote
+            // it, so its text is never read as a report of a poisoned lock.
+            if !parse_diagnosis && names_a_poisoned_lock(&msg) {
                 RENDERER_POISONED.store(true, Ordering::Relaxed);
                 Err(RenderError::Failed(
                     "mermaid renderer's internal state was poisoned by a previous \
@@ -643,12 +674,9 @@ fn try_render_mermaid(
                 Err(RenderError::Failed(msg))
             }
         }
-        Err(panic) => {
-            RENDERER_POISONED.store(true, Ordering::Relaxed);
-            Err(RenderError::Failed(format!(
-                "mermaid renderer panicked: {panic:?}"
-            )))
-        }
+        // The payload is dropped: the panic hook has already been given the
+        // panic's own message and place, and the default one prints them.
+        Err(_panic) => Err(RenderError::Failed(RENDER_PANICKED_MESSAGE.into())),
     }
 }
 
@@ -660,12 +688,23 @@ fn try_render_mermaid(
 /// are committed only as a render touches them.
 const MERMAID_RENDER_STACK_BYTES: usize = 256 * 1024 * 1024;
 
+/// The renderer's own error, as the render thread hands it on.
+#[derive(Debug)]
+struct UpstreamError {
+    /// The error's text.
+    text: String,
+    /// Whether it is the renderer's parse diagnosis
+    /// (`mermaid_rs_renderer::ParseError`): about this diagram's source,
+    /// which it may quote. A `#[cfg(test)]` seam's or the test-fault
+    /// seam's error is carried as not one.
+    parse_diagnosis: bool,
+}
+
 /// How a render ended without an SVG.
 #[derive(Debug)]
 enum RendererError {
-    /// The renderer's own error, stringified: `try_render_mermaid`
-    /// classifies it.
-    Upstream(String),
+    /// The renderer's own error: `try_render_mermaid` classifies it.
+    Upstream(UpstreamError),
     /// Ours: a budget stopped the render, or its thread could not run.
     /// The message is final.
     Bounded(String),
@@ -776,13 +815,14 @@ impl Drop for RenderSlot {
 
 /// What a render thread sends: the renderer's result, or the payload of
 /// its panic.
-type RenderThreadOutcome = std::thread::Result<Result<String, String>>;
+type RenderThreadOutcome = std::thread::Result<Result<String, UpstreamError>>;
 
 /// Thin shim around the actual mermaid-rs-renderer call, run on a
 /// thread of its own with `MERMAID_RENDER_STACK_BYTES` of stack. The
-/// upstream returns an `anyhow::Error` which we don't depend on
-/// directly — stringify here so the rest of the module deals with
-/// plain `String` messages.
+/// upstream returns an `anyhow::Error`, which we don't depend on
+/// directly: the render thread keeps its text and whether it is a parse
+/// diagnosis (`UpstreamError`), so the rest of the module deals with
+/// plain values.
 ///
 /// #1580: the render is waited on for at most the per-diagram budget, or
 /// what is left of the note's when that is shorter. Past it the call
@@ -834,24 +874,31 @@ fn mermaid_renderer_render(
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 if let Some(seam) = &seam {
-                    return seam(&source);
+                    return seam(&source).map_err(|text| UpstreamError {
+                        text,
+                        parse_diagnosis: false,
+                    });
                 }
                 match diagram_fault_from_environment(&source) {
                     DiagramFault::Panic => panic!("{FAULT_DIAGRAM_PANIC_MESSAGE}"),
                     DiagramFault::PoisonedLock => {
-                        return Err(FAULT_DIAGRAM_POISON_MESSAGE.to_string());
+                        return Err(UpstreamError {
+                            text: FAULT_DIAGRAM_POISON_MESSAGE.to_string(),
+                            parse_diagnosis: false,
+                        });
                     }
                     DiagramFault::None => {}
                 }
-                mermaid_rs_renderer::render(&source).map_err(|e| e.to_string())
+                // The type is read here, where the typed error still exists.
+                mermaid_rs_renderer::render(&source).map_err(|e| UpstreamError {
+                    parse_diagnosis: e.is::<mermaid_rs_renderer::ParseError>(),
+                    text: e.to_string(),
+                })
             }));
-            if outcome.is_err() {
-                // An abandoned render's panic has no caller to raise it: the
-                // poisoning rule (`RENDERER_POISONED`) applies to it as to a
-                // waited-on render's.
-                RENDERER_POISONED.store(true, Ordering::SeqCst);
-            }
-            // A caller that abandoned the render has dropped the receiver.
+            // A panic sets nothing (#1631): a waited-on render's is raised
+            // again by its caller, and an abandoned render's has no caller and
+            // says nothing. A caller that abandoned the render has dropped
+            // the receiver.
             let _ = sender.send(outcome);
         })
         .map_err(|e| {
@@ -1358,9 +1405,9 @@ mod tests {
         }
     }
 
-    /// Audit #246: when the renderer's internal mutex is poisoned,
-    /// subsequent renders short-circuit with a clear message instead
-    /// of producing opaque PoisonError failures.
+    /// Once the flag is set, later renders are refused at once with one
+    /// clear sentence. Since #1631 only a renderer error that names a
+    /// poisoned lock sets it; this fact sets it by hand.
     #[test]
     fn poisoned_renderer_short_circuits_with_clear_message() {
         let _guard = renderer_test_guard();
@@ -1377,9 +1424,10 @@ mod tests {
         }
     }
 
-    /// Audit #246: the poisoned flag integrates through
-    /// `render_diagram` — a valid flowchart still gets a structured
-    /// description even when the renderer is poisoned.
+    /// The flag, set here by hand, reaches `render_diagram`: a valid
+    /// flowchart still gets a structured description when its render is
+    /// refused. Since #1631 only a renderer error that names a poisoned
+    /// lock sets the flag.
     #[test]
     fn poisoned_renderer_still_produces_structured_description() {
         let _guard = renderer_test_guard();
@@ -1402,16 +1450,6 @@ mod tests {
             }
             other => panic!("expected RenderFailed; got {other:?}"),
         }
-    }
-
-    /// Audit #246: if the library itself returns a PoisonError (rather
-    /// than panicking), we detect it and set the poisoned flag.
-    #[test]
-    fn poison_error_in_library_response_sets_flag() {
-        let _guard = renderer_test_guard();
-        assert!(!RENDERER_POISONED.load(Ordering::Relaxed));
-        let lower = "mutex poisonerror: poisoned".to_ascii_lowercase();
-        assert!(lower.contains("poison"));
     }
 
     fn mermaid(source: String) -> RawDiagramBlock {
@@ -2048,7 +2086,186 @@ mod tests {
         );
     }
 
+    /// What the diagram whose render returned the lock error says, and what
+    /// every later diagram in the process says. Written out: both are kept
+    /// byte for byte.
+    const LOCK_ERROR_SENTENCE: &str = "mermaid renderer's internal state was poisoned by a \
+         previous render failure; rendering is unavailable for the rest of this session";
+    const UNAVAILABLE_SENTENCE: &str = "mermaid renderer is unavailable for the rest of this \
+         session (a previous render caused a panic that poisoned the renderer's internal state)";
+
+    /// The one case that still disables diagrams for the process: a renderer
+    /// error, not a parse diagnosis, that names a poisoned lock in either of
+    /// std's wordings. A seam's `Err` stands in for it.
+    #[test]
+    fn an_upstream_error_that_names_a_poisoned_lock_disables_diagrams_for_the_session() {
+        let _guard = renderer_test_guard();
+        for text in [
+            "poisoned lock: another task failed inside",
+            "PoisonError { .. }",
+        ] {
+            reset_renderer_poisoned();
+            let seam = render_seam(move |_| Err(text.to_string()));
+            assert_eq!(
+                render_diagram(&flowchart()).render_status,
+                DiagramRenderStatus::RenderFailed {
+                    message: LOCK_ERROR_SENTENCE.into()
+                },
+                "the render whose error was {text:?}"
+            );
+            assert!(
+                RENDERER_POISONED.load(Ordering::SeqCst),
+                "an error that names a poisoned lock ({text:?}) did not set the flag"
+            );
+            drop(seam);
+
+            let calls = std::sync::Arc::new(AtomicUsize::new(0));
+            let counted = std::sync::Arc::clone(&calls);
+            let _seam = render_seam(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Ok(SEAM_SVG.to_string())
+            });
+            assert_eq!(
+                render_diagram(&flowchart()).render_status,
+                DiagramRenderStatus::RenderFailed {
+                    message: UNAVAILABLE_SENTENCE.into()
+                },
+                "the render after the error {text:?}"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "a render was started after the lock error {text:?}"
+            );
+        }
+    }
+
+    /// `names_a_poisoned_lock` matches what std prints for a lock that
+    /// really is poisoned, and not a diagram's own words.
+    #[test]
+    fn the_poisoned_lock_texts_are_what_std_prints() {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let held = std::sync::Arc::clone(&lock);
+        let holder = std::thread::spawn(move || {
+            let _held = held.lock().unwrap();
+            panic!("slate-1631: poison the lock");
+        });
+        assert!(holder.join().is_err(), "premise: the holder did not panic");
+        let error = lock.lock().expect_err("premise: the lock is not poisoned");
+        let (display, debug) = (format!("{error}"), format!("{error:?}"));
+        assert!(
+            names_a_poisoned_lock(&display),
+            "std's Display for a poisoned lock is not matched: {display:?}"
+        );
+        assert!(
+            names_a_poisoned_lock(&debug),
+            "std's Debug for a poisoned lock is not matched: {debug:?}"
+        );
+        // Each wording is matched by its own literal.
+        assert!(!display.contains("PoisonError"), "{display:?}");
+        assert!(!debug.contains("poisoned lock"), "{debug:?}");
+
+        assert!(!names_a_poisoned_lock(
+            "unknown participant 'Poison' at line 4"
+        ));
+        assert!(!names_a_poisoned_lock("food poisoning"));
+        assert!(!names_a_poisoned_lock(""));
+    }
+
     // --- The test-fault seam (#1631) ---------------------------------------
+
+    /// The seam's variables, set for one fact and removed when it ends, on
+    /// return and while unwinding. The census at
+    /// `session/tests/fault_guard.rs` reads literal names only, and the fault
+    /// guard it points to is private to the session's facts. These two are
+    /// written by their constants, only while the renderer test lock is held
+    /// (the borrow is the proof), and removed on drop. They are not in
+    /// `FAULT_VARIABLES`: no session fact sets them, so the fault guard has
+    /// nothing of theirs to clear.
+    struct FaultSeamGuard<'a> {
+        _renderer: &'a RendererTestGuard,
+    }
+
+    impl<'a> FaultSeamGuard<'a> {
+        fn set(renderer: &'a RendererTestGuard, name: &'static str, value: &str) -> Self {
+            assert!(
+                name == FAULT_DIAGRAM_PANIC_ENV || name == FAULT_DIAGRAM_POISON_ENV,
+                "{name} is not one of the diagram seam's variables"
+            );
+            let guard = FaultSeamGuard {
+                _renderer: renderer,
+            };
+            // SAFETY: the renderer test lock is held, and every fact that
+            // writes one of these two variables does so under it. The value
+            // is a word no other fixture's source contains.
+            unsafe { std::env::set_var(name, value) };
+            guard
+        }
+    }
+
+    impl Drop for FaultSeamGuard<'_> {
+        fn drop(&mut self) {
+            for name in [FAULT_DIAGRAM_PANIC_ENV, FAULT_DIAGRAM_POISON_ENV] {
+                // SAFETY: the borrow outlives this guard, so the renderer
+                // test lock is still held, on return and while unwinding.
+                unsafe { std::env::remove_var(name) };
+            }
+        }
+    }
+
+    /// The names a field pass and the Windows fact write out.
+    #[test]
+    fn the_fault_seam_reads_the_names_a_field_pass_sets() {
+        assert_eq!(FAULT_DIAGRAM_PANIC_ENV, "SLATE_TEST_FAULT_DIAGRAM_PANIC");
+        assert_eq!(FAULT_DIAGRAM_POISON_ENV, "SLATE_TEST_FAULT_DIAGRAM_POISON");
+    }
+
+    /// Through the environment and the real render path: the diagram the
+    /// panic variable names fails alone, and the next one is drawn.
+    #[test]
+    fn the_fault_seam_panics_only_the_diagram_it_names() {
+        let guard = renderer_test_guard();
+        let _env = FaultSeamGuard::set(&guard, FAULT_DIAGRAM_PANIC_ENV, "cb27seampanic");
+        let named = render_diagram(&mermaid("flowchart LR\ncb27seampanic --> B".to_string()));
+        assert_eq!(
+            named.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: PANICKED_RENDER_SENTENCE.into()
+            }
+        );
+        assert!(named.svg.is_none());
+        let next = render_diagram(&flowchart());
+        assert_eq!(
+            next.render_status,
+            DiagramRenderStatus::Ok,
+            "a diagram the seam does not name"
+        );
+        assert!(next.svg.as_deref().is_some_and(|svg| !svg.is_empty()));
+        assert!(
+            !RENDERER_POISONED.load(Ordering::SeqCst),
+            "the seam's panic set the session-long flag"
+        );
+    }
+
+    /// Through the environment: the diagram the poison variable names
+    /// returns the lock error, and diagrams are disabled after it.
+    #[test]
+    fn the_fault_seam_can_name_a_poisoned_lock() {
+        let guard = renderer_test_guard();
+        let _env = FaultSeamGuard::set(&guard, FAULT_DIAGRAM_POISON_ENV, "cb27seamlock");
+        assert_eq!(
+            render_diagram(&mermaid("flowchart LR\ncb27seamlock --> B".to_string())).render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: LOCK_ERROR_SENTENCE.into()
+            }
+        );
+        assert_eq!(
+            render_diagram(&flowchart()).render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: UNAVAILABLE_SENTENCE.into()
+            }
+        );
+    }
 
     /// The seam's decision reads no environment here: unset, empty, or
     /// naming another diagram, a variable asks nothing of this render.
