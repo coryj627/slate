@@ -1828,11 +1828,11 @@ mod tests {
     }
 
     /// An abandoned render that panics releases its slot all the same, and
-    /// its panic poisons the renderer as a waited-on render's does.
+    /// its panic disables nothing: the next render is attempted (#1631).
     #[test]
     fn an_abandoned_render_that_panics_still_releases_its_slot() {
         let _guard = renderer_test_guard();
-        let _seam = render_seam(|_| {
+        let seam = render_seam(|_| {
             std::thread::sleep(Duration::from_secs(1));
             panic!("slate-1580: an abandoned render panics");
         });
@@ -1847,7 +1847,128 @@ mod tests {
             abandoned_renders_settle(),
             "the panicking render never released its slot"
         );
-        assert!(RENDERER_POISONED.load(Ordering::SeqCst));
+        assert!(
+            !RENDERER_POISONED.load(Ordering::SeqCst),
+            "an abandoned render's panic set the session-long flag"
+        );
+        drop(seam);
+        let _seam = render_seam(|_| Ok(SEAM_SVG.to_string()));
+        assert_eq!(
+            render_diagram(&flowchart()).render_status,
+            DiagramRenderStatus::Ok,
+            "the render after an abandoned render panicked"
+        );
+    }
+
+    // --- A panicked render fails alone (#1631) -----------------------------
+
+    /// What a diagram whose render panicked says. Written out here, not read
+    /// from the product's copy, so a change to the sentence fails these facts.
+    const PANICKED_RENDER_SENTENCE: &str =
+        "Diagram not drawn: the renderer failed on this diagram. The source follows.";
+
+    /// A diagram whose render panics fails alone, with core's sentence, and
+    /// the next diagram is rendered.
+    #[test]
+    fn a_render_after_a_panicked_render_still_renders() {
+        let _guard = renderer_test_guard();
+        let seam = render_seam(|_| panic!("slate-1631: a render panics"));
+        let panicked = render_diagram(&flowchart());
+        drop(seam);
+        assert_eq!(
+            panicked.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: PANICKED_RENDER_SENTENCE.into()
+            }
+        );
+        assert!(panicked.svg.is_none());
+        assert_eq!(panicked.structured_description, "Flowchart with 1 step.");
+        assert_eq!(panicked.source, "flowchart LR\nA --> B");
+
+        // The real renderer, in the same process.
+        let next = render_diagram(&flowchart());
+        assert_eq!(
+            next.render_status,
+            DiagramRenderStatus::Ok,
+            "the render after a panicked render"
+        );
+        assert!(
+            next.svg.as_deref().is_some_and(|svg| !svg.is_empty()),
+            "the render after a panicked render has no SVG"
+        );
+        assert!(
+            !RENDERER_POISONED.load(Ordering::SeqCst),
+            "a panic set the session-long flag"
+        );
+    }
+
+    /// In one note, the diagram whose render panics is the only one that
+    /// fails, and its failure is final: it is not a refusal to retry.
+    #[test]
+    fn one_panicking_diagram_in_a_note_leaves_the_others_rendering() {
+        let _guard = renderer_test_guard();
+        let _seam = render_seam(|source| {
+            if source.contains("slate1631panics") {
+                panic!("slate-1631: this diagram's render panics");
+            }
+            Ok(SEAM_SVG.to_string())
+        });
+        let raws = [
+            mermaid("flowchart LR\nslate1631panics --> B".to_string()),
+            flowchart(),
+            flowchart(),
+        ];
+        let rendered = render_diagram_blocks_reporting(&raws, DiagramBudgets::default());
+        let statuses: Vec<DiagramRenderStatus> = rendered
+            .blocks
+            .iter()
+            .map(|block| block.render_status.clone())
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                DiagramRenderStatus::RenderFailed {
+                    message: PANICKED_RENDER_SENTENCE.into()
+                },
+                DiagramRenderStatus::Ok,
+                DiagramRenderStatus::Ok,
+            ]
+        );
+        assert!(
+            !rendered.transient,
+            "a panicked render is this diagram's failure, not a refusal to retry"
+        );
+    }
+
+    /// The renderer's parse diagnosis quotes the diagram's own source. A
+    /// name in it is the note's text, never a report of a poisoned lock.
+    #[test]
+    fn a_diagram_that_quotes_poison_in_its_error_does_not_disable_diagrams() {
+        let _guard = renderer_test_guard();
+        let block = render_diagram(&mermaid(
+            "sequenceDiagram\nparticipant Alice\nparticipant Bob\nAlice->>PoisonError: hi\n"
+                .to_string(),
+        ));
+        let DiagramRenderStatus::RenderFailed { message } = &block.render_status else {
+            panic!("expected RenderFailed; got {:?}", block.render_status);
+        };
+        assert!(
+            !message.contains("unavailable") && !message.contains("internal state was poisoned"),
+            "a parse diagnosis was read as a poisoned lock: {message:?}"
+        );
+        assert!(
+            message.contains("PoisonError"),
+            "premise: the renderer no longer quotes the undeclared participant's name: {message:?}"
+        );
+        assert!(
+            !RENDERER_POISONED.load(Ordering::SeqCst),
+            "a parse diagnosis set the session-long flag"
+        );
+        assert_eq!(
+            render_diagram(&flowchart()).render_status,
+            DiagramRenderStatus::Ok,
+            "the render after a diagram whose error quotes its source"
+        );
     }
 
     /// The sentences both hosts show verbatim as the failed state's reason.
