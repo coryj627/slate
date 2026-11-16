@@ -76,6 +76,32 @@ public sealed partial class CommandPaletteTests
             Assert.Equal([pickerField], host.FocusChangesSinceEnter);
         });
 
+    /// <summary>#1673's sibling: the host's teardown waits for the lane
+    /// item it let go, and so for the work queued behind it. The item is
+    /// parked, then released by the teardown, and stands on the lane until
+    /// the teardown says it is waiting or says the session is gone; the
+    /// witness counts an item let through only by the second.</summary>
+    [Fact]
+    public void DisposingTheShellHostWaitsForTheLaneItReleased() =>
+        RunSta(() =>
+        {
+            var host = new PaletteShellHost();
+            TeardownWitness teardown = host.Teardown;
+            try
+            {
+                host.HoldTheLaneAtTeardown();
+                _ = host.ParkTheLane();
+            }
+            finally
+            {
+                host.Dispose();
+            }
+
+            teardown.WaitUntilPassed();
+            Assert.Equal(0, teardown.LateRuns);
+            Assert.True(teardown.DrainedBeforeGone, "the host's session went before the lane work it released had ended");
+        });
+
     /// <summary>
     /// The shipped shell — the real <see cref="MainWindow"/>, its XAML,
     /// lifecycle, handlers, registry and commands — over a scanned fixture
@@ -98,6 +124,7 @@ public sealed partial class CommandPaletteTests
         private readonly Window _window;
         private readonly string _recentsPath;
         private WorkspaceViewModel? _workspace;
+        private bool _holdTheLaneAtTeardown;
 
         /// <param name="seed">Writes extra files into the fixture vault before
         /// it is opened and scanned.</param>
@@ -189,6 +216,15 @@ public sealed partial class CommandPaletteTests
         public MainWindow Shell { get; }
 
         public CommandPaletteWorkLane Lane { get; }
+
+        /// <summary>#1673: what this host's teardown did for the lane work
+        /// it let go.</summary>
+        public TeardownWitness Teardown { get; } = new();
+
+        /// <summary>#1673: a parking item, once released, stands on the lane
+        /// until this host's teardown waits for the lane or its session is
+        /// gone, so whatever is queued behind it runs only then.</summary>
+        public void HoldTheLaneAtTeardown() => Volatile.Write(ref _holdTheLaneAtTeardown, true);
 
         public TextBox Sentinel { get; }
 
@@ -313,7 +349,12 @@ public sealed partial class CommandPaletteTests
                 () =>
                 {
                     running.Set();
-                    return gate.Wait(TimeSpan.FromSeconds(30));
+                    bool released = gate.Wait(TimeSpan.FromSeconds(30));
+                    if (Volatile.Read(ref _holdTheLaneAtTeardown))
+                    {
+                        _ = Teardown.Hold();
+                    }
+                    return released;
                 },
                 CancellationToken.None);
             Assert.True(running.Wait(TimeSpan.FromSeconds(10)), "the lane never picked up the parking item");
@@ -397,6 +438,24 @@ public sealed partial class CommandPaletteTests
 
             try
             {
+                // #1673: the lane items just let go, and the recents write
+                // queued behind them, end before anything closes: they read
+                // the session and write into the vault folder, and the
+                // shell's own wait for the lane gives up after five seconds.
+                Teardown.DrainBeforeTheSessionGoes(Lane.WhenIdle);
+            }
+            finally
+            {
+                // The lane gates are left to the collector: an item still
+                // waking on one must not meet a disposed event.
+                CloseTheShellThenTheSession();
+            }
+        }
+
+        private void CloseTheShellThenTheSession()
+        {
+            try
+            {
                 _window.RemoveHandler(
                     Keyboard.GotKeyboardFocusEvent,
                     new KeyboardFocusChangedEventHandler(Window_GotKeyboardFocus));
@@ -420,15 +479,12 @@ public sealed partial class CommandPaletteTests
                 PumpedDispatcher.Drain();
                 _switcher.Dispose();
                 _session.Dispose();
+                Teardown.SessionGone();
                 _fixture.Dispose();
             }
             finally
             {
                 CanvasSurfaceView.ShellOverlayIsOpen = _priorOverlayProbe;
-                foreach (ManualResetEventSlim gate in _gates)
-                {
-                    gate.Dispose();
-                }
             }
         }
 
