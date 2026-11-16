@@ -513,11 +513,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 /// Renders abandoned past their budget that are still running (#1580).
 static ABANDONED_RENDERS: AtomicUsize = AtomicUsize::new(0);
 
-/// Set, for the life of the process, only by a renderer error that names
-/// a poisoned lock (`names_a_poisoned_lock`) and is not the renderer's
-/// parse diagnosis. A std lock stays poisoned until the process ends, so
-/// every later render would fail the same way; they are refused at once
-/// with one sentence that says so. A panic never sets it (#1631).
+/// Set only by a renderer error that names a poisoned lock and is not the
+/// renderer's parse diagnosis (`UpstreamError::reports_a_poisoned_lock`),
+/// and never cleared in production. Nothing in the renderer clears a
+/// poisoned lock, so an error that reports one will be reported by every
+/// later render that takes that lock; they are refused at once with one
+/// sentence that says so. A panic never sets it (#1631).
 ///
 /// mermaid-rs-renderer 0.3.1 has one lock, its text measurer's, taken per
 /// measurement. When that lock is poisoned each measurement falls back to
@@ -653,30 +654,30 @@ fn try_render_mermaid(
         // final, never classified as the renderer's.
         Ok(Err(RendererError::Bounded(message))) => Err(RenderError::Failed(message)),
         Ok(Err(RendererError::Busy(message))) => Err(RenderError::Busy(message)),
-        Ok(Err(RendererError::Upstream(UpstreamError {
-            text: msg,
-            parse_diagnosis,
-        }))) => {
-            let lower = msg.to_ascii_lowercase();
-            // A parse diagnosis is about this diagram's source and may quote
-            // it, so its text is never read as a report of a poisoned lock.
-            if !parse_diagnosis && names_a_poisoned_lock(&msg) {
-                RENDERER_POISONED.store(true, Ordering::Relaxed);
-                Err(RenderError::Failed(
-                    "mermaid renderer's internal state was poisoned by a previous \
-                     render failure; rendering is unavailable for the rest of this \
-                     session"
-                        .into(),
-                ))
-            } else if lower.contains("unsupported") || lower.contains("not implemented") {
-                Err(RenderError::Unsupported(msg))
-            } else {
-                Err(RenderError::Failed(msg))
-            }
-        }
+        Ok(Err(RendererError::Upstream(error))) => Err(classify_upstream_error(error)),
         // The payload is dropped: the panic hook has already been given the
         // panic's own message and place, and the default one prints them.
         Err(_panic) => Err(RenderError::Failed(RENDER_PANICKED_MESSAGE.into())),
+    }
+}
+
+/// What the renderer's own error means for its diagram, and the one place
+/// `RENDERER_POISONED` is set.
+fn classify_upstream_error(error: UpstreamError) -> RenderError {
+    if error.reports_a_poisoned_lock() {
+        RENDERER_POISONED.store(true, Ordering::Relaxed);
+        return RenderError::Failed(
+            "mermaid renderer's internal state was poisoned by a previous \
+             render failure; rendering is unavailable for the rest of this \
+             session"
+                .into(),
+        );
+    }
+    let lower = error.text.to_ascii_lowercase();
+    if lower.contains("unsupported") || lower.contains("not implemented") {
+        RenderError::Unsupported(error.text)
+    } else {
+        RenderError::Failed(error.text)
     }
 }
 
@@ -691,13 +692,53 @@ const MERMAID_RENDER_STACK_BYTES: usize = 256 * 1024 * 1024;
 /// The renderer's own error, as the render thread hands it on.
 #[derive(Debug)]
 struct UpstreamError {
-    /// The error's text.
+    /// The error's own text, its outermost message: the reason a reader
+    /// is shown.
     text: String,
-    /// Whether it is the renderer's parse diagnosis
+    /// Whether any link of its chain is the renderer's parse diagnosis
     /// (`mermaid_rs_renderer::ParseError`): about this diagram's source,
-    /// which it may quote. A `#[cfg(test)]` seam's or the test-fault
-    /// seam's error is carried as not one.
+    /// which it may quote.
     parse_diagnosis: bool,
+    /// Whether any link of its chain names a poisoned lock
+    /// (`names_a_poisoned_lock`). The outermost message alone is not
+    /// enough: under a context it is the context's words, and the lock's
+    /// error is a link below it.
+    names_poisoned_lock: bool,
+}
+
+impl UpstreamError {
+    /// Reads a renderer error where its typed chain still exists, on the
+    /// render thread: `text` is the error's own message and `chain` is
+    /// every link of it, outermost first (`anyhow::Error::chain`).
+    fn from_chain<'a>(
+        text: String,
+        chain: impl Iterator<Item = &'a (dyn std::error::Error + 'static)>,
+    ) -> Self {
+        let mut error = UpstreamError::from_text(text);
+        for link in chain {
+            error.parse_diagnosis |= link.is::<mermaid_rs_renderer::ParseError>();
+            error.names_poisoned_lock |= names_a_poisoned_lock(&link.to_string());
+        }
+        error
+    }
+
+    /// An error that is only text, never a parse diagnosis: a
+    /// `#[cfg(test)]` seam's, or the test-fault seam's.
+    fn from_text(text: String) -> Self {
+        UpstreamError {
+            names_poisoned_lock: names_a_poisoned_lock(&text),
+            parse_diagnosis: false,
+            text,
+        }
+    }
+
+    /// The one error that disables diagrams for the process: it names a
+    /// poisoned lock and is not a parse diagnosis. A parse diagnosis is
+    /// about this diagram's source and may quote it, so its text is never
+    /// read as a report of a poisoned lock.
+    fn reports_a_poisoned_lock(&self) -> bool {
+        !self.parse_diagnosis && self.names_poisoned_lock
+    }
 }
 
 /// How a render ended without an SVG.
@@ -874,26 +915,20 @@ fn mermaid_renderer_render(
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 if let Some(seam) = &seam {
-                    return seam(&source).map_err(|text| UpstreamError {
-                        text,
-                        parse_diagnosis: false,
-                    });
+                    return seam(&source).map_err(UpstreamError::from_text);
                 }
                 match diagram_fault_from_environment(&source) {
                     DiagramFault::Panic => panic!("{FAULT_DIAGRAM_PANIC_MESSAGE}"),
                     DiagramFault::PoisonedLock => {
-                        return Err(UpstreamError {
-                            text: FAULT_DIAGRAM_POISON_MESSAGE.to_string(),
-                            parse_diagnosis: false,
-                        });
+                        return Err(UpstreamError::from_text(
+                            FAULT_DIAGRAM_POISON_MESSAGE.to_string(),
+                        ));
                     }
                     DiagramFault::None => {}
                 }
-                // The type is read here, where the typed error still exists.
-                mermaid_rs_renderer::render(&source).map_err(|e| UpstreamError {
-                    parse_diagnosis: e.is::<mermaid_rs_renderer::ParseError>(),
-                    text: e.to_string(),
-                })
+                // The chain is read here, where the typed error still exists.
+                mermaid_rs_renderer::render(&source)
+                    .map_err(|e| UpstreamError::from_chain(e.to_string(), e.chain()))
             }));
             // A panic sets nothing (#1631): a waited-on render's is raised
             // again by its caller, and an abandoned render's has no caller and
@@ -2170,6 +2205,106 @@ mod tests {
         ));
         assert!(!names_a_poisoned_lock("food poisoning"));
         assert!(!names_a_poisoned_lock(""));
+    }
+
+    /// An error under a context, as `anyhow`'s `.context(..)` chains one:
+    /// the outer link's text is the context alone, and the wrapped error
+    /// is its source.
+    #[derive(Debug)]
+    struct UnderContext {
+        context: &'static str,
+        source: Box<dyn std::error::Error + 'static>,
+    }
+
+    impl std::fmt::Display for UnderContext {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.context)
+        }
+    }
+
+    impl std::error::Error for UnderContext {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.source.as_ref())
+        }
+    }
+
+    /// An error's chain, outermost first, as `anyhow::Error::chain` walks it.
+    fn chain_of<'a>(
+        error: &'a (dyn std::error::Error + 'static),
+    ) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
+        std::iter::successors(Some(error), |link| link.source())
+    }
+
+    /// A lock's error under a context shows only the context as its own
+    /// text. The whole chain is read, so it still disables diagrams.
+    #[test]
+    fn a_poisoned_lock_error_under_a_context_still_disables_diagrams() {
+        let _guard = renderer_test_guard();
+        let lock: &'static std::sync::Mutex<()> = Box::leak(Box::new(std::sync::Mutex::new(())));
+        let holder = std::thread::spawn(move || {
+            let _held = lock.lock().unwrap();
+            panic!("slate-1631: poison the lock");
+        });
+        assert!(holder.join().is_err(), "premise: the holder did not panic");
+        let wrapped = UnderContext {
+            context: "measuring label text",
+            source: Box::new(lock.lock().expect_err("premise: the lock is not poisoned")),
+        };
+        let shown = wrapped.to_string();
+        assert!(
+            !names_a_poisoned_lock(&shown),
+            "premise: the error's own text names the lock: {shown:?}"
+        );
+
+        let error = UpstreamError::from_chain(shown, chain_of(&wrapped));
+        assert!(!error.parse_diagnosis);
+        assert!(
+            error.names_poisoned_lock,
+            "a link below the context was not read"
+        );
+        match classify_upstream_error(error) {
+            RenderError::Failed(message) => assert_eq!(message, LOCK_ERROR_SENTENCE),
+            other => panic!("expected the lock error's sentence; got {other:?}"),
+        }
+        assert!(
+            RENDERER_POISONED.load(Ordering::SeqCst),
+            "a lock error under a context did not set the flag"
+        );
+    }
+
+    /// A parse diagnosis under a context is still a parse diagnosis: it
+    /// quotes the diagram, here a participant named `PoisonError`, and
+    /// sets nothing.
+    #[test]
+    fn a_parse_diagnosis_under_a_context_still_sets_nothing() {
+        let _guard = renderer_test_guard();
+        let Err(diagnosis) = mermaid_rs_renderer::parse_mermaid_strict(
+            "sequenceDiagram\nparticipant Alice\nparticipant Bob\nAlice->>PoisonError: hi\n",
+        ) else {
+            panic!("premise: the renderer accepts an undeclared participant");
+        };
+        let wrapped = UnderContext {
+            context: "parsing the diagram",
+            source: Box::new(diagnosis),
+        };
+
+        let error = UpstreamError::from_chain(wrapped.to_string(), chain_of(&wrapped));
+        assert!(
+            error.names_poisoned_lock,
+            "premise: the diagnosis no longer quotes the participant's name"
+        );
+        assert!(
+            error.parse_diagnosis,
+            "a parse diagnosis below the context was not read"
+        );
+        match classify_upstream_error(error) {
+            RenderError::Failed(message) => assert_eq!(message, "parsing the diagram"),
+            other => panic!("expected the error's own text; got {other:?}"),
+        }
+        assert!(
+            !RENDERER_POISONED.load(Ordering::SeqCst),
+            "a parse diagnosis under a context set the session-long flag"
+        );
     }
 
     // --- The test-fault seam (#1631) ---------------------------------------
