@@ -611,8 +611,12 @@ internal sealed partial class VaultLifecycleViewModel
         CloseSearchForVaultTransition();
 
         CloseSession();
-        // Whether this attempt has already handed the keys to the welcome
-        // view, so a refusal below does not hand them over twice.
+        // Whether the keys are with the welcome view for this attempt: the
+        // switch's close below handed them over, and no vault has shown
+        // since. While it is true no failure exit hands them over again
+        // (#1730): a second return would pull the keys back to the Open
+        // button from wherever the reader has moved them. It is cleared
+        // where the new vault shows.
         bool returnedToWelcome = IsVaultOpen;
         if (IsVaultOpen)
         {
@@ -755,6 +759,9 @@ internal sealed partial class VaultLifecycleViewModel
                     // every phase of the open, and gives way in the same turn the
                     // workspace is published, so the keys move once.
                     IsVaultOpen = true;
+                    // The new vault shows: a failure from here on returns to
+                    // the welcome view again (#1730).
+                    returnedToWelcome = false;
                     if (recorded is not null)
                     {
                         ReplaceRecentVaults(recorded);
@@ -779,7 +786,11 @@ internal sealed partial class VaultLifecycleViewModel
                     A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
-                ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                if (!returnedToWelcome)
+                {
+                    ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                }
+
                 if (recorded is not null)
                 {
                     ReplaceRecentVaults(recorded);
@@ -793,7 +804,11 @@ internal sealed partial class VaultLifecycleViewModel
                 ReportTerminalStatus($"Unexpected vault error: {exception.Message}", A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
-                ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                if (!returnedToWelcome)
+                {
+                    ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                }
+
                 if (recorded is not null)
                 {
                     ReplaceRecentVaults(recorded);
