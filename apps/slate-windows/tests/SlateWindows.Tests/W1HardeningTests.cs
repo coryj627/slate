@@ -1434,9 +1434,13 @@ public sealed class W1SidebarHardeningTests
                 work();
             }));
 
-        // The constructor has returned and the worker is still held: the
-        // tree was not built on this thread. No elapsed time is asserted, as
-        // a busy runner lengthens any reading.
+        // The name is kept: plan 47's documents cite it. What the fact
+        // proves now is that the tree is built off the UI thread: the
+        // constructor has returned while the worker is still held, the
+        // worker runs on another thread, the tree is empty and the refresh
+        // is marked in flight. What it no longer sees is synchronous work
+        // the constructor does before it hands the build over: no elapsed
+        // time is asserted, as a busy runner lengthens any reading.
         Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
         Assert.NotEqual(uiThread, providerThread);
         Assert.Empty(sidebar.RootNodes);
