@@ -544,13 +544,26 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
   That run is the provider fact's red phase on a real volume, and the
   earlier session fact's: one of six provider facts and one of three
   session facts failed, on both volumes.
-- **[PLACEHOLDER, CB-13 run 3: the run id, job id and commit of the run
-  of CB-13's own session fact (`rename_folder_with_note`, with
-  `Docs/Docs.md`) on `main`'s product code, and its `OBSERVED … session
-  case-only …` lines per volume. Until this is filled in, that fact has
-  been seen only green on real volumes.]**
-- **Run 43943403456 (job 133566627722, commit 6061441e): the same facts
-  with the read-back in.** Six provider facts and three session facts
+- **Run 43956121701 (job 133611086339, commit bc2dd72d): `main`'s
+  product code with CB-13's own session fact.** The session fact renames
+  the folder through `rename_folder_with_note`, and the folder holds its
+  note `Docs/Docs.md`. This is that fact's red phase on a real volume.
+  The provider fact failed as in the first run, all twelve cases
+  `REPORTED SUCCESS AND KEPT`. The session fact failed on both volumes
+  with the same two lines:
+
+  ```
+  OBSERVED FAT32 session case-only Note.md -> note.md: REPORTED SUCCESS AND KEPT Note.md (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["Docs/Docs.md", "Docs/Inner.md", "note.md"], dirs ["Docs"])
+  OBSERVED FAT32 session case-only Docs -> docs: failed: InvalidArgument { message: "renaming the folder note failed (invalid vault-relative path \"Docs/Docs.md\": no such file in the index) AND rolling the folder rename back failed (invalid argument: destination equals source): the folder is now at \"docs\" with its note still named \"Docs.md\" — a rescan reconciles the index" } (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["docs/Docs.md", "docs/Inner.md", "note.md"], dirs ["docs"])
+  ```
+
+  So before the read-back, a folder with its note fared worse than a
+  plain folder. The folder hop was reported as done and moved the index
+  to `docs/…`; the note hop then failed, the rollback failed, and the
+  reader was told the folder is now at `docs` while the volume held
+  `Docs`.
+- **Run 43943403456 (job 133566627722, commit 6061441e), made between
+  the two above: the same facts with the read-back in.** Six provider facts and three session facts
   passed. All twelve provider cases were refused, with the listing and
   `canonical_path` on the old spelling:
 
