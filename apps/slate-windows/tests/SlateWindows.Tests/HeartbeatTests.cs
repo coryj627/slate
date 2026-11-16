@@ -1,11 +1,14 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
+
 namespace SlateWindows.Tests;
 
 /// <summary>
 /// #1843: the heartbeat a timed-out fact reads (<see cref="Heartbeat"/>).
-/// First the ring's arithmetic, on injected timestamps; then the one real
+/// First the ring's arithmetic, on injected timestamps; then a window's
+/// reading over a ring of made-up stopwatch timestamps; then the one real
 /// thread.
 /// </summary>
 public sealed class HeartbeatTests
@@ -67,27 +70,80 @@ public sealed class HeartbeatTests
         Assert.Equal(100, ring.LongestGap(from: 0, to: 1350));
     }
 
+    /// <summary>A window's reading is its ring's, between its own opening
+    /// and the end its reader names, as a time. Each window fact here has a
+    /// longest gap of its own length, so no one answer serves two of them.
+    /// Here the thread beat, missed seven seconds and beat again.</summary>
+    [Fact]
+    public void AWindowReadsAGapOfSecondsFromItsBeats()
+    {
+        Heartbeat.Window window = OpenedAt(0, beats: [100, 7100, 7200]);
+
+        Assert.Equal(Milliseconds(7000), window.LongestGapUntil(At(7200)));
+    }
+
+    /// <summary>The same for an uneven fraction of a second: the longest of
+    /// the stretches 120, 370, 120 and 40 ms.</summary>
+    [Fact]
+    public void AWindowReadsAGapOfAFractionOfASecondFromItsBeats()
+    {
+        Heartbeat.Window window = OpenedAt(0, beats: [120, 490, 610]);
+
+        Assert.Equal(Milliseconds(370), window.LongestGapUntil(At(650)));
+    }
+
     /// <summary>A window is read up to the end its reader names, and what
-    /// happened after that end is not the window's. Here the thread beat
-    /// for 200 ms, missed nearly nine seconds and beat again. A window that
-    /// ended 50 ms after the second beat saw one interval as its longest
-    /// gap: a timed-out body's window ends when its bound passes, so a stall
-    /// during the wait for its stack, or during the dump, is not read as a
-    /// stall during the body.</summary>
+    /// happened after that end is not the window's. Here the thread beat at
+    /// 300 ms, and the window ended at 750 ms with that stretch still open:
+    /// 450 ms. The beat 10 ms after the end does not close the stretch
+    /// later, and the eight seconds missed after it are not the window's. A
+    /// timed-out body's window ends at its deadline, so a stall during the
+    /// wait for its stack, or during the dump, is not read as a stall
+    /// during the body.</summary>
     [Fact]
     public void AGapAfterTheWindowsEndIsNotCounted()
     {
-        long second = System.Diagnostics.Stopwatch.Frequency;
-        long opened = System.Diagnostics.Stopwatch.GetTimestamp() - (10 * second);
-        var ring = new Heartbeat.Ring(capacity: 16, first: opened);
-        ring.Beat(opened + (second / 10));
-        ring.Beat(opened + (2 * second / 10));
-        ring.Beat(opened + (9 * second));
-        var window = new Heartbeat.Window(ring, opened);
+        Heartbeat.Window window = OpenedAt(0, beats: [300, 760, 9000]);
 
-        TimeSpan gap = window.LongestGapUntil(opened + (25 * second / 100));
+        Assert.Equal(Milliseconds(450), window.LongestGapUntil(At(750)));
+    }
 
-        Assert.Equal(System.Diagnostics.Stopwatch.GetElapsedTime(0, second / 10), gap);
+    /// <summary>A window that opens three seconds into a five-second gap
+    /// counts the two that came after its opening.</summary>
+    [Fact]
+    public void AWindowThatOpensInsideAGapCountsItFromItsOpening()
+    {
+        Heartbeat.Window window = OpenedAt(3000, beats: [5000, 5100]);
+
+        Assert.Equal(Milliseconds(2000), window.LongestGapUntil(At(5100)));
+    }
+
+    /// <summary>A stopwatch timestamp a minute before these facts run. The
+    /// made-up beats below are counted from it, so all of them lie in the
+    /// past and a reading that ran on to now would show as a longer gap.</summary>
+    private static readonly long AMinuteAgo = Stopwatch.GetTimestamp() - (60 * Stopwatch.Frequency);
+
+    /// <summary>The stopwatch timestamp <paramref name="milliseconds"/>
+    /// after <see cref="AMinuteAgo"/>.</summary>
+    private static long At(long milliseconds) => AMinuteAgo + Ticks(milliseconds);
+
+    private static long Ticks(long milliseconds) => milliseconds * Stopwatch.Frequency / 1000;
+
+    /// <summary>That many milliseconds, converted from stopwatch ticks as a
+    /// window converts its reading.</summary>
+    private static TimeSpan Milliseconds(long milliseconds) => Stopwatch.GetElapsedTime(0, Ticks(milliseconds));
+
+    /// <summary>A window that opened <paramref name="opened"/> ms after
+    /// <see cref="AMinuteAgo"/>, over a ring whose first beat is at 0 ms and
+    /// which then beat at each of <paramref name="beats"/>, in ms.</summary>
+    private static Heartbeat.Window OpenedAt(long opened, long[] beats)
+    {
+        var ring = new Heartbeat.Ring(capacity: 16, first: At(0));
+        foreach (long beat in beats)
+        {
+            ring.Beat(At(beat));
+        }
+        return new Heartbeat.Window(ring, At(opened));
     }
 
     /// <summary>The thread must never hold the test process's exit (xUnit
@@ -126,7 +182,7 @@ public sealed class HeartbeatTests
         Assert.True(
             SpinWait.SpinUntil(() => Heartbeat.Beats >= before + 3, TimeSpan.FromSeconds(30)),
             "the heartbeat thread recorded no beat in 30 s");
-        TimeSpan gap = window.LongestGapUntil(System.Diagnostics.Stopwatch.GetTimestamp());
+        TimeSpan gap = window.LongestGapUntil(Stopwatch.GetTimestamp());
         Assert.True(gap >= Heartbeat.Interval / 2, $"three beats came, but the window's longest gap reads {gap.TotalMilliseconds:0} ms");
     }
 

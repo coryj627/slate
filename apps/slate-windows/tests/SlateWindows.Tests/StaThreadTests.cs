@@ -476,31 +476,55 @@ public sealed class StaThreadTests : IDisposable
     }
 
     /// <summary>Time out a body that has no dispatcher and only sleeps. It
-    /// sleeps until its run's token is cancelled
-    /// (<see cref="SleepUntilTimedOut"/>), not for a time of its own: a body
+    /// has no deadline of its own (<see cref="SleepUntilTimedOut"/>): a body
     /// that left after 600 ms had left before a runner 400 ms late began its
     /// 200 ms wait, and the witness then had no timeout to read.</summary>
-    private static Xunit.Sdk.XunitException TimeOutASleepingBody() =>
-        Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-            SleepUntilTimedOut,
-            TimeSpan.FromMilliseconds(200),
-            "the body only slept",
-            unwindGrace: TimeSpan.FromSeconds(10)));
+    private static Xunit.Sdk.XunitException TimeOutASleepingBody()
+    {
+        var over = new Flag();
+        try
+        {
+            return Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () => SleepUntilTimedOut(over),
+                TimeSpan.FromMilliseconds(200),
+                "the body only slept",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            over.Raise();
+        }
+    }
 
-    /// <summary>What a witness's body does once it is set up: sleep, never
-    /// pumping, until its run has timed out. The runner cancels the token
-    /// after the timeout's stack, reading and dump are taken, so the body is
-    /// running when its bound passes however late the runner is, and it
-    /// unwinds at once after. The cap only ends a body whose token never is
-    /// cancelled.</summary>
-    private static void SleepUntilTimedOut() => SleepUntil(() => StaThread.TimedOut);
+    /// <summary>A flag one thread raises and others read. A witness's body
+    /// waits on flags, never on a clock: one its fact raises in a
+    /// <c>finally</c> once <see cref="StaThread.Run(Action, TimeSpan?, string?, TimeSpan?)"/>
+    /// has returned or thrown, so the body cannot outlive its fact, and
+    /// where it should leave sooner, one the runner's own step raises. It
+    /// holds nothing to dispose, so a body that reads it late reads a field.</summary>
+    private sealed class Flag
+    {
+        private volatile bool _raised;
+
+        internal bool IsRaised => _raised;
+
+        internal void Raise() => _raised = true;
+    }
+
+    /// <summary>What a witness's body with no dispatcher does once it is set
+    /// up: sleep, never pumping, until its run has timed out or its fact is
+    /// <paramref name="over"/>. The runner cancels the token after the
+    /// timeout's stack, reading and dump are taken, so the body is running
+    /// when its bound passes however late the runner is, and it unwinds at
+    /// once after.</summary>
+    private static void SleepUntilTimedOut(Flag over) => SleepUntil(() => StaThread.TimedOut || over.IsRaised);
 
     /// <summary>Sleep in short steps, never pumping, until
-    /// <paramref name="released"/> or 30 s have passed.</summary>
+    /// <paramref name="released"/>. There is no limit: what ends the wait is
+    /// the runner or the fact, never the body's own clock.</summary>
     private static void SleepUntil(Func<bool> released)
     {
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (!released() && clock.Elapsed < TimeSpan.FromSeconds(30))
+        while (!released())
         {
             Thread.Sleep(5);
         }
@@ -593,11 +617,7 @@ public sealed class StaThreadTests : IDisposable
     [Fact]
     public void ATimedOutBodyThatStillPumpsReportsWhereItWaits()
     {
-        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-            WaitHereWhilePumping,
-            TimeSpan.FromMilliseconds(200),
-            "the body kept pumping",
-            unwindGrace: TimeSpan.FromSeconds(10)));
+        Xunit.Sdk.XunitException timedOut = TimeOutABodyThatKeepsPumping();
 
         Assert.Contains("Its stack while pumping:", timedOut.Message, StringComparison.Ordinal);
         Assert.Contains($"{nameof(StaThreadTests)}.{nameof(WaitHereWhilePumping)}", timedOut.Message, StringComparison.Ordinal);
@@ -684,28 +704,8 @@ public sealed class StaThreadTests : IDisposable
             read = true;
             return TimeSpan.FromSeconds(40);
         };
-        // The bound starts once the body has its dispatcher: a thread that
-        // first ran late would otherwise have none to give a stack on.
-        using var pumping = new ManualResetEventSlim(false);
-        StaThread.AfterStartForTests = () => Assert.True(pumping.Wait(TimeSpan.FromSeconds(30)), "the body never started");
-        Xunit.Sdk.XunitException timedOut;
-        try
-        {
-            timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-                () =>
-                {
-                    _ = Dispatcher.CurrentDispatcher;
-                    pumping.Set();
-                    WaitHereWhilePumping();
-                },
-                TimeSpan.FromMilliseconds(200),
-                "the body kept pumping",
-                unwindGrace: TimeSpan.FromSeconds(10)));
-        }
-        finally
-        {
-            StaThread.AfterStartForTests = null;
-        }
+
+        Xunit.Sdk.XunitException timedOut = TimeOutABodyThatKeepsPumping();
 
         Assert.Contains("Its stack while pumping:", timedOut.Message, StringComparison.Ordinal);
         Assert.False(read, "the heartbeat was read for a body that gave up its stack");
@@ -918,6 +918,7 @@ public sealed class StaThreadTests : IDisposable
     {
         StaThread.LongestGapForTests = _ => throw new InvalidOperationException("the gap could not be had");
         CancellationToken read = default;
+        var over = new Flag();
         using var started = new ManualResetEventSlim(false);
         StaThread.AfterStartForTests = () => Assert.True(started.Wait(TimeSpan.FromSeconds(30)), "the body never started");
         Exception? thrown;
@@ -928,7 +929,7 @@ public sealed class StaThreadTests : IDisposable
                 {
                     read = StaThread.Current;
                     started.Set();
-                    SleepUntilTimedOut();
+                    SleepUntilTimedOut(over);
                 },
                 TimeSpan.FromMilliseconds(200),
                 "the body only slept",
@@ -937,6 +938,7 @@ public sealed class StaThreadTests : IDisposable
         finally
         {
             StaThread.AfterStartForTests = null;
+            over.Raise();
         }
 
         Xunit.Sdk.XunitException timedOut = Assert.IsType<Xunit.Sdk.XunitException>(thrown);
@@ -1025,13 +1027,16 @@ public sealed class StaThreadTests : IDisposable
     /// and the dispatcher's hook sees the post from the runner's thread. So
     /// the body is running when its bound passes however late the runner
     /// is, and it leaves at once after, with the operation never run: the
-    /// timeout says the body did not pump, and waits no 5 s to say it.
+    /// timeout says the body did not pump, and waits no 5 s to say it. The
+    /// body has no deadline of its own. Should the runner never ask, the
+    /// fact's <c>finally</c> lets it go.
     /// </remarks>
     private static Xunit.Sdk.XunitException TimeOutABodyThatDoesNotPump(
         Action? onItsThread = null, Action? thenTheRunnerIsLate = null)
     {
+        var over = new Flag();
+        var askedForItsStack = new Flag();
         using var made = new ManualResetEventSlim(false);
-        using var askedForItsStack = new ManualResetEventSlim(false);
         StaThread.AfterStartForTests = () =>
         {
             Assert.True(made.Wait(TimeSpan.FromSeconds(30)), "the body never started");
@@ -1048,11 +1053,11 @@ public sealed class StaThreadTests : IDisposable
                     {
                         if (posted.Operation.Priority == DispatcherPriority.Send)
                         {
-                            askedForItsStack.Set();
+                            askedForItsStack.Raise();
                         }
                     };
                     made.Set();
-                    SleepUntil(() => askedForItsStack.IsSet);
+                    SleepUntil(() => askedForItsStack.IsRaised || over.IsRaised);
                 },
                 TimeSpan.FromMilliseconds(200),
                 "the body outlived its bound",
@@ -1061,19 +1066,50 @@ public sealed class StaThreadTests : IDisposable
         finally
         {
             StaThread.AfterStartForTests = null;
+            over.Raise();
+        }
+    }
+
+    /// <summary>Time out a body that keeps pumping its dispatcher
+    /// (<see cref="WaitHereWhilePumping"/>). The bound starts once the body
+    /// has its dispatcher: a thread that first ran late would otherwise have
+    /// none to give a stack on. The body pumps until the runner shuts its
+    /// dispatcher down, with no deadline of its own, and the
+    /// <c>finally</c> here lets it go should the runner never do so.</summary>
+    private static Xunit.Sdk.XunitException TimeOutABodyThatKeepsPumping()
+    {
+        var over = new Flag();
+        using var pumping = new ManualResetEventSlim(false);
+        StaThread.AfterStartForTests = () => Assert.True(pumping.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        try
+        {
+            return Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    _ = Dispatcher.CurrentDispatcher;
+                    pumping.Set();
+                    WaitHereWhilePumping(over);
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body kept pumping",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+            over.Raise();
         }
     }
 
     /// <summary>A body that pumps its dispatcher until the runner shuts it
-    /// down. The 30 s cap only ends a body whose dispatcher never is: at
-    /// three seconds, the body had left before a runner that late began its
+    /// down or its fact is <paramref name="over"/>. It once also left after
+    /// three seconds, and had then left before a runner that late began its
     /// wait.</summary>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    private static void WaitHereWhilePumping()
+    private static void WaitHereWhilePumping(Flag over)
     {
-        var clock = System.Diagnostics.Stopwatch.StartNew();
         Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
-        while (!dispatcher.HasShutdownStarted && clock.Elapsed < TimeSpan.FromSeconds(30))
+        while (!dispatcher.HasShutdownStarted && !over.IsRaised)
         {
             var frame = new DispatcherFrame();
             _ = dispatcher.BeginInvoke(DispatcherPriority.Background, () => frame.Continue = false);
