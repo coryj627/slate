@@ -686,6 +686,76 @@ type RenderSeam = (
 #[cfg(test)]
 static RENDER_SEAM: std::sync::Mutex<Option<RenderSeam>> = std::sync::Mutex::new(None);
 
+/// The test-fault seam's two environment variables (#1631). Each holds a
+/// substring of a diagram's source: a render whose source contains the
+/// value takes the fault, and every other render is left alone. Unset or
+/// empty, a variable does nothing.
+///
+/// - The seam is for field passes and tests. It is compiled into every
+///   build, as core's other `SLATE_TEST_*` seams are, and read on the
+///   render thread, so a forced fault takes the channel, the counters and
+///   the `catch_unwind` a real one would.
+/// - A fact sets a value no other fixture's source contains, because the
+///   variable is the whole process's.
+/// - No hosted Windows or Mac fact may set
+///   `SLATE_TEST_FAULT_DIAGRAM_POISON`: `RENDERER_POISONED` is
+///   process-wide and has no reset outside core's test build, so every
+///   diagram fact after it in the same test host would fail.
+const FAULT_DIAGRAM_PANIC_ENV: &str = "SLATE_TEST_FAULT_DIAGRAM_PANIC";
+const FAULT_DIAGRAM_POISON_ENV: &str = "SLATE_TEST_FAULT_DIAGRAM_POISON";
+
+/// The panic `SLATE_TEST_FAULT_DIAGRAM_PANIC` raises.
+const FAULT_DIAGRAM_PANIC_MESSAGE: &str = "test fault: injected diagram render panic";
+
+/// The upstream error `SLATE_TEST_FAULT_DIAGRAM_POISON` returns: std's
+/// own words for a poisoned lock, as a renderer that reported one would
+/// carry them.
+const FAULT_DIAGRAM_POISON_MESSAGE: &str = "test fault: poisoned lock: another task failed inside";
+
+/// What the test-fault seam asks of one render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagramFault {
+    None,
+    Panic,
+    PoisonedLock,
+}
+
+/// The seam's decision, from the two variables' values and the diagram's
+/// source. A value names a diagram when it is not empty and the source
+/// contains it. When both name the same diagram, the panic wins.
+fn diagram_fault(
+    panic_trigger: Option<&str>,
+    poison_trigger: Option<&str>,
+    source: &str,
+) -> DiagramFault {
+    let names = |trigger: Option<&str>| {
+        trigger.is_some_and(|value| !value.is_empty() && source.contains(value))
+    };
+    if names(panic_trigger) {
+        DiagramFault::Panic
+    } else if names(poison_trigger) {
+        DiagramFault::PoisonedLock
+    } else {
+        DiagramFault::None
+    }
+}
+
+/// [`diagram_fault`] over the process's environment.
+fn diagram_fault_from_environment(source: &str) -> DiagramFault {
+    let panic_trigger = std::env::var_os(FAULT_DIAGRAM_PANIC_ENV);
+    let poison_trigger = std::env::var_os(FAULT_DIAGRAM_POISON_ENV);
+    let text = |value: &Option<std::ffi::OsString>| {
+        value
+            .as_deref()
+            .map(|value| value.to_string_lossy().into_owned())
+    };
+    diagram_fault(
+        text(&panic_trigger).as_deref(),
+        text(&poison_trigger).as_deref(),
+        source,
+    )
+}
+
 /// A render thread's state, shared with the call that waits on it.
 const RENDER_RUNNING: u8 = 0;
 const RENDER_FINISHED: u8 = 1;
@@ -765,6 +835,13 @@ fn mermaid_renderer_render(
                 #[cfg(test)]
                 if let Some(seam) = &seam {
                     return seam(&source);
+                }
+                match diagram_fault_from_environment(&source) {
+                    DiagramFault::Panic => panic!("{FAULT_DIAGRAM_PANIC_MESSAGE}"),
+                    DiagramFault::PoisonedLock => {
+                        return Err(FAULT_DIAGRAM_POISON_MESSAGE.to_string());
+                    }
+                    DiagramFault::None => {}
                 }
                 mermaid_rs_renderer::render(&source).map_err(|e| e.to_string())
             }));
@@ -1968,6 +2045,37 @@ mod tests {
             render_diagram(&flowchart()).render_status,
             DiagramRenderStatus::Ok,
             "the render after a diagram whose error quotes its source"
+        );
+    }
+
+    // --- The test-fault seam (#1631) ---------------------------------------
+
+    /// The seam's decision reads no environment here: unset, empty, or
+    /// naming another diagram, a variable asks nothing of this render.
+    #[test]
+    fn the_fault_seam_is_inert_when_unset_or_empty() {
+        let source = "flowchart LR\nA --> B";
+        assert_eq!(diagram_fault(None, None, source), DiagramFault::None);
+        assert_eq!(
+            diagram_fault(Some(""), Some(""), source),
+            DiagramFault::None
+        );
+        assert_eq!(
+            diagram_fault(Some("slate1631elsewhere"), Some("slate1631other"), source),
+            DiagramFault::None
+        );
+        // A value the source holds names it, one variable at a time.
+        assert_eq!(
+            diagram_fault(Some("A --> B"), None, source),
+            DiagramFault::Panic
+        );
+        assert_eq!(
+            diagram_fault(Some(""), Some("A --> B"), source),
+            DiagramFault::PoisonedLock
+        );
+        assert_eq!(
+            diagram_fault(Some("A --> B"), Some("A --> B"), source),
+            DiagramFault::Panic
         );
     }
 
