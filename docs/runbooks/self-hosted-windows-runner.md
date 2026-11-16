@@ -2018,3 +2018,95 @@ the build job compares.
 
 The whole-run figure is bounded by the two slots, not by the VMs: the
 second model shard waited for a slot.
+
+### A single timeout, read against the host's log
+
+A fact that times out once on the home pool is read against
+`C:\slate-ci\logs` before it is filed as a flake (plan 47 §4 rule 6). The
+job's log says when the fact ran. The orchestrator's log says what the
+host did with its slots in those minutes. A cache commit or a VM start
+inside or just before the fact's bound goes into the issue with the
+timeout.
+
+The evidence lives in three places, for three lengths of time:
+
+| Evidence | Where | Kept |
+|---|---|---|
+| The timeout's message | the job's log | 90 days |
+| The dump and the TRX | the artifact `slate-windows-app-results-<run>-<attempt>` | 7 days |
+| The host's side | `C:\slate-ci\logs\orchestrator-<yyyy-MM-dd>.log` | 30 days |
+
+The host's log exists on the host alone and is deleted after 30 days
+(`LogRetentionDays`), so its lines are copied into the issue when the
+timeout is read. Each file is named for the host's local date, and each
+timestamp carries its offset from UTC. This prints the first line of each
+entry between two UTC times. An entry that spans lines continues without
+a timestamp, and those lines are not printed:
+
+```powershell
+$from = [datetimeoffset]'2026-11-06T02:03:00Z'
+$to = [datetimeoffset]'2026-11-06T02:07:00Z'
+Get-Content C:\slate-ci\logs\orchestrator-*.log |
+    Where-Object { $_ -match '^(\d{4}-\d\d-\d\dT\S+) \[' -and [datetimeoffset]$Matches[1] -ge $from -and [datetimeoffset]$Matches[1] -le $to }
+```
+
+A timeout that could take no stack also says two things in its message
+(#1843): the longest stretch the test process's heartbeat thread went
+without running during the body, and how long the collector paused the
+process then. The gap is measured from before the body's thread starts to
+its deadline, so a stall after the bound, the wait for a stack and the
+dump are not in it. The pause is the collector's total from the same
+start to the moment the waiting runner ran again, since the runtime gives
+a total and no times: a collection or a suspension in progress when the
+bound passed is counted whole. A long gap is what a stop of the whole
+process or VM would
+leave, once the collector's pause beside it is set aside. A short gap
+says the process as a whole kept running, and the reading cannot tell
+whether the fact's thread was busy, blocked or starved: the heartbeat
+runs at the highest priority, ahead of the fact's thread.
+
+#### The timeout of 2026-11-06 (#1843)
+
+This is the one timeout read this way so far. It happened before the
+message carried the heartbeat's sentences.
+
+Run 42146706653, attempt 1, was a push to `main` at 28dae96e. Its app job
+(127659883812) failed 1 fact of 6,289:
+`RightPaneRailTests.AFirstRepeatDelayLongerThanTheSettleIntervalSettlesNothingWhileTheArrowIsHeld`
+ran past its 60 s bound. The message said that the body did not pump its
+dispatcher within 5 s, so no stack was taken, and that a full dump was
+written in 61,738 ms to a file stamped 02:04:56Z. The job's log reported
+the failure at 02:06:04Z and gave the fact 2 min 13 s.
+
+`C:\slate-ci\logs\orchestrator-2026-11-05.log`, lines 183 to 186. The
+host's local time is five hours behind UTC:
+
+```text
+2026-11-05T21:03:31.9768066-05:00 [info] slate-win-rust-327187a4: commit rust generation 112 (trusted main)
+2026-11-05T21:03:43.4497066-05:00 [info] slate-win-model-3195bf6f: provisioned for job 127659884048 (lane model, slot 2, fork generation 102)
+2026-11-05T21:03:55.3988650-05:00 [info] slate-win-model-3195bf6f: handed off (runner 13913, job 127659884048)
+2026-11-05T21:05:06.4275509-05:00 [info] slate-win-model-3195bf6f: claimed (job 127659884048 in progress)
+```
+
+The two logs on one clock:
+
+| UTC, 2026-11-06 | Source | Event |
+|---|---|---|
+| 02:03:31 | host | The Rust job's VM committed cache generation 112. |
+| 02:03:43 | host | The model shard's VM was provisioned on slot 2. |
+| about 02:03:51 | job | The fact's 60 s bound began. |
+| 02:03:55 | host | The model shard's VM was handed off to its runner. |
+| 02:04:56 | job | The bound and the 5 s wait for a stack had passed, and the dump began. |
+| 02:05:06 | host | The model shard's job was claimed. |
+| 02:06:04 | job | The dump (61.7 s) and the unwind were over, and the failure was reported. |
+
+The host was not idle. The fact's bound began about 20 s after the Rust
+job's VM committed its cache generation and about 8 s after the model
+shard's VM was provisioned on slot 2, and that VM was handed off while
+the bound ran. A job VM stalled on disk by that work would look like
+this, and the timeline is not proof of one. The four lines do not say
+which slot the Rust job's VM or the app job's VM held. The dump expired
+with its artifact, and the fact was rewritten the next day (#1853), so
+the cause of this timeout is not known. Of the job's three times in the
+table, the first is worked back from the report and the fact's
+2 min 13 s. The other two are read from the job's log.
