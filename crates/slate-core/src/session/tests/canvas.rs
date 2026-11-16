@@ -1469,3 +1469,82 @@ fn canvas_current_text_is_the_handles_revision_with_its_basis() {
     assert!(successor.text.contains("Snapshot probe"));
     assert_eq!(successor.text, session.read_text("board.canvas").unwrap());
 }
+
+/// #1900: the canvas pass compared a board's indexed size to the large-file
+/// limit as a `u64`, so the stat sentinel (`size_bytes = -1`, which a
+/// quarantine or migration 026, 034 or 038 leaves on a row the scan then
+/// cannot read) wrapped to 2^64-1, the board read as oversize and its card
+/// rows were purged. A board whose size is not known keeps its rows; they
+/// are derived again when the file reads.
+#[test]
+fn a_board_whose_size_is_the_sentinel_keeps_its_rows_across_a_scan() {
+    let (tmp, provider, session) = make_vault_with_deniable_reads(|p| {
+        p.write_file("board.canvas", SAMPLE.as_bytes()).unwrap();
+        p.write_file(
+            "notes/canvas research.md",
+            b"---\ntitle: Canvas Research Log\n---\n# Body\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let counts = |session: &VaultSession| -> (i64, i64) {
+        let conn = session.conn.lock().unwrap();
+        (
+            conn.query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r.get(0))
+                .unwrap(),
+            conn.query_row("SELECT COUNT(*) FROM canvas_edges", [], |r| r.get(0))
+                .unwrap(),
+        )
+    };
+    assert_eq!(counts(&session), (9, 5), "premise: the board is indexed");
+
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE files SET size_bytes = -1 WHERE path = 'board.canvas'",
+            [],
+        )
+        .unwrap();
+    provider.deny("board.canvas");
+    let report = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(
+        report.error_count, 1,
+        "the walk counts the unread board, and the canvas pass does not count it again"
+    );
+    assert_eq!(
+        counts(&session),
+        (9, 5),
+        "a board of unknown size is not oversize: its rows stay"
+    );
+
+    // The board reads again, with a card's note retitled meanwhile: the
+    // walk records the board's real size and the pass derives its rows
+    // again.
+    provider.allow("board.canvas");
+    FsVaultProvider::new(tmp.path().to_path_buf())
+        .write_file(
+            "notes/canvas research.md",
+            b"---\ntitle: Renamed Log\n---\n# Body\n",
+        )
+        .unwrap();
+    let report = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(report.error_count, 0);
+    assert_eq!(counts(&session), (9, 5));
+    let title: String = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT title FROM canvas_nodes WHERE node_id = 'card-notes'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(title, "Renamed Log");
+}

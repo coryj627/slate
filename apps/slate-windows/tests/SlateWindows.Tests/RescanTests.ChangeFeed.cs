@@ -572,6 +572,71 @@ public sealed partial class RescanTests
         Assert.StartsWith("Files refreshed with errors.", spoken, StringComparison.Ordinal);
     }
 
+    /// <summary>#1900: core contains a note it cannot read, and the note's
+    /// index row keeps a stat sentinel until the file reads again. One such
+    /// row used to fail every listing of its folder, so the tree said "Could
+    /// not load files: sqlite error: Integer -1 out of range at index 4" for
+    /// as long as the note stayed unreadable. The folder loads with the
+    /// contained note in it: on a plain refresh of the tree, and on a Refresh
+    /// whose scan cannot read the note either (the issue's own case), which
+    /// counts that one read and nothing for the tree.</summary>
+    [Fact]
+    public void AFolderHoldingAContainedNoteStillLoadsItsTree() => RunSta(() =>
+    {
+        const string Contained = "held/contained-1900.md";
+        const string Bystander = "held/bystander.md";
+        using var h = new Harness(
+            "contained-note-tree",
+            (Contained, "- [ ] locked away\n"),
+            (Bystander, "- [ ] serving\n"));
+        FileTreeNodeViewModel Folder() => Assert.Single(h.Sidebar.RootNodes, node => node.Path == "held");
+        void AssertTheFolderHolds(params string[] paths)
+        {
+            Assert.False(h.Sidebar.ShowsFailedLevelForRescan, h.Sidebar.Status);
+            Assert.Equal(paths, Folder().Children.Select(node => node.Path).Order(StringComparer.Ordinal));
+        }
+
+        Folder().IsExpanded = true;
+        AssertTheFolderHolds(Bystander, Contained);
+
+        // The host's own route to a contained note: the repair coordinator's
+        // call, with the note unreadable (core's seam stands in for the lock).
+        TaskIndexRepairOutcome outcome;
+        using (EnvFaultLock.Acquire())
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_REINDEX", "contained-1900");
+            try
+            {
+                outcome = h.Lifecycle.SessionForTests!.RepairOrContainPath(Contained);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_REINDEX", null);
+            }
+        }
+
+        Assert.Equal(TaskIndexRepairOutcome.Contained, outcome);
+        h.Context.Drain();
+        h.Events.Clear();
+
+        h.Context.Await(h.Sidebar.RefreshAsync());
+
+        Assert.Empty(h.Spoken);
+        AssertTheFolderHolds(Bystander, Contained);
+
+        // The issue's case: the note's read is denied for a whole Refresh, so
+        // the scan cannot heal the row, and a note that arrived meanwhile has
+        // the Refresh list the folder over it.
+        h.Write("held/late.md", "# Late\n");
+        using (DenyAccess.To(Path.Combine(h.Root, "held", "contained-1900.md"), FileSystemRights.ReadData))
+        {
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        }
+
+        Assert.Equal([OneError], h.Spoken);
+        AssertTheFolderHolds(Bystander, Contained, "held/late.md");
+    });
+
     // ---------------------------------------------------------------------
     // AR-31: passes
     // ---------------------------------------------------------------------

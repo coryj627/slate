@@ -4,7 +4,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace SlateWindows.Tests;
 
@@ -66,8 +68,20 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private readonly object _progressGate = new();
     private readonly TimeSpan _progressInterval;
     private System.Threading.Timer? _progressTimer;
+    private readonly Action<string> _onStall;
     private Checkpoint? _published;
     private Checkpoint? _written;
+    // The stall rule's state, all under the progress gate: the published
+    // checkpoint the last tick read, how many ticks in a row have read it,
+    // and, once the rule has spoken, the checkpoint it spoke of and the
+    // stalled form the file keeps while that one stays published.
+    private Checkpoint? _lastRead;
+    private int _ticksUnchanged;
+    private Checkpoint? _stalledOn;
+    private Checkpoint? _stalled;
+    // The stalled checkpoint's own file, while it exists (a reader held the
+    // checkpoint's file through every try).
+    private string? _stalledBeside;
     private bool _progressStopped;
     private Case? _activeCase;
     private int _missedProgressWrites;
@@ -79,6 +93,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// <param name="progressInterval">How often the checkpoint flusher runs;
     /// one second unless a fact supplies another (an infinite interval leaves
     /// flushing to <see cref="FlushProgress"/>).</param>
+    /// <param name="stallTicks">How many ticks in a row may read one
+    /// checkpoint before the run is stalled; <see cref="StallBound"/> of the
+    /// interval's ticks unless a fact supplies a count.</param>
+    /// <param name="onStall">What a stall does with its sentence;
+    /// <see cref="EndTheProcess"/> unless a fact records it instead. The
+    /// rule runs with the flusher, so only where a report directory is set:
+    /// CI sets one for every shard.</param>
     internal ModelTestRun(
         string family,
         IEnumerable<TCell> cells,
@@ -86,9 +107,17 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         Func<TCell, string> route,
         Func<TCell, string?> unreachable,
         ModelShardConfiguration configuration,
-        TimeSpan? progressInterval = null)
+        TimeSpan? progressInterval = null,
+        int? stallTicks = null,
+        Action<string>? onStall = null)
     {
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
+        if (stallTicks < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stallTicks), stallTicks, "The stall bound is at least one tick.");
+        }
+        StallTicks = stallTicks ?? DefaultStallTicks(_progressInterval);
+        _onStall = onStall ?? EndTheProcess;
         if (family is not ("routes" or "reroot" or "composed"))
         {
             throw new ArgumentException("Unknown model family.", nameof(family));
@@ -128,6 +157,70 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     internal int UnreachableCells { get; }
     internal string InventorySha256 { get; }
     internal IReadOnlyList<Case> SelectedCases { get; }
+
+    /// <summary>How long a published checkpoint may stand before the run is
+    /// called stalled (#1624). A healthy phase is well under a second: a
+    /// whole case took 0.60 s on the loaded host that issue records. One
+    /// bounded wait that runs to its bound holds a phase for about 70 s
+    /// (a settle is a 10 s pump and two drains of 30 s each), and a case
+    /// that is failing can hold one for up to about 165 s while it unwinds
+    /// (the 10 s wait for its release helper, the production teardown's 5 s
+    /// fallback, and two settles). Five minutes is above all of these.</summary>
+    internal static TimeSpan StallBound { get; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The stall bound in flusher ticks, or null for never. Ticks
+    /// are necessary, so a suspended machine adds at most one or two: the
+    /// timer does not fire for the time it slept through. They are not
+    /// sufficient where the flusher has an interval, because the timer
+    /// queues a callback for every interval whether or not the pool runs
+    /// it, and a pool that ran none for a while then runs them all at once.
+    /// There the checkpoint must also have stood on the family clock for
+    /// the time those ticks span, one interval fewer than their count. A
+    /// flusher driven by hand has no interval, and its ticks alone decide.</summary>
+    internal int? StallTicks { get; }
+
+    /// <summary>What a stall does with its sentence, for a fact to read.</summary>
+    internal Action<string> OnStall => _onStall;
+
+    /// <summary>How many times the stalled checkpoint's write is tried
+    /// before the callback runs, and the wait between two tries: under a
+    /// second in all.</summary>
+    private const int StalledWriteTries = 5;
+    private static readonly TimeSpan StalledWriteWait = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>The wait between two tries, a seam: a fact lets its reader
+    /// go here and waits for nothing.</summary>
+    internal Action<TimeSpan> WaitBetweenStalledWrites { get; set; } = Thread.Sleep;
+
+    /// <summary><see cref="StallBound"/> in ticks of the flusher's interval,
+    /// rounded up. A flusher with no interval of its own never ticks, so it
+    /// has no bound unless its fact gives one.</summary>
+    private static int? DefaultStallTicks(TimeSpan progressInterval) =>
+        progressInterval <= TimeSpan.Zero
+            ? null
+            : (int)Math.Min(int.MaxValue, Math.Ceiling((double)StallBound.Ticks / progressInterval.Ticks));
+
+    /// <summary>The default answer to a stall. The stalled thread is in
+    /// synchronous code and cannot be unwound, so the process ends here: the
+    /// sentence goes to standard error, and the fail-fast makes the runtime
+    /// write a dump of every thread where DOTNET_DbgEnableMiniDump is set
+    /// (the model step of windows.yml sets it).</summary>
+    internal static void EndTheProcess(string sentence)
+    {
+        try
+        {
+            // The process's own standard error, whatever Console.Error has
+            // been redirected to inside a test process.
+            using Stream error = Console.OpenStandardError();
+            error.Write(Encoding.UTF8.GetBytes(sentence + Environment.NewLine));
+            error.Flush();
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            // The fail-fast below carries the sentence too.
+        }
+        Environment.FailFast(sentence);
+    }
 
     /// <summary>Pin the census and its digest. Counts alone let a renamed
     /// route or a reworded exclusion reason pass locally and on both shards,
@@ -236,18 +329,144 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// <summary>The flusher's tick: write the latest checkpoint if it changed
     /// since the last write. It runs on its own thread, so a case stalled in
     /// a phase still reaches the file even though its thread writes
-    /// nothing.</summary>
+    /// nothing.
+    ///
+    /// The tick is also the stall rule's clock (#1624). A family is one
+    /// fact, so the test host's hang timer measures the family, not a case.
+    /// The rule speaks on a tick that is at least the
+    /// <see cref="StallTicks"/>-th in a row to read the same published
+    /// checkpoint and, where the flusher has an interval, finds that
+    /// checkpoint as old as those ticks span. It writes the checkpoint as
+    /// stalled and hands the callback one sentence naming the case and its
+    /// phase. It does so once in a run, never after the family completed,
+    /// and never under a debugger, where a breakpoint holds a case for as
+    /// long as its reader likes. The first tick to read a checkpoint counts
+    /// as one, so with one tick a second the rule speaks between 299 and
+    /// 300 seconds after the transition, later if ticks were late.
+    ///
+    /// A case thread never waits on the flusher: it publishes without the
+    /// gate. So the family can advance, complete or begin to be disposed
+    /// while this tick is still writing the stalled checkpoint and waiting
+    /// for a reader. The tick reads the published checkpoint again before
+    /// the callback and withdraws the stall if the family moved: no
+    /// callback, nothing on disk that says stalled, and the rule free to
+    /// speak of a later stall. The instant between that last read and the
+    /// callback cannot be closed without the gate; a family that moves in
+    /// it had stood for the whole bound all the same.</summary>
     internal void FlushProgress()
     {
         lock (_progressGate)
         {
-            if (!_progressStopped
-                && Volatile.Read(ref _published) is { } checkpoint
-                && !ReferenceEquals(checkpoint, _written))
+            if (_progressStopped || Volatile.Read(ref _published) is not { } checkpoint)
             {
-                WriteCheckpoint(checkpoint);
+                return;
             }
+            if (!ReferenceEquals(checkpoint, _lastRead))
+            {
+                _lastRead = checkpoint;
+                _ticksUnchanged = 0;
+            }
+            if (Debugger.IsAttached)
+            {
+                // Time under a debugger is not counted at all, so detaching
+                // starts the bound again.
+                _ticksUnchanged = 0;
+            }
+            else if (_ticksUnchanged < int.MaxValue)
+            {
+                _ticksUnchanged++;
+            }
+            string? sentence = null;
+            double now = _clock.Elapsed.TotalMilliseconds;
+            if (_stalledOn is null
+                && StallTicks is { } bound
+                && _ticksUnchanged >= bound
+                && StoodForItsTicks(checkpoint, bound, now)
+                && checkpoint.Phase != "complete")
+            {
+                _stalledOn = checkpoint;
+                _stalled = checkpoint with
+                {
+                    Phase = "stalled",
+                    ElapsedMilliseconds = now,
+                    StalledPhase = checkpoint.Phase,
+                    StalledMilliseconds = Math.Max(0, now - checkpoint.ElapsedMilliseconds),
+                };
+                sentence = StallSentence(_stalled, _ticksUnchanged);
+            }
+            Checkpoint latest = ReferenceEquals(checkpoint, _stalledOn) ? _stalled! : checkpoint;
+            if (!ReferenceEquals(latest, _written))
+            {
+                bool written = WriteCheckpoint(latest);
+                // The stalled checkpoint is what the job log prints once the
+                // process is gone, so a reader that briefly holds the file
+                // gets a few short waits to let go, for as long as the
+                // family has not moved. The callback's sentence carries
+                // everything the file would.
+                for (int tried = 1; sentence is not null && !written && tried < StalledWriteTries && StillStands(checkpoint); tried++)
+                {
+                    WaitBetweenStalledWrites(StalledWriteWait);
+                    if (StillStands(checkpoint))
+                    {
+                        written = WriteCheckpoint(latest);
+                    }
+                }
+                if (sentence is not null && !written && StillStands(checkpoint))
+                {
+                    // A reader that outlasted every try. The process is
+                    // about to end with the old phase in the file, and the
+                    // job log prints only what is on disk.
+                    WriteStalledBeside(latest);
+                }
+            }
+            if (sentence is null)
+            {
+                return;
+            }
+            if (!StillStands(checkpoint))
+            {
+                // The family moved while this tick wrote and waited. The
+                // stall is withdrawn: the rule has not spoken, and the file
+                // goes back to what is published. A run being disposed
+                // writes its own last checkpoint.
+                _stalledOn = null;
+                _stalled = null;
+                RemoveStalledBeside();
+                if (!_progressStopped
+                    && Volatile.Read(ref _published) is { } current
+                    && !ReferenceEquals(current, _written))
+                {
+                    WriteCheckpoint(current);
+                }
+                return;
+            }
+            // Inside the gate, after the write: Dispose waits here, so the
+            // stalled checkpoint is the file's last word when the default
+            // callback ends the process.
+            _onStall(sentence);
         }
+    }
+
+    /// <summary>Whether the checkpoint a tick decided on is still the
+    /// published one, in a run no one has begun to dispose.</summary>
+    private bool StillStands(Checkpoint checkpoint) =>
+        ReferenceEquals(Volatile.Read(ref _published), checkpoint) && !Volatile.Read(ref _disposed);
+
+    /// <summary>Whether the checkpoint is as old, on the family clock, as
+    /// its ticks say: <paramref name="bound"/> ticks span one interval fewer
+    /// than their count. A flusher with no interval has no such span.</summary>
+    private bool StoodForItsTicks(Checkpoint checkpoint, int bound, double now) =>
+        _progressInterval <= TimeSpan.Zero
+        || now - checkpoint.ElapsedMilliseconds >= (bound - 1) * _progressInterval.TotalMilliseconds;
+
+    private string StallSentence(Checkpoint stalled, int ticks)
+    {
+        string subject = stalled.ActiveOrdinal is { } ordinal
+            ? string.Create(CultureInfo.InvariantCulture,
+                $": case {ordinal} ({stalled.ActiveCell}) entered phase {stalled.StalledPhase} and published no transition")
+            : $" with no case active: nothing was published after phase {stalled.StalledPhase}";
+        return string.Create(CultureInfo.InvariantCulture,
+            $"The {_family} model stalled on shard {_configuration.Index} of {_configuration.Count}{subject} in {ticks} checkpoint ticks ({stalled.StalledMilliseconds / 1000:F1} s), with {stalled.CompletedCases} of {SelectedCases.Count} cases completed.");
     }
 
     /// <summary>One atomically replaced checkpoint, not an unbounded log.
@@ -256,26 +475,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// keeps this diagnostic separate from the verifier's JSON evidence.
     /// A monitor can briefly deny replacement on Windows; such a diagnostic
     /// failure must not abort a case or weaken final coverage reporting.
-    /// Callers hold the progress gate.</summary>
-    private void WriteCheckpoint(Checkpoint checkpoint)
+    /// Callers hold the progress gate. Answers whether the file took it.</summary>
+    private bool WriteCheckpoint(Checkpoint checkpoint)
     {
         string directory = _configuration.ReportDirectory!;
-        string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
-        var progress = new
-        {
-            family = _family,
-            shardIndex = _configuration.Index,
-            shardCount = _configuration.Count,
-            selectedCases = SelectedCases.Count,
-            completedCases = checkpoint.CompletedCases,
-            activeOrdinal = checkpoint.ActiveOrdinal,
-            activeCell = checkpoint.ActiveCell,
-            phase = checkpoint.Phase,
-            success = checkpoint.Success,
-            elapsedMilliseconds = checkpoint.ElapsedMilliseconds,
-        };
+        string path = CheckpointPath();
         string temporary = path + ".tmp";
-        string contents = JsonSerializer.Serialize(progress);
+        string contents = Serialize(checkpoint);
         try
         {
             Directory.CreateDirectory(directory);
@@ -288,7 +494,81 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             // Reuse this same temporary file on the next checkpoint. The final
             // JSON remains strict and records any missed diagnostic writes.
             _missedProgressWrites++;
+            return false;
         }
+        // The checkpoint's own file is current again, so a stalled copy
+        // beside it would only be a second, older word.
+        RemoveStalledBeside();
+        return true;
+    }
+
+    /// <summary>Remove the stalled checkpoint's own file, if this run wrote
+    /// one. Callers hold the progress gate.</summary>
+    private void RemoveStalledBeside()
+    {
+        if (_stalledBeside is not { } beside)
+        {
+            return;
+        }
+        _stalledBeside = null;
+        try
+        {
+            File.Delete(beside);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            _missedProgressWrites++;
+        }
+    }
+
+    /// <summary>The stalled checkpoint in a file of its own, for a stall
+    /// whose every write a reader of the checkpoint's file refused: the same
+    /// folder, a name no reader holds, and one the job's print step matches
+    /// (<c>*.progress.txt</c>). It is replaced whole, so no one reads half
+    /// of it, and a failure here is counted and goes no further: the
+    /// callback still runs. Callers hold the progress gate.</summary>
+    private void WriteStalledBeside(Checkpoint stalled)
+    {
+        string path = CheckpointPath(".stalled");
+        string temporary = path + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(_configuration.ReportDirectory!);
+            File.WriteAllText(temporary, Serialize(stalled));
+            File.Move(temporary, path, overwrite: true);
+            _stalledBeside = path;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            _missedProgressWrites++;
+        }
+    }
+
+    private string CheckpointPath(string kind = "") =>
+        Path.Combine(_configuration.ReportDirectory!, $"{_family}-shard-{_configuration.Index}{kind}.progress.txt");
+
+    private string Serialize(Checkpoint checkpoint)
+    {
+        var progress = new JsonObject
+        {
+            ["family"] = _family,
+            ["shardIndex"] = _configuration.Index,
+            ["shardCount"] = _configuration.Count,
+            ["selectedCases"] = SelectedCases.Count,
+            ["completedCases"] = checkpoint.CompletedCases,
+            ["activeOrdinal"] = checkpoint.ActiveOrdinal,
+            ["activeCell"] = checkpoint.ActiveCell,
+            ["phase"] = checkpoint.Phase,
+            ["success"] = checkpoint.Success,
+            ["elapsedMilliseconds"] = checkpoint.ElapsedMilliseconds,
+        };
+        if (checkpoint.StalledPhase is not null)
+        {
+            // Only a stalled checkpoint carries these two.
+            progress["stalledPhase"] = checkpoint.StalledPhase;
+            progress["stalledMilliseconds"] = checkpoint.StalledMilliseconds;
+        }
+        return progress.ToJsonString();
     }
 
     public void Dispose()
@@ -297,7 +577,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         {
             return;
         }
-        _disposed = true;
+        // Read by a tick that has decided on a stall: a run its fact has
+        // begun to dispose is ending, not stalled.
+        Volatile.Write(ref _disposed, true);
         _clock.Stop();
         lock (_progressGate)
         {
@@ -310,6 +592,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             if (_configuration.ReportDirectory is not null)
             {
                 WriteCheckpoint(Snapshot(_success ? "complete" : "failed"));
+                // Whether or not the file took that last checkpoint, no
+                // stalled copy outlives a run that reached its end.
+                RemoveStalledBeside();
             }
             missedProgressWrites = _missedProgressWrites;
         }
@@ -347,8 +632,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     private sealed record SlowCase(int Ordinal, string Cell, string Route, bool Completed,
         double ElapsedMilliseconds, IReadOnlyDictionary<string, double> Phases);
 
+    /// <summary><paramref name="ElapsedMilliseconds"/> is the family clock
+    /// read when the phase was entered, not when the file was written. Only
+    /// a stalled checkpoint differs: its clock is read at the stall, and it
+    /// carries the phase it stalled in and how long that phase had stood.</summary>
     private sealed record Checkpoint(string Phase, int? ActiveOrdinal, string? ActiveCell,
-        int CompletedCases, bool Success, double ElapsedMilliseconds);
+        int CompletedCases, bool Success, double ElapsedMilliseconds,
+        string? StalledPhase = null, double? StalledMilliseconds = null);
 
     internal sealed class RouteTiming(string route)
     {

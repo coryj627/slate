@@ -246,6 +246,50 @@ fn a_change_one_session_scanned_is_counted_by_both() {
     }
 }
 
+/// #1900: a window reads each present record's summary through the file
+/// listing's decoder, which refused the stat sentinel a quarantine leaves
+/// (`size_bytes = -1`). Another session's edit of a note that was then
+/// quarantined failed this session's whole window, and so its rescan. The
+/// quarantine itself writes no feed row (the triggers watch `path` and
+/// `content_hash`), so the record here is the edit's. The window opens and
+/// the record's summary has size 0.
+#[test]
+fn a_window_over_a_quarantined_path_opens() {
+    let mut _env = fault_guard();
+    const PATH: &str = "feed-quarantined.md";
+    let (_tmp, a, b) = two_hosts(|p| {
+        p.write_file(PATH, b"- [ ] before\n").unwrap();
+    });
+    let before = hash_of(&b, PATH);
+    b.save_text(PATH, "- [ ] after, from B\n", Some(&before))
+        .unwrap();
+    let head_after_the_edit = head(&a);
+    _env.set("SLATE_TEST_FAULT_REINDEX", "feed-quarantined");
+    assert_eq!(
+        b.repair_or_contain_path(PATH).unwrap(),
+        crate::TaskIndexRepairOutcome::Contained,
+    );
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+    assert_eq!(
+        head(&a),
+        head_after_the_edit,
+        "the quarantine writes no feed row"
+    );
+
+    let w = a
+        .change_feed_window(None, &CancelToken::new())
+        .expect("a window over a quarantined path opens");
+    assert_eq!(w.status, ChangeFeedStatus::Exact);
+    assert_eq!(counts(&w), (1, 0));
+    let records = records(&a, &w);
+    assert_eq!(files(&records), [(Present, PATH, Modified)]);
+    let summary = records[0]
+        .summary
+        .as_ref()
+        .expect("a present file carries its summary");
+    assert_eq!(summary.size_bytes, 0);
+}
+
 /// The census of design §3.5: every Slate-owned write is announced by its
 /// session's file-change events, so it is excluded from that session's own
 /// window and counted once by another session's.
