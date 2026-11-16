@@ -146,9 +146,11 @@ public sealed class SyncMarkerWatcherTests
             watcher.Start();
             // The churn only stops when this scope exits, so it is
             // demonstrably still running when the assertion returns. A fire
-            // inside the scope is the whole witness: a trailing-only
-            // debounce cannot produce one, however long it is given. How
-            // long the fire took is not asserted.
+            // inside the scope is the witness: churn at half the debounce
+            // keeps a trailing-only debounce from firing. A churn thread
+            // stalled for longer than the debounce would let a trailing-only
+            // debounce fire too, so the witness is as good as the churn is
+            // steady. How long the fire took is not asserted.
             using (new Churn(root, periodMs: 50))
             {
                 Assert.True(
