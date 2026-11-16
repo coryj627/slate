@@ -24,7 +24,7 @@ namespace SlateWindows;
 /// prompt is never "discarded" after it has already landed).</item>
 /// </list>
 /// </summary>
-internal sealed class WorkspaceSaveCoordinator
+internal sealed class WorkspaceSaveCoordinator : INoteSaveChain
 {
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, Task> _tails = new(StringComparer.Ordinal);
@@ -43,6 +43,19 @@ internal sealed class WorkspaceSaveCoordinator
 
     /// <summary>True once teardown has closed the coordinator.</summary>
     internal bool IsClosed => _closed;
+
+    /// <summary>Plan 47 CB-9a test seam: the admitted tickets not yet
+    /// completed. A fact reads it straight after a request to see whether the
+    /// route asked the chain, so no fact waits for a time to show that nothing
+    /// was written. Dispatcher only, like every admission.</summary>
+    internal int AdmittedForTests
+    {
+        get
+        {
+            _dispatcher.VerifyAccess();
+            return _pending;
+        }
+    }
 
     /// <summary>Workers not yet finished — a test observes the join.</summary>
     internal int LiveWorkersForTests
@@ -169,6 +182,14 @@ internal sealed class WorkspaceSaveCoordinator
         });
     }
 
+    /// <summary>Plan 47 CB-9a: <see cref="Admit(string, Func{SaveTicket, Task})"/>
+    /// for an operation that needs no ticket (<see cref="INoteSaveChain"/>).</summary>
+    public Task<bool> Admit(string path, Func<Task> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return Admit(path, _ => operation());
+    }
+
     private static void Finish(SaveTicket ticket, Task done)
     {
         if (done.IsFaulted)
@@ -255,7 +276,7 @@ internal sealed class WorkspaceSaveCoordinator
 
     /// <summary>Track a save's worker until it finishes, whatever the
     /// dispatcher does with its publication.</summary>
-    internal void TrackWorker(Task worker)
+    public void TrackWorker(Task worker)
     {
         lock (_workersGate)
         {
@@ -381,6 +402,23 @@ internal sealed class WorkspaceSaveCoordinator
             }
         }
     }
+}
+
+/// <summary>
+/// Plan 47 CB-9a (#1889): a note's save chain as a view model with no tab on
+/// the note sees it. <see cref="Admit"/> runs the operation on the dispatcher
+/// once every save and operation admitted for the path before it has
+/// completed, and holds the path's chain until the Task the operation returns
+/// ends; it answers false when the chain is closed and the operation never
+/// runs. The operation hands any worker it starts to
+/// <see cref="TrackWorker"/>, so teardown joins it before the session goes.
+/// The workspace's coordinator is the one implementer (a census holds that).
+/// </summary>
+internal interface INoteSaveChain
+{
+    Task<bool> Admit(string path, Func<Task> operation);
+
+    void TrackWorker(Task worker);
 }
 
 /// <summary>#1280: a wait that keeps the dispatcher pumping — a nested
