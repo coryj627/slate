@@ -119,11 +119,31 @@ tests) disagree, the tests and the code win.
   `docs(runbooks)`.
 - PR body: `Closes #N` for each issue it closes, the tests added, the contract
   register rows closed, VoiceOver phrases where a pass was required, each
-  version it adds or moves with its release date, and
-  `not delivered: <reason>` for anything not done or not verified.
-- One PR closes its issues and nothing else. A defect found on the way is
-  filed as an issue unless it blocks the PR. A defect in the PR's own feature
-  is fixed on its branch.
+  version it adds or moves with its release date, a line under "Found and
+  fixed here" for each defect fixed on the way, `not delivered: <reason>`
+  for anything not done or not verified, and a last line with the count:
+  found on the way, fixed here, deferred, filed.
+- One PR closes its issues. A defect found on the way is sized by what its
+  fix touches:
+  - Small: the fix stays in files the PR already changes, plus their tests.
+    Fix it in the PR.
+  - Medium: the fix reaches three or fewer other non-test files in the same
+    subsystem (one top-level folder of an app, or one module of a crate;
+    the files of one partial class count as one subsystem wherever they
+    sit). Fix it in the PR, or defer it to the plan's list of deferred
+    finds; outside a plan, or in a plan that keeps no such list, file it.
+  - High: the fix reaches more than three other non-test files, crosses
+    subsystems, or needs a design, an owner decision, an FFI change or a
+    machine the agent does not have. File it. If it blocks the PR, its fix
+    merges first, as its own PR.
+
+  A fix that needs an owner decision, an FFI change, a machine the agent
+  does not have, or a new or changed spoken sentence that needs a full
+  screen-reader pass is never small or medium.
+- Each fix taken in the PR has its failing test first and a line under
+  "Found and fixed here" in the PR body. Stop taking them when they would
+  more than double the non-test files the PR changes.
+- A defect in the PR's own feature is fixed on its branch, whatever its size.
 - A PR closes the register rows it affects in the `docs/plans/*_contracts.md`
   documents in the same change. A frozen contracts record is append-only:
   add only the owner's recorded call.

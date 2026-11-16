@@ -363,6 +363,10 @@ combined head). Added for this plan:
 7. **Blocked lanes:** if a `slate-win-*` job queues more than 20
    minutes, cancel and "Re-run failed jobs" (routes to Namespace).
 
+*2026-11-16:* "one PR closes its issues and nothing else" above is
+replaced by `AGENTS.md`'s rule for a defect found on the way (plan 47
+§4, CB-0).
+
 ## 5. The chunks
 
 Sizes: S under about 150 changed lines with facts, M 150 to 1,000, L
@@ -431,7 +435,7 @@ elsewhere or on a gate:
 | #1434 #1470 | WB-27 (the Windows proof) | plan 43 PR 38 (the macOS probe and refusal), after WB-27 has merged too | both merged |
 | #940 | WB-28 (22W) | by hand after 22b and 22W, per RD15 | — |
 | #998 | WB-32 (the spike) | the dependency bump when a tag exists | upstream |
-| #1484 | WB-31 (the Windows bench and, if the mechanism is proven, the remedy) | by hand after a macOS measurement confirms the remedy (the mac follow-up #1653), or the owner withdraws the macOS observation (WD21) | a Mac run |
+| #1484 | WB-31 (the Windows bench; the remedy was dropped on the owner's call, #1909) | by hand after a macOS run of `benches/two_sessions_bench.rs` on `main` (the mac follow-up #1653), or the owner withdraws the macOS observation (WD21) | a Mac run |
 
 ## 6. Delivery order
 

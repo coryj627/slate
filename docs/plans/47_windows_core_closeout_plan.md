@@ -644,7 +644,7 @@ Plan 44 §7 applies. Per kind of chunk, what its PR body quotes:
 | One golden rebuild, then a `home-only` run and #1903's probe | After CB-43 merges (and after CB-44, if it changes what the image needs) | CB-43 |
 | The VoiceOver passes and Mac adoptions on the ledger | Plan 43's queue | (ledger) |
 
-**"Mac work owed by plan 47"** is one issue, opened by CB-0. Lines known
+**"Mac work owed by plan 47"** is one issue, #1954, opened by CB-0. Lines known
 today:
 
 - Speech or text: #1628 and #1629 (math speech and braille); #1660 and
@@ -662,7 +662,7 @@ today:
   Mac's two copies of the save sentence carry #1660's run-on, and that
   Windows keeps four search and graph error arms worded apart from core.
 
-**"Plan 47 deferred finds"** is the second issue CB-0 opens (§4 rule 10).
+**"Plan 47 deferred finds"** (#1955) is the second issue CB-0 opens (§4 rule 10).
 It starts with the finds §9 gives to CB-46.
 
 **Watch list.**

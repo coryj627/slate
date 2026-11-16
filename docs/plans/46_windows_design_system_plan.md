@@ -2,7 +2,8 @@
 
 Status: adopted 2026-11-03, with the owner's decisions in §3. The owner started
 Wave 1 on 2026-11-04, and each of its chunks runs `codex:adversarial-review` until
-Codex approves before its PR opens. Later waves wait for the owner. Per-chunk specs are in
+Codex approves before its PR opens. All five waves have merged (#1821 to #1858);
+what is left is the owner's `/design-sync` (#1756). Per-chunk specs are in
 `46_windows_design_system/specs/`, one per PR. Red-teamed once by a fresh Claude
 agent and reviewed four times by Codex, with every finding checked against the tree
 and applied. Baseline: `main` at 9f4194c0 (#1787). #1792 landed just after it and
@@ -144,8 +145,8 @@ DS-0 settles these in the documents, so no later chunk has to.
 
 ### 2.4 Where this plan meets other work
 
-- **Plan 44's WB-29 and WB-30** are still open and don't touch shell chrome. Their
-  files can overlap `MainWindow.xaml`, so a chunk rebases as usual.
+- **Plan 44's WB-29** merged as #1873 (b8ca1c20). **WB-30** has not started and
+  doesn't touch shell chrome.
 - **W8-1 (#751)** consumes DS-10. **W8-2 (#752)** keeps the High Contrast
   acceptance; DS-2 and DS-5 deliver its "system font-size respect" line, and the
   issue should say so when they merge.
@@ -223,6 +224,9 @@ merge steps and cooldown. Additions:
 12. **`ThemeManager` can't be built under test.** It needs an `Application`, and
     `ShownShell.cs:31` forbids one. Keep each decision in a pure function a fact can
     call, with `ThemeManager` as the thin part that applies it.
+
+*2026-11-16:* "one PR closes its issues and nothing else" above is replaced by
+`AGENTS.md`'s rule for a defect found on the way (plan 47 §4, CB-0).
 
 ## 5. The chunks
 

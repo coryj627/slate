@@ -2,8 +2,10 @@
 
 Status: draft for the owner's review, 2026-10-23; per-chunk specs added
 the same day (§10, `45_windows_followups/specs/`, sixteen, one per PR,
-every file-and-line claim read from the tree). Not codex-reviewed. Not
-adopted; nothing in this plan has started. Baseline: `main` at 2463ee7a (#1599). Companion to
+every file-and-line claim read from the tree). Not codex-reviewed.
+Decided 2026-10-24 (§3). Fifteen of its sixteen chunks have merged, and
+XB-6 (#1596) is half delivered: its runner pin merged as #1938, and its
+setup-python pins are still to come. Baseline: `main` at 2463ee7a (#1599). Companion to
 `44_windows_backlog_plan.md`, which plans the Windows and host-neutral
 backlog as it stood on 2026-10-21. This plan takes the open issues in
 #1475–#1596 that plan 44 does not cover and that a Windows machine can
@@ -151,6 +153,10 @@ when a chord or help line changes. Two additions:
    `windows.yml`, `a11y-check.yml` or `pr-gate.yml` pins the property it
    changes in `Workflows.Tests.ps1` (as #1577 and #1578 did), and its PR
    body quotes the run that exercised the changed step.
+
+*2026-11-16:* "one PR closes its issues and nothing else" above is
+replaced by `AGENTS.md`'s rule for a defect found on the way (plan 47
+§4, CB-0).
 
 ## 5. The chunks
 
