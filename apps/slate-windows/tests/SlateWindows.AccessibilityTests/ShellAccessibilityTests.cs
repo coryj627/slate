@@ -2501,11 +2501,7 @@ public sealed partial class ShellAccessibilityTests
                 return "<absent>";
             }
 
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
+            using FileStream stream = GateFile.Open(path);
             using var reader = new StreamReader(stream);
             string content = reader.ReadToEnd();
             string head = content.Length > 120 ? content[..120] + "…" : content;
@@ -2596,11 +2592,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 try
                 {
-                    using var source = new FileStream(
-                        file,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
+                    using FileStream source = GateFile.Open(file);
                     using FileStream copy = File.Create(
                         Path.Combine(destination, Path.GetFileName(file)));
                     source.CopyTo(copy);
@@ -6753,20 +6745,9 @@ public sealed partial class ShellAccessibilityTests
                 // Tolerant read: the app holds the log open (the Bases
                 // journey's recorded sharing-violation pattern).
                 string log = Path.Combine(logDirectory, "slate-windows.log");
-                string tail = "(no log)";
-                try
-                {
-                    using var stream = new FileStream(
-                        log, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    using var reader = new StreamReader(stream);
-                    tail = string.Join(
-                        " | ",
-                        reader.ReadToEnd().Split('\n').TakeLast(8));
-                }
-                catch (IOException)
-                {
-                }
+                string tail = GateFile.TryReadText(log) is { } logged
+                    ? string.Join(" | ", logged.Split('\n').TakeLast(8))
+                    : "(no log)";
 
                 throw new Xunit.Sdk.XunitException(
                     $"MoveToSheet never appeared; exited={process.HasExited}; "
@@ -6920,8 +6901,7 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(item, "The file did not receive focus before Delete.");
             // The OS lock is a deterministic preparation barrier. Cancel must
             // drain the native worker while this independent holder still owns it.
-            using var blocker = new FileStream(Path.Combine(vaultRoot, ".slate", "structural.lock"),
-                FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+            using FileStream blocker = GateFile.Open(Path.Combine(vaultRoot, ".slate", "structural.lock"), FileAccess.ReadWrite);
             blocker.Lock(0, long.MaxValue);
             PressKey(VirtualKeyShort.DELETE);
             AutomationElement cancel = WaitForElement(window, "CancelTrash", TimeSpan.FromSeconds(10));

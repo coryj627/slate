@@ -51,11 +51,14 @@ internal static class GateFile
     /// another handle refuses it.</summary>
     internal static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
 
-    /// <summary>The file, open for reading and sharing reading, writing and
-    /// deleting. The caller holds it for as long as it keeps the stream: a
-    /// rename over the file is refused for that long.</summary>
-    internal static FileStream Open(string path) =>
-        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+    /// <summary>The file, open for reading (or for <paramref name="access"/>,
+    /// which a holder that locks a range of a lock file asks for) and sharing
+    /// reading, writing and deleting. The caller holds it for as long as it
+    /// keeps the stream: a rename over the file is refused for that long.
+    /// This is the gate's one way to open a stream on a file: rule 4 refuses
+    /// a <c>new FileStream</c> anywhere else in the project.</summary>
+    internal static FileStream Open(string path, FileAccess access = FileAccess.Read) =>
+        new(path, FileMode.Open, access, FileShare.ReadWrite | FileShare.Delete);
 
     /// <summary>The file's bytes, or null when it is absent or the open or
     /// the read was refused.</summary>

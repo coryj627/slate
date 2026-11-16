@@ -1384,8 +1384,7 @@ public sealed class TestWaitCensus
     private static readonly HashSet<string> UnitDelayReasons = new(DelayReasons, StringComparer.Ordinal);
     private static readonly HashSet<string> GateDelayReasons = new([.. DelayReasons, .. GateOnlyReasons], StringComparer.Ordinal);
     private static readonly HashSet<string> UnitCeilingReasons = new([.. DelayReasons, NoWaitWitness], StringComparer.Ordinal);
-    private static readonly HashSet<string> GateCeilingReasons =
-        new([.. DelayReasons, .. GateOnlyReasons, NoWaitWitness], StringComparer.Ordinal);
+    private static readonly HashSet<string> GateCeilingReasons = new([.. DelayReasons, NoWaitWitness], StringComparer.Ordinal);
 
     private static Func<SyntaxTree, string> FileIn(string project) =>
         tree => Path.GetRelativePath(Path.Combine(TestsRoot(), project), tree.FilePath).Replace('\\', '/');
@@ -3405,7 +3404,10 @@ public sealed class TestWaitCensus
     /// <summary>The gate's elapsed-time ceilings: none. The one the census
     /// first read, in FocusSettleWatchTests, asserted that a watch ended
     /// inside its window; it now asserts the reads the watch made (plan 47
-    /// CB-7).</summary>
+    /// CB-7). With this list empty rule 2 finds nothing in the gate's
+    /// project, so nothing there shows it still sees a ceiling: its planted
+    /// cases (TheClockRulesSeeAPlantedFact) are its control, and the unit
+    /// project's two entries are its live ones.</summary>
     private static readonly (string File, string Member, int Count, string Reason)[] GateElapsedCeilings = [];
 
     [Fact]
@@ -3828,7 +3830,7 @@ public sealed class TestWaitCensus
             clock.Members.Contains(member) && ClockSyntax.IsMemberOf(node, _model, clock.Type, clock.Namespace));
     }
 
-    // ---- Rule 4 (#1788): the gate reads the app's files through GateFile only ----
+    // ---- Rule 4 (#1788): the gate reads the app's files through GateFile, at a pace ----
     //
     // The app saves a file by renaming a staged one over it, with Windows'
     // classic replacing rename. Windows refuses that rename while any handle
@@ -3836,45 +3838,58 @@ public sealed class TestWaitCensus
     // is open at the instant of a save refuses the save, and nothing about
     // how the read opens the file changes that. What keeps it rare is how
     // briefly and how seldom the gate holds the file: GateFile opens, reads
-    // and closes, and its poll pauses between two reads. A read made another
-    // way, from a wait that spins above all, is how the gate lost a save for
-    // the product it was measuring (#1865, #1788).
+    // and closes, and its poll pauses between two reads. A read from a wait
+    // that spins is how the gate lost a save for the product it was
+    // measuring (#1865, #1788).
     //
     // In the gate's project, outside GateFile.cs and GateFileTests.cs (the
-    // reader and its own facts, whose holders are the controls):
-    //   a call to File.ReadAllText, ReadAllBytes, ReadAllLines, ReadLines,
-    //     OpenRead, OpenText or Open, or an Async form of one, is refused
-    //     unless its path is built from AppContext.BaseDirectory: a fixture
-    //     that travels with the binaries, which the app never writes;
-    //   a new FileStream(...) is refused unless it names FileShare.Delete:
-    //     the log and evidence readers, and one journey's deliberate holder
-    //     of a lock file.
+    // reader and its own facts, whose holders are the controls), rule 4
+    // refuses:
+    //   1. a read that does not go through GateFile: File.ReadAllText,
+    //      ReadAllBytes, ReadAllLines, ReadLines, OpenRead, OpenText, Open or
+    //      OpenHandle, or an Async form of one, called or handed on as a
+    //      method group; FileInfo.OpenRead, OpenText or Open; a
+    //      StreamReader made from a path; XDocument.Load or XElement.Load of
+    //      a path. A fixture's read is let through, where there is a path to
+    //      judge: the path is AppContext.BaseDirectory combined with string
+    //      constants and nothing else, written in the call or kept in a local
+    //      that is given that value once. Path.Combine drops the base when a
+    //      later part is rooted, and every vault path in the gate is rooted,
+    //      so a part that is not a constant is refused;
+    //   2. any new FileStream(...). Sharing deletion earns no exception: it
+    //      lets the app delete the file and does not let a rename through.
+    //      GateFile.Open opens with the same sharing;
+    //   3. a call to GateFile.TryReadText, TryReadBytes, ReadText or Open
+    //      inside a lambda or a local function that SpinWait.SpinUntil runs:
+    //      the reader's own read made at no pace. GateFile.PollText, and
+    //      ExpectFileText over it, pause between two reads.
     // There is no allow-list. Plan 47 worded the rule as "inside a poll";
-    // two of the gate's ten polls reached their read through a local
-    // function, which syntax cannot follow, so every direct read is refused
-    // wherever it stands.
+    // clauses 1 and 2 refuse a read wherever it stands, because a read can
+    // reach a poll through a helper that syntax cannot follow.
     //
-    // What binds and what is read as spelled. File's methods and FileStream
-    // are bound (System.IO), so another type's ReadAllText is no read; where
-    // one does not bind, the spelling of its type stands in.
-    // AppContext.BaseDirectory and FileShare.Delete are read as spelled,
-    // anywhere inside the path argument and the creation's arguments.
+    // What binds and what is read as spelled. File, FileInfo, FileStream,
+    // StreamReader, XDocument, XElement and Path are bound (System.IO,
+    // System.Xml.Linq), so another type's ReadAllText is no read; where one
+    // does not bind, the spelling of its type stands in.
+    // AppContext.BaseDirectory, GateFile and SpinUntil are read as spelled.
     //
     // What rule 4 does not see:
-    //   a path built from AppContext.BaseDirectory in a local and handed on
-    //     by name, which it refuses: write the path in the call;
-    //   a read through another type: a StreamReader or an XDocument made
-    //     from a path, a File.Copy out of a file the app writes;
-    //   a FileStream that names FileShare.Delete and is then held across a
-    //     save, and how long a caller keeps the stream GateFile.Open gave it.
-    //     Sharing deletion lets the app delete the file; it does not let a
-    //     rename through;
+    //   a read through a type it does not name (a JsonDocument or an
+    //     XmlReader made from a path, a File.Copy out of a file the app
+    //     writes);
+    //   a fixture's path that reaches the read through a field, a parameter
+    //     or a helper's return, which it refuses: write it in the call;
+    //   GateFile's reader reached from a spinning wait through a method of
+    //     the class (a helper that reads, called in the wait's lambda), or
+    //     from a while loop that does not pause;
+    //   how long a caller keeps the stream GateFile.Open gave it;
     //   a read in GateFile.cs or GateFileTests.cs.
 
     /// <summary>The reader and its own facts: the two files of the gate's
     /// project rule 4 does not read.</summary>
     private static readonly string[] TheReaderAndItsFacts = ["GateFile.cs", "GateFileTests.cs"];
 
+    /// <summary>File's own reads: each opens the file it is handed.</summary>
     private static readonly HashSet<string> DirectFileReads = new(StringComparer.Ordinal)
     {
         "ReadAllText",
@@ -3884,17 +3899,24 @@ public sealed class TestWaitCensus
         "OpenRead",
         "OpenText",
         "Open",
+        "OpenHandle",
         "ReadAllTextAsync",
         "ReadAllBytesAsync",
         "ReadAllLinesAsync",
         "ReadLinesAsync",
     };
 
+    private static readonly HashSet<string> FileInfoReads = new(StringComparer.Ordinal) { "OpenRead", "OpenText", "Open" };
+
+    /// <summary>GateFile's reads that open the file once each time they are
+    /// called. PollText is not one: it is the pace.</summary>
+    private static readonly HashSet<string> ReaderCalls = new(StringComparer.Ordinal) { "TryReadText", "TryReadBytes", "ReadText", "Open" };
+
     /// <summary>A floor under the calls on GateFile outside the reader's two
-    /// files: 20 on 2026-11-16 (the journeys' own, and the helpers every
-    /// paced wait and log read goes through). Fewer means the rule lost
-    /// sight of the reader, not that the gate reads less.</summary>
-    private const int GateFileCallsAtLeast = 16;
+    /// files: 25 on 2026-11-16 (the journeys' own, and the helpers every
+    /// paced wait, log read and evidence copy goes through). Fewer means the
+    /// rule lost sight of the reader, not that the gate reads less.</summary>
+    private const int GateFileCallsAtLeast = 20;
 
     [Fact]
     public void TheGateReadsAppFilesThroughGateFileOnly()
@@ -3903,11 +3925,13 @@ public sealed class TestWaitCensus
         IReadOnlyList<ClockSite> refused = DirectReadsOfFiles(gate.Compilation, gate.Sources, FileIn(GateProject));
         Assert.True(
             refused.Count == 0,
-            $"{refused.Count} reads in the gate's project open a file without GateFile. The app replaces a file it saves "
-            + "by a rename Windows refuses while any handle is open on the target, so a read costs the app its save when "
-            + "it is open at that instant. Read through GateFile: PollText for a wait (it pauses between reads), ReadText "
-            + "for one read, TryReadText for a failure message. A fixture's path is built from AppContext.BaseDirectory "
-            + "inside the call. This rule has no allow-list:\n" + string.Join("\n", refused));
+            $"{refused.Count} places in the gate's project read a file in a way rule 4 refuses. Outside GateFile.cs and "
+            + "GateFileTests.cs the rule refuses: (1) File.ReadAllText, ReadAllBytes, ReadAllLines, ReadLines, OpenRead, OpenText, "
+            + "Open or OpenHandle (called or handed on as a method group), FileInfo.OpenRead, OpenText or Open, and a StreamReader, "
+            + "XDocument.Load or XElement.Load over a path, unless the path is AppContext.BaseDirectory combined with string "
+            + "constants only; (2) any new FileStream; (3) GateFile.TryReadText, TryReadBytes, ReadText or Open inside a lambda or "
+            + "a local function that SpinWait.SpinUntil runs. GateFile.ReadText is one read, GateFile.Open one stream, and "
+            + "GateFile.PollText (ExpectFileText over it) a wait that pauses between two reads:\n" + string.Join("\n", refused));
 
         int calls = GateFileCalls(gate.Sources, FileIn(GateProject));
         Assert.True(
@@ -3916,10 +3940,12 @@ public sealed class TestWaitCensus
             + "was written, so it has lost sight of the reader.");
     }
 
-    /// <summary>Rule 4 on planted sources: a direct read is reported
-    /// wherever it stands, and a fixture's read, a stream that shares
-    /// deletion and another type's method of the same name are left
-    /// alone.</summary>
+    /// <summary>Rule 4 on planted sources: a read that is not GateFile's is
+    /// reported wherever it stands and by whatever type it is made, a
+    /// stream is reported whatever it shares, and GateFile's own read is
+    /// reported inside a spinning wait; a fixture's read, the paced poll,
+    /// one read outside a wait and another type's method of the same name
+    /// are left alone.</summary>
     [Theory]
     [MemberData(nameof(PlantedFileReads))]
     public void TheFileReadRuleSeesAPlantedRead(string form, string planted, string expected)
@@ -3928,6 +3954,10 @@ public sealed class TestWaitCensus
         SyntaxTree tree = CSharpSyntaxTree.ParseText(
             "namespace SlateWindows.Tests.Planted;\n"
             + "static class Notes { public static string ReadAllText(string path) => path; }\n"
+            + "static class GateFile { public static string? TryReadText(string path) => path; "
+            + "public static byte[]? TryReadBytes(string path) => null; public static string ReadText(string path) => path; "
+            + "public static Stream Open(string path) => Stream.Null; "
+            + "public static string? PollText(string path, Func<string, bool> ready, TimeSpan timeout) => path; }\n"
             + "sealed class P {\n" + planted + "\n}\n",
             (CSharpParseOptions)unit.SyntaxTrees.First().Options,
             path: "Planted.cs");
@@ -3984,9 +4014,9 @@ public sealed class TestWaitCensus
             "F: refused"
         },
         {
-            "a path from the base directory kept in a local first",
+            "a fixture's path kept in a local that is given it once",
             "void F() { string fixture = Path.Combine(AppContext.BaseDirectory, \"fixtures\", \"chords.json\"); _ = File.ReadAllText(fixture); }",
-            "F: refused"
+            "clean"
         },
         {
             "two reads in one member",
@@ -3994,21 +4024,93 @@ public sealed class TestWaitCensus
             "F: refused; F: refused"
         },
         {
-            "a fixture's read",
-            "void F() { _ = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, \"fixtures\", \"chords.json\")); }",
+            "a read handed on as a method group",
+            "void F(string[] paths) { _ = paths.Select(File.ReadAllText).ToArray(); }",
+            "F: refused"
+        },
+        { "a reader made from a path", "void F(string path) { using var reader = new StreamReader(path); }", "F: refused" },
+        { "a file's own OpenRead", "void F(string path) { using FileStream held = new FileInfo(path).OpenRead(); }", "F: refused" },
+        { "a file's own OpenText", "void F(string path) { using StreamReader held = new FileInfo(path).OpenText(); }", "F: refused" },
+        {
+            "a file's own Open",
+            "void F(string path) { using FileStream held = new FileInfo(path).Open(FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }",
+            "F: refused"
+        },
+        { "a bare handle", "void F(string path) { using var held = File.OpenHandle(path); }", "F: refused" },
+        { "a document loaded from a path", "void F(string path) { _ = System.Xml.Linq.XDocument.Load(path); }", "F: refused" },
+        { "an element loaded from a path", "void F(string path) { _ = System.Xml.Linq.XElement.Load(path); }", "F: refused" },
+        {
+            "the base directory combined with a path that may be rooted",
+            "void F(string notePath) { _ = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, notePath)); }",
+            "F: refused"
+        },
+        {
+            "a stream, whatever it shares",
+            "void F(string path) { using var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a spinning wait",
+            "void F(string path) { Assert.True(SpinWait.SpinUntil(() => GateFile.TryReadText(path) == \"new\", 1000)); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a local function a spinning wait calls",
+            "void F(string path) { bool Ready() => GateFile.ReadText(path).Length > 0; Assert.True(SpinWait.SpinUntil(() => Ready(), 1000)); }",
+            "Ready: refused"
+        },
+        {
+            "the gate's reader in a local function handed to a spinning wait",
+            "void F(string path) { bool Ready() => GateFile.TryReadBytes(path) is { Length: > 0 }; Assert.True(SpinWait.SpinUntil(Ready, 1000)); }",
+            "Ready: refused"
+        },
+        {
+            "the gate's reader held open in a spinning wait",
+            "void F(string path) { Assert.True(SpinWait.SpinUntil(() => { using Stream held = GateFile.Open(path); return held.Length > 0; }, 1000)); }",
+            "F: refused"
+        },
+        {
+            "the paced poll",
+            "void F(string path) { Assert.NotNull(GateFile.PollText(path, text => text == \"new\", TimeSpan.FromSeconds(1))); }",
+            "clean"
+        },
+        { "one read outside a wait", "void F(string path) { Assert.Equal(\"new\", GateFile.ReadText(path)); }", "clean" },
+        {
+            "a read in a lambda no wait runs",
+            "void F(string[] paths) { _ = paths.Select(path => GateFile.ReadText(path)).ToArray(); }",
             "clean"
         },
         {
-            "a stream that shares deletion",
-            "void F(string path) { using var log = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete); }",
+            "a reader over a stream someone else opened",
+            "void F(Stream stream) { using var reader = new StreamReader(stream); }",
+            "clean"
+        },
+        {
+            "a fixture's document",
+            "void F() { _ = System.Xml.Linq.XDocument.Load(Path.Combine(AppContext.BaseDirectory, \"fixtures\", \"MainWindow.xaml\")); }",
+            "clean"
+        },
+        {
+            "a fixture's path through a constant",
+            "const string Chords = \"chords.json\"; void F() { _ = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, \"fixtures\", Chords)); }",
+            "clean"
+        },
+        {
+            "a fixture's path in a local that is assigned again",
+            "void F(string other) { string fixture = Path.Combine(AppContext.BaseDirectory, \"chords.json\"); fixture = other; _ = File.ReadAllText(fixture); }",
+            "F: refused"
+        },
+        {
+            "a fixture's read",
+            "void F() { _ = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, \"fixtures\", \"chords.json\")); }",
             "clean"
         },
         { "another type's ReadAllText", "void F(string path) { _ = Notes.ReadAllText(path); }", "clean" },
         { "a write, a delete and a look", "void F(string path) { File.WriteAllText(path, \"new\"); _ = File.Exists(path); File.Delete(path); }", "clean" },
     };
 
-    /// <summary>Rule 4: every read of a file in <paramref name="sources"/>
-    /// that does not go through GateFile.</summary>
+    /// <summary>Rule 4: every place in <paramref name="sources"/> that reads
+    /// a file in a way the rule refuses.</summary>
     internal static IReadOnlyList<ClockSite> DirectReadsOfFiles(
         CSharpCompilation compilation, IReadOnlyList<SyntaxTree> sources, Func<SyntaxTree, string> fileOf)
     {
@@ -4021,25 +4123,58 @@ public sealed class TestWaitCensus
                 continue;
             }
             SemanticModel? model = null;
+            void Refuse(SyntaxNode at) =>
+                refused.Add(new ClockSite(file, ClockSyntax.MemberOf(at), LineOf(at), TextOf(at)));
             foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
             {
                 switch (node)
                 {
-                    case InvocationExpressionSyntax call
-                        when ClockSyntax.NameCalled(call.Expression) is { } name && DirectFileReads.Contains(name):
-                        model ??= compilation.GetSemanticModel(tree);
-                        if (ClockSyntax.IsMemberOf(call, model, "File", "System.IO")
-                            && !(ClockSyntax.ArgumentFor(call, model, "path") is { } path && Names(path, "AppContext", "BaseDirectory")))
+                    // File.X(...), and File.X handed on as a method group.
+                    case SimpleNameSyntax read
+                        when DirectFileReads.Contains(read.Identifier.ValueText)
+                            && Reference(read) is { } reference
+                            && ClockSyntax.IsMemberOf(reference, model ??= compilation.GetSemanticModel(tree), "File", "System.IO"):
+                        if (reference.Parent is not InvocationExpressionSyntax opened
+                            || opened.Expression != reference
+                            || !IsAFixturePath(ClockSyntax.ArgumentFor(opened, model, "path"), model))
                         {
-                            refused.Add(new ClockSite(file, ClockSyntax.MemberOf(call), LineOf(call), TextOf(call)));
+                            Refuse(reference);
+                        }
+                        break;
+                    case InvocationExpressionSyntax call when ClockSyntax.NameCalled(call.Expression) is { } name:
+                        model ??= compilation.GetSemanticModel(tree);
+                        if (FileInfoReads.Contains(name) && ClockSyntax.IsMemberOf(call, model, "FileInfo", "System.IO"))
+                        {
+                            Refuse(call);
+                        }
+                        else if (name == "Load"
+                            && (ClockSyntax.IsMemberOf(call, model, "XDocument", "System.Xml.Linq")
+                                || ClockSyntax.IsMemberOf(call, model, "XElement", "System.Xml.Linq"))
+                            && FirstArgument(call.ArgumentList) is { } loaded
+                            && IsAString(loaded, model)
+                            && !IsAFixturePath(loaded, model))
+                        {
+                            Refuse(call);
+                        }
+                        else if (ReaderCalls.Contains(name)
+                            && call.Expression is MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax { Identifier.ValueText: "GateFile" } }
+                            && RunsInASpinningWait(call, model))
+                        {
+                            Refuse(call);
                         }
                         break;
                     case BaseObjectCreationExpressionSyntax creation:
                         model ??= compilation.GetSemanticModel(tree);
-                        if (IsAFileStream(creation, model)
-                            && creation.ArgumentList?.Arguments.Any(argument => Names(argument.Expression, "FileShare", "Delete")) != true)
+                        if (Creates(creation, model, "FileStream"))
                         {
-                            refused.Add(new ClockSite(file, ClockSyntax.MemberOf(creation), LineOf(creation), TextOf(creation)));
+                            Refuse(creation);
+                        }
+                        else if (Creates(creation, model, "StreamReader")
+                            && FirstArgument(creation.ArgumentList) is { } path
+                            && IsAString(path, model)
+                            && !IsAFixturePath(path, model))
+                        {
+                            Refuse(creation);
                         }
                         break;
                 }
@@ -4048,19 +4183,96 @@ public sealed class TestWaitCensus
         return refused;
     }
 
-    private static bool IsAFileStream(BaseObjectCreationExpressionSyntax creation, SemanticModel model) =>
-        model.GetTypeInfo(creation).Type is { } type && type.TypeKind != TypeKind.Error
-            ? type.Name == "FileStream" && type.ContainingNamespace?.ToDisplayString() == "System.IO"
-            : creation is ObjectCreationExpressionSyntax { Type: var written }
-                && written.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == "FileStream";
+    /// <summary>The whole reference a member's name is the end of:
+    /// <c>File.ReadAllText</c> for its <c>ReadAllText</c>, the bare name
+    /// where no type is written. Null for a name that is something else (a
+    /// declaration, the left of a longer access).</summary>
+    private static ExpressionSyntax? Reference(SimpleNameSyntax name) => name.Parent switch
+    {
+        MemberAccessExpressionSyntax access when access.Name == name => access,
+        MemberAccessExpressionSyntax or QualifiedNameSyntax or MemberBindingExpressionSyntax => null,
+        _ => name,
+    };
 
-    /// <summary>Whether an expression spells <c>type.member</c> anywhere
-    /// inside it.</summary>
-    private static bool Names(ExpressionSyntax expression, string type, string member) => expression
-        .DescendantNodesAndSelf()
-        .OfType<MemberAccessExpressionSyntax>()
-        .Any(access => access.Name.Identifier.ValueText == member
-            && access.Expression.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == type);
+    private static ExpressionSyntax? FirstArgument(ArgumentListSyntax? arguments) =>
+        arguments is { Arguments: [{ Expression: var first }, ..] } ? first : null;
+
+    private static bool IsAString(ExpressionSyntax expression, SemanticModel model) =>
+        model.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_String;
+
+    private static bool Creates(BaseObjectCreationExpressionSyntax creation, SemanticModel model, string type) =>
+        model.GetTypeInfo(creation).Type is { } made && made.TypeKind != TypeKind.Error
+            ? made.Name == type && made.ContainingNamespace?.ToDisplayString() == "System.IO"
+            : creation is ObjectCreationExpressionSyntax { Type: var written }
+                && written.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == type;
+
+    /// <summary>Whether a path is a fixture's: <c>Path.Combine</c> (or
+    /// <c>Path.Join</c>) of <c>AppContext.BaseDirectory</c> and string
+    /// constants only, written here or kept in a local that is given that
+    /// value at its declaration and never assigned again.</summary>
+    private static bool IsAFixturePath(ExpressionSyntax? path, SemanticModel model)
+    {
+        if (path is null)
+        {
+            return false;
+        }
+        path = ClockSyntax.Bare(path);
+        if (path is IdentifierNameSyntax kept)
+        {
+            if (model.GetSymbolInfo(kept).Symbol is not ILocalSymbol local
+                || local.DeclaringSyntaxReferences is not [var declared]
+                || declared.GetSyntax() is not VariableDeclaratorSyntax { Initializer.Value: { } given } declarator
+                || ClockSyntax.Bare(given) is IdentifierNameSyntax)
+            {
+                return false;
+            }
+            SyntaxNode around = declarator.Ancestors().FirstOrDefault(ancestor => ancestor is MemberDeclarationSyntax) ?? declarator;
+            bool assignedAgain = around.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(assignment =>
+                SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(assignment.Left).Symbol, local));
+            return !assignedAgain && IsAFixturePath(given, model);
+        }
+        return path is InvocationExpressionSyntax combined
+            && ClockSyntax.NameCalled(combined.Expression) is "Combine" or "Join"
+            && ClockSyntax.IsMemberOf(combined, model, "Path", "System.IO")
+            && combined.ArgumentList.Arguments is [{ Expression: var root }, _, ..] parts
+            && ClockSyntax.Bare(root) is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "BaseDirectory" } rooted
+            && rooted.Expression.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == "AppContext"
+            && parts.Skip(1).All(part => model.GetConstantValue(part.Expression) is { HasValue: true, Value: string });
+    }
+
+    /// <summary>Whether a call runs inside a wait that spins: in a lambda
+    /// handed to a call named SpinUntil, or in a local function that such a
+    /// lambda calls or that is itself handed to SpinUntil.</summary>
+    private static bool RunsInASpinningWait(SyntaxNode call, SemanticModel model)
+    {
+        foreach (SyntaxNode ancestor in call.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case AnonymousFunctionExpressionSyntax lambda when IsHandedToSpinUntil(lambda):
+                    return true;
+                case LocalFunctionStatementSyntax local:
+                    if (model.GetDeclaredSymbol(local) is { } declared
+                        && local.Ancestors().FirstOrDefault(around => around is MemberDeclarationSyntax) is { } member
+                        && member.DescendantNodes().OfType<IdentifierNameSyntax>().Any(name =>
+                            name.Identifier.ValueText == local.Identifier.ValueText
+                            && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(name).Symbol, declared)
+                            && (IsHandedToSpinUntil(name)
+                                || name.Ancestors().OfType<AnonymousFunctionExpressionSyntax>().Any(IsHandedToSpinUntil))))
+                    {
+                        return true;
+                    }
+                    break;
+                case MemberDeclarationSyntax:
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsHandedToSpinUntil(ExpressionSyntax handed) =>
+        ClockSyntax.TakenBy(ClockSyntax.Outermost(handed)) is InvocationExpressionSyntax wait
+        && ClockSyntax.NameCalled(wait.Expression) == "SpinUntil";
 
     /// <summary>The calls made on GateFile outside the reader's two
     /// files.</summary>
