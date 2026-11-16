@@ -219,7 +219,10 @@ class CheckFacts(unittest.TestCase):
                        "DOC = os.path.join(ROOT, 'docs', 'plans', '43_mac_backlog_delivery', 'x.md')\n",
                        'DOC = os.path.join(\n    ROOT,\n    "docs",\n    "plans",\n    "43_mac_backlog_delivery",  # the folder\n    "x.md",\n)\n',
                        'DOC = "/".join(["docs", "plans", "43_mac_backlog_delivery/x.md"])\n',
-                       'DOC = ROOT / "docs" / "plans" / "43_mac_backlog_delivery" / "x.md"\n'):
+                       'DOC = ROOT / "docs" / "plans" / "43_mac_backlog_delivery" / "x.md"\n',
+                       # A segment may hold several folders.
+                       'DOC = os.path.join(ROOT, "docs", "plans/43_mac_backlog_delivery/x.md")\n',
+                       'DOC = ROOT / "docs" / "plans/43_mac_backlog_delivery" / "x.md"\n'):
             with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
                 problems = trigger.check(make_repo(Path(tmp), workflow=script_workflow("python -I"), script=script))
                 self.assertTrue(any("docs/plans/43_mac_backlog_delivery/x.md" in p and "scripts/reader.py" in p

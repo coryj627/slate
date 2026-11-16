@@ -445,12 +445,13 @@ Describe 'windows.yml generated tables' {
     BeforeAll {
         $script:tableSteps = Get-Steps (Get-JobBlock $windows 'windows')
         $script:ledgerStep = "Verify contract 38's trigger ledger is the generator's output"
-        $script:scripts = Join-Path $PSScriptRoot '..' '..' '..' 'scripts'
         function Get-NamedStep([string[]]$Steps, [string]$Name) {
             @($Steps | Where-Object { $_ -match ('(?m)\A      - name: ' + [regex]::Escape($Name) + '[ \t]*\r?$') })
         }
         # A step's own lines: the comment lines after a step introduce the next one. A step that is only its name and
-        # its command has no if:, continue-on-error:, shell: or env: to skip it, soften it or change what it runs.
+        # its command has no if:, continue-on-error:, shell: or env: of its own to skip it, soften it or change what it
+        # runs. The lines are compared with their case: `python -i` is the interactive switch, which runs the script,
+        # swallows its exit and ends 0 at the end of its input.
         function Get-OwnLines([string]$Step) {
             @($Step -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
         }
@@ -470,10 +471,15 @@ Describe 'windows.yml generated tables' {
         foreach ($name in $checks.Keys) {
             $step = @(Get-NamedStep $tableSteps $name)
             $step.Count | Should -Be 1 -Because "the app job has one step named $name"
-            Get-OwnLines $step[0] | Should -Be @("      - name: $name", "        run: $($checks[$name])") -Because "$name is only its name and its command"
+            Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", "        run: $($checks[$name])") -Because "$name is only its name and its command"
         }
         $order = @('Build', 'Set up Python (the reconciliation checks)') + @($checks.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
         $order | Should -Be @($order | Sort-Object) -Because 'each generator reads the built tree, and a stale table fails before the unit suite spends its minutes'
+        # Nothing on the job softens a step either: a job-level continue-on-error turns a red check green, and a default
+        # shell can end every command with exit 0.
+        $job = Get-JobBlock $windows 'windows'
+        $job | Should -Not -Match '(?m)^    (continue-on-error|defaults):' -Because 'a failed check must fail the app job'
+        $windows | Should -Not -Match '(?m)^defaults:' -Because 'a workflow-wide default shell could swallow a failed check'
         # The census tier (#1945) runs the app job too, and the ledger lists Mac construction sites. Said by name, so
         # the reason outlives an edit of the only-lines pin above.
         $ledger = @(Get-NamedStep $tableSteps $ledgerStep)[0]
@@ -488,11 +494,9 @@ Describe 'windows.yml generated tables' {
         foreach ($name in $tests.Keys) {
             $step = @(Get-NamedStep $tableSteps $name)
             $step.Count | Should -Be 1 -Because "the app job has one step named $name"
-            Get-OwnLines $step[0] | Should -Be @("      - name: $name", "        run: python -I -m unittest discover -v -s scripts/tests -p $($tests[$name])") -Because "$name is only its name and its command"
+            Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", "        run: python -I -m unittest discover -v -s scripts/tests -p $($tests[$name])") -Because "$name is only its name and its command"
             $step[0] | Should -Not -Match '(?m)^        if:' -Because 'the census tier runs the checks, so it runs their tests'
             $step[0] | Should -Not -Match 'outputs\.scope' -Because 'the census tier runs the checks, so it runs their tests'
-            # A pattern that names no file runs no test.
-            Join-Path $scripts 'tests' $tests[$name] | Should -Exist
         }
         $order = @($ledgerStep) + @($tests.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
         $order | Should -Be @($order | Sort-Object) -Because 'the tests of the checks follow the checks and come before the unit suite'
@@ -504,7 +508,7 @@ Describe 'windows.yml generated tables' {
         $name = "Verify the parity matrix is the generator's output"
         $step = @(Get-NamedStep $docsSteps $name)
         $step.Count | Should -Be 1 -Because 'the docs census job has one parity matrix step'
-        Get-OwnLines $step[0] | Should -Be @("      - name: $name", '        run: python3 scripts/generate-parity-matrix.py --check') -Because 'the step is only its name and its command'
+        Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", '        run: python3 scripts/generate-parity-matrix.py --check') -Because 'the step is only its name and its command'
         (Get-StepIndex $docsSteps 'Checkout') | Should -BeLessThan ([array]::IndexOf($docsSteps, $step[0])) -Because 'the generator reads the checked-out tree'
     }
 }

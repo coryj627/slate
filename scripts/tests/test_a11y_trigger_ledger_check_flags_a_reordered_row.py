@@ -20,6 +20,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,7 @@ class LedgerCheckFlagsAReorderedRow(unittest.TestCase):
         self.assertEqual(1, len(added), lines)
         self.assertIn(HAND_ORDER, removed[0])
         self.assertIn(GENERATOR_ORDER, added[0])
+        self.assertEqual(lines.index(removed[0]) + 1, lines.index(added[0]), "the generator's row is under the stale one")
         self.assertEqual([f"@@ -{row} +{row} @@"], [line for line in lines if line.startswith("@@")],
                          "the header gives the row's line in the document")
         # The '+' row is the committed row, character for character.
@@ -118,6 +120,25 @@ class LedgerCheckFlagsAReorderedRow(unittest.TestCase):
         self.assertIn("current", self.run_main("--check"))
         self.assertEqual(self.written, self.document.read_bytes())
 
+    def paste(self, lines):
+        """Do to the document what the printed lines say, and nothing else: at the line each `@@` header gives,
+        take out the '-' rows and put in the '+' rows."""
+        document = self.document.read_text(encoding="utf-8").split("\n")
+        hunks = []
+        for line in lines[2:]:  # after the two file-name lines
+            header = re.fullmatch(r"@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", line)
+            if header:
+                hunks.append({"line": int(header[1]), "count": int(header[2] or 1), "old": [], "new": []})
+            elif line[:1] in ("-", "+"):
+                hunks[-1]["old" if line[0] == "-" else "new"].append(line[1:])
+        for hunk in reversed(hunks):
+            # A header with a count of 0 names the line the new rows go after.
+            start = hunk["line"] - 1 if hunk["count"] else hunk["line"]
+            self.assertEqual(hunk["old"], document[start:start + hunk["count"]], "the '-' rows are the document's")
+            document[start:start + hunk["count"]] = hunk["new"]
+        self.document.write_bytes("\n".join(document).encode("utf-8"))
+        return hunks
+
     def test_the_printed_rows_pasted_into_the_document_pass_the_check(self):
         # The route of a contributor with no Windows build: the lane's log is all there is.
         data = inventory_data()
@@ -125,18 +146,27 @@ class LedgerCheckFlagsAReorderedRow(unittest.TestCase):
         self.inventory.write_text(json.dumps(data), encoding="utf-8")
 
         lines = self.stale_check()
+        hunks = self.paste(lines)
 
-        removed = [line[1:] for line in lines if line.startswith("-|")]
-        added = [line[1:] for line in lines if line.startswith("+|")]
-        self.assertEqual(1, len(removed), lines)
-        self.assertEqual(1, len(added), lines)
-        self.assertIn("`A.cs#M@3`", added[0])
-        document = self.document.read_text(encoding="utf-8").split("\n")
-        for old, new in zip(removed, added):
-            self.assertEqual(1, document.count(old))
-            document[document.index(old)] = new
-        self.document.write_bytes("\n".join(document).encode("utf-8"))
+        self.assertEqual(1, len(hunks), lines)
+        self.assertEqual(1, len(hunks[0]["old"]), lines)
+        self.assertEqual(1, len(hunks[0]["new"]), lines)
+        self.assertIn("`A.cs#M@3`", hunks[0]["new"][0])
+        self.assertIn("current", self.run_main("--check"))
 
+    def test_a_new_row_and_a_removed_row_are_printed_and_pasting_them_passes_the_check(self):
+        # A key the binding gains has no row to replace, and one it loses has none to put in.
+        data = inventory_data()
+        data["Keys"] = ["Alpha", "Gamma"]
+        data["Windows"] = [entry for entry in data["Windows"] if entry["Key"] != "Beta"] + [site("Gamma", "G.cs#Q", 1)]
+        data["Mac"] = [entry for entry in data["Mac"] if entry["Key"] != "Beta"] + [site("Gamma", "G.swift#q", 1)]
+        self.inventory.write_text(json.dumps(data), encoding="utf-8")
+
+        lines = self.stale_check()
+        hunks = self.paste(lines)
+
+        self.assertEqual(["| `Beta` "], [row[:9] for hunk in hunks for row in hunk["old"]], lines)
+        self.assertEqual(["| `Gamma` "], [row[:10] for hunk in hunks for row in hunk["new"]], lines)
         self.assertIn("current", self.run_main("--check"))
 
     def test_a_piped_check_prints_its_rows_as_utf_8(self):

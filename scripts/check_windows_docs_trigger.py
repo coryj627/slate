@@ -34,12 +34,17 @@ that helper in the same file; a call whose argument is not a string literal
 or same-file constant, or a helper with no call, fails the check, naming the
 file, so a new kind of dynamic read is reviewed rather than silently missed.
 
-That holds for the Windows sources only. The scan of a script has a blind
-spot: a docs path a script builds through anything but string literals (a
-variable, an f-string, a concatenation) is not seen. A segment chain with
-such a segment is skipped whole, never read as its literal prefix, because
-`"docs", "plans", name` is not a read of the folder docs/plans. A script
-the scan cannot parse fails the check.
+That holds for the Windows sources only. The scan of a script reads two
+shapes and no other: a quoted `docs/plans...` or `docs/help...` literal
+anywhere in its text, and a run of string literals that starts `"docs"`,
+then `"plans"` or `"help"`, and runs to the end of its call, tuple, list or
+`/` expression. A docs path a script builds any other way is not seen:
+through a variable, an f-string or a concatenation, through nested joins or
+`Path("docs") / ...`, or in a call that takes another argument after the
+path. A chain with a segment that is not a string literal is skipped whole,
+never read as its literal prefix, because `"docs", "plans", name` is not a
+read of the folder docs/plans. A script the scan cannot parse fails the
+check.
 
 Exit 0 when every path is covered by the one list; exit 1 with the problems
 otherwise.
@@ -236,10 +241,10 @@ def segment_chains(tree: ast.AST) -> list[str]:
     `"docs", "help"` and the string literals after them, as the arguments of a
     call, the items of a tuple or list, or the operands of `/`.
 
-    A chain is read only when every segment after it is a string literal. One
-    that goes on with anything else is skipped whole: its literal prefix is
-    not the path it names (`"docs", "plans", name` is not a read of the folder
-    docs/plans).
+    A chain is read only when every item from it to the end of its sequence is
+    a string literal. One that goes on with anything else is skipped whole:
+    its literal prefix is not the path it names (`"docs", "plans", name` is
+    not a read of the folder docs/plans).
     """
     sequences: list[list[ast.expr]] = []
     inner: set[int] = set()
@@ -259,11 +264,13 @@ def segment_chains(tree: ast.AST) -> list[str]:
     for items in sequences:
         at = 0
         while at + 1 < len(items):
-            if _literal(items[at]) != "docs" or _literal(items[at + 1]) not in ("plans", "help"):
+            # The segment after "docs" may hold several folders: "plans/18_windows_port".
+            following = [segment for segment in (_literal(items[at + 1]) or "").split("/") if segment]
+            if _literal(items[at]) != "docs" or not following or following[0] not in ("plans", "help"):
                 at += 1
                 continue
-            parts = ["docs", _literal(items[at + 1])]
-            at += 2
+            parts = ["docs"]
+            at += 1
             while at < len(items) and _literal(items[at]) is not None:
                 parts.extend(segment for segment in _literal(items[at]).split("/") if segment)
                 at += 1

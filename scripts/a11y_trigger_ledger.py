@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> None:
     # page: a row printed in it would not paste back into the document.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    config =json.loads(CONFIG.read_text(encoding="utf-8"))
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
     data = json.loads(args.inventory.read_text(encoding="utf-8")) if args.inventory else inventory()
     generated = render(data, config)
     original = DOCUMENT.read_bytes().decode("utf-8")
@@ -157,8 +157,9 @@ def main(argv: list[str] | None = None) -> None:
             sys.stdout.flush()
             raise SystemExit(
                 "A11y trigger ledger is stale. In docs/plans/38_notification_dispatcher_contracts.md, replace each "
-                "'-' row printed above with the '+' row under it (the '@@' header gives the line), or regenerate "
-                "with --write on a Windows Release build.")
+                "'-' row printed above with the '+' rows under it (the '@@' header gives the line; a '+' row with no "
+                "'-' row over it is new, and a '-' row with no '+' row under it goes), or regenerate with --write "
+                "on a Windows Release build.")
         print(f"A11y ledger current: {len(data['Keys'])} top-level keys.")
     elif args.write:
         DOCUMENT.write_bytes(updated.replace("\n", newline).encode("utf-8"))
