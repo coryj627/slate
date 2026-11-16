@@ -29,7 +29,8 @@ not match a path, or if `on.pull_request` carries a list of its own. It reads:
   "34_canvas_contracts.md")`, the same as a tuple, a list or `/` operands).
 
 A directory path (no file extension) requires the whole folder to be covered.
-A path built from a helper's parameter is resolved through every call of
+A path is checked where it lands, with each `..` resolved, not as it is
+spelled. A path built from a helper's parameter is resolved through every call of
 that helper in the same file; a call whose argument is not a string literal
 or same-file constant, or a helper with no call, fails the check, naming the
 file, so a new kind of dynamic read is reviewed rather than silently missed.
@@ -55,6 +56,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import posixpath
 import re
 import sys
 
@@ -318,11 +320,14 @@ def check(repo: Path = REPO) -> list[str]:
             "and a second list would keep the lane from reporting on some pull requests (#1565)"
         )
 
-    reads, unresolved = source_reads(repo)
+    from_sources, unresolved = source_reads(repo)
     from_scripts, unparsed = script_reads(repo, workflow_text)
-    for extra in (designation_reads(repo), at_map_reads(repo), from_scripts):
+    # A path is checked where it lands, not as it is spelled: docs/help/../plans/x.md
+    # is a plan document, whatever the list says about docs/help.
+    reads: dict[str, set[str]] = {}
+    for extra in (from_sources, designation_reads(repo), at_map_reads(repo), from_scripts):
         for path, sources in extra.items():
-            reads.setdefault(path, set()).update(sources)
+            reads.setdefault(posixpath.normpath(path), set()).update(sources)
     problems.extend(unresolved)
     problems.extend(unparsed)
 

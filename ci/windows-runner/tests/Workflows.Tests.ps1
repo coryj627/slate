@@ -460,6 +460,14 @@ Describe 'windows.yml generated tables' {
             $found.Count | Should -Be 1 -Because "there is one step named $Name"
             [array]::IndexOf($Steps, $found[0])
         }
+        # Nothing above a step softens it either: a job-level continue-on-error turns a red check green, and a default
+        # shell, on the job or on the workflow, can end every command with exit 0.
+        function Assert-NothingSoftensTheJob([string]$Job) {
+            $block = Get-JobBlock $windows $Job
+            $block | Should -Not -BeNullOrEmpty
+            $block | Should -Not -Match '(?m)^    (continue-on-error|defaults):' -Because "a failed check must fail the $Job job"
+            $windows | Should -Not -Match '(?m)^defaults:' -Because 'a workflow-wide default shell could swallow a failed check'
+        }
     }
     It 'checks contracts 34, 35 and 38''s generated tables against their generators after the build, unconditionally, before the unit suite' {
         $checks = [ordered]@{
@@ -475,11 +483,7 @@ Describe 'windows.yml generated tables' {
         }
         $order = @('Build', 'Set up Python (the reconciliation checks)') + @($checks.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
         $order | Should -Be @($order | Sort-Object) -Because 'each generator reads the built tree, and a stale table fails before the unit suite spends its minutes'
-        # Nothing on the job softens a step either: a job-level continue-on-error turns a red check green, and a default
-        # shell can end every command with exit 0.
-        $job = Get-JobBlock $windows 'windows'
-        $job | Should -Not -Match '(?m)^    (continue-on-error|defaults):' -Because 'a failed check must fail the app job'
-        $windows | Should -Not -Match '(?m)^defaults:' -Because 'a workflow-wide default shell could swallow a failed check'
+        Assert-NothingSoftensTheJob 'windows'
         # The census tier (#1945) runs the app job too, and the ledger lists Mac construction sites. Said by name, so
         # the reason outlives an edit of the only-lines pin above.
         $ledger = @(Get-NamedStep $tableSteps $ledgerStep)[0]
@@ -498,6 +502,7 @@ Describe 'windows.yml generated tables' {
             $step[0] | Should -Not -Match '(?m)^        if:' -Because 'the census tier runs the checks, so it runs their tests'
             $step[0] | Should -Not -Match 'outputs\.scope' -Because 'the census tier runs the checks, so it runs their tests'
         }
+        Assert-NothingSoftensTheJob 'windows'
         $order = @($ledgerStep) + @($tests.Keys) + @('Test') | ForEach-Object { Get-StepIndex $tableSteps $_ }
         $order | Should -Be @($order | Sort-Object) -Because 'the tests of the checks follow the checks and come before the unit suite'
     }
@@ -509,6 +514,7 @@ Describe 'windows.yml generated tables' {
         $step = @(Get-NamedStep $docsSteps $name)
         $step.Count | Should -Be 1 -Because 'the docs census job has one parity matrix step'
         Get-OwnLines $step[0] | Should -BeExactly @("      - name: $name", '        run: python3 scripts/generate-parity-matrix.py --check') -Because 'the step is only its name and its command'
+        Assert-NothingSoftensTheJob 'docs-trigger'
         (Get-StepIndex $docsSteps 'Checkout') | Should -BeLessThan ([array]::IndexOf($docsSteps, $step[0])) -Because 'the generator reads the checked-out tree'
     }
 }

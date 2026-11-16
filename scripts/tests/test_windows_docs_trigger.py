@@ -228,6 +228,25 @@ class CheckFacts(unittest.TestCase):
                 self.assertTrue(any("docs/plans/43_mac_backlog_delivery/x.md" in p and "scripts/reader.py" in p
                                     for p in problems), problems)
 
+    def test_a_path_that_climbs_out_of_a_covered_folder_is_checked_where_it_lands(self):
+        # docs/help/../plans/x.md is spelled under docs/help, which the fixture covers, and names a plan it does not.
+        covering = WORKFLOW.replace("      - 'docs/plans/*.md'\n", "      - 'docs/help/**'\n")
+        landed = "docs/plans/43_mac_backlog_delivery.md"
+        scripts = ('DOC = ROOT / "docs" / "help" / ".." / "plans" / "43_mac_backlog_delivery.md"\n',
+                   'DOC = os.path.join(ROOT, "docs", "help", "..", "plans", "43_mac_backlog_delivery.md")\n',
+                   'DOC = ROOT / "docs/help/../plans/43_mac_backlog_delivery.md"\n')
+        for script in scripts:
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as tmp:
+                workflow = covering + "    steps:\n      - name: Check\n        run: python -I scripts/reader.py\n"
+                problems = trigger.check(make_repo(Path(tmp), workflow=workflow, script=script))
+                self.assertTrue(any(p.startswith(f"{landed} is read") and "scripts/reader.py" in p for p in problems), problems)
+        sources = ('File.ReadAllText(Path.Combine(Root, "docs", "help", "..", "plans", "43_mac_backlog_delivery.md"));',
+                   'File.ReadAllText(Path.Combine(Root, "docs/help/../plans/43_mac_backlog_delivery.md"));')
+        for source in sources:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                problems = trigger.check(make_repo(Path(tmp), workflow=covering, source=source))
+                self.assertTrue(any(p.startswith(f"{landed} is read") for p in problems), problems)
+
     def test_the_census_scans_the_three_generators_the_app_job_checks(self):
         workflow_text = (trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8")
         reads, unparsed = trigger.script_reads(trigger.REPO, workflow_text)
