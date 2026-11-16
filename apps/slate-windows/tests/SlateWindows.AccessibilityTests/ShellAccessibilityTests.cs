@@ -6533,13 +6533,36 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
 
             string createdPath = Path.Combine(vaultRoot, "Journey Note.md");
-            string saved = ExpectFileText(
-                createdPath,
-                text => text.Contains("MARK", StringComparison.Ordinal),
-                "the typed caret marker never reached the note on disk.",
-                nameof(Templates_PickerPromptsCreateAndCancel_AreClean),
-                logDirectory,
-                TimeSpan.FromSeconds(10));
+            string saved;
+            try
+            {
+                saved = ExpectFileText(
+                    createdPath,
+                    text => text.Contains("MARK", StringComparison.Ordinal),
+                    "the typed caret marker never reached the note on disk.",
+                    nameof(Templates_PickerPromptsCreateAndCancel_AreClean),
+                    logDirectory,
+                    TimeSpan.FromSeconds(10));
+            }
+            catch (Xunit.Sdk.XunitException miss)
+            {
+                // Which leg it was: the typing (the editor holds no MARK) or
+                // the save (the editor holds it and the file does not), and
+                // who had the keys.
+                string inTheEditor;
+                try
+                {
+                    inTheEditor = "\"" + EditorText(editor).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+                }
+                catch (Exception exception)
+                {
+                    inTheEditor = $"<unreadable: {exception.GetType().Name}>";
+                }
+
+                throw new Xunit.Sdk.XunitException(
+                    $"{miss.Message} The editor reads: {inTheEditor}. {KeyInputDiagnosis(automation)}");
+            }
+
             // The template's own frontmatter renders through into the
             // note (that is how template frontmatter seeds properties;
             // mac-identical), and MARK sits exactly where {{cursor}}
