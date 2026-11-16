@@ -2078,7 +2078,8 @@ public sealed partial class ConnectionsLeafTests
 
     /// <summary>Own resources as soon as they exist, including a gate created
     /// inside an arrangement that throws before returning it. Every exit
-    /// releases and drains the worker before disposing the gate or session.</summary>
+    /// releases and drains the worker before disposing the session; the
+    /// park's own Dispose only releases (#1673).</summary>
     private sealed class ModelCaseResources : IDisposable
     {
         internal Host? Host { get; set; }

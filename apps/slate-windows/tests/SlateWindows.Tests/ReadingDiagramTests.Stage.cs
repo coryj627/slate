@@ -151,19 +151,29 @@ public sealed partial class ReadingDiagramTests
 
         public void Dispose()
         {
-            Gate.Set();
             ReadingSurface.ApplyProbeForTests = null;
             try
             {
-                _window?.Close();
-                Tab.Dispose();
-                // #1673: a stage the gate just let go ends before the session
+                try
+                {
+                    _window?.Close();
+                    Tab.Dispose();
+                }
+                finally
+                {
+                    // After the tab retired the stage, so a stage still
+                    // parked wakes to a cancelled token and stops there
+                    // instead of rendering a diagram nobody will read.
+                    Gate.Set();
+                }
+                // #1673: a stage the gate let go ends before the session
                 // goes. It checks its token and then calls the session, so
-                // one already past the check when the tab retired it would
-                // call a disposed session. The tab's Dispose drops its
-                // reading model, so the drain is over the models recorded as
-                // they were created; a decode in flight may take its whole
-                // tolerance (#1949), and a stage here decodes two at most.
+                // one a fact released, already past the check when the tab
+                // retired it, would call a disposed session. The tab's
+                // Dispose drops its reading model, so the drain is over the
+                // models recorded as they were created; a decode in flight
+                // may take its whole tolerance (#1949), and the bound is the
+                // one this class gives a fact's decodes.
                 Teardown.DrainBeforeTheSessionGoes(
                     () => Task.WhenAll(_models.Select(model => model.WhenRefreshWorkDrained())),
                     UnhurriedSvgDecodes.LandingWait(2));

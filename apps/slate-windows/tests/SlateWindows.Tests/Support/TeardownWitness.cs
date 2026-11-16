@@ -13,13 +13,24 @@ namespace SlateWindows.Tests;
 /// worker stands in the seam until one of those two calls comes. With the
 /// right drain in place the worker runs while the session lives and the
 /// drain is still waiting for it. Without a drain the worker can only run
-/// after the session is gone, and with a drain that does not cover it the
-/// worker finds that drain already ended while it is still in the seam; the
-/// witness counts both.
+/// after the session is gone, which the witness counts. It also counts a
+/// worker that leaves the hold and finds the drain already ended: that
+/// drain did not wait for it.
 /// </summary>
-/// <remarks>Built on <see cref="TaskCompletionSource"/>, as
-/// <see cref="HeldWork"/> is, so the witness has nothing to dispose while a
-/// worker may still be leaving the hold.</remarks>
+/// <remarks>
+/// <para>
+/// What it cannot see: a drain of other work that is still running when the
+/// worker leaves the hold looks the same as the right drain. Nothing short
+/// of a sleep tells them apart from the seam, so a fixture's drain is still
+/// read by a person; the witness proves there is one, that it comes before
+/// the session, and that it had not ended under the worker.
+/// </para>
+/// <para>
+/// Built on <see cref="TaskCompletionSource"/>, as <see cref="HeldWork"/>
+/// is, so the witness has nothing to dispose while a worker may still be
+/// leaving the hold.
+/// </para>
+/// </remarks>
 internal sealed class TeardownWitness
 {
     /// <summary>How long a worker stands in the hold when the fixture never
@@ -126,7 +137,8 @@ internal sealed class TeardownWitness
 
     /// <summary>Workers that left the hold while the session lived but found
     /// the fixture's drain already ended: the drain did not wait for them,
-    /// so nothing kept the session alive under them.</summary>
+    /// so nothing kept the session alive under them. A drain of other work
+    /// that was still running then is not counted.</summary>
     public int RunsOutsideTheDrain => Volatile.Read(ref _runsOutsideTheDrain);
 
     /// <summary>Whether a worker's hold ran out its bound: the fixture

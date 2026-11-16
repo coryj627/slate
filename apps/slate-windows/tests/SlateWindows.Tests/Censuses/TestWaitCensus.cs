@@ -128,8 +128,8 @@ public sealed class TestWaitCensus
     //     waits on. A worker that has not reached the gate yet, or is still
     //     waking on it, meets a disposed event.
     // 3b: a Dispose that releases a gate and later tears a session down has
-    //     a drain between the two, so the released work ends while the
-    //     session lives.
+    //     a drain between its last release and the session, so all the
+    //     released work ends while the session lives.
     //
     // What rule 3 does not prove. It reads a teardown in source order, not
     // in the order a run takes through its branches. It follows a test
@@ -143,13 +143,20 @@ public sealed class TestWaitCensus
     // (IDisposable, object) is not followed. The using-declared gates in
     // fact bodies are outside the rule.
 
-    /// <summary>Fixtures rule 3b names whose teardown is right as it stands:
-    /// the product's own lifecycle waits for the released work before it
-    /// lets the session go, so the fixture names no drain of its own. Rule
+    /// <summary>Fixtures rule 3b names whose teardown is right as it stands.
+    /// In two the product's own lifecycle waits for the released work before
+    /// it lets the session go, so the fixture names no drain of its own; in
+    /// one the release the rule sees after the drain lets nothing go. Rule
     /// 3a has no such list: there is no right way to dispose a gate a worker
     /// may still reach.</summary>
-    private static readonly (string File, string Type, string Reason, string Dated)[] DrainedByTheLifecycle =
+    private static readonly (string File, string Type, string Reason, string Dated)[] RightAsTheyStand =
     [
+        (
+            "SlateWindows.Tests/ConnectionsLeafTests.Model.cs",
+            "ModelCaseResources",
+            "its park's Dispose stands after Host.Settle's drain and only sets a gate every path has set already: "
+            + "DisposeModelWorkspace, or the line that sets the gate, releases the fetch before the drain",
+            "2026-11-16"),
         (
             "SlateWindows.Tests/RescanTests.cs",
             "Harness",
@@ -250,10 +257,11 @@ public sealed class TestWaitCensus
         }
         AssertOnlyTheListed(
             found,
-            DrainedByTheLifecycle,
-            "These release held work and then dispose a session with no drain between, so the released work can "
-            + "run after the session is gone. Wait for it first: TeardownWitness.DrainBeforeTheSessionGoes over the "
-            + "product's own drain (WhenRefreshWorkDrained, WhenAllWorkDrained, WhenIdle), then the session:");
+            RightAsTheyStand,
+            "These release held work and then dispose a session with no drain after the last release, so the "
+            + "released work can run after the session is gone. Wait for it first: "
+            + "TeardownWitness.DrainBeforeTheSessionGoes over the product's own drain (WhenRefreshWorkDrained, "
+            + "WhenAllWorkDrained, WhenIdle), then the session:");
     }
 
     /// <summary>Rule 3a on planted sources and rule 3b on planted sources:
@@ -356,6 +364,35 @@ public sealed class TestWaitCensus
             "sealed class P : IDisposable { private readonly EventWaitHandle _gate = new(false, EventResetMode.ManualReset); "
             + "public void Park() => _gate.WaitOne(); public void Dispose() { _gate.Set(); _gate.Dispose(); } }",
             "3a"
+        },
+        {
+            "disposes through a downcast",
+            "sealed class P : IDisposable { private readonly object _gate = new ManualResetEventSlim(false); "
+            + "public void Park() => ((ManualResetEventSlim)_gate).Wait(); "
+            + "public void Dispose() { ((ManualResetEventSlim)_gate).Dispose(); } }",
+            "3a"
+        },
+        {
+            "disposes the gates of a list it only adds to",
+            "sealed class P : IDisposable { private readonly List<ManualResetEventSlim> _gates = []; "
+            + "public Action Park() { var gate = new ManualResetEventSlim(false); _gates.Add(gate); return () => gate.Wait(); } "
+            + "public void Dispose() { foreach (ManualResetEventSlim gate in _gates) { gate.Dispose(); } } }",
+            "3a"
+        },
+        {
+            "disposes a gate kept in a field after its hook took the local",
+            "sealed class P : IDisposable { private ManualResetEventSlim? _gate; "
+            + "public Action Park() { var gate = new ManualResetEventSlim(false); _gate = gate; return () => gate.Wait(); } "
+            + "public void Dispose() { _gate?.Dispose(); } }",
+            "3a"
+        },
+        {
+            "a second release after the drain",
+            "sealed class P : IDisposable { private readonly ManualResetEventSlim _first = new(false); "
+            + "private readonly ManualResetEventSlim _second = new(false); private readonly VaultSession _session; "
+            + "public P(VaultSession session) { _session = session; } public Task Work = Task.CompletedTask; "
+            + "public void Dispose() { _first.Set(); PumpedDispatcher.PumpUntilDrained(Work); _second.Set(); _session.Dispose(); } }",
+            "3b"
         },
         {
             "a session disposed through a cast",
@@ -489,7 +526,7 @@ public sealed class TestWaitCensus
 
     /// <summary>Rule 3b: every <c>Dispose</c> or <c>DisposeAsync</c> that
     /// releases a gate and later tears a session down with no drain between
-    /// the first release and that teardown.</summary>
+    /// the last release before that teardown and the teardown itself.</summary>
     internal static IReadOnlyList<Violation> ReleasesWithNoDrainBeforeTheSession(
         CSharpCompilation compilation, IReadOnlyList<SyntaxTree> sources, Func<SyntaxTree, string> fileOf)
     {
@@ -498,15 +535,25 @@ public sealed class TestWaitCensus
         foreach ((INamedTypeSymbol type, MethodDeclarationSyntax method) in teardowns.DisposeMethods(sources))
         {
             IReadOnlyList<Step> steps = teardowns.StepsOf(method);
-            int released = IndexOfFirst(steps, 0, StepKind.Release);
-            if (released < 0)
+            int first = IndexOfFirst(steps, 0, StepKind.Release);
+            if (first < 0)
             {
                 continue;
             }
-            int gone = IndexOfFirst(steps, released + 1, StepKind.Teardown);
+            int gone = IndexOfFirst(steps, first + 1, StepKind.Teardown);
             if (gone < 0)
             {
                 continue;
+            }
+            // Every release wants a drain after it: the last one before the
+            // session decides.
+            int released = first;
+            for (int index = first + 1; index < gone; index++)
+            {
+                if (steps[index].Kind == StepKind.Release)
+                {
+                    released = index;
+                }
             }
             bool drained = false;
             for (int index = released + 1; index < gone; index++)
@@ -520,7 +567,7 @@ public sealed class TestWaitCensus
                     type.Name,
                     LineOf(steps[gone].Site),
                     $"{method.Identifier.ValueText} releases {steps[released].Text} (line {LineOf(steps[released].Site)}) "
-                    + $"and then tears the session down through {steps[gone].Text}, with no drain between"));
+                    + $"and then tears the session down through {steps[gone].Text}, with no drain between the two"));
             }
         }
         return found;
@@ -672,7 +719,7 @@ public sealed class TestWaitCensus
                     case UsingStatementSyntax used:
                         foreach (ExpressionSyntax resource in ResourcesOf(used))
                         {
-                            Disposed(used, used.Span.End, resource, model.GetTypeInfo(resource).Type, null, "using " + resource);
+                            Disposed(used, used.Span.End, resource, TypeReachedOn(resource, model), null, "using " + resource);
                         }
                         break;
                     case LocalDeclarationStatementSyntax { UsingKeyword.RawKind: not 0 } declared:
@@ -735,11 +782,9 @@ public sealed class TestWaitCensus
                 {
                     return;
                 }
-                // The receiver as declared, under any cast: ((IDisposable)gate)
-                // is still the gate.
-                ExpressionSyntax? receiver = ReceiverOf(callee) is { } reached ? Uncast(reached) : null;
+                ExpressionSyntax? receiver = ReceiverOf(callee);
                 ITypeSymbol? type = receiver is not null
-                    ? model.GetTypeInfo(receiver).Type
+                    ? TypeReachedOn(receiver, model)
                     : symbol is { IsStatic: false } ? symbol.ContainingType : null;
                 string text = string.Join(' ', at.ToString().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
                 if (text.Length > 80)
@@ -785,6 +830,25 @@ public sealed class TestWaitCensus
                 }
             }
         }
+
+        /// <summary>What an expression is, for a call made on it: the type it
+        /// is written as when that names a gate, a session or a test type,
+        /// and otherwise the type under its casts. So
+        /// <c>((IDisposable)gate)</c> is the gate, and so is
+        /// <c>((ManualResetEventSlim)handle)</c>.</summary>
+        private static ITypeSymbol? TypeReachedOn(ExpressionSyntax written, SemanticModel model)
+        {
+            ITypeSymbol? stated = model.GetTypeInfo(written).Type;
+            if (SaysWhatItIs(stated))
+            {
+                return stated;
+            }
+            ITypeSymbol? under = model.GetTypeInfo(Uncast(written)).Type;
+            return SaysWhatItIs(under) ? under : stated;
+        }
+
+        private static bool SaysWhatItIs(ITypeSymbol? type) =>
+            IsGate(type) || IsSession(type) || type is INamedTypeSymbol { DeclaringSyntaxReferences.IsDefaultOrEmpty: false };
 
         /// <summary>The expression under parentheses, casts, <c>as</c> and
         /// the null-forgiving mark.</summary>
@@ -951,26 +1015,44 @@ public sealed class TestWaitCensus
                         case MemberAccessExpressionSyntax access
                             when !handedOn
                                 && GateUses.Contains(access.Name.Identifier.ValueText)
-                                && IsGate(model.GetTypeInfo(access.Expression).Type):
+                                && IsGate(TypeReachedOn(access.Expression, model)):
                             yield return IdentityOf(access.Expression, model, 0);
                             break;
                         case MemberBindingExpressionSyntax binding
                             when !handedOn
                                 && GateUses.Contains(binding.Name.Identifier.ValueText)
                                 && ReceiverOf(binding) is { } receiver
-                                && IsGate(model.GetTypeInfo(receiver).Type):
+                                && IsGate(TypeReachedOn(receiver, model)):
                             yield return IdentityOf(receiver, model, 0);
                             break;
-                        case ArgumentSyntax { Expression: { } passed }
-                            when handedOn && IsGate(model.GetTypeInfo(passed).Type):
-                            yield return IdentityOf(passed, model, 0);
-                            break;
+                        case ArgumentSyntax { Expression: { } passed } argument
+                            when handedOn && IsGate(TypeReachedOn(passed, model)):
+                            {
+                                Identity handed = IdentityOf(passed, model, 0);
+                                // A gate put into a collection (_gates.Add(gate))
+                                // is one of that collection's elements from
+                                // then on.
+                                if (argument.Parent?.Parent is InvocationExpressionSyntax into
+                                    && ReceiverOf(into.Expression) is { } holder
+                                    && !IsGate(TypeReachedOn(holder, model)))
+                                {
+                                    handed.Add(IdentityOf(holder, model, 0));
+                                }
+                                yield return handed;
+                                break;
+                            }
                         case AssignmentExpressionSyntax { Right: { } assigned } assignment
                             when handedOn
-                                && IsGate(model.GetTypeInfo(assigned).Type)
+                                && IsGate(TypeReachedOn(assigned, model))
                                 && model.GetSymbolInfo(assignment.Left).Symbol is not ILocalSymbol:
-                            yield return IdentityOf(assigned, model, 0);
-                            break;
+                            {
+                                // A gate kept in a member is that member from
+                                // then on.
+                                Identity kept = IdentityOf(assigned, model, 0);
+                                kept.Add(IdentityOf(assignment.Left, model, 0));
+                                yield return kept;
+                                break;
+                            }
                     }
                 }
             }

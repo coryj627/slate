@@ -107,6 +107,19 @@ public sealed class ReadingFindSurfaceTests
                 ? new VaultException.Io("the stage ran after the harness's session was gone")
                 : null;
 
+        /// <summary>A reading model of the production kind for
+        /// <paramref name="tab"/>: it fetches on the pool, over this
+        /// harness's session. The harness's teardown waits for its fetch
+        /// before the session goes (#1673): a fact that ends while the view
+        /// still loads retires the model, and a retired fetch can still be
+        /// inside a session call.</summary>
+        public ReadingContentViewModel ProjectInBackground(WorkspaceTabViewModel tab)
+        {
+            var model = new ReadingContentViewModel(Session, tab, _ => { });
+            _models.Add(model);
+            return model;
+        }
+
         public string IndexText => Find.Text.Text;
 
         public List<(int Offset, int Length)> Matches(string query) => SearchStrategyFactory
@@ -139,19 +152,30 @@ public sealed class ReadingFindSurfaceTests
 
         public void Dispose()
         {
-            Gate.Set();
             try
             {
-                Find.Detach();
-                _window.Close();
-                Tab.Dispose();
-                // #1673: a stage the gate just let go ends before the session
+                try
+                {
+                    Find.Detach();
+                    _window.Close();
+                    Tab.Dispose();
+                }
+                finally
+                {
+                    // After the tab retired the stage, so a stage still
+                    // parked wakes to a cancelled token and stops there
+                    // instead of rendering a diagram nobody will read.
+                    Gate.Set();
+                }
+                // #1673: a stage the gate let go ends before the session
                 // goes. It checks its token and then calls the session, so
-                // one already past the check when the tab retired it would
-                // call a disposed session. The tab's Dispose drops its
-                // reading model, so the drain is over the models recorded as
-                // they were created; a decode in flight may take its whole
-                // tolerance (#1949), and no note here holds two diagrams.
+                // one a fact released, already past the check when the tab
+                // retired it, would call a disposed session. The tab's
+                // Dispose drops its reading model, so the drain is over the
+                // models recorded as they were created, and over the ones a
+                // fact projects in the background on this session; a decode
+                // in flight may take its whole tolerance (#1949), and no
+                // note here holds two diagrams.
                 Teardown.DrainBeforeTheSessionGoes(
                     () => Task.WhenAll(_models.Select(model => model.WhenRefreshWorkDrained())),
                     UnhurriedSvgDecodes.LandingWait());
@@ -266,7 +290,7 @@ public sealed class ReadingFindSurfaceTests
                             Guid.NewGuid(),
                             new WorkspaceItemState(WorkspaceItemKind.Markdown, "note1.md")),
                         startInteractionBackgroundWork: false);
-                    using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+                    using ReadingContentViewModel model = harness.ProjectInBackground(tab);
                     surface.Model = model;
                     Assert.Equal([ReadingContentChange.Replaced], heard);
                     Assert.False(surface.ShowsSearchableContent, "the placeholder is not searchable");
@@ -282,7 +306,7 @@ public sealed class ReadingFindSurfaceTests
                             Guid.NewGuid(),
                             new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
                         startInteractionBackgroundWork: false);
-                    using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+                    using ReadingContentViewModel model = harness.ProjectInBackground(tab);
                     int fragments = 0;
                     model.BlocksAppended += _ => fragments++;
                     surface.Model = model;
@@ -418,7 +442,7 @@ public sealed class ReadingFindSurfaceTests
                 Guid.NewGuid(),
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
             startInteractionBackgroundWork: false);
-        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        using ReadingContentViewModel model = harness.ProjectInBackground(tab);
         harness.Surface.Model = model;
         var heard = new List<A11yEvent>();
         using var find = new FindInNoteViewModel(heard.Add);
@@ -457,7 +481,7 @@ public sealed class ReadingFindSurfaceTests
                 Guid.NewGuid(),
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
             startInteractionBackgroundWork: false);
-        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        using ReadingContentViewModel model = harness.ProjectInBackground(tab);
         harness.Surface.Model = model;
         var loading = new ReadingFindSurface(harness.Surface);
         var heard = new List<A11yEvent>();
@@ -528,7 +552,7 @@ public sealed class ReadingFindSurfaceTests
                 Guid.NewGuid(),
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
             startInteractionBackgroundWork: false);
-        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        using ReadingContentViewModel model = harness.ProjectInBackground(tab);
         harness.Surface.Model = model;
         var surface = new ReadingFindSurface(harness.Surface);
         var heard = new List<A11yEvent>();
@@ -572,6 +596,42 @@ public sealed class ReadingFindSurfaceTests
         }
 
         teardown.AssertTheTeardownWaited("the stage the harness released");
+    });
+
+    /// <summary>#1673's sibling: a fact that projects a tab in the
+    /// background on the harness's session can end while that fetch runs.
+    /// The harness's teardown waits for it. The fetch stands in its fault
+    /// seam, before its first session call, until the teardown says it is
+    /// waiting or says the session is gone.</summary>
+    [Fact]
+    public void DisposingTheHarnessWaitsForAFetchAFactStartedOnItsSession() => RunSta(() =>
+    {
+        var harness = new Harness("reading-find-teardown-fetch", "The reading note.\n", notes: 2);
+        TeardownWitness teardown = harness.Teardown;
+        try
+        {
+            var tab = new WorkspaceTabViewModel(
+                harness.Session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note1.md")),
+                startInteractionBackgroundWork: false);
+            ReadingContentViewModel model = harness.ProjectInBackground(tab);
+            model.FetchFaultForTests = () => teardown.Hold()
+                ? new InvalidOperationException("The fetch ran after the harness's session was gone.")
+                : null;
+            harness.Surface.Model = model;
+            teardown.WaitUntilEntered();
+            harness.Surface.Model = null;
+            model.Dispose();
+            tab.Dispose();
+        }
+        finally
+        {
+            harness.Dispose();
+        }
+
+        teardown.AssertTheTeardownWaited("the fetch a fact started on the harness's session");
     });
 
     private const string MathAndDiagramNote =
@@ -902,7 +962,7 @@ public sealed class ReadingFindSurfaceTests
                 Guid.NewGuid(),
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
             startInteractionBackgroundWork: false);
-        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        using ReadingContentViewModel model = harness.ProjectInBackground(tab);
         harness.Surface.Model = model;
         Assert.False(harness.Find.IsSearchable, "premise: the placeholder shows");
 
