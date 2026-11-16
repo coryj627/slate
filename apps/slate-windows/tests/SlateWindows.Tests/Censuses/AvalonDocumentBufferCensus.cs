@@ -583,7 +583,11 @@ public sealed class AvalonDocumentBufferCensus
         session.Document.Replace(1, 1, "L");
         Assert.Equal(session.Document.TextLength, (int)session.BufferForCensus.LenUtf16());
         long recoveries = session.DriftRecoveryCount;
-        RunDispatcherFor(TimeSpan.FromMilliseconds(250));
+        // The idle check runs on the session's 10 ms timer. The pump waits
+        // for the count to move, not for a fixed time.
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => session.DriftRecoveryCount > recoveries, TimeSpan.FromSeconds(10)),
+            "the idle integrity check never found the drift");
         Assert.Equal(recoveries + 1, session.DriftRecoveryCount);
         Assert.Equal(session.Document.Text, session.BufferForCensus.Text());
 
@@ -637,7 +641,12 @@ public sealed class AvalonDocumentBufferCensus
 
             Assert.Equal(editedText, session.Document.Text);
             Assert.True(tab.IsDirty);
-            RunDispatcherFor(TimeSpan.FromMilliseconds(750));
+            // The idle check puts the reset buffer back on the document's
+            // text. The pump waits for that, not for a fixed time; the tab
+            // must still be dirty once it has happened.
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => session.BufferForCensus.Text() == editedText, TimeSpan.FromSeconds(10)),
+                "the idle integrity check never recovered the drifted buffer");
             Assert.Equal(editedText, session.BufferForCensus.Text());
             Assert.True(tab.IsDirty);
 
