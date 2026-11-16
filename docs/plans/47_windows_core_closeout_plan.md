@@ -191,6 +191,10 @@ from the class: a tab's own save when it holds no hash is already in
 the chain, and a deleted file's recovery is CB-9a's to admit. The
 export that row cites is at `session.rs:19886-19895` on that commit.
 
+Corrected on 2026-11-16 by CB-6's census (#1971): the last row's gate
+count is 31 fixed waits, not 30. The thirty-first is a sleep in
+`FocusSettleWatchTests.cs` (§12).
+
 The reading also found the palette seal's route table has two rows in no
 register (drag and drop, and UIA `SetFocus`), and five more search
 fields with the shape #1837 names. §9 lists every other find that no
@@ -700,7 +704,9 @@ Sequenced on purpose, because they share files:
 | `38_notification_dispatcher_contracts.md` (the generated ledger, a lane gate after CB-3) | every chunk that adds or moves an `A11yEvent` construction, CB-9a among them (it moves up to four construction sites); same-wave pairs rebase and rerun `--write`, never hand-merging |
 | `TestWaitCensus.cs` | CB-4, CB-6, CB-7 |
 | `Censuses/SaveChainAdmissionCensus.cs` | CB-9a creates it; CB-9b deletes its rows. From CB-9a's merge, any chunk that adds a first Windows call to a `VaultSession` method classifies it there |
-| `docs/plans/40_nvda_matrix_remediation_contracts.md` (contract 40's R rows) | CB-10 (an addendum after R-5) and CB-9a (an addendum after R-9), same wave, different rows; the second to merge rebases and keeps both |
+| `docs/plans/40_nvda_matrix_remediation_contracts.md` (contract 40's R rows) | CB-10 (an addendum after R-5) and CB-9a (an addendum after R-9), same wave, different rows; the second to merge rebases and keeps both. Contract 40 is also in the palette row below, for CB-34, CB-38 and CB-38b |
+| `WorkspaceSaveCoordinator.cs` | CB-9a (`AdmittedForTests` and `INoteSaveChain`), then CB-9b |
+| `Panels/PanelWorkScheduler.cs` | CB-9a (`StartTrackedWork`), then any chunk that adds panel work; no later chunk is named for it yet |
 | `Support/StaThread.cs` | CB-1 only; CB-2's stall dump goes through the runtime's own dump path |
 | `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-26 (only if its design adds a journey), CB-40, CB-18; never two in a wave that edit the same partial file |
 | `crates/slate-core/src/session.rs` | CB-8, CB-9b, CB-12, CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
@@ -715,7 +721,7 @@ Sequenced on purpose, because they share files:
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
 | `Reading/` (`ReadingDocumentBuilder`, `ReadingSurface`, `ReadingContentViewModel`) | CB-28, CB-15c, CB-20, CB-21, CB-20b, CB-26 |
 | `links_db.rs` | CB-32, then CB-33 |
-| `CommandPaletteViewModel.cs`, `28_palette_contracts.md`, contract 40 | CB-34, then CB-38, then CB-38b (with `ModalSurfaces.cs` and its tests) |
+| `CommandPaletteViewModel.cs`, `28_palette_contracts.md`, contract 40 | CB-34, then CB-38, then CB-38b (with `ModalSurfaces.cs` and its tests). Contract 40's R rows are in a row of their own above, for CB-10 and CB-9a |
 | `Canvas/CanvasRendererView.cs`, `CanvasRendererPeers.cs`, `CanvasRendererPeerTests.cs` | CB-36, then CB-37 |
 | `chords.json`, `ChordTable.cs`, the parity matrix | CB-20b; CB-26, if its design gives folding a chord |
 | the golden image (`provision-guest.ps1`, `versions.json`, `Golden.Tests.ps1`) | CB-43 only |
@@ -1037,8 +1043,10 @@ generator now leaves out the 22 stems core refuses on Windows.
 
 Wave C2, 2026-11-16. Each chunk had a fresh Opus red team and Codex
 rounds to an approve: CB-8 one round, the math template one, CB-3
-seven, CB-5 one and CB-6 five. Every Codex round ran at the configured
-effort, high, below the protocol's xhigh, as in wave C1. CB-3's rounds
+seven, CB-5 one and CB-6 five. The configured effort was high
+throughout, below the protocol's xhigh, as in wave C1: the config file
+was not changed during the run. Only #1966's and #1970's bodies state
+it. CB-3's rounds
 1 to 5 each found one gap in how the docs census reads a script (a
 path that climbs with `..`, a backslash separator, letter case, an
 f-string, a byte-order mark), and round 1 also found a default shell on
@@ -1048,8 +1056,9 @@ caused. CB-6's rounds 1 to 4 made eleven findings, nine of them
 spellings the census did not recognise. Codoki reported Safe to merge
 at 5/5 on all five.
 
-CB-6's census: the unit project's fixed waits were 81 at its first
-commit and are 68 at the merge, and its elapsed-time ceilings went from
+CB-6's census: the unit project's fixed waits were 81 on the spec's
+base, 80 on its first commit once CB-1 was under it, and are 68 at the
+merge, and its elapsed-time ceilings went from
 19 to 2. The gate's 31 sites and its one ceiling are pinned `unswept`
 for CB-7. §2.3 read 30 gate sites; the thirty-first is a sleep in
 `FocusSettleWatchTests.cs`. CB-6 also corrected contract 34: H1's
@@ -1057,8 +1066,8 @@ bullet for the large canvas fact and TH-2 now say the fact asserts warm
 medians. The PR H section is not frozen.
 
 CB-3's probe ran on a scratch branch (run 43858767321). The contract 38
-step went red 14 seconds after the app job started, and the row it
-printed equalled `main`'s. The committed ledger already equalled the
+step went red 14 seconds after the step started, about two minutes
+twenty into the app job, and the row it printed equalled `main`'s. The committed ledger already equalled the
 generator's output, so nothing was regenerated.
 
 CB-5's seven probe pushes ran on a throwaway PR, #1969, since closed.
