@@ -8,7 +8,7 @@ A fixture that lets held work go waits for that work before its session goes, an
 
 ## Current state on main
 
-Paths: `T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` = `apps/slate-windows/src/SlateWindows/`, `RCVM` = `S/Reading/ReadingContentViewModel.cs`. Every line was opened at c2377210. Nothing was built or run.
+Paths: `T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` = `apps/slate-windows/src/SlateWindows/`, `RCVM` = `S/Reading/ReadingContentViewModel.cs`. Every line was opened at c2377210; those in `StaThreadCensus.cs`, `windows.yml` and `ReadingDiagramTests.Stage.cs`, which changed since, were re-read on 2026-11-15 at 798cdaae. Nothing was built or run.
 
 **The product already has every drain, so no product file changes.** `RCVM:717-726` `WhenRefreshWorkDrained()` ends when every tracked fetch (`:606`) and diagram stage (`:2035`) has ended; tests see internals (`S/AssemblyInfo.cs:7`). The property header is a `PanelWorkScheduler` with `WhenAllWorkDrained()` (`S/Panels/PanelWorkScheduler.cs:564`). The palette lane has `WhenIdle()` (`S/CommandPaletteWorkLane.cs:69-83`). `PumpedDispatcher.PumpUntilDrained(Task)` (`T/PumpedDispatcher.cs:127-131`) pumps until a task ends and observes its fault. The two right shapes for a gate are `T/Support/HeldWork.cs` (a `TaskCompletionSource`, nothing to dispose) and "the events are left to the collector" (`T/GraphDiagramTests.Lineage.cs:48-51`, `T/GraphDocumentTests.RequestLineage.cs:94-97`).
 
@@ -38,9 +38,11 @@ Paths: `T/` = `apps/slate-windows/tests/SlateWindows.Tests/`, `S/` = `apps/slate
 
 Right already: the two collector parks, `HeldWork`, `T/PendingImport.cs:35-45`, `ModelCaseResources` (it drains through `Host.Settle`), `T/RescanTests.cs:2567-2595` and `T/WelcomeShell.cs:277-298` (the lifecycle owns the drain).
 
+**No census trait for `TestWaitCensus`.** It reads only the two Windows test projects' sources, which are not in `windows.yml`'s `census-paths` (`:214-230`), and reaches them through `SourceText.RepoRoot()` and `CSharpSource.LoadPath`, neither of which `scripts/check_windows_census_trait.py --list` names as a reader of a census-only path; so, like `StaThreadCensus` and `ShellLaunchCensus`, it does not carry `[Trait("tier", "census")]`, and the census tier (whose pull requests change no Windows source) does not run it.
+
 ## Reference
 
-`T/Censuses/StaThreadCensus.cs` (allow-list `:33-40`, stale-entry check `:62-65`, walk `:133-170`); `T/Censuses/ShellLaunchCensus.cs:38` (a floor, so a walk that missed files fails); `T/Censuses/AnnouncementNameCensus.cs:150-170` (a rule run on planted source, parsed with `CSharpSyntaxTree.ParseText`; `CSharpSource.LoadPath` reads files only). Plan 47 §4 rules 2, 3, 4, 6, 7, 8.
+`T/Censuses/StaThreadCensus.cs` (allow-list `:33-40`, stale-entry check `:62-65`, walk `:143-180`); `T/Censuses/ShellLaunchCensus.cs:38` (a floor, so a walk that missed files fails); `T/Censuses/AnnouncementNameCensus.cs:150-170` (a rule run on planted source, parsed with `CSharpSyntaxTree.ParseText`; `CSharpSource.LoadPath` reads files only). Plan 47 §4 rules 2, 3, 4, 6, 7, 8.
 
 ## Design
 
@@ -62,7 +64,7 @@ Right already: the two collector parks, `HeldWork`, `T/PendingImport.cs:35-45`, 
 
 **4. `T/Censuses/TestWaitCensus.cs` (new), `[Trait("census", "test-wait")]`.** One fact per rule, each with its own allow-list, over one shared walk, so later rules are independent facts.
 
-- **Shared, at the top.** A lazy walk of both test projects (`bin` and `obj` skipped), parsed once. `TheWalkReadsBothTestProjects` pins a floor per project (419 and 33 files today; pin 400 and 30). Each rule is a pure function from parsed sources to violation strings, so its planted fact feeds it text.
+- **Shared, at the top.** A lazy walk of both test projects (`bin` and `obj` skipped), parsed once. `TheWalkReadsBothTestProjects` pins a floor per project (420 and 33 files today; pin 400 and 30). Each rule is a pure function from parsed sources to violation strings, so its planted fact feeds it text.
 - **Rule 3a, `NoFixtureDisposesAGateItReleasesOrWaitsOn`.** In a type's `Dispose` or `DisposeAsync`: no `Dispose()` (a call, a method group such as `CleanUp(gate.Dispose)`, or a `using`) on an event the type sets, releases or waits on. An event is a member, local, loop or pattern variable declared as `ManualResetEventSlim`, `ManualResetEvent`, `AutoResetEvent`, `SemaphoreSlim` or `CountdownEvent`, or an element of a collection of them. A set or dispose made through one of the type's own methods counts (one level). No allow-list. This is wider than the reading's words by the two cases the search found: a set through a helper (#8) and a gate disposed with no set (#9).
 - **Rule 3b, `AFixtureThatReleasesAGateDrainsBeforeItsSessionGoes`.** In a `Dispose` that releases a gate (an event `Set` or `Release`, a `TaskCompletionSource` completion, a `HeldWork.Release`) and later tears a session down, a drain call stands between the first release and the teardown. Teardown is `Dispose()` on a `VaultSession`, a `VaultLifecycleViewModel`, or a test type whose own `Dispose` does either (by declared type; a nested type resolves inside its enclosing class first). A drain is a call named `PumpUntilDrained`, `WhenRefreshWorkDrained`, `WhenAllWorkDrained`, `WhenIdle` or `DrainBeforeTheSessionGoes`. `PumpedDispatcher.Drain()` is not one: it waits for no pool work. The one-level rule applies here too.
 - **3b's allow-list** is `(File, Type, Reason, Dated)`: fixtures whose product lifecycle owns the drain. Expected at merge, by reading: `RescanTests.cs` `Host`, `PumpedSaveReentrancyTests.cs` `Host`, `ConnectionsLeafTests.Model.cs` `ModelCaseResources`. Confirm each by reading its teardown before writing its reason. An empty reason fails. An entry that matches no hit fails. Any other hit is a sibling: fix it.
@@ -90,7 +92,7 @@ Each fact is seen failing on today's teardown first. None sleeps.
 
 - `GraphTableTests.AFetchThatReachesTheParkAfterItsDisposalPassesThrough`: `document.FetchGateForTests!()` after `park.Dispose()`.
 - `FinalMergeDeltaTests.ALoadThatReachesTheParkAfterItsDisposalPassesThrough`: read `host.Workspace.InteractionBackgroundFaultForTests` before `loads.Dispose()`; call it with `EditorInteractionWorkerKind.Artifact` after.
-- `ConnectionsLeafTests.AHoldAfterTheParksDisposalPassesThrough`: `parked.Dispose()`, then `parked.Hold()`; `TimedOut` stays false. The name must not start with `TheModelOf` (the lane's filter, `windows.yml:774`).
+- `ConnectionsLeafTests.AHoldAfterTheParksDisposalPassesThrough`: `parked.Dispose()`, then `parked.Hold()`; `TimedOut` stays false. The name must not start with `TheModelOf` (the lane's filter, `windows.yml:941`).
 
 **Cannot be forced.** A pool thread still waking inside `Wait` while the fixture disposes that event (#4, #5, #8, and the event half of #1, #6, #7). There is no seam inside `ManualResetEventSlim`, and whether the wake is harmless is the runtime's detail. No fact is written for it, and #8 has none. Rule 3a proves the form is gone, and its planted cases prove the rule sees it.
 
