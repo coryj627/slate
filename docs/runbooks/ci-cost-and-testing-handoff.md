@@ -453,7 +453,13 @@ Repaired on the Mac:
   lost a still-progressing routes fact at 45 minutes, because VSTest's blame
   timer resets only between tests. This is a hosted exception to the unchanged
   45-minute watchdog above; Namespace candidates keep 45 minutes, and earlier
-  hosted runs measured under the shorter limit.
+  hosted runs measured under the shorter limit. Since #1624, `windows.yml`'s
+  model step uses 70 minutes on every pool, because a home shard lost a
+  still-progressing routes fact the same way. The pilot's file is unchanged,
+  but its model step sets a report directory, so it inherits the stall rule of
+  `docs/runbooks/windows-model-ci.md`: a stalled pilot shard now ends after
+  about five minutes with the stalled checkpoint in its coverage artifact and
+  the sentence in its TRX, and no dump.
 
 Not run on this Mac: Finder answered no Apple Events from the review session
 (`AppleEvent timed out`, -1712). Of the library tests, 1,986 passed, 10 failed
