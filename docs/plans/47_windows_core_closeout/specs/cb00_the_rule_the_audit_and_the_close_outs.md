@@ -60,7 +60,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    - A defect in the PR's own feature is fixed on its branch, whatever its size.
    ```
 
-   This is plan 47 §4 rule 1's text. Four things in it go beyond what the owner saw in the brief, and the owner reads them when adopting the plan: (a) High includes "reaches more than three other non-test files", because a four-file fix in one subsystem was in no class; (b) "a Mac" is "a machine the agent does not have", because `AGENTS.md` is also read on the Mac, where "needs a Mac" excludes nothing; (c) the blocking case the old rule covered is kept as one sentence; (d) a partial class's files count as one subsystem, because the Windows app's root folder holds 162 files in no subfolder, most of them the `MainWindow`, `WorkspaceViewModel`, `FilesSidebarViewModel` and `VaultLifecycle` partials. The count line is written on every PR, zeros included.
+   This is plan 47 §4 rule 1's text. Four things in it go beyond what the owner saw in the brief, and the owner reads them when adopting the plan: (a) High includes "reaches more than three other non-test files", because a four-file fix in one subsystem was in no class; (b) "a Mac" is "a machine the agent does not have", because `AGENTS.md` is also read on the Mac, where "needs a Mac" excludes nothing; (c) the blocking case the old rule covered is kept as one sentence; (d) a partial class's files count as one subsystem, because the Windows app's root folder holds 162 `.cs` files in no subfolder, most of them the `MainWindow`, `WorkspaceViewModel`, `FilesSidebarViewModel` and `VaultLifecycle` partials. The count line is written on every PR, zeros included.
 
 2. **Pointers.** One appended line each. The old sentences stay.
    - `43_mac_backlog_delivery/00_program.md`, after `:149`, indented as part of rule 8:
@@ -103,7 +103,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    > Status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): unchanged since the 2026-10-28 comment. Plan 44 WB-11 (#1688, 18c6815b) merged with `Refs` and left this open: the UIA side is correct and pinned by `ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote`, and Narrator still says nothing on Ctrl+A. No chunk of plans 44 to 46 owned what remains, so plan 47 takes it as chunk CB-21 (owner decision CD13, `<date>`; `docs/plans/47_windows_core_closeout_plan.md` §5). Its first step is the one WB-11's record names: whether Narrator needs TextPattern2's caret range or a different event.
 
    #1395 (CD8 "yes"):
-   > Status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): not started; the text above and the 2026-10-16 narrowing are still accurate. `CreatePublishedUnindexed` with a non-empty reason (`a11y.rs:2249`) and `vault_error_detail(SavedButUnindexed)` (`a11y.rs:3608`) still splice the reason with no closing period. This was parked with plan 43 PR 39. Plan 47 now takes it in chunk CB-14, with #1660: the two sentences are rendered by separate functions (the create announcement and `vault_error_detail`), and both take the same punctuation helper, each with its own facts (owner decision CD8, `<date>`); PR 39 keeps #1394. The change is delivered and checked on Windows. The VoiceOver pass both sentences are owed is listed on #`<ledger>`, "Mac work owed by plan 47", which plan 43's queue clears.
+   > Status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): not started; the text above and the 2026-10-16 narrowing are still accurate. `CreatePublishedUnindexed` with a non-empty reason (`a11y.rs:2249`) and `vault_error_detail(SavedButUnindexed)` (`a11y.rs:3613` at 5b060297) still splice the reason with no closing period. This was parked with plan 43 PR 39. Plan 47 now takes it in chunk CB-14, with #1660: the two sentences are rendered by separate functions (the create announcement and `vault_error_detail`), and both take the same punctuation helper, each with its own facts (owner decision CD8, `<date>`); PR 39 keeps #1394. The change is delivered and checked on Windows. The VoiceOver pass both sentences are owed is listed on #`<ledger>`, "Mac work owed by plan 47", which plan 43's queue clears.
 
    #1596:
    > Correction and status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): half delivered since this was read. #1938 (2026-11-14, plan 45 XB-6b) moved the golden image's runner to 2.338.2. The setup-python half (XB-6a) is still open: there are eleven `actions/setup-python` pins at v7.0.0 in six files, not nine in five, since two were added to `windows.yml` after this was filed. This issue stays with plan 45's XB-6; plan 47 does not take it, and its CB-43 covers only #1614 and #1903, which need a golden rebuild of their own.
@@ -141,7 +141,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    The row goes at the end of the PR table in `00_program.md` §11.4, after `:470` (row 53). That table is the queue, and its rows already carry pointers to other plans.
 
    ```markdown
-   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plans 44 and 45 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them when the queue restarts |
+   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plans 44 and 45 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
    ```
 
    Add to its Title cell, each only under its "yes": "PR 52 is retired and 22b's fact goes with #1513 (plan 47 CD36)."; "#1395 is plan 47's CB-14, and PR 39 keeps #1394 (CD8)."
@@ -170,7 +170,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
 
    Drop a line whose decision row was answered the other way. The rule for later chunks is plan 47 §4 rule 5: the comment is added in the same PR as the change, and the PR body cites this issue's number.
 
-   **The deferred-finds issue** (plan 47 §4 rule 10). Open it with the ledger: `gh issue create --title "Plan 47 deferred finds" --label windows --body-file <file>`. Its body says what it is (the one list of defects a plan 47 PR found and did not fix, each as one comment: the file, what is wrong, the failing test that would show it, and the PR that found it), who clears it (CB-46), and the lines it starts with, from plan 47 §9's table: the canvas and graph trigger ledgers have no `--check` and `test_canvas_trigger_ledger.py` runs in no workflow; the device stores do not retry a refused rename; whether blame's mini dumps lack managed frames. Write its number into plan 47 §8 in the docs PR.
+   **The deferred-finds issue** (plan 47 §4 rule 10). Open it with the ledger: `gh issue create --title "Plan 47 deferred finds" --label windows --body-file <file>`. Its body says what it is (the one list of defects a plan 47 PR found and did not fix, each as one comment: the file, what is wrong, the failing test that would show it, and the PR that found it), who clears it (CB-46), and the lines it starts with, from plan 47 §9's table: the canvas and graph trigger ledgers have no `--check` and `test_canvas_trigger_ledger.py` runs in no workflow; the device stores do not retry a refused rename; whether blame's mini dumps lack managed frames; the gate's facts, other than the ones CB-7 edits, delete their app log on failure. Write its number into plan 47 §8 in the docs PR.
 
    **CD38's catalogue issue**, only under CD38 "as recommended": `gh issue create --title "core: the sentences the Windows host still composes" --label windows --label a11y --milestone "Milestone W — Windows Version" --body-file <file>`, with the table from `reading/05_spoken_failures.md` ("Sentences the host composes that the rule says core should own"), and one line that each move is an FFI addition with Mac adoption.
 
@@ -180,7 +180,7 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    |---|---|---|
    | #1493 | crates.io, `notify` versions | 9.0.0 is listed; the bump waits until it is 7 days old |
    | #480 | crates.io, `citationberg` and `hayagriva` versions | a `citationberg` release carries the quick-xml fix of commit 06a591e2, and a `hayagriva` release depends on it |
-   | #1628 | crates.io, `mathcat` versions | a release newer than 0.7.7 exists; whether its Nemeth cells are corrected is then one golden run |
+   | #1628 | crates.io, `mathcat` versions | a release newer than 0.7.7 exists (a pre-release is named in the comment and changes nothing: 0.7.8-alpha.1 has been listed since 2026-10-28); whether its Nemeth cells are corrected is then one golden run |
 
    It comments on the issue itself, and only when the list has moved since the last such comment: "Read `<date>` (plan 47 wave Cn): newest is `<version>`, released `<date>`." With no change, the wave's first PR body carries one line, "release lists read `<date>`: no change". This first reading goes into the two status comments of item 5 (#1493, #480) in place of "was not re-read", and "[who and when]" becomes "the agent that opens each wave of plan 47, at the wave's start (CD37)"; #1628 gets a short comment of its own. A release that has landed is reported to the owner, not acted on. If the owner names another reader, that name replaces the phrase.
 
@@ -225,7 +225,7 @@ CI lanes: none does its work. `windows.yml` names the plan documents its censuse
 - [ ] The tag resolves to 9edf4b6b on `origin`, or, if the owner does not want tags, #1842 carries the pasted code item 6 names; #1842 and #1848 are in Milestone W, each with its comment.
 - [ ] #1733 has its comment, and plan 43 §11.4 has the row.
 - [ ] The ledger issue exists; plan 47 §8 and plan 43's row cite its number.
-- [ ] The deferred-finds issue exists with its three starting lines, and plan 47 §8 cites its number. Under CD38 as recommended, the catalogue issue exists in Milestone W.
+- [ ] The deferred-finds issue exists with its four starting lines, and plan 47 §8 cites its number. Under CD38 as recommended, the catalogue issue exists in Milestone W.
 - [ ] The three release lists were read, and the result is on #1493, #480 and #1628.
 - [ ] The docs PR's `closingIssuesReferences` is empty, and its body ends with the count.
 

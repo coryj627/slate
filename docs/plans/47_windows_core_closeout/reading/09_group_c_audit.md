@@ -54,7 +54,7 @@ Audited 2026-11-13 against the worktree `<worktree>` at `main` 1ec9bf31 (#1926).
 - **What remains:** all of it. Owner: plan 43 PR 32; needs a Mac.
 - **Confidence:** high.
 - **Drafted comment:**
-  > Status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): not started; the text above is still accurate. Both hosts still pick the hint by kind (`CanvasPhrase.ActivationHint`, `CanvasDocumentViewModel.cs:5490`; mac `CanvasOutlineView.swift:490`), and core's `CanvasOutlineRow` carries no target. This stays with plan 43 PR 32 (RD7: core-owned, both hosts in one PR, with a VoiceOver pass). No plan 43 PR after 22a has merged, and plan 47 does not take this one.
+  > Status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13): not started; the text above is still accurate. Both hosts still pick the hint by kind (`CanvasPhrase.ActivationHint`, `CanvasDocumentViewModel.cs:5490`; mac `CanvasOutlineView.swift:490`), and core's `CanvasOutlineRow` carries no target. This stays with plan 43 PR 32 (RD7: core-owned, both hosts in one PR, with a VoiceOver pass). PR 32 has not started, and plan 47 does not take this one.
 
 ### #1389 — Code preamble verbosity setting changes nothing (mac and Windows)
 
@@ -296,7 +296,7 @@ Audited 2026-11-13 against the worktree `<worktree>` at `main` 1ec9bf31 (#1926).
 - **What is wrong on the issue:** the 2026-11-01 comment says "With 22b and 22W both delivered, this issue can be closed by hand (RD15) once #1731 merges." 22b is not delivered. RD15's plan ("after 22b… moves to Milestone W, with 22W as its only remaining part") has been overtaken the other way round: 22W is done and 22b is what is left, so nothing remains for Milestone W.
 - **Confidence:** high.
 - **Drafted comment:**
-  > Correction and status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13). 22W is on `main`: #1729 (fb131216) and #1731 (ed172e07), plan 44 WB-28. The 2026-11-01 comment is wrong about 22b: the mac host half has not been delivered (no plan 43 PR after 22a has merged, and its fact `a_renamed_open_vault_keeps_working_and_can_show_its_new_path` is not in the tree; it depends on #1513). So RD15's move to Milestone W no longer applies: nothing is left for that milestone, and what remains is plan 43's 22b, after 22c. This stays open until 22b merges or the owner ends it by hand.
+  > Correction and status at `main` 1ec9bf31 (plan 47 audit, 2026-11-13). 22W is on `main`: #1729 (fb131216) and #1731 (ed172e07), plan 44 WB-28. The 2026-11-01 comment is wrong about 22b: the mac host half has not been delivered (22b has not merged, and its fact `a_renamed_open_vault_keeps_working_and_can_show_its_new_path` is not in the tree; it depends on #1513). So RD15's move to Milestone W no longer applies: nothing is left for that milestone, and what remains is plan 43's 22b, after 22c. This stays open until 22b merges or the owner ends it by hand.
 
 ### #998 — uniffi 0.32 blocked: uniffi-bindgen-cs has no 0.32 tag
 

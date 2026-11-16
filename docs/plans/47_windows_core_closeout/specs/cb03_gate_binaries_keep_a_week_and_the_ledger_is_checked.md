@@ -29,7 +29,7 @@ Read at c2377210; the line numbers in `windows.yml` and `Workflows.Tests.ps1`, w
 
 ## Design
 
-1. **Retention.** `windows.yml:981` becomes `retention-days: 7`. The comment's last clause becomes: "within the artifact's seven days (#1647), the app results artifact's own; after that the gate's download fails with 'Artifact not found', and the way out is 'Re-run all jobs'".
+1. **Retention.** `windows.yml:1024` becomes `retention-days: 7`. The comment's last clause becomes: "within the artifact's seven days (#1647), the app results artifact's own; after that the gate's download fails with 'Artifact not found', and the way out is 'Re-run all jobs'".
 
 2. **The check and its unit test, in the app job.** Widen the comment at `:851-855` to name contract 38 and #1699. After contract 35's step and before the stale-pointer test:
 
@@ -64,7 +64,7 @@ Read at c2377210; the line numbers in `windows.yml` and `Workflows.Tests.ps1`, w
 
 5. **The docs-trigger census.** `_SCRIPT_RUN` becomes `python3?(?:\s+-I)?\s+(scripts/[A-Za-z0-9_./-]+\.py)`. Update the docstring bullet at `:26`.
 
-6. **Found and fixed here (known before coding).** With item 5 alone the census opens the two reconciliation scripts and finds nothing, because they join their path from segments. `script_reads()` also applies the existing `_CHAIN` pattern (`:61`) to each script, literal segments only. Contracts 34 and 35 are already in the path list (`windows.yml:164-165`), so the census stays green.
+6. **Found and fixed here (known before coding).** With item 5 alone the census opens the two reconciliation scripts and finds nothing, because they join their path from segments. `script_reads()` also applies the existing `_CHAIN` pattern (`:61`) to each script, literal segments only: a chain with any non-literal segment is skipped whole, never read as its literal prefix. `scripts/check_windows_census_trait.py` has two such chains (`:23` in its docstring, `:287` a join ending in a variable); read as a prefix they would name the folder `docs/plans`, which the path list does not cover and `test_the_lane_trigger_names_no_top_level_plan_glob` forbids adding. A fact plants one such chain and expects no read, and the comment at `check_windows_census_trait.py:285-286`, which says the join hides the pattern from this scan, is reworded (checked 2026-11-15 at 5b060297). Contracts 34 and 35 are already in the path list (`windows.yml:164-165`), so the census stays green.
 
 7. **`AGENTS.md`, "Gotchas", directly after the parity-matrix bullet (before the census-trait bullet):**
 
@@ -84,7 +84,7 @@ Read at c2377210; the line numbers in `windows.yml` and `Workflows.Tests.ps1`, w
 
 ## Tests
 
-Failing first. Pester, in `Workflows.Tests.ps1` (extend the header comment `:4-10`):
+Failing first. Pester, in `Workflows.Tests.ps1` (extend the header comment `:4-14`):
 
 - In `Describe 'windows.yml FlaUI handoff'`:
   - `It 'keeps the binaries seven days, as long as the app job''s own results, so a rerun of the gate alone finds them after the first day'`. Pins `retention-days: 7` inside the `Upload FlaUI gate binaries` step and inside `Upload app test results and hang evidence`.

@@ -1,8 +1,9 @@
 # 47 — Windows and core close-out: delivery plan
 
 Status: draft for the owner's review, 2026-11-13; corrected 2026-11-14
-and 2026-11-15 for twelve merges that landed around it (§2.6). Not adopted; nothing in
-this plan has started. Written from the requirements brief the owner
+and 2026-11-15 for twelve merges that landed around it (§2.6). Delivery
+started on 2026-11-15 with the drift check §2.6 ends on; the owner's
+answers to §3 are being recorded and no chunk has started. Written from the requirements brief the owner
 approved the same day
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -265,7 +266,40 @@ Also since the baseline:
   and 44 all changed, so the line numbers in the first-wave specs were
   re-read on 2026-11-14 and again on 2026-11-15.
 
-## 3. Decisions for the owner (CD1 to CD40)
+**Read a third time on 2026-11-15 at 5b060297 (#1940), as delivery
+starts.** Nothing has merged since #1940, which changed only this plan's
+documents, and no pull request is open. All 59 in-scope issues are still
+open, none with a comment since 2026-11-13, and no Windows or core issue
+has been filed since #1949. Five agents re-read the specs for CB-0 to
+CB-6 and the reading for CB-8 against the tree; nothing in them has been
+delivered elsewhere. What moved:
+
+| Chunk | What the check found | What changes here |
+|---|---|---|
+| CB-0 | Every line it edits still holds. The #1395 comment's `a11y.rs:3608` is `:3613` since #1936. Two audit drafts (#1370, #940) said no plan 43 PR after 22a had merged, which #1936 and #1942 made false. The new plan 43 row said the queue had not restarted. crates.io now lists `notify` 9.0.0-rc.9 (2026-11-15) and `mathcat` 0.7.8-alpha.1. The deferred-finds issue starts with four lines, not three | The spec and the two drafts are corrected. #1493's comment names rc.9 |
+| CB-1, CB-2 | Every cited line holds. `TestHostCrashDumpCensus`'s failure message names the `windows` job in words, so CB-2's theory passes the job name in. A highest-priority heartbeat cannot tell a starved fact thread from a healthy one | CB-1's PR says so in its "not delivered" line; a second beat at normal priority is a find for the red team to size |
+| CB-3 | Design 1 cited `windows.yml:981`; the line is `:1024`. Design 6's chain scan would read `check_windows_census_trait.py`'s two joins as the folder `docs/plans` and turn the census red | The spec is corrected: a chain with a non-literal segment is skipped whole, with a fact |
+| CB-4 | All nine fixtures hold. `ParkedFetch` has eighteen users, not eight. The teardown drain's default 10-second bound is shorter than the 20-second decode #1950 allows, so the reading fixtures' drains need the longer bound | The spec is corrected; `PumpedDispatcher.cs` may join the chunk's files |
+| CB-5 | Every cited line holds. The existing Pester fact's consecutive-lines pin breaks under the new skipped-analysis branch and is rewritten, and new pin 2 is scoped to the ten `noScore(` calls | The spec is corrected |
+| CB-6 | The 81 sites reproduce. There is a nineteenth unit ceiling the spec missed, `SingleInstanceCoordinatorTests.cs:66` | The spec is corrected; the ceiling goes |
+| CB-8 | Every `session.rs` line in the reading moved by about 254 with #1936. Three migrations (026, 034, 038) write the same `size_bytes = -1` on every row, so a cache upgraded across one, holding a file the scan cannot read, fails its folder's listing with no quarantine involved. `get_file_metadata` wraps the -1 to 2^64-1 and the canvas pass purges a quarantined board's rows. Once the row lists, both hosts show its `mtime_ms = -1` as a 1969 or 1970 date | CB-8's spec is written from this at C2's start: the decoder absorbs the sentinel, and the two other readers stop wrapping it. The date is CD41. Its Windows twin fact goes in `RescanTests.ChangeFeed.cs`, because CB-6 edits `RescanTests.cs` |
+
+The lanes, as read the same day: `WINDOWS_RUNNER_MODE` is `namespace`,
+and the home pool reports serving with two slots and nothing running.
+The one ruleset requires `pr gate` and an up-to-date branch; no lane is
+required. `main` is green at 798cdaae, the newest commit that ran a
+lane. The shell gate's three red runs of 2026-11-14 and 2026-11-15 were
+the app-menu and theme facts that #1944 and #1951 then fixed.
+
+This session's review and merge process, the owner's instruction of
+2026-11-15, replaces §4 rule 9 for delivery: a PR that changes only
+documents or comments, or a small configuration change with no product
+code and no test logic, gets one red team; every other PR gets a red
+team and then Codex rounds until it approves. §6's "at most three agents
+at once" becomes up to two principal engineers a wave, each with up to
+three workers, and never more than eight agents at once.
+
+## 3. Decisions for the owner (CD1 to CD41)
 
 **The owner answers this table before delivery starts,** as the brief
 says. Each row has a recommendation. §6's Gate column then names the
@@ -318,6 +352,7 @@ answers the method now, and the result is put to them in the chunk's PR
 | CD38 | — | The reading listed about nine families of sentences the host composes that `AGENTS.md` says core should own (the sidebar's failure leads, the panel error leads, the status-line copy and others). Each move is an FFI addition with Mac adoption. | Not in this plan. CB-0 files one issue for Milestone W that holds the catalogue. | CB-0 |
 | CD39 | — | The brief's order is sweeps before code-area chunks. With three slots and shared files, §6 fills free slots with code-area chunks from C2 on, ahead of the later reader-facing sweeps. | Accept §6's order. | §6 |
 | CD40 | #1835 | Close on the control's removal, with no fact? There is no toggle left to measure. | Yes. CB-0's comment names #1856 and quotes the search that finds only the menu row. | CB-0 |
+| CD41 | #1900 | Added 2026-11-15 (§2.6). Once an unreadable note lists again, its row carries no real modified time: core holds -1, and both hosts would show a 1969 or 1970 date and sort it oldest. Accept that, or mark the row as unreadable over the FFI? | Accept it here: the row lists with size 0 and the odd date until the file reads again, and the ledger line says so. A marked row (an optional time, or an `unreadable` flag, with a sentence on both hosts) is an FFI change with new speech; CB-8 files it for Milestone W. | CB-8 |
 
 ## 4. Rules (every chunk)
 
@@ -485,7 +520,7 @@ wave's specs are written.
 |---|---|---|---|---|
 | C0 | CB-0 | — | — | CD8 CD13 CD35 CD36 CD37 CD38 CD40 |
 | C1 | CB-1 | CB-2 | CB-4 | CD2 |
-| C2 | CB-3, then CB-5 | CB-6 | CB-8 | CD4 |
+| C2 | CB-3, then CB-5 | CB-6 | CB-8 | CD4 CD41 |
 | C3 | CB-7 | CB-9a | CB-10 | CD3 CD5 |
 | C4 | CB-9b | CB-13 | CB-27 | CD5 CD7 CD18 |
 | C5 | CB-11 | CB-12 | CB-19 | CD6 |
@@ -694,7 +729,7 @@ against that day's `main`.
   Nineteen waves under one-at-a-time merges is weeks of lane time. The
   first cut, if one is needed, is CD28 and CD29 (the Files tree
   redesign) and CB-35's five extra fields.
-- **Thirty-nine decisions come before any work** (CD1 is overtaken).
+- **Forty decisions come before any work** (CD1 is overtaken; CD41 was added on 2026-11-15).
   Each has a recommendation, and the brief asks for them up front. If
   that is too much to answer at once, the smallest safe change is to
   answer C0 to C2's rows first (CD2, CD4, CD8, CD13, CD35 to CD40) and
