@@ -4,7 +4,9 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. No chunk has started. Written from
+recommendation. CB-0 is delivered (#1957, 97b94ddc, 2026-11-16), and
+wave C1 (CB-1, CB-2, CB-4) started the same day. §12 keeps the delivery
+record. Written from
 the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -50,10 +52,13 @@ Three of these were not in the brief's count of 58 and are in by a
 decision row: #1330 (CD13), #1395 (CD8) and #1596 (CD32, since
 overtaken). §2.4 says why.
 
-Two of the six decisions became work in this plan by the owner's answers
-of 2026-11-16 (§3.1): #1665 is built as CB-38b (CD27), and #1718 is
-designed in CB-45 and built in CB-45b and the phases that design cuts
-(CD34).
+Two more of the six decisions became work in this plan by the owner's
+answers of 2026-11-16 (§3.1): #1665 is built here (CD27), and #1718 is
+designed in CB-45 and built here (CD34). How each is cut is the plan
+lead's call, 2026-11-16, not the owner's answer: the lead cut #1665 as
+CB-38b, a chunk of its own, and cut #1718's build into phases, with
+CB-45b the first implementation phase and the later ones cut by CB-45's
+design.
 
 **Left to another owner:** #1733 goes to plan 43's queue, because its
 code is `cfg(unix)` and only a Mac can check its behaviour. §9 lists the
@@ -238,7 +243,7 @@ corrections once: two findings, both applied.
 | #1937 | uniffi 0.32.2 and the C# generator's matching tag; plan 44's WB-32; closed #998 | #998 leaves the watch list and the audit's comments, which are now 25. |
 | #1938 | The golden image's runner pin moves to 2.338.2, as plan 45's XB-6b, with `Refs #1596` | Plan 45 is delivering XB-6. #1596 leaves this plan; CD32 keeps only its question about the evergreen installers. |
 | #1930 | A CI job, `rust-weak-volumes`, runs the weak-volume facts on FAT32, exFAT and letterless VHDs on every lane run; it skips the case-only rename fact by name until #1727 is fixed | CB-13 needs no elevated session from the owner. It un-skips that fact, so it edits `windows.yml` and `Workflows.Tests.ps1`. The two facts WB-28 left are delivered. |
-| #1935, #1936 | Plan 43's PR 29 spec, and its core half (an FFI addition) | Plan 43's queue has restarted. CB-14 and CB-20b re-read `a11y.rs` and the variant count when they start. |
+| #1935, #1936 | Plan 43's PR 29 spec, and its core half (an FFI addition) | Plan 43's queue has restarted. CB-14, CB-16 and CB-20b re-read `a11y.rs` and the variant count when they start. |
 
 Read again on 2026-11-15 at 798cdaae (#1946).
 
@@ -326,10 +331,12 @@ recommendation, kept below as it was put to the owner; where §3.1
 differs, §3.1 stands. §6's Gate column names the rows each wave's chunks
 rely on.
 
-Four rows are answered in two steps, marked "two steps": the owner
-answered the method on 2026-11-16, and the result is put to them in the
-chunk's PR (§8 lists those second steps). CD11 was put as a fifth; the
-owner's answer leaves it no second step (§3.1).
+Five rows are answered in two steps. Four are marked "two steps" in the
+table: the owner answered the method on 2026-11-16, and the result is
+put to them in the chunk's PR. CD27 is the fifth, by its answer: one
+question it left open comes back in CB-38b's PR (§3.1). §8 lists the
+five second steps. CD11 was put as a two-step row; the owner's answer
+leaves it no second step (§3.1).
 
 | Id | Issue | Question | Recommended | Blocks |
 |---|---|---|---|---|
@@ -377,23 +384,29 @@ owner's answer leaves it no second step (§3.1).
 
 ### 3.1 Owner answers
 
-Recorded as they arrive; an answer here supersedes the recommendation in
-the table above. Since 2026-11-16 no row remains pending, apart from the
-second steps of CD12(b), CD20, CD25 and CD29. The owner gave the answers
-in an interview on 2026-11-15 and 2026-11-16, and all are dated
-2026-11-16. CD1 is overtaken and has no answer.
+Recorded 2026-11-16. An answer here supersedes the recommendation in
+the table above. No row remains pending, apart from the second steps of
+CD12(b), CD20, CD25, CD27 and CD29. The owner gave the answers in an
+interview on 2026-11-15 and 2026-11-16, and every decision row is dated
+2026-11-16. The Run process row is dated 2026-11-15, the day of the
+delivery instruction. CD1 is overtaken and has no answer.
+
+Some rows also carry a call the owner did not make. It is marked "the
+plan lead's call, 2026-11-16": how the answered work is cut into chunks
+and phases, and which chunks open with a design the owner reads. The
+owner can change any of them.
 
 | Id | Date | Answer | What it changes |
 |---|---|---|---|
-| CD9 | 2026-11-16 | **The four search and graph error arms are reworded to core's sentences,** not kept. The census part is as recommended: rule 1 over the whole shell, and rule 2 only if a trial run shows few hits. | CB-15b changes four spoken sentences on Windows and checks them under NVDA. The #1890 census needs no exception for the arms. §8's note for #1527 no longer says Windows keeps four arms worded apart from core. |
+| CD9 | 2026-11-16 | **The four search and graph error arms are not kept: the host says core's sentences.** The census part is as recommended: rule 1 over the whole shell, and rule 2 only if a trial run shows few hits. | The four arms go; one sentence (the invalid-query one) changes, on search and on graph. The `Io`, `Db` and `Unsupported` arms already produce core's words (`SearchOverlayViewModel.cs:909-916`, `GraphDocumentViewModel.cs:1509-1516`); only the `InvalidQuery` arm adds a lead of its own, "Search query is invalid:". CB-15b checks that sentence on both surfaces under NVDA. The #1890 census needs no exception for the arms. §8's note for #1527 no longer says Windows keeps four arms worded apart from core. |
 | CD10 | 2026-11-16 | **The import sentences move to core now,** as new core events, not as the host's sentence with a ledger line. The cancel is still spoken at once, and the Files status line still says what it said before, never a count. | CB-16 is M to L on the windows, rust and swift lanes, with an FFI addition. It joins §6's `crates/slate-uniffi/src/lib.rs` and `a11y.rs` rows. §8's ledger line becomes the Mac's adoption of the import events, with a VoiceOver pass. |
-| CD11 | 2026-11-16 | **Every self-disabling button moves the keys first, whatever the NVDA session hears,** not only the ones heard to fail. | CD11 has no second step. CB-17a's NVDA session still runs and is recorded. All six groups (about twenty buttons) are changed, in CB-17a or CB-17b as the spec cuts it, and no dated accepted exception is left for this class. §8's owner step and the closure matrix row for #1866 drop the second answer. |
+| CD11 | 2026-11-16 | **Every self-disabling button moves the keys first, whatever the NVDA session hears,** not only the ones heard to fail. | CD11 has no second step. It covers every self-disabling button the `Command=` scrape finds, not only the six groups the reading listed (about twenty buttons). Every one of those changes goes in CB-17b (C10), none in CB-17a. CB-17a keeps the NVDA session, which still runs and is recorded, the keys-first witness, and the `Command=` scrape with today's sites as dated exceptions. CB-17b ends those exceptions, and no dated accepted exception is left for this class. §8's owner step and the closure matrix row for #1866 drop the second answer. |
 | CD15 | 2026-11-16 | **Core owns the three empty-panel lines,** not the host. The wording is the recommended pattern, one line per panel. | CB-23 is S to M on the rust, windows and swift lanes, with an FFI addition and a ledger line. It joins §6's uniffi row. |
-| CD17 | 2026-11-16 | **A structured callout over the FFI, with foldable callouts, in this plan,** not the label rewrite. A callout carries its type and title, and Obsidian's `+` and `-` fold markers are honoured, so a reader can expand and collapse it. | CB-26 is L, with an FFI change, a full NVDA pass and a Narrator pass. The Mac lane keeps compiling by blind mirror edits, and until plan 43 adopts the callout the Mac renders whatever that edit gives. Mac adoption and a VoiceOver pass go on the ledger. CB-26 joins §6's uniffi and `Reading/` rows. By the lead's call, not the owner's answer, it opens with a short design the owner reads before code. §11 records it as a feature-sized chunk taken on the owner's decision. |
-| CD22 | 2026-11-16 | **Sigma: a new fold stored in the index, with an index rebuild,** not selector keys. Snippets are as recommended: trimmed at read to a word boundary and marked with "…". | CB-32 is M to L. It gains a migration and a one-time rebuild of each vault's index on upgrade, and its spec says what a user with a large vault sees while the rebuild runs. The ledger lines stay. |
-| CD24 | 2026-11-16 | **Label chips are drawn now,** not the midpoint rectangle. | CB-36 is M to L: each labelled edge gets a drawn chip that carries its bounds, with layout and overlap rules. The covering-state scan is still written first and seen to fail. By the lead's call, CB-36 opens with a short design the owner reads before code. The Mac already draws edge-label chips (#371, `CanvasRendererView.swift`), so a ledger line is added only if the chips change core. |
-| CD27 | 2026-11-16 | **The editor popover joins the modal surface,** not "no, close". CD26 is as recommended. | #1665 is no longer closed by decision. It is a new chunk, CB-38b, in the wave after CB-38: eight admission tables and about 35 read sites, with an NVDA pass. §4 rule 7, the closure matrix and §6 follow. |
-| CD34 | 2026-11-16 | **#1718 is built in this plan,** not handed to its own plan: a read-only second connection in WAL mode, phased from Quick Open. No interim. | CB-45 stays the reviewed design, which the owner reads, and moves to C11 so the build can follow it. CB-45b builds the first phase, and the design cuts the later ones. #1718 closes when the last phase merges. §11 records a large core change added by the owner's decision. |
+| CD17 | 2026-11-16 | **A structured callout over the FFI, with foldable callouts, in this plan,** not the label rewrite. A callout carries its type and title, and Obsidian's `+` and `-` fold markers are honoured, so a reader can expand and collapse it. | CB-26 is L, with an FFI change, a full NVDA pass and a Narrator pass. The Mac lane keeps compiling by blind mirror edits, and until plan 43 adopts the callout the Mac renders whatever that edit gives. Mac adoption and a VoiceOver pass go on the ledger. CB-26 joins §6's uniffi and `Reading/` rows. It opens with a short design the owner reads before code; that step is the plan lead's call, 2026-11-16, not the owner's answer. §11 records it as a feature-sized chunk taken on the owner's decision. |
+| CD22 | 2026-11-16 | **Sigma: a new fold stored in the index, with an index rebuild,** not selector keys. Snippets are as recommended: trimmed at read to a word boundary and marked with "…". | CB-32 is M to L. It gains a migration and a one-time rebuild of each vault's index on upgrade, and its spec says what a user with a large vault sees while the rebuild runs. Its spec also says which fold it is: a new stored column, which leaves the sort order unchanged, or a change to the sort key (`tree_sort_key`), which may move the Files tree's sort order for Greek names on both hosts (`reading/07_core.md:95`). The ledger lines stay, and #1705's names the sort-order change if there is one. |
+| CD24 | 2026-11-16 | **Label chips are drawn now,** not the midpoint rectangle. | CB-36 is M to L: each labelled edge gets a drawn chip that carries its bounds, with layout and overlap rules. Its order is the same everywhere it is stated: the covering-state scan is written first and seen to fail, then a short design the owner reads, then the chip code. The design step, and landing the chips as a second PR of CB-36 so the two small changes (#1838, #1722) do not wait on the design, are the plan lead's call, 2026-11-16. The Mac already draws edge-label chips (#371, `CanvasRendererView.swift`), so a ledger line is added only if the chips change core. |
+| CD27 | 2026-11-16 | **The editor popover joins the modal surface,** not "no, close". CD26 is as recommended. | #1665 is no longer closed by decision. The lead cut it as CB-38b, a chunk of its own in the wave after CB-38 (the plan lead's call, 2026-11-16): eight admission tables and about 35 read sites, with an NVDA pass. One question the owner did not answer makes this a two-step row: does an open popover count as modal while focus is elsewhere? CB-38b's spec proposes the rule. Its starting point is the ring's, which counts the popover only while focus is inside it (`MainWindow.ShellRegions.cs:35-36`). The owner confirms the rule in CB-38b's PR. §4 rule 7, the closure matrix and §6 follow. |
+| CD34 | 2026-11-16 | **#1718 is built in this plan,** not handed to its own plan: a read-only second connection in WAL mode, phased from Quick Open. No interim. | CB-45 stays the reviewed design, which the owner reads, and moves to C11 so the build can follow it. How the build is cut is the plan lead's call, 2026-11-16: CB-45b is the first implementation phase, and the design cuts the later ones. So is the review of CB-45's PR: it is documents only and still gets the red team and Codex (§4 rule 9). #1718 closes when the last phase merges. §11 records a large core change added by the owner's decision. |
 | CD2 to CD8, CD12 to CD14, CD16, CD18 to CD21, CD23, CD25, CD26, CD28 to CD33, CD35 to CD40 | 2026-11-16 | **Adopted as recommended.** The Recommended column stands exactly for CD2, CD3, CD4, CD5 (all four parts), CD6, CD7, CD8, CD12 (all four parts, CB-20b among them), CD13, CD14, CD16, CD18, CD19, CD20, CD21, CD23, CD25 (the target; its second step follows the diagnosis), CD26, CD28 (both, design first), CD29 (the method; its second step follows the probe), CD30, CD31, CD32, CD33, CD35 (with the tag `ds11-accent-contrast-gate` at 9edf4b6b, the repository's first pushed tag), CD36, CD37, CD38, CD39 and CD40. | Each chunk's spec as written for those rows |
 | CD41 | 2026-11-16 | **As recommended: the odd date is accepted.** A quarantined note lists with size 0 and no real modified time until the file reads again. A marked row is filed for Milestone W. | CB-8's PR writes `not delivered: VoiceOver pass` with its ledger line, and files the marked row |
 | Run process | 2026-11-15 | **How the chunks are delivered.** The owner's delivery instruction, as §2.6 and §4 rule 9 state it: one red team on a light PR; the red team and then Codex rounds until it approves on every other PR, with an independent judge at 14 rounds; Codoki at 3/5 or a recorded bypass, and every check green, before a merge; merges one at a time, pinned to the head; up to two principal engineers a wave, each directing up to three workers, and never more than eight agents at once. | §4 rule 9; §6's first paragraph; the Review line of each first-wave spec |
@@ -473,6 +486,10 @@ already pins the step) and proved on the lane. Added for this plan:
      judgement, and every check must be green. The merge is
      `gh pr merge N --squash --match-head-commit <sha>`, one at a time,
      with `main` green on each merge commit before the next.
+   - One light PR is reviewed as the others are: CB-45's design. It is
+     documents only and gets the red team and then Codex, because the
+     brief names Codex for the scan-lock design. This is the plan lead's
+     call, 2026-11-16.
 10. **A deferral is one line on "Plan 47 deferred finds",** an issue CB-0
     opens: the file, what is wrong, and the failing test that would show
     it. CB-46 works that list.
@@ -496,18 +513,18 @@ work the chunk carries.
 | CB-7 | The gate's journeys wait on conditions and read app files with delete sharing; rule 4; the graph settle-and-save pin; the app log joins the gate's uploaded evidence | #1788 | M | windows (gate) | — | CD3 |
 | CB-8 | A quarantined note still lists, so an unreadable note no longer fails the Files tree; the two stale mac comments are corrected | #1900 #1709 | S | rust, windows, swift | — | CD41 |
 | CB-9a | `SaveChainAdmissionCensus` with dated exceptions; the single-path routes join (the reload guard, `RecoverDeletedFile`, the two tabless writes); the create-class fact | Refs #1889 | M | windows | — | CD5 |
-| CB-9b | A bulk rename and a tag edit are admitted over their notes; the saved-query export cannot name a note; the only exceptions left are the two CD5 accepts (link rewrites, the Bases export) | #1889 | M–L | windows, rust, swift | NVDA spot if a refusal is new | CD5 |
+| CB-9b | A bulk rename and a tag edit are admitted over their notes; the saved-query export cannot name a note; two accepted exceptions are left, and the census names both: the link rewrites (CD5 part b) and the Bases export, which is not one of CD5's four parts but the reading's exemption (W11, `reading/03_save_chain_lifecycle.md`); both are put to the owner in CB-46's table | #1889 | M–L | windows, rust, swift | NVDA spot if a refusal is new | CD5 |
 | CB-10 | A failed vault switch returns to the welcome view once | #1730 | S | windows | NVDA spot | — |
 | CB-11 | A parked citation summary press follows its note's rename | #1714 | S | windows | NVDA spot | — |
 | CB-12 | A repair announces only what it changed, so an own rename after another session's does not say the old path is missing | #1683 | S | rust, windows, swift | NVDA spot (two sessions) | CD6 |
 | CB-13 | A case-only rename on FAT32 or exFAT is refused and says so; the lane's weak-volume job runs the fact it has skipped by name | #1727 | S | rust, windows, runner | NVDA spot | CD7 |
 | CB-14 | A toggle that landed but was not indexed says it landed; the unindexed caveats close their reason; the other leads a `SavedButUnindexed` reaches are listed | #1660 #1395 | M | rust, windows, swift | NVDA spot, three routes | CD8 |
 | CB-15a | `FailureDetail` and `ShellFailureDetailCensus`; the Files sidebar's 21 sites | Refs #1890 | M | windows | NVDA spot | CD9 |
-| CB-15b | Canvas, graph and search: 21 sites, `GraphConfigStore` among them; the four search and graph error arms say core's sentences | Refs #1890 | M | windows | NVDA spot, the four reworded sentences among them | CD9 |
+| CB-15b | Canvas, graph and search: 21 sites, `GraphConfigStore` among them; the four search and graph error arms go, and one sentence (the invalid-query one) changes, on search and on graph | Refs #1890 | M | windows | NVDA spot, the invalid-query sentence on search and on graph among them | CD9 |
 | CB-15c | Panels, reading, workspace, lifecycle and commands; the census covers the whole shell | #1890 | M | windows | NVDA spot | CD9 |
 | CB-16 | A cancelled import says so, and the import summary and cancel sentences are core events that Windows speaks; the status bar shows an import running, with a Cancel that moves the keys first; the Files status line never stays on "Loading files…"; the sidebar filter's and the Bases export's cancel paths are checked | #1830 #1791 | M–L | windows, rust, swift | NVDA spot | CD10 |
-| CB-17a | One NVDA session hears a sheet opened from the menu and from the launcher, and each self-disabling button; the manifest census gains the keys-first witness and scrapes `Command=`, with today's sites as dated exceptions that CB-17b ends; the session's record is kept whatever it hears | Refs #1866 | M | windows | NVDA: the session | CD11 |
-| CB-17b | Nothing holding the keys goes off as a sheet opens, over all fourteen sheets and the launcher; every button of the six self-disabling groups (about twenty) moves the keys first, heard to fail or not, in CB-17a or here as the spec cuts it; no dated exception of this class is left | #1866 | L | windows (gate) | NVDA spot, three sheets | CD11 |
+| CB-17a | One NVDA session hears a sheet opened from the menu and from the launcher, and each self-disabling button; the manifest census gains the keys-first witness and scrapes `Command=`, with today's sites as dated exceptions that CB-17b ends; the session's record is kept whatever it hears; no button is changed here | Refs #1866 | M | windows | NVDA: the session | CD11 |
+| CB-17b | Nothing holding the keys goes off as a sheet opens, over all fourteen sheets and the launcher; every self-disabling button the `Command=` scrape finds moves the keys first, heard to fail or not: the reading's six groups (about twenty) and any other the scrape lists, all of them here; no dated exception of this class is left | #1866 | L | windows (gate) | NVDA spot: three sheets, and one button of each group | CD11 |
 | CB-18 | Deleting the last note of a date group lands the keys with no "unavailable"; diagnosis first | #1671 | M | windows (gate) | NVDA spot | — |
 | CB-19 | Every open combo box's rows report their place; `ComboBoxCensus`; the gate scans a list open in each family; probe first | #1783 #1836 | S–M | windows (gate) | NVDA spot | — |
 | CB-20 | Line reading speaks a diagram's description, rendered and pending; `ReadingEmbeddedElementCensus`; spike first | #1708 | M | windows (gate) | NVDA full, Narrator spot | CD12 |
@@ -517,28 +534,28 @@ work the chunk carries.
 | CB-23 | A right-pane panel with no body says what it will show, in a line core owns | #1800 | S–M | rust, windows, swift | NVDA spot | CD15 |
 | CB-24 | One NVDA session records #1846 and #1849; the note header's menu keeps its first row under a resting pointer, by #1944's remedy | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
 | CB-25 | A `LayoutItemsControl` drops a removed item's raw-view peer | #1860 | S | windows | — | — |
-| CB-26 | A callout is an element with its type and title on both hosts' FFI, and on Windows a reader can move to it and fold or unfold it; design first | #1775 | L | rust, windows, swift | NVDA full, Narrator | CD17 |
+| CB-26 | A callout is an element with its type and title over the FFI, and on Windows a reader can move to it and fold or unfold it; it opens with a short design the owner reads (the plan lead's call, 2026-11-16) | #1775 | L | rust, windows, swift | NVDA full, Narrator | CD17 |
 | CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (no known input reaches it) | CD18 |
 | CB-28 | A timed-out SVG decode is remembered, and a projection's decodes have a deadline | #1635 | M | windows, rust, swift | NVDA spot | CD19 |
 | CB-29 | The SVG guard refuses the documents that decode slowly, from recorded limits | #1610 | M | windows, rust, swift | NVDA spot | CD20 |
 | CB-30 | A scripted function after an ordinary atom is spoken as math; three or more primes are spoken as primes | #1629 #1628 | M | rust, swift | NVDA spot, speech and braille | CD21 |
 | CB-31 | A file first indexed by a save, a repair or an open heals the dangling links that name it | #1704 | M | rust, swift | — | — |
-| CB-32 | A target with a final sigma resolves, in links and in Quick Open's name match, through a fold stored in the index; each vault's index is rebuilt once on upgrade; a link snippet starts and ends on a word | #1705 #1782 | M–L | rust, windows, swift | NVDA spot | CD22 |
+| CB-32 | A target with a final sigma resolves, in links and in Quick Open's name match, through a fold stored in the index; each vault's index is rebuilt once on upgrade; a link snippet starts and ends on a word. Its spec says whether the fold is a new stored column (sort order unchanged) or a change to the sort key, which may move the Files tree's order for Greek names on both hosts. If the rebuild shows the user anything, its spec names that surface and checks it against CB-15c's files (same wave) before it starts | #1705 #1782 | M–L | rust, windows, swift | NVDA spot | CD22 |
 | CB-33 | No cached or hot statement with an equality on `files.path` re-prepares per binding | #1917 | M | rust, swift | — | — |
 | CB-34 | A typed command name runs that command | #1834 | M | rust, windows, swift | NVDA full | CD23 |
 | CB-35 | Quick Open, search and the five other search fields flush as the palette does; a census holds every search field over a republishing list to it | #1837 | M | windows | NVDA spot, timed | — |
-| CB-36 | The board paints in scene order; a first search for an off-window item returns it; each labelled edge has a drawn chip, and the edge's bounds are the chip's; design first, then the covering-state scan seen to fail | #1838 #1722 #1721 | M–L | windows (gate) | NVDA spot | CD24 |
+| CB-36 | The board paints in scene order; a first search for an off-window item returns it; each labelled edge has a drawn chip, and the edge's bounds are the chip's. For the chips: the covering-state scan first and seen to fail, then a short design the owner reads, then the chip code. The chips land as a second PR of CB-36, so #1838 and #1722 do not wait on the design (the design step and the two PRs are the plan lead's call, 2026-11-16) | #1838 #1722 #1721 | M–L | windows (gate) | NVDA spot | CD24 |
 | CB-37 | A deselect made while an edit installs stands; diagnosis first | #1724 | M | windows | — | CD25 |
 | CB-38 | A probe says what touch, stylus and a drop do under the seal, and the seal takes each route that acts; the route table names every route; #1694 is recorded as decided | #1695; #1694 by decision | S–M | windows | — | CD26 |
-| CB-38b | The editor popover is part of the modal surface: a member of its own, an arm in each of the eight admission tables, and an answer at each of about 35 read sites | #1665 | M | windows (gate) | NVDA spot | CD27 |
+| CB-38b | The editor popover is part of the modal surface: a member of its own, an arm in each of the eight admission tables, and an answer at each of about 35 read sites. The lead cut it as CB-38b (the plan lead's call, 2026-11-16). Its spec proposes whether an open popover counts as modal while focus is elsewhere, starting from the ring's "only while focus is inside" (`MainWindow.ShellRegions.cs:35-36`), and the owner confirms the rule in the PR | #1665 | M–L | windows (gate) | NVDA spot | CD27 (two steps) |
 | CB-39 | A Reveal in File Tree into an unlisted folder seats when the folder lists, and the newest intent wins | #1670 | M | windows (gate) | NVDA spot | — |
 | CB-40 | A publication keeps the tree's rows while a list's row is selected, and follows a reader on an unselected row; design first | #1669 | M–L | windows (gate) | NVDA full | CD28 |
 | CB-41 | A pin keeps the pinned row and every row it does not displace; the rest per the `Move` probe | #1668, if CD29's second step allows | S–M | windows | NVDA spot | CD29 |
 | CB-42 | The Connections model says what it does not cover, and one lifecycle fact pins production | #1625 | S | windows | — | CD30 |
 | CB-43 | The next golden image arms crash dumps and bakes the pinned SDK; the app job collects the dumps | Refs #1903 #1614 | M | runner, windows | — | CD31 CD32 |
 | CB-44 | Every job that sets up .NET runs the runtime the pinned SDK bundles | #1614 | M | windows, runner, pilot | — | CD33 |
-| CB-45 | A reviewed design for reads that do not wait behind a scan: a read-only second connection in WAL mode, phased from Quick Open; it cuts the chunks that build it, and the owner reads it before CB-45b starts | Refs #1718 | S (docs) | none | — | CD34 |
-| CB-45b | Quick Open's reads do not wait behind a scan (the first phase of CB-45's design); the design cuts the phases after it | Refs #1718 | L | rust, windows, swift | NVDA spot | CD34 |
+| CB-45 | A reviewed design for reads that do not wait behind a scan: a read-only second connection in WAL mode, phased from Quick Open; it cuts the chunks that build it, and the owner reads it before CB-45b starts. Its PR gets the red team and Codex, though it is documents only (the brief names Codex for this design; the plan lead's call, 2026-11-16). Its phasing is what keeps CB-45b inside one reviewable PR | Refs #1718 | S (docs) | none | — | CD34 |
+| CB-45b | Quick Open's reads do not wait behind a scan. This is the first implementation phase of CB-45's design (the phasing is the plan lead's call, 2026-11-16); the design cuts the phases after it | Refs #1718 | L | rust, windows, swift | NVDA spot | CD34 |
 | CB-46 | The deferred finds are fixed, in several PRs cut by subsystem; every Windows or core defect filed since 2026-11-13 is fixed or decided; every dated census exception is gone or in the owner's table; the close-out count is recorded | — | M–L | as needed | as needed | the re-count's own table |
 
 ### Closure matrix
@@ -547,18 +564,17 @@ Only rows where something beyond the chunk's merge must happen.
 
 | Issue | Chunk | Closes or Refs | What else must happen before close |
 |---|---|---|---|
-| #1843 | CB-1 | closes (CD2) | — |
 | #1788 | CB-7 | closes (CD3) | the pin passes on `main` |
 | #1889 | CB-9a, CB-9b | Refs, then closes | CB-9b; the two accepted exceptions named in CB-46's table |
 | #1890 | CB-15a to CB-15c | Refs, Refs, closes | the census over the whole shell |
-| #1866 | CB-17a, CB-17b | Refs, then closes | every one of the six groups moves the keys first; no accepted exception is left (CD11) |
+| #1866 | CB-17a, CB-17b | Refs, then closes | CB-17b: every self-disabling button the scrape finds moves the keys first; no accepted exception is left (CD11) |
 | #1846 | CB-24 | closes by comment (CD16) | the recorded NVDA run |
-| #1835 | CB-0 | closes by comment (CD40) | — |
+| #1835 | CB-0 | ended by hand, with a comment (CD40) | done on 2026-11-16 (§12) |
 | #1694 | CB-38 | closes by decision (CD26) | the contract line merged |
-| #1665 | CB-38b | closes (CD27) | nothing more; it is a fix since 2026-11-16, no longer a close by decision |
+| #1665 | CB-38b | closes (CD27) | the owner's second answer, in CB-38b's PR: whether an open popover counts as modal while focus is elsewhere |
 | #1668 | CB-41 | closes, or stays open (CD29) | the probe's result and the owner's second answer |
 | #1330 | CB-21 | closes, or closes with the record (CD13) | the diagnosis |
-| every issue §8's ledger lists | their chunks | close | each one's ledger line |
+| every issue §8's ledger lists, except #1718 | their chunks | close | each one's ledger line; #1718 has its own row below and stays open until its last phase |
 | #1727 | CB-13 | closes | the `rust-weak-volumes` job green with its skipped fact running |
 | #1903 | CB-43 | Refs, then closes | the golden rebuild and the home-VM probe (CD31) |
 | #1614 | CB-43, CB-44 | Refs, then closes at CB-44 (CD33) | the rebuild stays on the owner's steps |
@@ -604,9 +620,11 @@ each wave's specs are written.
 Waves C11 to C19 were re-cut on 2026-11-16 for the owner's answers
 (§3.1); C0 to C10 did not move. Seven chunks now change
 `crates/slate-uniffi/src/lib.rs` (CB-14, CB-28, CB-16, CB-23, CB-20b,
-CB-26, CB-45b), and no wave holds two of them. CB-38b adds one wave:
-seven chunks from C11 on edit the `MainWindow` files, one a wave, and
-CB-41 sits between CB-40 and CB-18. CB-45 is documents only, so it takes
+CB-26, CB-45b), and no wave holds two of them. Seven chunks from C11
+on edit the `MainWindow` files, one a wave, and CB-41 sits between CB-40
+and CB-18. Twenty waves is one valid slotting of that, not a count any
+one chunk forces, and the count is re-cut when each wave's specs are
+written. CB-45 is documents only, so it takes
 the first free slot from C3 on, which is C11's. CB-45b follows it in
 C16, after CB-33 and after the owner has read the design. The phases the
 design cuts after CB-45b take free slots from C17 on, under the same
@@ -616,8 +634,13 @@ The table was checked wave by wave on 2026-11-16 against the shared-file
 table below: no two chunks of a wave appear together in a row. The two
 exceptions are the ones the rows allow. CB-3 and CB-5 share
 `Workflows.Tests.ps1` and run in turn in one slot. CB-21 and CB-36 both
-add gate journeys, in different partial files. As before, the slotting
-of waves C3 onward is confirmed when each wave's specs are written.
+add gate journeys, in different partial files. A third is conditional:
+if CB-26's design adds a gate journey, it shares C15 with CB-38b's
+popover journey, in a different partial file. The check was run again
+the same day after CB-17b's group files and the conditional `a11y.rs`
+members joined the rows below, with the same result. As before, the
+slotting of waves C3 onward is confirmed when each wave's specs are
+written.
 
 Why this order:
 
@@ -658,15 +681,16 @@ Sequenced on purpose, because they share files:
 | `38_notification_dispatcher_contracts.md` (the generated ledger, a lane gate after CB-3) | every chunk that adds or moves an `A11yEvent` construction; same-wave pairs rebase and rerun `--write`, never hand-merging |
 | `TestWaitCensus.cs` | CB-4, CB-6, CB-7 |
 | `Support/StaThread.cs` | CB-1 only; CB-2's stall dump goes through the runtime's own dump path |
-| `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-40, CB-18; never two in a wave that edit the same partial file |
+| `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-26 (only if its design adds a journey), CB-40, CB-18; never two in a wave that edit the same partial file |
 | `crates/slate-core/src/session.rs` | CB-8, CB-9b, CB-12, CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
 | `crates/slate-core/src/db.rs` | CB-32 (the fold's migration), then CB-45b (the reader connection) |
-| `a11y.rs`, the corpus and the variant count | CB-14, then CB-16 (the import events), then CB-20b; plan 44's WB-30 takes the next slot |
+| `a11y.rs`, the corpus and the variant count | CB-14, then CB-32 (only if the rebuild speaks), then CB-16 (the import events), then CB-20b, then CB-26 (only if folding announces); plan 44's WB-30 takes the next slot |
 | `crates/slate-uniffi/src/lib.rs` | CB-14 (a new event), CB-28 (one doc comment), CB-16 (the import events), CB-23 (the three panel lines), CB-20b (a new event), CB-26 (the callout), CB-45b (the first phase of the scan-lock design); never two in a wave |
 | `diagram.rs`, `EditorInteractions.cs` | CB-27, CB-28, CB-29, then CB-15c and CB-22 |
 | `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-9b, CB-11, CB-14, CB-15c, CB-22 |
-| `FilesSidebarViewModel*.cs` | CB-9b, CB-15a, CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
-| `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-17a, CB-17b, CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
+| `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-9b, CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
+| `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-9a, CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them |
+| `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-17a, CB-17b (the sheets, and the property-row and launcher buttons), CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
 | `Reading/` (`ReadingDocumentBuilder`, `ReadingSurface`, `ReadingContentViewModel`) | CB-28, CB-15c, CB-20, CB-21, CB-20b, CB-26 |
 | `links_db.rs` | CB-32, then CB-33 |
@@ -700,8 +724,8 @@ Plan 44 §7 applies. Per kind of chunk, what its PR body quotes:
 | What | When | Chunk |
 |---|---|---|
 | Answer §3 | Done on 2026-11-16 (§3.1) | all |
-| The second step of CD12(b), CD20, CD25 and CD29: read the spike, the calibration table, the diagnosis or the probe, and answer | In that chunk's PR | CB-20 CB-29 CB-37 CB-41 |
-| Read the short design that opens CB-26 and CB-36 (the lead's call, §3.1), and CB-45's design | Before that chunk's code; CB-45's before CB-45b starts | CB-26 CB-36 CB-45 |
+| The second step of CD12(b), CD20, CD25, CD27 and CD29: read the spike, the calibration table, the diagnosis, the proposed popover rule or the probe, and answer | In that chunk's PR | CB-20 CB-29 CB-37 CB-38b CB-41 |
+| Read the short designs for CB-26 and CB-36 (the plan lead's call, 2026-11-16, §3.1), CB-40's design step (CD28) and CB-45's design (CD34) | Before that chunk's code; CB-36's after its scan is seen to fail and before the chip code; CB-45's before CB-45b starts | CB-26 CB-36 CB-40 CB-45 |
 | The ruleset `PUT` from #1639, so #1565 can close | Any time; the week's watch is met | (audit) |
 | `/design-sync`, so #1756 can close | Any time | (audit) |
 | The four Studio steps for #1564 | Any time | (audit) |
@@ -726,13 +750,19 @@ today:
 - Behaviour, with nothing new to hear: #1683 (one event stops arriving);
   #1889 (the export's refusal); #1704 and #1705 (links that used to stay
   unresolved now resolve; #1705's new fold rebuilds each vault's index
-  once on upgrade, on the Mac too, CD22).
+  once on upgrade, on the Mac too, CD22; if CB-32 makes the fold by
+  changing the sort key, the line also names the Files tree's changed
+  sort order for Greek names, on both hosts).
 - Checks: the Mac reading view for #1708's gap; a note on #1527 that the
   Mac's two copies of the save sentence carry #1660's run-on; #1800
   (core owns the three empty-panel lines, and the Mac, which has bodies
-  for those panels, uses none of them, CD15); #1718 (Quick Open during a
-  rescan, once CB-45b lands, CD34); #1721 (only if the chips change
-  core: the Mac already draws edge-label chips, CD24).
+  for those panels in `ContentBlockPanels.swift`, uses none of them,
+  CD15); #1718 (VoiceOver on Quick Open during a rescan, once CB-45b
+  lands, CD34); #1721 (only if the chips change core: the Mac already
+  draws edge-label chips, #371, CD24).
+
+The issue's body is the live text of these lines. It was brought into
+line with this list on 2026-11-16.
 
 **"Plan 47 deferred finds"** (#1955) is the second issue CB-0 opens (§4 rule 10).
 It starts with the finds §9 gives to CB-46.
@@ -759,7 +789,7 @@ by hand, and #1389 and #1323 stay open for their Mac halves.
 | The watch list | #480 #1493 |
 | Plan 45 XB-6, its second half | #1596 |
 
-Mac follow-ups that plans 44 and 45 filed and no plan 43 row names
+Mac follow-ups that plan 44 filed and no plan 43 row names
 (#1651 to #1654, #1662, #1679, #1720) are out of this plan. Two audited
 issues close only with them, so CB-0 adds one row to plan 43 §11 that
 lists them, and corrects #1653's body by comment.
@@ -802,9 +832,11 @@ chunk that rests on WPF behaviour nobody has checked (CB-19, CB-36,
 CB-41) opens with the failing fact or probe that settles it, with
 the fallback named. A chunk with a spike (CB-20) or a design step
 (CB-26, CB-36, CB-40, CB-45) opens with that, and the owner reads it
-first. CB-26's and CB-36's design steps are the lead's call of
-2026-11-16 (§3.1), and CB-36 still writes its covering-state scan and
-sees it fail before the chips are drawn.
+first. CB-26's and CB-36's design steps are the plan lead's call,
+2026-11-16 (§3.1). CB-36 has one order: the covering-state scan first
+and seen to fail, then the design the owner reads, then the chip code.
+The chips land as a second PR of CB-36, so #1838 and #1722 do not wait
+on the design.
 
 Specs for the first wave, written 2026-11-13 against c2377210. CB-1's
 was rewritten on 2026-11-14, and every line number re-read on
@@ -833,26 +865,35 @@ against that day's `main`.
 - **The plan is larger than the brief guessed:** 53 PRs before CB-46's,
   and more for the phases CB-45's design cuts, not 20 to 25. The sweeps
   found what they were meant to find, and the owner's answers of
-  2026-11-16 added CB-38b and CB-45b, made five chunks larger (CB-16,
-  CB-23, CB-26, CB-32, CB-36) and put more work in CB-15b and CB-17b.
+  2026-11-16 added the work the lead cut as CB-38b and CB-45b (the plan
+  lead's call, 2026-11-16), made five chunks larger (CB-16, CB-23,
+  CB-26, CB-32, CB-36) and put more work in CB-15b and CB-17b.
   Twenty waves under one-at-a-time merges is weeks of lane time. The
   first cut, if one is needed, is CD28 and CD29 (the Files tree
   redesign) and CB-35's five extra fields.
 - **The forty decisions were answered before any work** (§3.1; CD1 is
   overtaken, and CD41 was added on 2026-11-15). Nine answers depart from
-  the recommendation, and each adds work. Four second steps remain
-  (CD12(b), CD20, CD25, CD29).
+  the recommendation, and each adds work. Five second steps remain
+  (CD12(b), CD20, CD25, CD27, CD29).
 - **CB-26 is a feature-sized chunk.** The brief's anti-goal is "a
   feature arrives under a defect's name", and a structured, foldable
   callout over the FFI is a feature that #1775's defect did not need.
   It is here by the owner's decision (CD17), recorded as the owner's
-  call. Its design step, its full NVDA pass and the blind Mac mirror
-  edit are where it can slip.
+  call. Its design step, which is the plan lead's call, 2026-11-16, its
+  full NVDA pass and the blind Mac mirror edit are where it can slip.
+- **CB-36's drawn chips are also a feature-sized change,** taken on the
+  owner's decision (CD24). They change what a sighted user sees on
+  every board, and no chip token exists in `design/windows`. CB-36's
+  design names the chip's fill and text tokens, reusing the card tokens
+  as the Mac does with `CanvasColorPalette.cardFill`, or it brings a
+  design-source change to the owner.
 - **CB-45b and the phases after it are a large core change added by the
-  owner's decision (CD34).** The reading sized the whole of it L and
+  owner's decision (CD34).** Building it here is the owner's decision;
+  cutting it into phases, with CB-45b the first, is the plan lead's
+  call, 2026-11-16. The reading sized the whole of it L and
   kept it out of this plan: it changes the session's connection model,
   with the write-intent protocol and the page-cache guards (#1909,
-  #1926) in reach, and it shares `session.rs` with five other chunks.
+  #1926) in reach, and it shares `session.rs` with six other chunks.
   The number of phases is not known until the design is read, so the
   PR count and the wave count above are floors.
 - **Seven chunks now change the FFI,** one a wave (§6). A slip in one
@@ -861,9 +902,12 @@ against that day's `main`.
 - **CB-32 rebuilds every vault's index once on upgrade (CD22).** On a
   large vault that is a visible wait at first open. Its spec has to say
   what the user sees and hears while it runs.
-- **CB-38b was sized from the reading, not the code.** The reading put
-  the full answer at M to L: eight admission tables, about 35 read
-  sites and four censuses. It is sized again when its spec is written.
+- **CB-38b was sized from the reading, not the code.** The owner
+  decided that the popover joins the modal surface (CD27); the lead cut
+  it as CB-38b. The reading put the full answer at M to L: eight
+  admission tables, about 35 read sites and four censuses. It is sized
+  again when its spec is written, and one question goes back to the
+  owner in its PR (§3.1).
 - **Inline fixes can swell a PR.** Rule 2's cap and the red team's read
   are the guard; rule 8's count shows it happening.
 - **Three issues close on inference, not replay** (#1788, #1843, and
@@ -871,7 +915,7 @@ against that day's `main`.
   CD16). If #1788's pin fails or #1846's run does not confirm it, that
   issue stays open with a watch, and CB-46's table carries it.
 - **Core changes with no Mac to listen.** About twenty ledger lines so
-  far. The owner's answers of 2026-11-16 added the two largest: the
+  far. The owner's answers of 2026-11-16 grew the two largest: the
   import events (CD10) and the structured callout (CD17). Plan 43's
   queue restarted on 2026-11-13, which is what clears it.
 - **CB-17b is the #1867 problem fourteen times.** That change took eight
@@ -901,3 +945,29 @@ against that day's `main`.
   Codex's second round read them with the plan and found seven places
   where a spec disagreed with it; expect a spec written later to need
   the same check against the plan before its chunk starts.
+
+## 12. Delivery record
+
+One row per chunk as it merges. Rows are batched into each wave's docs
+PR, so a row can trail its merge by a wave. The count is rule 8's, as
+the chunk's PR body ended. "Owed" is what the merge left for someone
+else: an owner's call, a second answer, a rebuild or a ledger line.
+
+| Chunk | PR | Merged | Closed | Found / fixed here / deferred / filed | Owed |
+|---|---|---|---|---|---|
+| CB-0 | #1957 | 2026-11-16 (97b94ddc) | #1835, #940 | 2 / 1 / 1 / 0 | The owner's call on the subsystem definition's two gaps (below). Nothing else |
+
+CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
+#1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
+Milestone W); retitled #1323; posted all 24 audit status comments and
+those on #1653, #1628, #1733, #1842 and #1848; pushed the tag
+`ds11-accent-contrast-gate` at 9edf4b6b; and moved #1842 and #1848 to
+Milestone W. Its red team found 0 high, 2 medium and 11 low. One medium
+was applied: the Medium line in `AGENTS.md` now reads "defer it to the
+plan's list of deferred finds; outside a plan, or in a plan that keeps
+no such list, file it". The other is left for the owner: the subsystem
+definition does not say where an app's root-folder files belong, or
+whether a Swift type's extensions count as a partial class. Its one
+deferred find, a line on #1955, was that §9 and the CB-0 spec said
+plans 44 and 45 filed the mac follow-ups. Plan 44 alone did, and both
+places were corrected on 2026-11-16.

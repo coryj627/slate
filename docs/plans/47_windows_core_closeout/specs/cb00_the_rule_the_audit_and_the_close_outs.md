@@ -2,6 +2,8 @@
 
 Issues: #1835 (closed by hand, with a comment); comments on the 24 audited issues still open (#998 closed on 2026-11-14 with #1937, and #1525 on 2026-11-15 with #1942) and on #1653, #1733, #1842, #1848; three new issues (the ledger, the deferred finds, CD38's catalogue). Size S. Lanes: none (the docs PR touches no lane's path list, so each lane's `lane paths` job and `pr gate` run and every other job skips). AT: —. Wave: C0. Depends on: plan 47's documents being on `main`, and the owner's answers to plan §3. Parallel with: nothing (C0 has one slot). Decision: the `AGENTS.md` PR waits on no row. CD35, CD36, CD37 and CD38 gate the issue edits and the catalogue issue; CD40 gates #1835's close; CD8 and CD13 each gate one comment. All are answered before C0 (plan 47 §3). Interlock: CB-3 adds one line to `AGENTS.md` beside the parity-matrix gotcha, after this chunk's PR has merged. Review: one red team (plan §4 rule 9; the PR changes only documents).
 
+*2026-11-16, delivered:* CB-0 was delivered on 2026-11-16 by #1957 (97b94ddc), with the tag pushed and every comment posted, so no step below is run again. Plan 47 §12 has the record.
+
 *2026-11-16:* the owner answered every row this chunk relies on as recommended: CD8, CD13, CD35 (with the tag, the repository's first), CD36, CD37, CD38 and CD40 (plan 47 §3.1). So each "yes" path below is the one to take, and `<date>` for a decision is 2026-11-16. The "no" paths stay as the record of what was offered. Item 8's ledger lines and the catalogue issue carry the owner's other answers of that day (CD9, CD10, CD15, CD17, CD22, CD24, CD34).
 
 ## Goal
@@ -143,12 +145,12 @@ One docs PR (items 1 to 3 and the row in item 7), then GitHub work (items 4 to 9
    The row goes at the end of the PR table in `00_program.md` §11.4, after `:470` (row 53). That table is the queue, and its rows already carry pointers to other plans.
 
    ```markdown
-   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plans 44 and 45 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
+   | — | *<date>, plan 47 CB-0:* open issues no row above names. #1733 is the Unix half of 22c's reads and goes with 22c. The mac follow-ups plan 44 filed: #1651 (#1526 and #1389 wait on it), #1652, #1653 (#1484 waits on it), #1654, #1662, #1679, #1720. Plan 47's core changes that a Mac user hears are listed on #<ledger> | #1733 #1651 #1652 #1653 #1654 #1662 #1679 #1720 | — | — | not slotted; the owner places them in the queue, which restarted on 2026-11-13 |
    ```
 
    Add to its Title cell, each only under its "yes": "PR 52 is retired and 22b's fact goes with #1513 (plan 47 CD36)."; "#1395 is plan 47's CB-14, and PR 39 keeps #1394 (CD8)."
 
-8. **The ledger issue.** Open it before the docs PR: `gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y --body-file <file>`. Write its number into the three places marked `<ledger>` and into plan 47 §8 (one clause, in the docs PR).
+8. **The ledger issue.** Open it before the docs PR: `gh issue create --title "Mac work owed by plan 47" --label swift-ui --label a11y --body-file <file>`. Write its number into the three places marked `<ledger>` and into plan 47 §8 (one clause, in the docs PR). The issue exists as #1954, and its body is the live text: the lines quoted below are what it was opened with, and it is edited there, not here.
    > Plan 47 (`docs/plans/47_windows_core_closeout_plan.md`) is delivered on a Windows machine, with no Mac available to it. Some of its core changes alter what a Mac user hears or sees. Each merges on Windows evidence, with `not delivered: VoiceOver pass` in its PR body and one line here. This issue is the list of what the Mac is then owed.
    >
    > **Who clears it.** Plan 43's queue, on the owner's Mac. A line is cleared by a comment naming the VoiceOver pass, with its phrases, or the mac PR that adopted the change. This issue ends when every line is cleared.
