@@ -30,19 +30,32 @@ public sealed partial class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("no open tab in the window.");
 
             // DS-13: the bar holds the logo, an image its name speaks for, and the menus'
-            // names are rows of its popup, so a row's text is what's measured. The popup
-            // slides in, so the row is measured once it has stopped. It is watched on the
-            // screen: a popup is a window of its own, and UI Automation gives its rows no
-            // handle but the main window's, whose own pixels show what lies under the popup.
+            // names are rows of its popup, so a row's text is what's measured. The popup's
+            // surface slides in where the shell animates (Slate.Menus.xaml: 167 ms, from
+            // 90 above), and UI Automation hands out the row before the popup has painted:
+            // measured here, the row's rectangle went on moving for about 140 ms after it
+            // was first given, and a combo box's row showed the window under it at first.
+            // So the journey waits for the row to be on the screen, then for it to stop,
+            // and measures once. It is watched on the screen: a popup is a window of its
+            // own, and UI Automation gives its rows no handle but the main window's, whose
+            // own pixels show what lies under the popup.
             AutomationElement file = WaitForAppMenu(window, "FileMenu", TimeSpan.FromSeconds(10));
+            WaitForPopupOnScreen(file, "the File row");
             WaitForSettledPixels(file, "the File row", onScreen: true);
             AssertReadable(file, "the File row");
-            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Collapse();
+            // The logo is held as an element: a logo that cannot be found is "not yet",
+            // never "collapsed".
+            AutomationElement logo = WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10));
+            logo.Patterns.ExpandCollapse.Pattern.Collapse();
             Assert.True(
-                SpinWait.SpinUntil(() => StateOf(window, "AppMenu") == ExpandCollapseState.Collapsed, TimeSpan.FromSeconds(10)),
+                EventuallyByUia(
+                    () => logo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                    TimeSpan.FromSeconds(10)),
                 "the app menu did not close.");
-            // The tab is measured where the menu's popup was. The popup is a window of its
-            // own, so only the screen shows it gone from over the tab.
+            // The tab is measured once the menu has closed. The popup opened beside the
+            // tab, not over it (its rows ended 279 pixels left of the tab on the desktop
+            // this was measured on), so the tab has no popup to be seen gone from over it.
+            // It is settled on the screen because the screen is what the measurement reads.
             WaitForSettledPixels(tab, "the open tab", onScreen: true);
             AssertReadable(tab, "the open tab");
 
@@ -349,10 +362,12 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
             WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
             Assert.True(
-                SpinWait.SpinUntil(() => !grid.IsEnabled, TimeSpan.FromSeconds(10)),
+                EventuallyByUia(() => !grid.IsEnabled, TimeSpan.FromSeconds(10)),
                 "premise: the overlay didn't disable the grid.");
             // The grid's Disabled state is an animation, and the fact is about where it
-            // ends: the surface is measured once, after it has stopped changing.
+            // ends: the surface is measured once, after it has settled. The overlay's
+            // field lies over the grid and draws a caret, so settled here can mean
+            // blinking between two frames (SettledPixels).
             WaitForSettledPixels(grid, "the disabled graph table");
 
             // DS-6: the overlay's scrim is over it now, a flat 30% black in both themes.
@@ -429,7 +444,9 @@ public sealed partial class ShellAccessibilityTests
                 "the accent's open list showed no selected row.");
             AutomationElement row = selected!;
             // The list is a popup, a window of its own: watched on the screen, as the
-            // app menu's row is.
+            // app menu's row is. First on the screen at all (UI Automation gave this row
+            // while the screen in its rectangle was still the sheet under it), then at rest.
+            WaitForPopupOnScreen(row, "the selected dropdown row");
             WaitForSettledPixels(row, "the selected dropdown row", onScreen: true);
 
             Color fill = MostCommonColor(row);
@@ -437,8 +454,8 @@ public sealed partial class ShellAccessibilityTests
 
             combo.Patterns.ExpandCollapse.Pattern.Collapse();
             Assert.True(
-                SpinWait.SpinUntil(
-                    () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.ValueOrDefault == ExpandCollapseState.Collapsed,
+                EventuallyByUia(
+                    () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
                     TimeSpan.FromSeconds(10)),
                 "the accent's list did not close.");
             AssertAxeClean(process, "dropdown-row");
