@@ -292,3 +292,152 @@ pub(super) fn fts_match_count(session: &VaultSession, term: &str) -> i64 {
     )
     .unwrap()
 }
+
+/// #1900: `path`, a file directly under `dir` whose index row holds the
+/// stat sentinel (`size_bytes = -1`), is returned with size 0 by every
+/// reader of a [`FileSummary`] or a [`FileMetadata`], and its sibling
+/// `bystander` is returned beside it. Both files carry the frontmatter
+/// property `kind: probe`, so the property readers are covered too. One
+/// such row used to fail the whole page it sat on.
+///
+/// Returns `path`'s summary, for the caller's own assertions on the
+/// modified time.
+pub(super) fn assert_a_sentinel_size_lists_as_zero(
+    session: &VaultSession,
+    dir: &str,
+    path: &str,
+    bystander: &str,
+) -> FileSummary {
+    let cancel = CancelToken::new();
+    let lists = |reader: &str, files: &[FileSummary]| {
+        let row = files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("{reader} does not list {path}: {files:?}"));
+        assert_eq!(row.size_bytes, 0, "{reader}: {path}'s size");
+        assert!(
+            files.iter().any(|file| file.path == bystander),
+            "{reader} does not list {bystander}: {files:?}"
+        );
+    };
+
+    let page = session
+        .list_dir_files_page(dir, Paging::first(50), &cancel)
+        .expect("list_dir_files_page");
+    lists("list_dir_files_page", &page.files);
+    let page = session
+        .list_dir_children_page(dir, Paging::first(50), &cancel)
+        .expect("list_dir_children_page");
+    lists("list_dir_children_page", &page.files);
+    let listing = session
+        .list_dir_children(dir, Paging::first(50))
+        .expect("list_dir_children");
+    lists("list_dir_children", &listing.files.items);
+    let page = session
+        .list_files(FileFilter::All, Paging::first(50), &cancel)
+        .expect("list_files");
+    lists("list_files", &page.items);
+    let page = session
+        .filter_files("", Some(dir), None, &[], Paging::first(50))
+        .expect("filter_files");
+    lists("filter_files", &page.files);
+    let page = session
+        .files_with_property("kind", "probe", Paging::first(50))
+        .expect("files_with_property");
+    lists("files_with_property", &page.items);
+    let page = session
+        .files_with_property_key("kind", Paging::first(50))
+        .expect("files_with_property_key");
+    lists("files_with_property_key", &page.items);
+
+    let metadata = session
+        .get_file_metadata(path)
+        .expect("get_file_metadata")
+        .unwrap_or_else(|| panic!("get_file_metadata does not find {path}"));
+    assert_eq!(metadata.size_bytes, 0, "get_file_metadata: {path}'s size");
+
+    let summary = session
+        .get_file_summary(path)
+        .expect("get_file_summary")
+        .unwrap_or_else(|| panic!("get_file_summary does not find {path}"));
+    assert_eq!(summary.size_bytes, 0, "get_file_summary: {path}'s size");
+    assert_eq!(summary.mtime_ms, metadata.mtime_ms, "one modified time");
+    summary
+}
+
+/// A filesystem provider whose reads of the denied paths fail with
+/// `PermissionDenied` while their listing and stat still succeed: a file a
+/// scan can see and cannot read (an ACL, another program's exclusive
+/// lock).
+pub(super) struct UnreadableProvider {
+    inner: FsVaultProvider,
+    denied: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl UnreadableProvider {
+    /// Reads of `relative` fail from now on.
+    pub(super) fn deny(&self, relative: &str) {
+        self.denied.lock().unwrap().insert(relative.to_string());
+    }
+
+    /// Reads of `relative` succeed again.
+    pub(super) fn allow(&self, relative: &str) {
+        self.denied.lock().unwrap().remove(relative);
+    }
+}
+
+impl crate::VaultProvider for UnreadableProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        if self.denied.lock().unwrap().contains(relative) {
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "test provider: the read is denied",
+            )));
+        }
+        self.inner.read_file(relative)
+    }
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
+/// [`make_vault`] over an [`UnreadableProvider`], which the caller keeps to
+/// deny and allow reads between scans.
+pub(super) fn make_vault_with_deniable_reads(
+    setup: impl FnOnce(&FsVaultProvider),
+) -> (tempfile::TempDir, Arc<UnreadableProvider>, VaultSession) {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+    setup(&inner);
+    let provider = Arc::new(UnreadableProvider {
+        inner,
+        denied: std::sync::Mutex::new(std::collections::HashSet::new()),
+    });
+    let session = VaultSession::open(
+        provider.clone(),
+        SessionConfig::new(tmp.path().join(".slate")),
+    )
+    .unwrap();
+    (tmp, provider, session)
+}

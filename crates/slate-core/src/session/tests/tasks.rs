@@ -839,6 +839,65 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
 }
 
 #[test]
+fn a_note_the_sweep_quarantined_still_lists_in_its_folder() {
+    let mut _env = fault_guard();
+    // #1900, the sweep's route: an aged marker on a path whose repair
+    // fails on a file condition is quarantined by the next task query,
+    // in any process, with the same stat sentinel the host's containment
+    // writes. The folder still lists, with the quarantined note in it.
+    const QUARANTINED: &str = "notes/swept-quarantined.md";
+    const BYSTANDER: &str = "notes/swept-bystander.md";
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(QUARANTINED, b"---\nkind: probe\n---\n- [ ] trapped\n")
+            .unwrap();
+        p.write_file(BYSTANDER, b"---\nkind: probe\n---\n- [ ] serving\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let current_hash = session.note_tasks(QUARANTINED, 1).unwrap().content_hash;
+
+    // A pre-write failure whose cleanup also fails strands the marker.
+    _env.set("SLATE_TEST_FAULT_PRE_WRITE", "swept-quarantined");
+    _env.set("SLATE_TEST_FAULT_INTENT_CLEAR", "swept-quarantined");
+    let result = session.save_text(
+        QUARANTINED,
+        "---\nkind: probe\n---\n- [x] trapped\n",
+        Some(&current_hash),
+    );
+    _env.clear("SLATE_TEST_FAULT_INTENT_CLEAR");
+    _env.clear("SLATE_TEST_FAULT_PRE_WRITE");
+    assert!(result.is_err());
+
+    // The marker ages while the path stays unreadable: the query's sweep
+    // quarantines it.
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "swept-quarantined");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "swept-quarantined");
+    session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("vault-wide queries stay available under an un-repairable marker");
+    let stat: (i64, i64, i64) = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1",
+            rusqlite::params![QUARANTINED],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stat,
+        (-1, -1, -1),
+        "premise: the quarantine leaves the sentinel"
+    );
+
+    let listed = assert_a_sentinel_size_lists_as_zero(&session, "notes", QUARANTINED, BYSTANDER);
+    assert_eq!(listed.mtime_ms, -1, "CD41: the time core holds");
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
+}
+
+#[test]
 fn resolved_candidates_skip_the_quarantine() {
     let mut _env = fault_guard();
     // Adversarial round 29: the sweep selects its candidates BEFORE
@@ -1143,6 +1202,67 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
             .unwrap();
         assert_eq!(intents, 0, "the planted marker cleared with the repair");
     }
+}
+
+#[test]
+fn a_contained_note_still_lists_in_its_folder() {
+    let mut _env = fault_guard();
+    // #1900: containment poisons the note's stat tuple
+    // (`mtime_ms = -1, size_bytes = -1, ctime_ms = -1`), and the file
+    // listing's decoder refused a negative size. One contained note then
+    // failed every page it sat on with "sqlite error: Integer -1 out of
+    // range at index 4", for as long as the file stayed unreadable. The
+    // sentinel is the scanner's contract and stays in the row; every
+    // reader reports it as size 0.
+    const CONTAINED: &str = "notes/listed-contained.md";
+    const BYSTANDER: &str = "notes/listed-bystander.md";
+    let body = b"---\nkind: probe\n---\n- [ ] locked away\n";
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(CONTAINED, body).unwrap();
+        p.write_file(BYSTANDER, b"---\nkind: probe\n---\n- [ ] serving\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    _env.set("SLATE_TEST_FAULT_REINDEX", "listed-contained");
+    assert_eq!(
+        session.repair_or_contain_path(CONTAINED).unwrap(),
+        TaskIndexRepairOutcome::Contained,
+    );
+    let stat: (i64, i64, i64) = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1",
+            rusqlite::params![CONTAINED],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stat,
+        (-1, -1, -1),
+        "premise: containment leaves the sentinel"
+    );
+
+    let listed = assert_a_sentinel_size_lists_as_zero(&session, "notes", CONTAINED, BYSTANDER);
+    // The owner's decision CD41 (plan 47 §3.1): the row reports the
+    // modified time core holds, which is the sentinel until the file
+    // reads again.
+    assert_eq!(listed.mtime_ms, -1);
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+
+    // The file reads again: the planted marker's sweep repairs the row,
+    // and it reports its real size and modified time.
+    session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    let healed = session
+        .get_file_summary(CONTAINED)
+        .unwrap()
+        .expect("the repaired note is listed");
+    assert_eq!(healed.size_bytes, body.len() as u64);
+    assert!(healed.mtime_ms > 0, "the repaired row holds its real time");
 }
 
 #[test]

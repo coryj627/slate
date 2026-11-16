@@ -338,7 +338,12 @@ pub fn is_openable_document(path: &str) -> bool {
 pub struct FileSummary {
     pub path: String,
     pub name: String,
+    /// The modified time the index holds. It is `-1` while the file is
+    /// quarantined, which is until it reads again (#1900; a marked row is
+    /// #1964).
     pub mtime_ms: i64,
+    /// 0 while the index holds no size for the file: it is quarantined, or
+    /// a scan after an upgrade could not read it (#1900).
     pub size_bytes: u64,
     pub is_markdown: bool,
     pub display_name: Option<String>,
@@ -404,7 +409,9 @@ pub struct DirListing {
 pub struct FileMetadata {
     pub path: String,
     pub name: String,
+    /// As [`FileSummary::mtime_ms`].
     pub mtime_ms: i64,
+    /// As [`FileSummary::size_bytes`].
     pub size_bytes: u64,
     pub is_markdown: bool,
     pub content_hash: String,
@@ -12287,7 +12294,7 @@ fn get_file_metadata_impl(
         path,
         name,
         mtime_ms,
-        size_bytes: size_bytes as u64,
+        size_bytes: reported_size_bytes(size_bytes),
         is_markdown: is_markdown != 0,
         content_hash,
         headings,
@@ -12448,6 +12455,20 @@ fn resolve_created_value(
     (None, datetime_ms.or(positive_birthtime))
 }
 
+/// The size a reader reports for a `files.size_bytes` value (#1900).
+///
+/// A negative value is the stat sentinel. The task-index quarantine and the
+/// repair write `-1` beside `mtime_ms = -1` and `ctime_ms = -1`, and
+/// migrations 026, 034 and 038 write it alone, so that [`index_file`]'s fast
+/// path can never match the row and the next read indexes the file in full.
+/// A file whose read keeps failing keeps the sentinel. Its size is not
+/// known, so it is reported as 0 and its row still lists: a reader that
+/// refused the value failed every page the row sat on. The sentinel stays in
+/// the row, and the modified time passes through as the row holds it.
+fn reported_size_bytes(raw: i64) -> u64 {
+    u64::try_from(raw).unwrap_or(0)
+}
+
 /// Decode the fixed column order emitted by [`file_summary_query_projection`].
 /// The first column is nullable because each caller drives the projection from
 /// `totals` and emits a sentinel/count row when no candidate summary exists, so
@@ -12487,10 +12508,7 @@ pub(crate) fn decode_file_summary_query_row(
             path: row.get(1)?,
             name: row.get(2)?,
             mtime_ms: row.get(3)?,
-            size_bytes: {
-                let raw = row.get::<_, i64>(4)?;
-                u64::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, raw))?
-            },
+            size_bytes: reported_size_bytes(row.get::<_, i64>(4)?),
             is_markdown,
             display_name,
             created_date,
@@ -22032,7 +22050,16 @@ fn reindex_all_canvases(
     for (file_id, path, size_bytes) in canvases {
         scan_point("canvas file");
         cancel.check()?;
-        if size_bytes as u64 > large_file_refuse_bytes {
+        // #1900: a negative size is the stat sentinel
+        // ([`reported_size_bytes`]). The walk writes a board's real size
+        // whenever it indexes it, so the sentinel here means this scan did
+        // not: its read failed, which the walk has counted, or the walk
+        // never listed it. Its size is not known, so it is not oversize.
+        // Its rows stay, and the scan that next reads it derives them again.
+        let Ok(size_bytes) = u64::try_from(size_bytes) else {
+            continue;
+        };
+        if size_bytes > large_file_refuse_bytes {
             purge_canvas_rows(tx, file_id)?;
             continue;
         }

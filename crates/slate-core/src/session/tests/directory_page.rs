@@ -399,3 +399,61 @@ fn bounded_page_indexes_are_present() {
     assert!(indexes.contains("idx_dirs_parent_tree"));
     assert!(indexes.contains("idx_files_parent_tree"));
 }
+
+/// #1900, the migration's route: migrations 026, 034 and 038 set
+/// `size_bytes = -1` on every row, to force the scanner's slow path, and
+/// leave the times alone. A file the next scan cannot read keeps that row,
+/// with no quarantine involved, and it used to fail its folder's listing.
+/// It lists with size 0 and the modified time it had.
+#[test]
+fn a_file_the_scan_after_a_migration_cannot_read_still_lists() {
+    const UNREAD: &str = "notes/unread-after-upgrade.md";
+    const READ: &str = "notes/read-after-upgrade.md";
+    let body = b"---\nkind: probe\n---\nbody\n";
+    let (_tmp, provider, session) = make_vault_with_deniable_reads(|p| {
+        p.write_file(UNREAD, body).unwrap();
+        p.write_file(READ, body).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let before = session.get_file_summary(UNREAD).unwrap().unwrap();
+    assert!(before.mtime_ms > 0, "premise: a real modified time");
+
+    // What each of the three migrations does to the whole table.
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .execute("UPDATE files SET size_bytes = -1", [])
+        .unwrap();
+    provider.deny(UNREAD);
+    let report = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(report.error_count, 1, "premise: the scan could not read it");
+
+    let listed = assert_a_sentinel_size_lists_as_zero(&session, "notes", UNREAD, READ);
+    assert_eq!(
+        listed.mtime_ms, before.mtime_ms,
+        "a migration leaves the row's times alone"
+    );
+    assert_eq!(
+        session.get_file_summary(READ).unwrap().unwrap().size_bytes,
+        body.len() as u64,
+        "the scan healed the row it could read"
+    );
+
+    // The file reads again: the next scan heals its row too.
+    provider.allow(UNREAD);
+    let report = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(report.error_count, 0);
+    assert_eq!(
+        session
+            .get_file_summary(UNREAD)
+            .unwrap()
+            .unwrap()
+            .size_bytes,
+        body.len() as u64
+    );
+}
