@@ -111,7 +111,10 @@ checkpoint adds `stalledPhase`, the phase the family stood in, and
 write is tried five times over less than a second. If the reader outlasts those
 tries, the stalled checkpoint goes to a file of its own beside the held one,
 `<family>-shard-<n>.stalled.progress.txt`, which the print step below also
-reads, and the held file keeps the old phase. The flusher then writes one
+reads, and the held file keeps the old phase. The flusher then reads the
+published checkpoint once more. If the family advanced, completed or began to be
+disposed while the flusher was writing, the stall is withdrawn: nothing on disk
+says stalled and the process goes on. Otherwise the flusher writes one
 sentence to standard error that names the family, the shard, the case, the
 phase, the ticks and the completed count, and ends the process with
 `Environment.FailFast`, whether or not the file took the stalled checkpoint. The

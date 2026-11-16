@@ -342,7 +342,17 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// and never under a debugger, where a breakpoint holds a case for as
     /// long as its reader likes. The first tick to read a checkpoint counts
     /// as one, so with one tick a second the rule speaks between 299 and
-    /// 300 seconds after the transition, later if ticks were late.</summary>
+    /// 300 seconds after the transition, later if ticks were late.
+    ///
+    /// A case thread never waits on the flusher: it publishes without the
+    /// gate. So the family can advance, complete or begin to be disposed
+    /// while this tick is still writing the stalled checkpoint and waiting
+    /// for a reader. The tick reads the published checkpoint again before
+    /// the callback and withdraws the stall if the family moved: no
+    /// callback, nothing on disk that says stalled, and the rule free to
+    /// speak of a later stall. The instant between that last read and the
+    /// callback cannot be closed without the gate; a family that moves in
+    /// it had stood for the whole bound all the same.</summary>
     internal void FlushProgress()
     {
         lock (_progressGate)
@@ -390,14 +400,18 @@ internal sealed class ModelTestRun<TCell> : IDisposable
                 bool written = WriteCheckpoint(latest);
                 // The stalled checkpoint is what the job log prints once the
                 // process is gone, so a reader that briefly holds the file
-                // gets a few short waits to let go. The callback runs either
-                // way, and its sentence carries everything the file would.
-                for (int tried = 1; sentence is not null && !written && tried < StalledWriteTries; tried++)
+                // gets a few short waits to let go, for as long as the
+                // family has not moved. The callback's sentence carries
+                // everything the file would.
+                for (int tried = 1; sentence is not null && !written && tried < StalledWriteTries && StillStands(checkpoint); tried++)
                 {
                     WaitBetweenStalledWrites(StalledWriteWait);
-                    written = WriteCheckpoint(latest);
+                    if (StillStands(checkpoint))
+                    {
+                        written = WriteCheckpoint(latest);
+                    }
                 }
-                if (sentence is not null && !written)
+                if (sentence is not null && !written && StillStands(checkpoint))
                 {
                     // A reader that outlasted every try. The process is
                     // about to end with the old phase in the file, and the
@@ -405,15 +419,38 @@ internal sealed class ModelTestRun<TCell> : IDisposable
                     WriteStalledBeside(latest);
                 }
             }
-            if (sentence is not null)
+            if (sentence is null)
             {
-                // Inside the gate, after the write: Dispose waits here, so
-                // the stalled checkpoint is the file's last word when the
-                // default callback ends the process.
-                _onStall(sentence);
+                return;
             }
+            if (!StillStands(checkpoint))
+            {
+                // The family moved while this tick wrote and waited. The
+                // stall is withdrawn: the rule has not spoken, and the file
+                // goes back to what is published. A run being disposed
+                // writes its own last checkpoint.
+                _stalledOn = null;
+                _stalled = null;
+                RemoveStalledBeside();
+                if (!_progressStopped
+                    && Volatile.Read(ref _published) is { } current
+                    && !ReferenceEquals(current, _written))
+                {
+                    WriteCheckpoint(current);
+                }
+                return;
+            }
+            // Inside the gate, after the write: Dispose waits here, so the
+            // stalled checkpoint is the file's last word when the default
+            // callback ends the process.
+            _onStall(sentence);
         }
     }
+
+    /// <summary>Whether the checkpoint a tick decided on is still the
+    /// published one, in a run no one has begun to dispose.</summary>
+    private bool StillStands(Checkpoint checkpoint) =>
+        ReferenceEquals(Volatile.Read(ref _published), checkpoint) && !Volatile.Read(ref _disposed);
 
     /// <summary>Whether the checkpoint is as old, on the family clock, as
     /// its ticks say: <paramref name="bound"/> ticks span one interval fewer
@@ -459,21 +496,29 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             _missedProgressWrites++;
             return false;
         }
-        if (_stalledBeside is { } beside)
-        {
-            // The checkpoint's own file is current again, so the stalled
-            // copy beside it would only be a second, older word.
-            _stalledBeside = null;
-            try
-            {
-                File.Delete(beside);
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                _missedProgressWrites++;
-            }
-        }
+        // The checkpoint's own file is current again, so a stalled copy
+        // beside it would only be a second, older word.
+        RemoveStalledBeside();
         return true;
+    }
+
+    /// <summary>Remove the stalled checkpoint's own file, if this run wrote
+    /// one. Callers hold the progress gate.</summary>
+    private void RemoveStalledBeside()
+    {
+        if (_stalledBeside is not { } beside)
+        {
+            return;
+        }
+        _stalledBeside = null;
+        try
+        {
+            File.Delete(beside);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            _missedProgressWrites++;
+        }
     }
 
     /// <summary>The stalled checkpoint in a file of its own, for a stall
@@ -532,7 +577,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
         {
             return;
         }
-        _disposed = true;
+        // Read by a tick that has decided on a stall: a run its fact has
+        // begun to dispose is ending, not stalled.
+        Volatile.Write(ref _disposed, true);
         _clock.Stop();
         lock (_progressGate)
         {
@@ -545,6 +592,9 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             if (_configuration.ReportDirectory is not null)
             {
                 WriteCheckpoint(Snapshot(_success ? "complete" : "failed"));
+                // Whether or not the file took that last checkpoint, no
+                // stalled copy outlives a run that reached its end.
+                RemoveStalledBeside();
             }
             missedProgressWrites = _missedProgressWrites;
         }

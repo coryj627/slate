@@ -618,6 +618,180 @@ public sealed class ModelTestRunTests
         });
     }
 
+    /// <summary>A case thread never waits on the flusher, so it can publish
+    /// while a tick that has decided on a stall is still writing and waiting
+    /// for a reader. A family that advanced is not stalled: the tick reads
+    /// the published checkpoint again before the callback and withdraws.
+    /// The wait seam is where each fact below lets the case move.</summary>
+    [Fact]
+    public void AStallIsWithdrawnWhenTheCaseAdvancesBeforeTheCallback()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing =>
+        {
+            timing.Phase("drive");
+            run.FlushProgress();
+            int waits = 0;
+            run.WaitBetweenStalledWrites = _ =>
+            {
+                waits++;
+                timing.Phase("settleAndVerify");
+            };
+            using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                run.FlushProgress();
+                Assert.Empty(stalls);
+                // One wait: the tick stops trying once the case has moved.
+                Assert.Equal(1, waits);
+                Assert.False(File.Exists(directory.StalledPath), "a withdrawn stall left its checkpoint beside the held file.");
+            }
+            run.FlushProgress();
+            Assert.Empty(stalls);
+            using JsonDocument advanced = directory.ReadProgress();
+            Assert.Equal("settleAndVerify", advanced.RootElement.GetProperty("phase").GetString());
+            Assert.False(advanced.RootElement.TryGetProperty("stalledPhase", out _));
+            Assert.False(File.Exists(directory.StalledPath));
+            timing.Complete();
+        });
+    }
+
+    [Fact]
+    public void AStallIsWithdrawnWhenTheFamilyCompletesBeforeTheCallback()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        foreach (var cell in run.SelectedCases)
+        {
+            run.RunCase(cell, timing => timing.Complete());
+        }
+        // Between the last case and Complete, which the wait seam runs.
+        run.FlushProgress();
+        run.WaitBetweenStalledWrites = _ => run.Complete();
+        using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            run.FlushProgress();
+            Assert.Empty(stalls);
+        }
+        run.Dispose();
+        Assert.Empty(stalls);
+        using JsonDocument complete = directory.ReadProgress();
+        Assert.Equal("complete", complete.RootElement.GetProperty("phase").GetString());
+        Assert.True(complete.RootElement.GetProperty("success").GetBoolean());
+        Assert.False(complete.RootElement.TryGetProperty("stalledPhase", out _));
+        Assert.False(File.Exists(directory.StalledPath));
+        using JsonDocument report = directory.Read(0);
+        Assert.True(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(5, report.RootElement.GetProperty("completedOrdinals").GetArrayLength());
+    }
+
+    /// <summary>A family whose fact has begun to dispose it is ending, not
+    /// stalled. The seam disposes on the tick's own thread, which stands for
+    /// a fact thread that has entered Dispose and waits for the gate.</summary>
+    [Fact]
+    public void AStallIsWithdrawnWhenTheRunIsBeingDisposedBeforeTheCallback()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing => timing.Complete());
+        run.FlushProgress();
+        run.WaitBetweenStalledWrites = _ => run.Dispose();
+        using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            run.FlushProgress();
+        }
+        Assert.Empty(stalls);
+        Assert.False(File.Exists(directory.StalledPath));
+        using JsonDocument report = directory.Read(0);
+        Assert.False(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal([1], report.RootElement.GetProperty("completedOrdinals").EnumerateArray().Select(value => value.GetInt32()));
+        using JsonDocument last = directory.ReadProgress();
+        Assert.False(last.RootElement.TryGetProperty("stalledPhase", out _));
+    }
+
+    /// <summary>Only a recording callback lets a stalled run reach its end.
+    /// When one does, the stalled copy beside a held checkpoint goes with
+    /// the run, whether or not the reader lets the last checkpoint in.</summary>
+    [Fact]
+    public void AStalledCopyBesideAHeldCheckpointDoesNotOutliveTheRun()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing => timing.Complete());
+        run.FlushProgress();
+        run.WaitBetweenStalledWrites = _ => { };
+        using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            run.FlushProgress();
+            Assert.Single(stalls);
+            Assert.True(File.Exists(directory.StalledPath), "the stall a reader held was not written beside the checkpoint.");
+            run.Dispose();
+            Assert.False(File.Exists(directory.StalledPath), "the stalled copy outlived its run.");
+        }
+        using JsonDocument report = directory.Read(0);
+        Assert.False(report.RootElement.GetProperty("success").GetBoolean());
+        Assert.Single(stalls);
+    }
+
+    [Fact]
+    public void ARunWhoseStallWasWithdrawnIsStillReportedOnceWhenALaterCheckpointStands()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        var cell = run.SelectedCases[0];
+        run.RunCase(cell, timing =>
+        {
+            timing.Phase("drive");
+            run.FlushProgress();
+            bool moved = false;
+            run.WaitBetweenStalledWrites = _ =>
+            {
+                if (!moved)
+                {
+                    moved = true;
+                    timing.Phase("settleAndVerify");
+                }
+            };
+            using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                run.FlushProgress();
+            }
+            Assert.Empty(stalls);
+            // The later checkpoint now stands for its two ticks.
+            run.FlushProgress();
+            Assert.Empty(stalls);
+            run.FlushProgress();
+            string sentence = Assert.Single(stalls);
+            Assert.Contains($"case {cell.Ordinal} ({cell.Value.Name})", sentence, StringComparison.Ordinal);
+            Assert.Contains("phase settleAndVerify", sentence, StringComparison.Ordinal);
+            Assert.Contains("2 checkpoint ticks", sentence, StringComparison.Ordinal);
+            using (JsonDocument stalled = directory.ReadProgress())
+            {
+                Assert.Equal("stalled", stalled.RootElement.GetProperty("phase").GetString());
+                Assert.Equal("settleAndVerify", stalled.RootElement.GetProperty("stalledPhase").GetString());
+            }
+            run.FlushProgress();
+            run.FlushProgress();
+            Assert.Single(stalls);
+            timing.Complete();
+        });
+    }
+
     [Fact]
     public void SlowCellSamplesAreBoundedAndRetainPerCellPhaseAccounting()
     {
