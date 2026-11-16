@@ -268,8 +268,15 @@ public sealed class ModelTestRunTests
     {
         using var directory = new ReportDirectory();
         var stalls = new List<string>();
+        var onDiskAtTheCall = new List<string?>();
         using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
-            stallTicks: 3, onStall: stalls.Add);
+            stallTicks: 3, onStall: sentence =>
+            {
+                stalls.Add(sentence);
+                // What a process ended by this call leaves behind.
+                using JsonDocument atTheCall = directory.ReadProgress();
+                onDiskAtTheCall.Add(atTheCall.RootElement.GetProperty("phase").GetString());
+            });
         run.AssertInventory(7, 2, 5, InventorySha256);
         run.RunCase(run.SelectedCases[0], timing => timing.Complete());
         var cell = run.SelectedCases[1];
@@ -279,15 +286,20 @@ public sealed class ModelTestRunTests
             run.FlushProgress();
             run.FlushProgress();
             Assert.Empty(stalls);
+            double entered;
             using (JsonDocument advancing = directory.ReadProgress())
             {
                 Assert.Equal("arrangement", advancing.RootElement.GetProperty("phase").GetString());
                 Assert.False(advancing.RootElement.TryGetProperty("stalledPhase", out _),
                     "a checkpoint that is not stalled carries a stalled phase.");
+                entered = advancing.RootElement.GetProperty("elapsedMilliseconds").GetDouble();
             }
 
             run.FlushProgress();
             string sentence = Assert.Single(stalls);
+            // The stalled checkpoint is written before the callback runs:
+            // the default callback ends the process.
+            Assert.Equal(["stalled"], onDiskAtTheCall);
             Assert.Contains("The routes model stalled on shard 0 of 1", sentence, StringComparison.Ordinal);
             Assert.Contains($"case {cell.Ordinal} ({cell.Value.Name})", sentence, StringComparison.Ordinal);
             Assert.Contains("phase arrangement", sentence, StringComparison.Ordinal);
@@ -303,9 +315,12 @@ public sealed class ModelTestRunTests
                 Assert.Equal(1, root.GetProperty("completedCases").GetInt32());
                 Assert.False(root.GetProperty("success").GetBoolean());
                 // The family clock read at the stall, and how much of it the
-                // phase has held: their difference is when the phase began.
+                // phase has held: their difference is when the phase began,
+                // which is the time the advancing checkpoint carried.
+                double elapsed = root.GetProperty("elapsedMilliseconds").GetDouble();
                 double stalledFor = root.GetProperty("stalledMilliseconds").GetDouble();
-                Assert.InRange(stalledFor, 0, root.GetProperty("elapsedMilliseconds").GetDouble());
+                Assert.True(elapsed >= entered, $"the stall's clock reads {elapsed} ms, before the phase began at {entered} ms.");
+                Assert.Equal(entered, elapsed - stalledFor, precision: 6);
             }
 
             // The rule speaks once, and later ticks leave the stalled
@@ -416,6 +431,167 @@ public sealed class ModelTestRunTests
         // A bound below one tick would report a run that has not been read
         // twice.
         Assert.Throws<ArgumentOutOfRangeException>(() => Run(Configuration(), stallTicks: 0));
+    }
+
+    /// <summary>The timer queues one callback for each interval whether or
+    /// not the pool runs it, so a pool that ran none for a while runs them
+    /// all at once, against a checkpoint that may be milliseconds old. Where
+    /// the flusher has an interval, the checkpoint must also have stood for
+    /// the bound on the family clock. The hour here is an interval no fact
+    /// waits for: every tick below is a callback that arrived late.</summary>
+    [Fact]
+    public void TicksThatArriveTogetherDoNotReportACheckpointYoungerThanTheBound()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: TimeSpan.FromHours(1),
+            stallTicks: 3, onStall: stalls.Add);
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing =>
+        {
+            timing.Phase("arrangement");
+            for (int tick = 0; tick < 10; tick++)
+            {
+                run.FlushProgress();
+            }
+            Assert.Empty(stalls);
+            using JsonDocument young = directory.ReadProgress();
+            Assert.Equal("arrangement", young.RootElement.GetProperty("phase").GetString());
+            timing.Complete();
+        });
+    }
+
+    /// <summary>The age and the ticks together still report a checkpoint
+    /// that is held: the real timer, five ticks of 20 ms, and a case that
+    /// waits for the report.</summary>
+    [Fact]
+    public void AHeldCheckpointIsReportedOnceItsAgeAndItsTicksAreBothReached()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var reported = new ManualResetEventSlim();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: TimeSpan.FromMilliseconds(20),
+            stallTicks: 5, onStall: sentence =>
+            {
+                stalls.Enqueue(sentence);
+                reported.Set();
+            });
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing =>
+        {
+            timing.Phase("drive");
+            Assert.True(reported.Wait(TimeSpan.FromSeconds(30)), "the held checkpoint was never reported.");
+            using JsonDocument stalled = directory.ReadProgress();
+            Assert.Equal("stalled", stalled.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("drive", stalled.RootElement.GetProperty("stalledPhase").GetString());
+            // Four intervals between the first of five ticks and the last.
+            Assert.True(stalled.RootElement.GetProperty("stalledMilliseconds").GetDouble() >= 80,
+                "the checkpoint was reported younger than the bound.");
+            timing.Complete();
+        });
+        Assert.Contains("phase drive", Assert.Single(stalls), StringComparison.Ordinal);
+    }
+
+    /// <summary>The three model facts give no callback, so the default is
+    /// what a stalled shard gets.</summary>
+    [Fact]
+    public void ARunGivenNoCallbackEndsTheProcessOnAStall()
+    {
+        using var byDefault = Run(Configuration());
+        Assert.Equal<Action<string>>(ModelTestRun<Cell>.EndTheProcess, byDefault.OnStall);
+        Action<string> recording = _ => { };
+        using var recorded = Run(Configuration(), onStall: recording);
+        Assert.Same(recording, recorded.OnStall);
+    }
+
+    /// <summary>A reader without delete sharing refuses the checkpoint's
+    /// replacement, as a monitor reading the file does. The stalled
+    /// checkpoint is the one the job log prints, so its write is tried again
+    /// before the callback ends the process.</summary>
+    [Fact]
+    public void AStalledCheckpointAReaderHeldIsOnDiskAtTheCallbackOnceTheReaderLetsGo()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        var onDiskAtTheCall = new List<string?>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: sentence =>
+            {
+                stalls.Add(sentence);
+                using JsonDocument atTheCall = directory.ReadProgress();
+                onDiskAtTheCall.Add(atTheCall.RootElement.GetProperty("phase").GetString());
+            });
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        run.RunCase(run.SelectedCases[0], timing =>
+        {
+            timing.Phase("drive");
+            run.FlushProgress();
+            FileStream? reader = new(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var waits = new List<TimeSpan>();
+            run.WaitBetweenStalledWrites = wait =>
+            {
+                waits.Add(wait);
+                reader?.Dispose();
+                reader = null;
+            };
+            try
+            {
+                run.FlushProgress();
+            }
+            finally
+            {
+                reader?.Dispose();
+            }
+            Assert.Single(stalls);
+            Assert.Equal(["stalled"], onDiskAtTheCall);
+            Assert.Single(waits);
+            timing.Complete();
+        });
+    }
+
+    [Fact]
+    public void AStalledCheckpointAReaderNeverLetsGoStillReachesTheCallbackOnce()
+    {
+        using var directory = new ReportDirectory();
+        var stalls = new List<string>();
+        var onDiskAtTheCall = new List<string?>();
+        using var run = Run(new(0, 1, [], directory.Path), progressInterval: Timeout.InfiniteTimeSpan,
+            stallTicks: 2, onStall: sentence =>
+            {
+                stalls.Add(sentence);
+                using JsonDocument atTheCall = directory.ReadProgress();
+                onDiskAtTheCall.Add(atTheCall.RootElement.GetProperty("phase").GetString());
+            });
+        run.AssertInventory(7, 2, 5, InventorySha256);
+        var cell = run.SelectedCases[0];
+        run.RunCase(cell, timing =>
+        {
+            timing.Phase("drive");
+            run.FlushProgress();
+            var waits = new List<TimeSpan>();
+            run.WaitBetweenStalledWrites = waits.Add;
+            using (var reader = new FileStream(directory.ProgressPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                run.FlushProgress();
+                // Every try was refused: the file keeps the phase, and the
+                // sentence carries the case all the same.
+                string sentence = Assert.Single(stalls);
+                Assert.Contains($"case {cell.Ordinal} ({cell.Value.Name})", sentence, StringComparison.Ordinal);
+                Assert.Contains("phase drive", sentence, StringComparison.Ordinal);
+                Assert.Equal(["drive"], onDiskAtTheCall);
+                // Five tries, a wait between each two, well under a few
+                // seconds in all.
+                Assert.Equal(4, waits.Count);
+                Assert.InRange(waits.Aggregate(TimeSpan.Zero, (sum, wait) => sum + wait), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+            }
+            // A run that goes on writes the stalled checkpoint on its next
+            // tick, and is not reported again.
+            run.FlushProgress();
+            Assert.Single(stalls);
+            using JsonDocument stalled = directory.ReadProgress();
+            Assert.Equal("stalled", stalled.RootElement.GetProperty("phase").GetString());
+            timing.Complete();
+        });
     }
 
     [Fact]

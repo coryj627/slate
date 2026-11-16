@@ -1268,25 +1268,29 @@ jobs:
       # opens first, so each family's last checkpoint goes into it whatever
       # the test adapter printed: the case and phase a stopped family was in,
       # and an error line for one the stall rule ended (#1624). It reads
-      # files and never fails the job.
+      # files and never fails the job. A cell's name is the test's own text,
+      # so what goes into a workflow command is encoded as GitHub decodes it
+      # (%25, %0D, %0A), and a checkpoint's own text is printed on one line
+      # after its file's name. Workflows.Tests.ps1 runs this script.
       - name: Show where each model family stopped
         if: ${{ always() }}
         run: |
           $results = '${{ runner.temp }}\slate-model-results'
+          function Format-CommandData([string]$Text) { $Text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
           $files = @(Get-ChildItem -Path $results -Filter '*.progress.txt' -File -ErrorAction SilentlyContinue | Sort-Object Name)
           if ($files.Count -eq 0) { Write-Host "no model family wrote a checkpoint under $results" }
           foreach ($file in $files) {
             try {
               $text = (Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop).Trim()
-              Write-Host "$($file.Name): $text"
+              Write-Host "$($file.Name): $($text -replace '[\r\n]+', ' ')"
               $progress = $text | ConvertFrom-Json -ErrorAction Stop
               if ($progress.phase -eq 'stalled') {
                 $subject = if ($null -ne $progress.activeOrdinal) { "case $($progress.activeOrdinal) ($($progress.activeCell))" } else { 'no case active' }
                 $line = "the $($progress.family) model stalled on shard $($progress.shardIndex): $subject, phase $($progress.stalledPhase), for $([math]::Round($progress.stalledMilliseconds / 1000)) s, with $($progress.completedCases) of $($progress.selectedCases) cases completed"
-                Write-Host "::error::$($line -replace '[\r\n]+', ' ')"
+                Write-Host "::error::$(Format-CommandData $line)"
               }
             } catch {
-              Write-Host "::warning::cannot read $($file.Name): $($_.Exception.Message -replace '[\r\n]+', ' ')"
+              Write-Host "::warning::$(Format-CommandData "cannot read $($file.Name): $($_.Exception.Message)")"
             }
           }
           exit 0

@@ -87,53 +87,127 @@ public sealed class TestHostCrashDumpCensus
     /// or stop publishing the dumps first. Both jobs that set the dump
     /// variables are held to it: the app job, and each model shard, whose
     /// stall rule fails fast and whose failed attempt uploads the dump
-    /// (#1624).</summary>
+    /// (#1624). A grant or a secret at the workflow's top level reaches
+    /// every job, so the text before <c>jobs:</c> is held to it too.</summary>
     [Theory]
     [InlineData("windows")]
     [InlineData("windows-model-shard")]
     public void TheJobThatPublishesTheTestProcessDumpHoldsNoSecret(string job)
     {
         string workflow = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), ".github", "workflows", "windows.yml"));
-        string block = DeviceStateCensus.Job(workflow, job);
         // The guard is about a job that dumps: one that stopped setting the
         // variable has left this theory's data without saying so.
-        Assert.Contains("DOTNET_DbgEnableMiniDump: '1'", block, StringComparison.Ordinal);
-        string[] found = SecretReferences(block);
+        Assert.Contains("DOTNET_DbgEnableMiniDump: '1'", Live(DeviceStateCensus.Job(workflow, job)), StringComparison.Ordinal);
+        string[] found = SecretsReaching(workflow, job);
         Assert.True(
             found.Length == 0,
-            $"The {job} job now references {string.Join(", ", found.Select(secret => $"`{secret}`"))}. Its test process "
-            + "is dumped in full into a public artifact when it fails fast (DOTNET_DbgEnableMiniDump), and the windows "
-            + "job's also when a fact times out (StaThread), so a secret there would be published. Keep the secret out of "
-            + "this job, or stop uploading the dumps.");
+            $"The {job} job, or the workflow's top level, now references {string.Join(", ", found.Select(secret => $"`{secret}`"))}. "
+            + "The job's test process is dumped in full into a public artifact when it fails fast (DOTNET_DbgEnableMiniDump), "
+            + "and the windows job's also when a fact times out (StaThread), so a secret there would be published. Keep the "
+            + "secret out of this job and out of the workflow's top level, or stop uploading the dumps.");
+    }
+
+    /// <summary>The theory above names its jobs, so the workflow must not
+    /// have a third that dumps: a job that starts setting the variable fails
+    /// here until it is listed there and held to the guard.</summary>
+    [Fact]
+    public void TheJobsThatDumpATestProcessAreTheTwoTheSecretGuardHolds()
+    {
+        string workflow = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), ".github", "workflows", "windows.yml"));
+        Assert.Equal(["windows", "windows-model-shard"], DumpingJobs(workflow));
+    }
+
+    /// <summary>The teeth of the fact above: a job that sets the variable,
+    /// on a step or on itself, is a dumping job, and one whose comment only
+    /// names the variable is not.</summary>
+    [Fact]
+    public void AJobThatStartsDumpingIsSeenAndACommentThatNamesTheVariableIsNot()
+    {
+        string workflow =
+            "name: x\njobs:\n"
+            + "  quiet:\n    runs-on: x\n    # DOTNET_DbgEnableMiniDump is not set here\n"
+            + "  loud:\n    runs-on: y\n    steps:\n      - name: Test\n        env:\n          DOTNET_DbgEnableMiniDump: '1'\n"
+            + "  third:\n    runs-on: z\n    env:\n      DOTNET_DbgEnableMiniDump: '1'\n";
+        Assert.Equal(["loud", "third"], DumpingJobs(workflow));
     }
 
     /// <summary>The secret guard's teeth: each kind of reference it looks for
-    /// is found in a job that has one, and a comment that only names one is
-    /// not a reference.</summary>
+    /// is found in a job that has one and at the workflow's top level, and a
+    /// comment that only names one is not a reference.</summary>
     [Theory]
-    [InlineData("        env:\n          TOKEN: ${{ secrets.SIGNING_KEY }}", true)]
-    [InlineData("        env:\n          GH_TOKEN: ${{ github.token }}", true)]
-    [InlineData("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", true)]
-    [InlineData("    permissions:\n      id-token: write", true)]
-    [InlineData("    uses: ./.github/workflows/build.yml\n    secrets: inherit", true)]
-    [InlineData("        env:\n          ACTIONS_RUNTIME_TOKEN: ${{ env.ACTIONS_RUNTIME_TOKEN }}", true)]
-    [InlineData("        env:\n          ACTIONS_ID_TOKEN_REQUEST_TOKEN: x", true)]
-    [InlineData("      # no secrets. here, no GITHUB_TOKEN, no id-token grant", false)]
-    public void TheSecretGuardSeesEachKindOfSecret(string planted, bool isSecret)
+    [InlineData("        env:\n          TOKEN: ${{ secrets.SIGNING_KEY }}", "job", true)]
+    [InlineData("        env:\n          GH_TOKEN: ${{ github.token }}", "job", true)]
+    [InlineData("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", "job", true)]
+    [InlineData("    permissions:\n      id-token: write", "job", true)]
+    [InlineData("    uses: ./.github/workflows/build.yml\n    secrets: inherit", "job", true)]
+    [InlineData("        env:\n          ACTIONS_RUNTIME_TOKEN: ${{ env.ACTIONS_RUNTIME_TOKEN }}", "job", true)]
+    [InlineData("        env:\n          ACTIONS_ID_TOKEN_REQUEST_TOKEN: x", "job", true)]
+    [InlineData("      # no secrets. here, no GITHUB_TOKEN, no id-token grant", "job", false)]
+    [InlineData("permissions:\n  contents: read\n  id-token: write", "top", true)]
+    [InlineData("env:\n  SIGNING_KEY: ${{ secrets.SIGNING_KEY }}", "top", true)]
+    [InlineData("permissions:\n  contents: read\n# no id-token grant, no secrets. here", "top", false)]
+    [InlineData("env:\n  SIGNING_KEY: ${{ secrets.SIGNING_KEY }}", "end", true)]
+    public void TheSecretGuardSeesEachKindOfSecret(string planted, string where, bool isSecret)
     {
-        string workflow = "jobs:\n  windows:\n    runs-on: x\n" + planted + "\n  other:\n    runs-on: y\n";
-        Assert.Equal(isSecret, SecretReferences(DeviceStateCensus.Job(workflow, "windows")).Length > 0);
+        // In the job, at the top level before jobs:, or at the top level after the last job.
+        string workflow = where switch
+        {
+            "job" => "name: x\njobs:\n  windows:\n    runs-on: x\n" + planted + "\n  other:\n    runs-on: y\n",
+            "top" => "name: x\n" + planted + "\njobs:\n  windows:\n    runs-on: x\n  other:\n    runs-on: y\n",
+            _ => "name: x\njobs:\n  windows:\n    runs-on: x\n  other:\n    runs-on: y\n" + planted + "\n",
+        };
+        Assert.Equal(isSecret, SecretsReaching(workflow, "windows").Length > 0);
     }
 
-    /// <summary>The secret references in a job's YAML, its comment lines
-    /// aside (the workflow's own comment explains the guard in these words).</summary>
-    private static string[] SecretReferences(string job)
+    /// <summary>The secret references that reach a job: its own, and the
+    /// ones at the workflow's top level, which every job inherits.</summary>
+    private static string[] SecretsReaching(string workflow, string job) =>
+        SecretReferences(TopLevel(workflow) + "\n" + DeviceStateCensus.Job(workflow, job));
+
+    /// <summary>The jobs whose own lines set the runtime's dump variable,
+    /// in the workflow's order.</summary>
+    private static string[] DumpingJobs(string workflow)
     {
-        string yaml = string.Join(
-            "\n",
-            job.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
-        return [.. SecretVectors.Where(secret => yaml.Contains(secret, StringComparison.OrdinalIgnoreCase))];
+        string[] lines = Lines(workflow);
+        int jobs = Array.IndexOf(lines, "jobs:");
+        Assert.True(jobs >= 0, "the workflow has no jobs: line");
+        return
+        [
+            .. lines.Skip(jobs + 1)
+                .Select(line => System.Text.RegularExpressions.Regex.Match(line, "^  ([A-Za-z0-9_-]+):\\s*$"))
+                .Where(match => match.Success)
+                .Select(match => match.Groups[1].Value)
+                .Where(job => Live(DeviceStateCensus.Job(workflow, job)).Contains("DOTNET_DbgEnableMiniDump", StringComparison.Ordinal)),
+        ];
     }
+
+    /// <summary>The workflow's text outside <c>jobs:</c>: its triggers, its
+    /// permissions and any <c>env:</c> every job inherits.</summary>
+    private static string TopLevel(string workflow)
+    {
+        string[] lines = Lines(workflow);
+        int jobs = Array.IndexOf(lines, "jobs:");
+        Assert.True(jobs >= 0, "the workflow has no jobs: line");
+        // A top-level key may also follow the last job.
+        int after = Array.FindIndex(lines, jobs + 1, line => line.Length > 0 && !char.IsWhiteSpace(line[0]) && line[0] != '#');
+        return string.Join("\n", lines[..jobs].Concat(after < 0 ? [] : lines[after..]));
+    }
+
+    private static string[] Lines(string workflow) =>
+        workflow.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+
+    /// <summary>The secret references in a piece of the workflow's YAML, its
+    /// comment lines aside (the workflow's own comment explains the guard in
+    /// these words).</summary>
+    private static string[] SecretReferences(string yaml)
+    {
+        string live = Live(yaml);
+        return [.. SecretVectors.Where(secret => live.Contains(secret, StringComparison.OrdinalIgnoreCase))];
+    }
+
+    /// <summary>YAML without its comment lines.</summary>
+    private static string Live(string yaml) =>
+        string.Join("\n", yaml.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
 
     /// <summary>Every way a job can hand its steps a secret or token: a
     /// secret reference, inherited secrets (<c>secrets: inherit</c> on a

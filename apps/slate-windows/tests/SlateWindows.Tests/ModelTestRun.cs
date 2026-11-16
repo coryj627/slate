@@ -156,15 +156,38 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     internal IReadOnlyList<Case> SelectedCases { get; }
 
     /// <summary>How long a published checkpoint may stand before the run is
-    /// called stalled (#1624): ten times the longest bounded wait inside a
-    /// case (30 s), and five hundred times a case on the loaded host that
-    /// issue records (0.60 s).</summary>
+    /// called stalled (#1624). A healthy phase is well under a second: a
+    /// whole case took 0.60 s on the loaded host that issue records. One
+    /// bounded wait that runs to its bound holds a phase for about 70 s
+    /// (a settle is a 10 s pump and two drains of 30 s each), and a case
+    /// that is failing can hold one for up to about 165 s while it unwinds
+    /// (the 10 s wait for its release helper, the production teardown's 5 s
+    /// fallback, and two settles). Five minutes is above all of these.</summary>
     internal static TimeSpan StallBound { get; } = TimeSpan.FromMinutes(5);
 
     /// <summary>The stall bound in flusher ticks, or null for never. Ticks
-    /// are counted, not wall time: a suspended machine adds none, and a
-    /// starved pool makes the rule slower, never early.</summary>
+    /// are necessary, so a suspended machine adds at most one or two: the
+    /// timer does not fire for the time it slept through. They are not
+    /// sufficient where the flusher has an interval, because the timer
+    /// queues a callback for every interval whether or not the pool runs
+    /// it, and a pool that ran none for a while then runs them all at once.
+    /// There the checkpoint must also have stood on the family clock for
+    /// the time those ticks span, one interval fewer than their count. A
+    /// flusher driven by hand has no interval, and its ticks alone decide.</summary>
     internal int? StallTicks { get; }
+
+    /// <summary>What a stall does with its sentence, for a fact to read.</summary>
+    internal Action<string> OnStall => _onStall;
+
+    /// <summary>How many times the stalled checkpoint's write is tried
+    /// before the callback runs, and the wait between two tries: under a
+    /// second in all.</summary>
+    private const int StalledWriteTries = 5;
+    private static readonly TimeSpan StalledWriteWait = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>The wait between two tries, a seam: a fact lets its reader
+    /// go here and waits for nothing.</summary>
+    internal Action<TimeSpan> WaitBetweenStalledWrites { get; set; } = Thread.Sleep;
 
     /// <summary><see cref="StallBound"/> in ticks of the flusher's interval,
     /// rounded up. A flusher with no interval of its own never ticks, so it
@@ -307,14 +330,16 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     ///
     /// The tick is also the stall rule's clock (#1624). A family is one
     /// fact, so the test host's hang timer measures the family, not a case.
-    /// The tick that makes <see cref="StallTicks"/> in a row reading the
-    /// same published checkpoint writes that checkpoint as stalled and hands
-    /// the callback one sentence naming the case and its phase. It does so
-    /// once in a run, never after the family completed, and never under a
-    /// debugger, where a breakpoint holds a case for as long as its reader
-    /// likes. The first tick to read a checkpoint counts as one, so the
-    /// rule speaks between one interval short of the bound and the bound
-    /// after the transition.</summary>
+    /// The rule speaks on a tick that is at least the
+    /// <see cref="StallTicks"/>-th in a row to read the same published
+    /// checkpoint and, where the flusher has an interval, finds that
+    /// checkpoint as old as those ticks span. It writes the checkpoint as
+    /// stalled and hands the callback one sentence naming the case and its
+    /// phase. It does so once in a run, never after the family completed,
+    /// and never under a debugger, where a breakpoint holds a case for as
+    /// long as its reader likes. The first tick to read a checkpoint counts
+    /// as one, so with one tick a second the rule speaks between 299 and
+    /// 300 seconds after the transition, later if ticks were late.</summary>
     internal void FlushProgress()
     {
         lock (_progressGate)
@@ -339,12 +364,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
                 _ticksUnchanged++;
             }
             string? sentence = null;
+            double now = _clock.Elapsed.TotalMilliseconds;
             if (_stalledOn is null
                 && StallTicks is { } bound
                 && _ticksUnchanged >= bound
+                && StoodForItsTicks(checkpoint, bound, now)
                 && checkpoint.Phase != "complete")
             {
-                double now = _clock.Elapsed.TotalMilliseconds;
                 _stalledOn = checkpoint;
                 _stalled = checkpoint with
                 {
@@ -358,7 +384,16 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             Checkpoint latest = ReferenceEquals(checkpoint, _stalledOn) ? _stalled! : checkpoint;
             if (!ReferenceEquals(latest, _written))
             {
-                WriteCheckpoint(latest);
+                bool written = WriteCheckpoint(latest);
+                // The stalled checkpoint is what the job log prints once the
+                // process is gone, so a reader that briefly holds the file
+                // gets a few short waits to let go. The callback runs either
+                // way, and its sentence carries everything the file would.
+                for (int tried = 1; sentence is not null && !written && tried < StalledWriteTries; tried++)
+                {
+                    WaitBetweenStalledWrites(StalledWriteWait);
+                    written = WriteCheckpoint(latest);
+                }
             }
             if (sentence is not null)
             {
@@ -369,6 +404,13 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             }
         }
     }
+
+    /// <summary>Whether the checkpoint is as old, on the family clock, as
+    /// its ticks say: <paramref name="bound"/> ticks span one interval fewer
+    /// than their count. A flusher with no interval has no such span.</summary>
+    private bool StoodForItsTicks(Checkpoint checkpoint, int bound, double now) =>
+        _progressInterval <= TimeSpan.Zero
+        || now - checkpoint.ElapsedMilliseconds >= (bound - 1) * _progressInterval.TotalMilliseconds;
 
     private string StallSentence(Checkpoint stalled, int ticks)
     {
@@ -386,8 +428,8 @@ internal sealed class ModelTestRun<TCell> : IDisposable
     /// keeps this diagnostic separate from the verifier's JSON evidence.
     /// A monitor can briefly deny replacement on Windows; such a diagnostic
     /// failure must not abort a case or weaken final coverage reporting.
-    /// Callers hold the progress gate.</summary>
-    private void WriteCheckpoint(Checkpoint checkpoint)
+    /// Callers hold the progress gate. Answers whether the file took it.</summary>
+    private bool WriteCheckpoint(Checkpoint checkpoint)
     {
         string directory = _configuration.ReportDirectory!;
         string path = Path.Combine(directory, $"{_family}-shard-{_configuration.Index}.progress.txt");
@@ -418,12 +460,14 @@ internal sealed class ModelTestRun<TCell> : IDisposable
             File.WriteAllText(temporary, contents);
             File.Move(temporary, path, overwrite: true);
             _written = checkpoint;
+            return true;
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
         {
             // Reuse this same temporary file on the next checkpoint. The final
             // JSON remains strict and records any missed diagnostic writes.
             _missedProgressWrites++;
+            return false;
         }
     }
 
