@@ -4,6 +4,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -3856,13 +3857,28 @@ public sealed class TestWaitCensus
     //      exception: it lets the app delete the file and does not let a
     //      rename through. GateFile.Open opens with the same sharing;
     //   3. a call to GateFile.TryReadText, TryReadBytes, ReadText,
-    //      ReadFixture or Open inside a lambda or a local function that
-    //      SpinWait.SpinUntil runs (handed to it, called from a lambda
-    //      handed to it, or a lambda kept in a local that is): the reader's
-    //      own read made at no pace. GateFile.PollText, and ExpectFileText
-    //      over it, pause between two reads. A fixture is no file the app
-    //      writes, so ReadFixture in a spinning wait would lose no save; it
-    //      is refused all the same, because one rule is simpler than two.
+    //      ReadFixture or Open that a spinning wait runs: the reader's own
+    //      read made at no pace. A spinning wait is a call named SpinUntil.
+    //      It runs a read that stands in a lambda handed to it, and a read
+    //      in anything whose name stands in one of its arguments: a local
+    //      function, a method or a property of the gate's project, or the
+    //      local, field or property that a lambda holding the read is
+    //      assigned to. GateFile.PollText, and ExpectFileText over it,
+    //      pause between two reads. A fixture is no file the app writes, so
+    //      ReadFixture in a spinning wait would lose no save; it is refused
+    //      all the same, because one rule is simpler than two;
+    //   4. one of those calls in a loop that never pauses: a while, a do or
+    //      a for that can end early, in the same function as the call, with
+    //      no Thread.Sleep, Task.Delay, Wait.UntilInputIsProcessed,
+    //      GateFile.PollText or ExpectFileText anywhere in it. A foreach,
+    //      and a for that only counts, read each file once and are no loop
+    //      in this sense;
+    //   5. a GateFile method named and not called: handed on, kept, cast,
+    //      returned or put in a collection as a method group, PollText
+    //      included. A reader is called where it is used, so that clauses 3
+    //      and 4 can see whether a wait spins on it: a delegate made from a
+    //      reader can be called from anywhere, under any name. nameof is no
+    //      such reference.
     // There is no allow-list and no exemption. Plan 47 worded the rule as
     // "inside a poll"; clauses 1 and 2 refuse a read wherever it stands,
     // because a read can reach a poll through a helper that syntax cannot
@@ -3897,11 +3913,25 @@ public sealed class TestWaitCensus
     //     XmlTextReader made from a path, an image or a bitmap made from
     //     one, a File.Copy out of a file the app writes). JsonDocument has
     //     no form that takes a path;
-    //   GateFile's reader reached from a spinning wait through a method of
-    //     the class (a helper that reads, called in the wait's lambda),
-    //     through a lambda kept in a field or handed in as a parameter, or
-    //     through SpinUntil kept in a delegate; or from a while loop that
-    //     does not pause;
+    //   a read more than one member away from a spinning wait: the wait
+    //     calls a method that calls a method that reads. The member the
+    //     read stands in is followed, and not the chain of its callers:
+    //     following every caller would refuse a read wherever a wait
+    //     stands anywhere above it;
+    //   a lambda that reads and reaches a spinning wait as a parameter of
+    //     a helper, as an element of a collection, through a delegate's
+    //     constructor or through a second local it is copied to: a lambda
+    //     is followed to the local, field or property it is assigned to,
+    //     and no further;
+    //   a spinning wait by another name (a helper of the gate's own that
+    //     spins on what it is handed, SpinUntil kept in a delegate), and a
+    //     loop made without a loop statement (goto, recursion);
+    //   a pause that not every pass of a loop reaches: one anywhere in the
+    //     loop counts;
+    //   how often a read on a timer's tick or in a task runs: a timer's
+    //     period is a number and not a shape, and one read in a task is one
+    //     read. A loop inside the callback or the task is seen like any
+    //     other;
     //   how long a caller keeps the stream GateFile.Open gave it;
     //   a read in GateFile.cs or GateFileTests.cs.
 
@@ -3966,7 +3996,11 @@ public sealed class TestWaitCensus
             + "OpenRead, OpenText, Open or OpenHandle, FileInfo.OpenRead, OpenText or Open, and XDocument.Load, XElement.Load, "
             + "XmlDocument.Load or XmlReader.Create of a path (each called or handed on as a method group), and a StreamReader "
             + "made from a path; (2) any new FileStream; (3) GateFile.TryReadText, TryReadBytes, ReadText, ReadFixture or Open "
-            + "inside a lambda or a local function that SpinWait.SpinUntil runs. Each is read by what it binds to. A fixture that "
+            + "that a call named SpinUntil runs: in a lambda handed to it, or in a local function, method, property, or a local "
+            + "or field holding a lambda, that is named in one of its arguments; (4) one of those calls in a while, do or for "
+            + "loop with no Thread.Sleep, Task.Delay or GateFile.PollText in it; (5) a GateFile method named and not called (a "
+            + "method group): a reader is called where it is used, so the rule can see whether a wait spins on it. Each is read "
+            + "by what it binds to. A fixture that "
             + "travels with the test binaries is read with GateFile.ReadFixture (its parts, under the base directory); "
             + "GateFile.ReadText is one read, GateFile.Open one stream, and GateFile.PollText (ExpectFileText over it) a wait "
             + "that pauses between two reads:\n" + string.Join("\n", refused));
@@ -3989,7 +4023,10 @@ public sealed class TestWaitCensus
     /// through now show it refused. Each form is planted as it is usually
     /// written and again with its arguments named and out of order, and
     /// through an alias, a using static and its namespace: the answer is
-    /// the same.</summary>
+    /// the same. The reader itself is planted handed on as a method group,
+    /// reached through each thing that can hold it, and in each kind of
+    /// loop; the rows that answer clean for a read the rule cannot follow
+    /// are its limits, written down in the header.</summary>
     [Theory]
     [MemberData(nameof(PlantedFileReads))]
     public void TheFileReadRuleSeesAPlantedRead(string form, string planted, string expected)
@@ -4369,6 +4406,153 @@ public sealed class TestWaitCensus
             "void F() { Assert.True(SpinWait.SpinUntil(() => GateFile.ReadFixture(\"fixtures\", \"chords.json\").Length > 0, 1000)); }",
             "F: refused"
         },
+        {
+            "the gate's reader kept as a method group and called in a spinning wait",
+            "void F(string path) { Func<string, string?> read = GateFile.TryReadText; Assert.True(SpinWait.SpinUntil(() => read(path) != null, 1000)); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader handed to a call as a method group",
+            "void F(string[] paths) { _ = paths.Select(GateFile.ReadText).ToArray(); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a collection of delegates",
+            "void F() { Func<string, string?>[] readers = [GateFile.TryReadText]; _ = readers; }",
+            "F: refused"
+        },
+        {
+            "the gate's reader returned as a method group",
+            "Func<string, string?> F() => GateFile.TryReadText;",
+            "F: refused"
+        },
+        {
+            "the gate's reader cast to a delegate",
+            "void F() { var read = (Func<string, string?>)GateFile.TryReadText; _ = read; }",
+            "F: refused"
+        },
+        {
+            "the gate's poll handed on as a method group",
+            "void F() { Func<string, Func<string, bool>, TimeSpan, string?> poll = GateFile.PollText; _ = poll; }",
+            "F: refused"
+        },
+        {
+            "the gate's reader named and not called",
+            "void F() { _ = nameof(GateFile.ReadText); }",
+            "clean"
+        },
+        {
+            "the gate's reader in a forwarding lambda kept in a local and called in a spinning wait",
+            "void F(string path) { Func<string, string?> read = p => GateFile.TryReadText(p); Assert.True(SpinWait.SpinUntil(() => read(path) != null, 1000)); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a lambda a local is given after its declaration",
+            "void F(string path) { Func<string, string?> read; read = p => GateFile.TryReadText(p); Assert.True(SpinWait.SpinUntil(() => read(path) != null, 1000)); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a lambda kept in a field and called in a spinning wait",
+            "static readonly Func<string, string?> Read = p => GateFile.TryReadText(p); void F(string path) { Assert.True(SpinWait.SpinUntil(() => Read(path) != null, 1000)); }",
+            "<member>: refused"
+        },
+        {
+            "the gate's reader in a helper method a spinning wait calls",
+            "static string? Slurp(string path) => GateFile.TryReadText(path); void F(string path) { Assert.True(SpinWait.SpinUntil(() => Slurp(path) != null, 1000)); }",
+            "Slurp: refused"
+        },
+        {
+            "the gate's reader in a method handed to a spinning wait",
+            "bool Ready() => GateFile.TryReadText(\"note.md\") != null; void F() { Assert.True(SpinWait.SpinUntil(Ready, 1000)); }",
+            "Ready: refused"
+        },
+        {
+            "the gate's reader in a property a spinning wait reads",
+            "string? Now => GateFile.TryReadText(\"note.md\"); void F() { Assert.True(SpinWait.SpinUntil(() => Now != null, 1000)); }",
+            "Now: refused"
+        },
+        {
+            "the gate's reader two helpers away from a spinning wait",
+            "static string? Inner(string path) => GateFile.TryReadText(path); static string? Outer(string path) => Inner(path); void F(string path) { Assert.True(SpinWait.SpinUntil(() => Outer(path) != null, 1000)); }",
+            "clean"
+        },
+        {
+            "a helper that reads, called outside any wait",
+            "static string? Slurp(string path) => GateFile.TryReadText(path); void F(string path) { _ = Slurp(path); }",
+            "clean"
+        },
+        {
+            "the gate's reader as the condition of a while with no pause",
+            "void F(string path) { while (GateFile.TryReadText(path) is null) { } }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a for with no end and no pause",
+            "void F(string path) { for (;;) { if (GateFile.TryReadText(path) is not null) { break; } } }",
+            "F: refused"
+        },
+        {
+            "the gate's reader as the condition of a do with no pause",
+            "void F(string path) { do { } while (GateFile.TryReadText(path) is null); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a loop that only spins",
+            "void F(string path) { var spinner = new SpinWait(); while (GateFile.TryReadText(path) is null) { spinner.SpinOnce(); } }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a loop with no pause, on another thread",
+            "void F(string path) { _ = Task.Run(() => { while (GateFile.TryReadText(path) is null) { } }); }",
+            "F: refused"
+        },
+        {
+            "the gate's reader in a loop that pauses",
+            "void F(string path) { while (GateFile.TryReadText(path) is null) { Thread.Sleep(100); } }",
+            "clean"
+        },
+        {
+            "each of several files read once in a foreach",
+            "void F(string[] paths) { foreach (string path in paths) { _ = GateFile.ReadText(path); } }",
+            "clean"
+        },
+        {
+            "each of several files read once in a counted for",
+            "void F(string[] paths) { for (int i = 0; i < paths.Length; i++) { _ = GateFile.ReadText(paths[i]); } }",
+            "clean"
+        },
+        {
+            "several files read each pass of a loop that pauses",
+            "void F(string[] paths) { while (true) { foreach (string path in paths) { if (GateFile.TryReadText(path) is not null) { return; } } Thread.Sleep(100); } }",
+            "clean"
+        },
+        {
+            "one read on another thread",
+            "void F(string path) { _ = Task.Run(() => GateFile.ReadText(path)); }",
+            "clean"
+        },
+        {
+            "a read on a timer's tick",
+            "void F(string path) { using var timer = new System.Threading.Timer(_ => GateFile.TryReadText(path), null, 0, 1); }",
+            "clean"
+        },
+        {
+            "a limit: a lambda that reads, handed to a helper that spins on it",
+            "static bool Spin(Func<bool> ready) => SpinWait.SpinUntil(ready, 1000); "
+            + "void F(string path) { Assert.True(Spin(() => GateFile.TryReadText(path) != null)); }",
+            "clean"
+        },
+        {
+            "a limit: a lambda that reads, copied to a second local that a spinning wait runs",
+            "void F(string path) { Func<bool> first = () => GateFile.TryReadText(path) != null; Func<bool> second = first; "
+            + "Assert.True(SpinWait.SpinUntil(second, 1000)); }",
+            "clean"
+        },
+        {
+            "a limit: a loop made with goto",
+            "void F(string path) { again: if (GateFile.TryReadText(path) is null) { goto again; } }",
+            "clean"
+        },
         { "another type's ReadAllText", "void F(string path) { _ = Notes.ReadAllText(path); }", "clean" },
         { "a write, a delete and a look", "void F(string path) { File.WriteAllText(path, \"new\"); _ = File.Exists(path); File.Delete(path); }", "clean" },
     };
@@ -4379,6 +4563,7 @@ public sealed class TestWaitCensus
         CSharpCompilation compilation, IReadOnlyList<SyntaxTree> sources, Func<SyntaxTree, string> fileOf)
     {
         List<ClockSite> refused = [];
+        var spinning = new SpinningWaits(compilation, sources);
         foreach (SyntaxTree tree in sources)
         {
             string file = fileOf(tree);
@@ -4400,13 +4585,15 @@ public sealed class TestWaitCensus
                         bool ofFile = DirectFileReads.Contains(member);
                         bool ofFileInfo = FileInfoReads.Contains(member);
                         bool aLoad = PathLoads.Any(load => load.Method == member);
-                        if (!ofFile && !ofFileInfo && !aLoad)
+                        bool ofGateFile = GateFileMethods.Contains(member);
+                        if (!ofFile && !ofFileInfo && !aLoad && !ofGateFile)
                         {
                             break;
                         }
-                        SemanticModel bound = model ??= compilation.GetSemanticModel(tree);
+                        SemanticModel bound = model ??= spinning.ModelOf(tree);
                         if ((ofFile && ClockSyntax.IsMemberOf(reference, bound, "File", "System.IO"))
-                            || (ofFileInfo && ClockSyntax.IsMemberOf(reference, bound, "FileInfo", "System.IO")))
+                            || (ofFileInfo && ClockSyntax.IsMemberOf(reference, bound, "FileInfo", "System.IO"))
+                            || (ofGateFile && IsAGateFileMethodGroup(reference, bound)))
                         {
                             Refuse(reference);
                         }
@@ -4427,14 +4614,14 @@ public sealed class TestWaitCensus
                         break;
                     case InvocationExpressionSyntax call
                         when ClockSyntax.NameCalled(call.Expression) is { } name && ReaderCalls.Contains(name):
-                        model ??= compilation.GetSemanticModel(tree);
-                        if (IsOnGateFile(call, model) && RunsInASpinningWait(call, model))
+                        model ??= spinning.ModelOf(tree);
+                        if (IsOnGateFile(call, model) && (spinning.Run(call) || StandsInALoopThatNeverPauses(call)))
                         {
                             Refuse(call);
                         }
                         break;
                     case BaseObjectCreationExpressionSyntax creation:
-                        model ??= compilation.GetSemanticModel(tree);
+                        model ??= spinning.ModelOf(tree);
                         if (Creates(creation, model, "FileStream")
                             || (Creates(creation, model, "StreamReader") && ReadsAPath(creation, creation.ArgumentList, model)))
                         {
@@ -4523,51 +4710,165 @@ public sealed class TestWaitCensus
             && receiver.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == "GateFile";
     }
 
-    /// <summary>Whether a call runs inside a wait that spins: in a lambda
-    /// handed to a call named SpinUntil; or in a local function, or a lambda
-    /// kept in a local, that is handed to one or called from a lambda that
-    /// is.</summary>
-    private static bool RunsInASpinningWait(SyntaxNode call, SemanticModel model)
+    /// <summary>Whether a GateFile method is named without being called: a
+    /// method group, by the operation it binds to. A call is not one, and
+    /// neither is the name inside <c>nameof</c>. Where the reference binds
+    /// to no operation, its symbol stands in, and where it has none, the
+    /// spelling of its receiver.</summary>
+    private static bool IsAGateFileMethodGroup(ExpressionSyntax reference, SemanticModel model)
     {
+        if (reference.Parent is InvocationExpressionSyntax called && called.Expression == reference)
+        {
+            return false;
+        }
+        if (model.GetOperation(reference) is IMethodReferenceOperation named)
+        {
+            return named.Method.ContainingType?.Name == "GateFile";
+        }
+        if (reference.Ancestors().OfType<InvocationExpressionSyntax>()
+            .Any(around => around.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" }))
+        {
+            return false;
+        }
+        SymbolInfo info = model.GetSymbolInfo(reference);
+        if ((info.Symbol ?? info.CandidateSymbols.FirstOrDefault()) is { } symbol)
+        {
+            return symbol is IMethodSymbol && symbol.ContainingType?.Name == "GateFile";
+        }
+        return reference is MemberAccessExpressionSyntax { Expression: var receiver }
+            && receiver.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault()?.Identifier.ValueText == "GateFile";
+    }
+
+    /// <summary>What makes a pass of a loop take time: a sleep, a delay, or
+    /// the gate's own paced poll.</summary>
+    private static readonly HashSet<string> Pauses =
+        new(StringComparer.Ordinal) { "Sleep", "Delay", "UntilInputIsProcessed", "PollText", "ExpectFileText" };
+
+    /// <summary>Whether a call stands in a loop that never pauses: a while,
+    /// a do or a for that can end early, in the call's own function, and
+    /// no loop statement around the call in that function holds a pause. A
+    /// foreach, and a for that only counts, go over their files once.</summary>
+    private static bool StandsInALoopThatNeverPauses(SyntaxNode call)
+    {
+        if (!ClockSyntax.StandsInAPoll(call, foreachIsAPoll: false))
+        {
+            return false;
+        }
         foreach (SyntaxNode ancestor in call.Ancestors())
         {
             switch (ancestor)
             {
-                case AnonymousFunctionExpressionSyntax lambda:
-                    if (IsHandedToSpinUntil(lambda))
+                case WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax:
+                    if (ancestor.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                        .Any(inner => ClockSyntax.NameCalled(inner.Expression) is { } pause && Pauses.Contains(pause)))
                     {
-                        return true;
-                    }
-                    if (ClockSyntax.Outermost(lambda).Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax keptIn }
-                        && model.GetDeclaredSymbol(keptIn) is ILocalSymbol kept
-                        && IsRunByASpinningWait(kept, keptIn, model))
-                    {
-                        return true;
+                        return false;
                     }
                     break;
-                case LocalFunctionStatementSyntax local:
-                    if (model.GetDeclaredSymbol(local) is { } declared && IsRunByASpinningWait(declared, local, model))
-                    {
-                        return true;
-                    }
-                    break;
-                case MemberDeclarationSyntax:
-                    return false;
+                case AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or MemberDeclarationSyntax:
+                    return true;
             }
         }
-        return false;
+        return true;
     }
 
-    /// <summary>Whether a local function or a local that holds a lambda is
-    /// named, anywhere in its member, as an argument of SpinUntil or inside
-    /// a lambda handed to it.</summary>
-    private static bool IsRunByASpinningWait(ISymbol function, SyntaxNode declaredAt, SemanticModel model) =>
-        declaredAt.Ancestors().FirstOrDefault(around => around is MemberDeclarationSyntax) is { } member
-        && member.DescendantNodes().OfType<IdentifierNameSyntax>().Any(name =>
-            name.Identifier.ValueText == function.Name
-            && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(name).Symbol, function)
-            && (IsHandedToSpinUntil(name)
-                || name.Ancestors().OfType<AnonymousFunctionExpressionSyntax>().Any(IsHandedToSpinUntil)));
+    /// <summary>What the spinning waits of a set of sources run. A spinning
+    /// wait is a call named SpinUntil. It runs a call that stands in a
+    /// lambda handed to it, and a call in anything whose name stands in one
+    /// of its arguments: the local function, method or property the call is
+    /// in, or the local, field or property that a lambda holding the call
+    /// is assigned to. One member is followed, not the chain of its
+    /// callers.</summary>
+    private sealed class SpinningWaits(CSharpCompilation compilation, IReadOnlyList<SyntaxTree> sources)
+    {
+        private readonly Dictionary<SyntaxTree, SemanticModel> _models = [];
+        private Dictionary<string, List<SimpleNameSyntax>>? _named;
+
+        public SemanticModel ModelOf(SyntaxTree tree) =>
+            _models.TryGetValue(tree, out SemanticModel? model) ? model : _models[tree] = compilation.GetSemanticModel(tree);
+
+        /// <summary>Whether a spinning wait runs <paramref name="call"/>.</summary>
+        public bool Run(SyntaxNode call)
+        {
+            SemanticModel model = ModelOf(call.SyntaxTree);
+            foreach (SyntaxNode ancestor in call.Ancestors())
+            {
+                switch (ancestor)
+                {
+                    case AnonymousFunctionExpressionSyntax lambda:
+                        if (IsHandedToSpinUntil(lambda) || (HolderOf(lambda, model) is { } holder && Names(holder)))
+                        {
+                            return true;
+                        }
+                        break;
+                    case LocalFunctionStatementSyntax local:
+                        if (model.GetDeclaredSymbol(local) is { } declared && Names(declared))
+                        {
+                            return true;
+                        }
+                        break;
+                    case BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax:
+                        return model.GetDeclaredSymbol(ancestor) is { } member && Names(member);
+                    case MemberDeclarationSyntax:
+                        return false;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>The local, field or property a lambda is assigned to,
+        /// where it is declared or later.</summary>
+        private static ISymbol? HolderOf(AnonymousFunctionExpressionSyntax lambda, SemanticModel model)
+        {
+            ExpressionSyntax kept = ClockSyntax.Outermost(lambda);
+            ISymbol? holder = kept.Parent switch
+            {
+                EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } => model.GetDeclaredSymbol(declarator),
+                AssignmentExpressionSyntax assignment when assignment.Right == kept => model.GetSymbolInfo(assignment.Left).Symbol,
+                _ => null,
+            };
+            return holder is ILocalSymbol or IFieldSymbol or IPropertySymbol ? holder : null;
+        }
+
+        /// <summary>Whether a spinning wait names <paramref name="holder"/>
+        /// in one of its arguments.</summary>
+        private bool Names(ISymbol holder) =>
+            (_named ??= NamedInSpinningWaits()).TryGetValue(holder.Name, out List<SimpleNameSyntax>? named)
+            && named.Any(name => SymbolEqualityComparer.Default.Equals(Declared(ModelOf(name.SyntaxTree).GetSymbolInfo(name).Symbol), holder));
+
+        private static ISymbol? Declared(ISymbol? symbol) => symbol switch
+        {
+            IMethodSymbol method => (method.ReducedFrom ?? method).OriginalDefinition,
+            null => null,
+            _ => symbol.OriginalDefinition,
+        };
+
+        /// <summary>Every name in an argument of a call named SpinUntil, by
+        /// its text.</summary>
+        private Dictionary<string, List<SimpleNameSyntax>> NamedInSpinningWaits()
+        {
+            Dictionary<string, List<SimpleNameSyntax>> names = new(StringComparer.Ordinal);
+            foreach (SyntaxTree tree in sources)
+            {
+                foreach (InvocationExpressionSyntax wait in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (ClockSyntax.NameCalled(wait.Expression) != "SpinUntil")
+                    {
+                        continue;
+                    }
+                    foreach (SimpleNameSyntax name in wait.ArgumentList.DescendantNodes().OfType<SimpleNameSyntax>())
+                    {
+                        if (!names.TryGetValue(name.Identifier.ValueText, out List<SimpleNameSyntax>? named))
+                        {
+                            names[name.Identifier.ValueText] = named = [];
+                        }
+                        named.Add(name);
+                    }
+                }
+            }
+            return names;
+        }
+    }
 
     private static bool IsHandedToSpinUntil(ExpressionSyntax handed) =>
         ClockSyntax.TakenBy(ClockSyntax.Outermost(handed)) is InvocationExpressionSyntax wait
