@@ -474,14 +474,44 @@ internal sealed partial class WorkspaceViewModel
     /// leaf's spelling. A destination that is not a note moves nothing
     /// either: the index has no note row there, so a load at that path
     /// would answer the press with no citations.</summary>
-    private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination)
+    private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination, bool checkTheMovedFile)
     {
         if (_summaryParked
             && ReferenceEquals(tab, _parkedSummaryTab)
             && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
-            && CoreDocumentClassification.IsMarkdown(destination))
+            && CoreDocumentClassification.IsMarkdown(destination)
+            && (!checkTheMovedFile || IndexHoldsTheTabsVersion(tab, destination)))
         {
             _parkedSummaryPath = destination;
+        }
+    }
+
+    /// <summary>Plan 47 CB-11 (#1714): the file a rename this window made
+    /// moved to <paramref name="path"/> is the version <paramref name="tab"/>
+    /// holds: the index, which the rename has already moved, has the tab's
+    /// saved baseline at the new path. A rename moves whatever file is at
+    /// the path, and another session can have put a different note there
+    /// before this window's rescan; the tab is then moved onto that note's
+    /// file (as on main), but the press does not go with it. The change
+    /// feed's moves need no such read: its plan moves a tab only when the
+    /// tab's baseline is the record's own hash. A tab with no baseline, or
+    /// an index that cannot be read, proves nothing, and the press falls
+    /// back to main's drop.</summary>
+    private bool IndexHoldsTheTabsVersion(WorkspaceTabViewModel tab, string path)
+    {
+        if (tab.SavedContentHash is not string baseline)
+        {
+            return false;
+        }
+        try
+        {
+            using var cancel = new CancelToken();
+            return string.Equals(
+                _session.IndexedContentHashes([path], cancel)[0], baseline, StringComparison.Ordinal);
+        }
+        catch (VaultException)
+        {
+            return false;
         }
     }
 
