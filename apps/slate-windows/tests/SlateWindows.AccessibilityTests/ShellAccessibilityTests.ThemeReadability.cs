@@ -28,15 +28,35 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
             AutomationElement tab = tabs.FindFirstChild(cf => cf.ByControlType(ControlType.TabItem))
                 ?? throw new Xunit.Sdk.XunitException("no open tab in the window.");
-            Thread.Sleep(500);
 
             // DS-13: the bar holds the logo, an image its name speaks for, and the menus'
-            // names are rows of its popup, so a row's text is what's measured.
+            // names are rows of its popup, so a row's text is what's measured. The popup's
+            // surface slides in where the shell animates (Slate.Menus.xaml: 167 ms, from
+            // 90 above), and UI Automation hands out the row before the popup has painted:
+            // measured here, the row's rectangle went on moving for about 140 ms after it
+            // was first given, and a combo box's row showed the window under it at first.
+            // So the journey waits for the row to be on the screen, then for it to stop,
+            // and measures once. It is watched on the screen: a popup is a window of its
+            // own, and UI Automation gives its rows no handle but the main window's, whose
+            // own pixels show what lies under the popup.
             AutomationElement file = WaitForAppMenu(window, "FileMenu", TimeSpan.FromSeconds(10));
-            Thread.Sleep(500);
+            WaitForPopupOnScreen(file, "the File row");
+            WaitForSettledPixels(file, "the File row", onScreen: true);
             AssertReadable(file, "the File row");
-            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Collapse();
-            Thread.Sleep(300);
+            // The logo is held as an element: a logo that cannot be found is "not yet",
+            // never "collapsed".
+            AutomationElement logo = WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10));
+            logo.Patterns.ExpandCollapse.Pattern.Collapse();
+            Assert.True(
+                EventuallyByUia(
+                    () => logo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                    TimeSpan.FromSeconds(10)),
+                "the app menu did not close.");
+            // The tab is measured once the menu has closed. The popup opened beside the
+            // tab, not over it (its rows ended 279 pixels left of the tab on the desktop
+            // this was measured on), so the tab has no popup to be seen gone from over it.
+            // It is settled on the screen because the screen is what the measurement reads.
+            WaitForSettledPixels(tab, "the open tab", onScreen: true);
             AssertReadable(tab, "the open tab");
 
             AssertAxeClean(process, "theme-readability");
@@ -59,7 +79,7 @@ public sealed partial class ShellAccessibilityTests
 
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement palette = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
-            Thread.Sleep(800);
+            WaitForSettledPixels(palette, "the command palette");
 
             int ink;
             int fringed;
@@ -181,7 +201,8 @@ public sealed partial class ShellAccessibilityTests
                 1) is 0
                 ? Color.FromArgb(0x6B, 0x4D, 0x00)
                 : Color.FromArgb(0xF9, 0xE7, 0xB8);
-            Thread.Sleep(300);
+            AssertEventuallyFocused(editor, "the note did not take the keys.");
+            WaitForSettledPixels(editor, "the editor");
             int before = Measure(editor, highlight).Highlight;
             Assert.True(before < 50, $"premise: {before} pixels are the highlight with nothing selected.");
 
@@ -190,7 +211,10 @@ public sealed partial class ShellAccessibilityTests
                 Keyboard.Type(VirtualKeyShort.KEY_A);
             }
 
-            Thread.Sleep(400);
+            Assert.True(
+                EventuallyByUia(() => SelectionText(editor).Length > 0, TimeSpan.FromSeconds(5)),
+                "Ctrl+A selected nothing in the editor.");
+            WaitForSettledPixels(editor, "the editor's selection");
             (int selected, double ink) = Measure(editor, highlight);
             Assert.True(
                 selected > 500,
@@ -208,7 +232,7 @@ public sealed partial class ShellAccessibilityTests
         {
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
-            Thread.Sleep(500);
+            WaitForSettledPixels(results, "the command palette's list");
 
             AssertReadable(results, "the command palette's list");
 
@@ -225,10 +249,27 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement[] rows = rail.FindAllChildren(cf => cf.ByControlType(ControlType.ListItem));
             rows[1].Focus();
             PressKey(VirtualKeyShort.DOWN);
-            Thread.Sleep(500);
-            AutomationElement row = rail
-                .FindAllChildren(cf => cf.ByControlType(ControlType.ListItem))
-                .Single(item => item.Properties.HasKeyboardFocus.ValueOrDefault);
+            AutomationElement? focused = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            focused = rail
+                                .FindAllChildren(cf => cf.ByControlType(ControlType.ListItem))
+                                .SingleOrDefault(item => item.Properties.HasKeyboardFocus.ValueOrDefault);
+                            return focused is not null && !focused.Equals(rows[1]);
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Down from the rail's second row did not put the keys on another row.");
+            AutomationElement row = focused!;
+            WaitForSettledPixels(row, "the focused rail row");
 
             using FlaUI.Core.Capturing.CaptureImage capture = CapturePhysicalPixels(row);
             Bitmap bitmap = capture.Bitmap;
@@ -296,16 +337,38 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
             search.Patterns.Value.Pattern.SetValue("Open Graph");
-            Thread.Sleep(500);
+            AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            AutomationElement[] selection = results.Patterns.Selection.Pattern.Selection.ValueOrDefault ?? [];
+                            return selection.Length == 1 && selection[0].Name.StartsWith("Open Graph", StringComparison.Ordinal);
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette never selected Open Graph.");
             PressKey(VirtualKeyShort.ENTER);
             AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
-            Thread.Sleep(500);
+            WaitForSettledPixels(grid, "the graph table");
             Color enabled = MostCommonColor(grid);
 
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
             WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
-            Thread.Sleep(500);
-            Assert.False(grid.IsEnabled, "premise: the overlay didn't disable the grid.");
+            Assert.True(
+                EventuallyByUia(() => !grid.IsEnabled, TimeSpan.FromSeconds(10)),
+                "premise: the overlay didn't disable the grid.");
+            // The grid's Disabled state is an animation, and the fact is about where it
+            // ends: the surface is measured once, after it has settled. The overlay's
+            // field lies over the grid and draws a caret, so settled here can mean
+            // blinking between two frames (SettledPixels).
+            WaitForSettledPixels(grid, "the disabled graph table");
 
             // DS-6: the overlay's scrim is over it now, a flat 30% black in both themes.
             Color disabled = MostCommonColor(grid);
@@ -331,7 +394,7 @@ public sealed partial class ShellAccessibilityTests
         {
             AutomationElement filter = WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10));
             Assert.True(string.IsNullOrEmpty(filter.Patterns.Value.Pattern.Value.Value), "premise: the filter has text.");
-            Thread.Sleep(300);
+            WaitForSettledPixels(filter, "the Files filter");
 
             using FlaUI.Core.Capturing.CaptureImage capture = CapturePhysicalPixels(filter);
             Bitmap bitmap = capture.Bitmap;
@@ -361,15 +424,40 @@ public sealed partial class ShellAccessibilityTests
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_COMMA);
             AutomationElement combo = WaitForElement(window, "SettingsAccent", TimeSpan.FromSeconds(10));
             combo.Patterns.ExpandCollapse.Pattern.Expand();
-            Thread.Sleep(500);
-            AutomationElement row = combo.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))
-                .First(item => item.Patterns.SelectionItem.Pattern.IsSelected.Value);
+            AutomationElement? selected = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            selected = combo.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Patterns.SelectionItem.Pattern.IsSelected.Value);
+                            return selected is not null;
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the accent's open list showed no selected row.");
+            AutomationElement row = selected!;
+            // The list is a popup, a window of its own: watched on the screen, as the
+            // app menu's row is. First on the screen at all (UI Automation gave this row
+            // while the screen in its rectangle was still the sheet under it), then at rest.
+            WaitForPopupOnScreen(row, "the selected dropdown row");
+            WaitForSettledPixels(row, "the selected dropdown row", onScreen: true);
 
             Color fill = MostCommonColor(row);
             Assert.True(fill.B <= fill.R, $"the selected row is {fill}.");
 
             combo.Patterns.ExpandCollapse.Pattern.Collapse();
-            Thread.Sleep(300);
+            Assert.True(
+                EventuallyByUia(
+                    () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                    TimeSpan.FromSeconds(10)),
+                "the accent's list did not close.");
             AssertAxeClean(process, "dropdown-row");
         });
 

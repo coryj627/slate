@@ -23,12 +23,12 @@ public sealed partial class ShellAccessibilityTests
         string logs = Path.Combine(root, "logs");
         Directory.CreateDirectory(vault);
         File.WriteAllText(Path.Combine(vault, "alpha.md"), "# Alpha\n\n[Example](https://example.org)\n\n- Item\n");
-        using JsonDocument table = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "chords.json")));
+        using JsonDocument table = JsonDocument.Parse(GateFile.ReadFixture("fixtures", "chords.json"));
         var rows = table.RootElement.GetProperty("commands").EnumerateArray()
             .Concat(table.RootElement.GetProperty("chordSurface").EnumerateArray())
             .ToDictionary(row => row.GetProperty("id").GetString()!, row => row);
-        XDocument xaml = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "MainWindow.xaml"));
-        XDocument templates = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "WorkspaceTemplates.xaml"));
+        XDocument xaml = XDocument.Parse(GateFile.ReadFixture("fixtures", "MainWindow.xaml"));
+        XDocument templates = XDocument.Parse(GateFile.ReadFixture("fixtures", "WorkspaceTemplates.xaml"));
         string Speech(string id) => rows[id].GetProperty("windowsSpoken").GetString()
             ?? throw new Xunit.Sdk.XunitException("No spoken chord for " + id);
         string LiteralHelp(string id) => xaml.Descendants().Single(element =>
@@ -175,6 +175,11 @@ public sealed partial class ShellAccessibilityTests
                 Assert.Contains(Speech("windows.reading." + id), reading.Properties.HelpText.Value);
             }
             AssertAxeClean(process, "spoken-chords-reading");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(SpokenChords_MenusPaletteAndOverlays_MatchTheTable), logs);
+            throw;
         }
         finally
         {

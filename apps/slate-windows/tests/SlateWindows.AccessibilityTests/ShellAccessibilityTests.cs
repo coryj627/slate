@@ -1556,7 +1556,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        string fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "editor_semantics.md"));
+        string fixture = GateFile.ReadFixture("fixtures", "editor_semantics.md");
         File.WriteAllText(Path.Combine(vaultRoot, "note.md"), fixture);
         Process? process = null;
         try
@@ -1681,6 +1681,11 @@ public sealed partial class ShellAccessibilityTests
                     child = reverse ? walker.GetPreviousSibling(child) : walker.GetNextSibling(child);
                 }
             }
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -2501,13 +2506,11 @@ public sealed partial class ShellAccessibilityTests
                 return "<absent>";
             }
 
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            string content = reader.ReadToEnd();
+            if (GateFile.TryReadText(path) is not { } content)
+            {
+                return "<unreadable>";
+            }
+
             string head = content.Length > 120 ? content[..120] + "…" : content;
             return "\"" + head.Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
         }
@@ -2517,6 +2520,35 @@ public sealed partial class ShellAccessibilityTests
             return $"<unreadable: {exception.GetType().Name}>";
         }
     }
+
+    /// <summary>
+    /// Waits until the file at <paramref name="path"/> reads as
+    /// <paramref name="ready"/> asks, and returns that text. The wait is
+    /// <see cref="GateFile.PollText"/>: one short read, then a pause, so a
+    /// save the app makes meanwhile finds the file free. On a miss the app's
+    /// log is kept (<see cref="PreserveEvidence"/>) and the failure says
+    /// <paramref name="what"/>, what the file holds and the log's last lines.
+    /// </summary>
+    private static string ExpectFileText(
+        string path, Func<string, bool> ready, string what, string testName, string logDirectory, TimeSpan timeout)
+    {
+        if (GateFile.PollText(path, ready, timeout) is { } text)
+        {
+            return text;
+        }
+
+        PreserveEvidence(testName, logDirectory);
+        throw new Xunit.Sdk.XunitException(
+            $"{what} After {timeout.TotalSeconds:0.#} s {Path.GetFileName(path)} reads: {DiagnosticFileHead(path)}. "
+            + $"The app log's last lines: {LogTail(Path.Combine(logDirectory, "slate-windows.log"))}");
+    }
+
+    /// <summary>The last eight lines of the app's log, for a failure
+    /// message.</summary>
+    private static string LogTail(string logFile) =>
+        GateFile.TryReadText(logFile) is { } log
+            ? string.Join(" | ", log.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(8).Select(line => line.TrimEnd('\r')))
+            : "<no app log>";
 
     /// <summary>
     /// Whether Slate has exited, for a failure message; never throws, so
@@ -2539,13 +2571,21 @@ public sealed partial class ShellAccessibilityTests
     /// <c>SLATE_ACCESSIBILITY_EVIDENCE_DIR\&lt;testName&gt;</c> (the
     /// directory the CI job uploads) before the test's <c>finally</c>
     /// deletes it. A no-op when the variable is unset; best effort, so a
-    /// copy error never replaces the failure being reported.
+    /// copy error never replaces the failure being reported. On the lane the
+    /// folder is uploaded, failed run or not, in the artifact
+    /// <c>slate-windows-accessibility-&lt;sha&gt;-&lt;attempt&gt;</c>, which is
+    /// kept 30 days: the log is <c>&lt;testName&gt;\slate-windows.log</c> there.
+    /// <paramref name="testName"/> is whatever the caller passes. Most facts
+    /// pass their own name. A fact that runs through
+    /// <c>RunFindInNoteJourney</c> does not: the folder is named for the
+    /// journey (<c>theme-readability</c>, <c>dropdown-row</c>), the first
+    /// argument of that call, not for the fact.
     /// </summary>
     /// <remarks>
     /// The app holds <c>slate-windows.log</c> open for writing, so each
-    /// file is read through a shared stream rather than
-    /// <see cref="File.Copy(string, string, bool)"/>, which would hit a
-    /// sharing violation.
+    /// file is read through <see cref="GateFile"/>, which shares the file
+    /// with its writer, and its bytes are written out: a plain copy would
+    /// hit a sharing violation. A file the reader cannot read is skipped.
     /// </remarks>
     private static void PreserveEvidence(string testName, string logDirectory)
     {
@@ -2564,14 +2604,10 @@ public sealed partial class ShellAccessibilityTests
             {
                 try
                 {
-                    using var source = new FileStream(
-                        file,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    using FileStream copy = File.Create(
-                        Path.Combine(destination, Path.GetFileName(file)));
-                    source.CopyTo(copy);
+                    if (GateFile.TryReadBytes(file) is { } kept)
+                    {
+                        File.WriteAllBytes(Path.Combine(destination, Path.GetFileName(file)), kept);
+                    }
                 }
                 catch (Exception exception) when (
                     exception is IOException or UnauthorizedAccessException)
@@ -2972,22 +3008,10 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 openRow, "the open task row never took keyboard focus before Space");
             Keyboard.Type(VirtualKeyShort.SPACE);
-            if (!SpinWait.SpinUntil(
-                () =>
-                {
-                    // Tolerant of the app's atomic temp+rename
-                    // write racing this poll.
-                    try
-                    {
-                        return File.ReadAllText(todoPath)
-                            .Contains("- [x] first open");
-                    }
-                    catch (IOException)
-                    {
-                        return false;
-                    }
-                },
-                TimeSpan.FromSeconds(20)))
+            if (GateFile.PollText(
+                    todoPath,
+                    text => text.Contains("- [x] first open", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(20)) is null)
             {
                 // A miss says where the Space went: what todo.md holds,
                 // who had the foreground and focus, and which keys the
@@ -3057,6 +3081,11 @@ public sealed partial class ShellAccessibilityTests
                 "selecting the Overdue chip never took the UIA selection");
 
             AssertAxeClean(process, "task-panels");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(TaskPanels_RowsToggleAndReviewCarriesTheMacShapes), logDirectory);
+            throw;
         }
         finally
         {
@@ -3197,22 +3226,13 @@ public sealed partial class ShellAccessibilityTests
             titleEditor!.Patterns.Value.Pattern.SetValue("Renamed");
             titleEditor.Focus();
             Keyboard.Type(VirtualKeyShort.ENTER);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        try
-                        {
-                            return File.ReadAllText(notePath)
-                                .Contains("title: Renamed");
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(20)),
-                "the Enter commit never reached disk");
+            _ = ExpectFileText(
+                notePath,
+                text => text.Contains("title: Renamed", StringComparison.Ordinal),
+                "the Enter commit never reached disk.",
+                nameof(PropertiesHeader_RowsEditSheetsAndRenameCarryTheMacShapes),
+                logDirectory,
+                TimeSpan.FromSeconds(20));
 
             // The add sheet opens as a named UIA dialog and Cancel
             // dismisses it.
@@ -3298,6 +3318,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "properties-header");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(PropertiesHeader_RowsEditSheetsAndRenameCarryTheMacShapes), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -3355,7 +3380,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vaultRoot, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
-        File.Copy(CitationStyleFixture(), Path.Combine(vaultRoot, "ieee.csl"));
+        CopyCitationStyleFixture(Path.Combine(vaultRoot, "ieee.csl"));
         // A style is REQUIRED for rows to render; without one every row
         // is a placeholder and nothing is expandable (contract 2).
         File.WriteAllText(
@@ -3915,6 +3940,11 @@ public sealed partial class ShellAccessibilityTests
                     + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
             sheetsOutcome = ListenerOutcome.Completed;
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CitationSurfaces_GridsSheetsAndChords_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             int slateId = process?.Id ?? -1;
@@ -4297,28 +4327,16 @@ public sealed partial class ShellAccessibilityTests
                 "the cell editor did not take focus");
             Keyboard.Type("todo-edited");
             PressKey(VirtualKeyShort.RETURN);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the app's atomic temp+rename
-                        // write racing this poll (the CI sharing
-                        // violation this journey tripped on PR #1124).
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "status: todo-edited",
-                                    StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "the committed cell edit never reached the file");
+            // A paced read: this journey's spinning read met the app's
+            // save on PR #1124, and a read open at the instant of the app's
+            // rename refuses it (GateFile).
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("status: todo-edited", StringComparison.Ordinal),
+                "the committed cell edit never reached the file.",
+                nameof(BasesSurfaces_GridBuilderAndLeaves_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(15));
             // The committed edit's vault event re-executes every Bases
             // surface (C9): the tab grid re-binds BEHIND the right
             // pane while the journey moves on, and an axe snapshot
@@ -4583,6 +4601,11 @@ public sealed partial class ShellAccessibilityTests
             _ = WaitForElement(window, "DashboardSection0Grid", TimeSpan.FromSeconds(15));
             AssertAxeClean(process, "bases-dashboard-tab");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(BasesSurfaces_GridBuilderAndLeaves_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -4673,46 +4696,22 @@ public sealed partial class ShellAccessibilityTests
             editor.Focus();
             Keyboard.Type("first revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "first revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the first in-app save never reached disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("first revision", StringComparison.Ordinal),
+                "the first in-app save never reached disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(10));
             Keyboard.Type("second revision ");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "second revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the second in-app save never reached disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => text.Contains("second revision", StringComparison.Ordinal),
+                "the second in-app save never reached disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(10));
 
             // slate.history.showPanel: the chordless menu route
             // (contract H11) reveals the leaf.
@@ -4914,25 +4913,13 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(15)),
                 "the restore confirmation dialog with its pinned "
                 + "Cancel/Restore buttons never appeared");
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        // Tolerant of the atomic write racing the poll.
-                        try
-                        {
-                            return !File.ReadAllText(
-                                    Path.Combine(vaultRoot, "alpha.md"))
-                                .Contains(
-                                    "second revision", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "the restore never landed on disk");
+            _ = ExpectFileText(
+                Path.Combine(vaultRoot, "alpha.md"),
+                text => !text.Contains("second revision", StringComparison.Ordinal),
+                "the restore never landed on disk.",
+                nameof(HistorySurfaces_LeafDiffAndRestore_AreClean),
+                logDirectory,
+                TimeSpan.FromSeconds(15));
             // Success returns focus to the NEW HEAD row — exactly
             // HistoryRow0, not the anchor row or its buttons, whose
             // ids also start with "HistoryRow" (H7 / WCAG 2.4.3;
@@ -4952,6 +4939,11 @@ public sealed partial class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(15)),
                 "focus never landed on the new head row after the restore");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(HistorySurfaces_LeafDiffAndRestore_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -6553,23 +6545,36 @@ public sealed partial class ShellAccessibilityTests
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
 
             string createdPath = Path.Combine(vaultRoot, "Journey Note.md");
-            string saved = string.Empty;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        try
-                        {
-                            saved = File.ReadAllText(createdPath);
-                            return saved.Contains("MARK", StringComparison.Ordinal);
-                        }
-                        catch (IOException)
-                        {
-                            return false;
-                        }
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the typed caret marker never reached the note on disk.");
+            string saved;
+            try
+            {
+                saved = ExpectFileText(
+                    createdPath,
+                    text => text.Contains("MARK", StringComparison.Ordinal),
+                    "the typed caret marker never reached the note on disk.",
+                    nameof(Templates_PickerPromptsCreateAndCancel_AreClean),
+                    logDirectory,
+                    TimeSpan.FromSeconds(10));
+            }
+            catch (Xunit.Sdk.XunitException miss)
+            {
+                // Which leg it was: the typing (the editor holds no MARK) or
+                // the save (the editor holds it and the file does not), and
+                // who had the keys.
+                string inTheEditor;
+                try
+                {
+                    inTheEditor = "\"" + EditorText(editor).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
+                }
+                catch (Exception exception)
+                {
+                    inTheEditor = $"<unreadable: {exception.GetType().Name}>";
+                }
+
+                throw new Xunit.Sdk.XunitException(
+                    $"{miss.Message} The editor reads: {inTheEditor}. {KeyInputDiagnosis(automation)}");
+            }
+
             // The template's own frontmatter renders through into the
             // note (that is how template frontmatter seeds properties;
             // mac-identical), and MARK sits exactly where {{cursor}}
@@ -6578,6 +6583,11 @@ public sealed partial class ShellAccessibilityTests
                 "---\ndescription: Journey fixture\n---\n# Journey Note\n\n"
                 + "Topic: Quarterly sync\nNotes: \n\nCafé MARKend\n",
                 saved);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PickerPromptsCreateAndCancel_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -6775,20 +6785,9 @@ public sealed partial class ShellAccessibilityTests
                 // Tolerant read: the app holds the log open (the Bases
                 // journey's recorded sharing-violation pattern).
                 string log = Path.Combine(logDirectory, "slate-windows.log");
-                string tail = "(no log)";
-                try
-                {
-                    using var stream = new FileStream(
-                        log, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    using var reader = new StreamReader(stream);
-                    tail = string.Join(
-                        " | ",
-                        reader.ReadToEnd().Split('\n').TakeLast(8));
-                }
-                catch (IOException)
-                {
-                }
+                string tail = GateFile.TryReadText(log) is { } logged
+                    ? string.Join(" | ", logged.Split('\n').TakeLast(8))
+                    : "(no log)";
 
                 throw new Xunit.Sdk.XunitException(
                     $"MoveToSheet never appeared; exited={process.HasExited}; "
@@ -6881,6 +6880,11 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 File.Exists(Path.Combine(vaultRoot, "arch", "journey copy.md")));
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(FileManagement_CreateRenameDuplicateMoveDelete_IsClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -6919,8 +6923,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(Path.Combine(vaultRoot, "target.md"), "# Target\n");
         if (useCanvas)
         {
-            File.Copy(Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-                Path.Combine(vaultRoot, "sample.canvas"));
+            CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
         }
         Process? process = null;
         try
@@ -6942,8 +6945,8 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(item, "The file did not receive focus before Delete.");
             // The OS lock is a deterministic preparation barrier. Cancel must
             // drain the native worker while this independent holder still owns it.
-            using var blocker = new FileStream(Path.Combine(vaultRoot, ".slate", "structural.lock"),
-                FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+            using FileStream blocker = GateFile.HoldForTheFact(
+                Path.Combine(vaultRoot, ".slate", "structural.lock"), FileAccess.ReadWrite);
             blocker.Lock(0, long.MaxValue);
             PressKey(VirtualKeyShort.DELETE);
             AutomationElement cancel = WaitForElement(window, "CancelTrash", TimeSpan.FromSeconds(10));
@@ -7001,8 +7004,13 @@ public sealed partial class ShellAccessibilityTests
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CancelTrash")) is null,
                 TimeSpan.FromSeconds(10)), "Cancellation waited for the external structural lock to release.");
             AssertTrashProgressAbsent(window, automation);
-            Assert.Equal("# Keep\n", File.ReadAllText(Path.Combine(vaultRoot, "keep.md")));
+            Assert.Equal("# Keep\n", GateFile.ReadText(Path.Combine(vaultRoot, "keep.md")));
             blocker.Unlock(0, long.MaxValue);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(TrashCancellation_WhileStructuralLockIsHeld_IsReachableAndPreservesFocus), logDirectory);
+            throw;
         }
         finally
         {
@@ -7185,7 +7193,7 @@ public sealed partial class ShellAccessibilityTests
                 .Replace('\\', '/')
                 .Contains("/.slate/", StringComparison.Ordinal))
             .OrderBy(path => path, StringComparer.Ordinal)
-            .Select(path => $"{path}|{File.ReadAllText(path)}")];
+            .Select(path => $"{path}|{GateFile.ReadText(path)}")];
 
     /// <summary>
     /// Whether a chord can actually be delivered to the app, or is held
@@ -7445,7 +7453,7 @@ public sealed partial class ShellAccessibilityTests
                 + string.Join(
                     " / ",
                     Directory.EnumerateFiles(vaultRoot, "*.canvas")
-                        .Select(f => Path.GetFileName(f) + "=" + File.ReadAllText(f)))
+                        .Select(f => Path.GetFileName(f) + "=" + (GateFile.TryReadText(f) ?? "<unreadable>")))
                 + "; log: "
                 + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
 
@@ -7480,6 +7488,11 @@ public sealed partial class ShellAccessibilityTests
                     },
                     TimeSpan.FromSeconds(15)),
                 "Ctrl+Z did not undo the committed edit");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable), logDirectory);
+            throw;
         }
         finally
         {
@@ -8616,9 +8629,7 @@ public sealed partial class ShellAccessibilityTests
             "sample.canvas", "groups_nested.canvas", "malformed.canvas",
         })
         {
-            File.Copy(
-                Path.Combine(DemoVaultCanvasDirectory(), fixture),
-                Path.Combine(vaultRoot, fixture));
+            CopyCanvasFixture(fixture, Path.Combine(vaultRoot, fixture));
         }
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
@@ -8822,6 +8833,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "canvas-degraded");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -8873,9 +8889,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9052,6 +9066,11 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "activating a table row never opened the editor's text");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -9141,9 +9160,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9275,6 +9292,11 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "Escape did not consume the surface rung and close the panel");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -9316,9 +9338,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9529,6 +9549,11 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.UP);
             AssertTheSeatIsOnTheBoard(board, "Core question", "UP from a dimmed card");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_VisualBoardPeersAndZoom_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             process?.Kill(entireProcessTree: true);
@@ -9696,9 +9721,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9811,6 +9834,11 @@ public sealed partial class ShellAccessibilityTests
                     "Text card \"Unfiled thought\"",
                 ],
                 "Toggle Mark from the rows' and the seated cards' menus");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Canvas_ContextMenus_OpenTheCardMenuByKeyboard), logDirectory);
+            throw;
         }
         finally
         {
@@ -10580,23 +10608,18 @@ public sealed partial class ShellAccessibilityTests
         };
         string ExpectedFile(uniffi.slate_uniffi.GraphConfig config) =>
             uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigEncode(config, null);
-        string ReadFile()
-        {
-            try
-            {
-                return File.Exists(configPath) ? File.ReadAllText(configPath) : string.Empty;
-            }
-            catch (IOException)
-            {
-                return string.Empty;
-            }
-        }
+        string ReadFile() => GateFile.TryReadText(configPath) ?? string.Empty;
         void ExpectFile(uniffi.slate_uniffi.GraphConfig config, string what)
         {
+            // A paced read. This wait used to spin on File.ReadAllText, and a
+            // read open at the instant of the app's rename refuses the save:
+            // that is how the gate lost a graph.json write (#1865, #1788).
             string expected = ExpectedFile(config);
-            Assert.True(
-                SpinWait.SpinUntil(() => ReadFile() == expected, TimeSpan.FromSeconds(10)),
-                $"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
+            if (GateFile.PollText(configPath, text => text == expected, TimeSpan.FromSeconds(10)) is null)
+            {
+                PreserveEvidence(nameof(GraphInspector_FiltersGroupsAndForces_AreClean), logDirectory);
+                Assert.Fail($"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
+            }
         }
 
         Process? process = null;
@@ -10858,6 +10881,11 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspector"), TimeSpan.FromSeconds(10)),
                 $"the show did not move the keys into the pane; focus is {DescribeFocusedElement(automation)}");
             AssertAxeClean(process, "graph-inspector");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(GraphInspector_FiltersGroupsAndForces_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -11590,11 +11618,52 @@ public sealed partial class ShellAccessibilityTests
             // Right from INSIDE the tree is the boundary's terminal: the
             // shell posts its line and focus stays in the tree — it never
             // falls through to the editor-geometry route.
-            ReassertForegroundForAChord(window);
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
-            Assert.False(
-                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && !focused.Equals(tree) && !IsDescendantOf(focused, tree), TimeSpan.FromSeconds(2)),
-                $"Right from inside the tree moved focus out of the leaf; focus is {DescribeFocusedElement(automation)}");
+            // Focus is read in the tree once before the press (the premise),
+            // and from the press on every read must see it there, for two
+            // seconds: a read that sees it gone fails at once, whatever was
+            // read before it, and after the press a read UI Automation
+            // faulted on is no observation
+            // (FocusSettleWatch.WatchAcrossAKey). The line is the witness
+            // that the chord arrived:
+            // with the keys in a side pane and no pane further that way, the
+            // window posts its terminal line (MainWindow's
+            // AnnounceNoPaneInDirection, the shell's own words), heard on the
+            // desktop root as a reader hears it. A line that comes only after
+            // the watch has ended starts a second watch, so focus is always
+            // watched after the chord was handled.
+            string edgeLine = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+                new uniffi.slate_uniffi.A11yEvent.HostComposed(
+                    "No pane in that direction.", uniffi.slate_uniffi.A11yPriority.Medium)).Text;
+            var edgeHeard = new ConcurrentQueue<ReceivedNotification>();
+            using (ListenOnTheDesktop(automation, edgeHeard))
+            {
+                int edgeMark = QuietMark(edgeHeard, process.Id);
+                bool EdgeLineHeard() => HeardFrom(edgeHeard, process.Id).Skip(edgeMark).Any(line => line.DisplayString == edgeLine);
+                ReassertForegroundForAChord(window);
+                string? edgeMoved = FocusSettleWatch.WatchAcrossAKey(
+                    () => FocusIsWithin(automation, tree),
+                    () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT),
+                    TimeSpan.FromSeconds(2));
+                string? edgeFailure = FocusSettleWatch.FailureOf(
+                    edgeMoved,
+                    "Right from inside the tree moved focus out of the leaf.",
+                    () => $" Focus is {DescribeFocusedElement(automation)}");
+                Assert.True(edgeFailure is null, edgeFailure);
+                bool heardInTheWatch = EdgeLineHeard();
+                Assert.True(
+                    SpinWait.SpinUntil(EdgeLineHeard, TimeSpan.FromSeconds(10)),
+                    $"Right from inside the tree did not post \"{edgeLine}\"; heard: "
+                    + string.Join(" | ", HeardFrom(edgeHeard, process.Id).Skip(edgeMark).Select(line => line.DisplayString)));
+                if (!heardInTheWatch)
+                {
+                    edgeMoved = FocusSettleWatch.Watch(() => FocusIsWithin(automation, tree), TimeSpan.FromSeconds(2));
+                    edgeFailure = FocusSettleWatch.FailureOf(
+                        edgeMoved,
+                        "Right from inside the tree moved focus out of the leaf after its line was posted.",
+                        () => $" Focus is {DescribeFocusedElement(automation)}");
+                    Assert.True(edgeFailure is null, edgeFailure);
+                }
+            }
 
             // ---- W6-2 PR B2 (B2-9): the continuation ----------------------------
             // Show connections on the healed incoming row (the leaf's own
@@ -11655,13 +11724,35 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(returnedTree) || IsDescendantOf(focused, returnedTree)), TimeSpan.FromSeconds(10)),
                 $"the popped leaf did not keep focus; focus is {DescribeFocusedElement(automation)}");
             ReassertForegroundForAChord(window);
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4);
-            Assert.False(
-                SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault != Path.GetFileName(ghostPath)
-                        || !(automation.FocusedElement() is { } focused && (focused.Equals(returnedTree) || IsDescendantOf(focused, returnedTree))),
-                    TimeSpan.FromSeconds(2)),
-                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus");
+            // Nothing to pop leaves nothing to wait for. So the leaf is read
+            // in place once before the press (the premise), and from the
+            // press on it is watched for two seconds, the window this check
+            // had on main: every read must see the heading still naming the
+            // note and focus still in the tree. A read that sees the heading
+            // changed or gone, or focus elsewhere, fails at once, whatever
+            // was read before it; after the press only a read UI Automation
+            // faulted on is no observation (FocusSettleWatch.WatchAcrossAKey).
+            string? HeadingNow() =>
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault;
+            bool? NothingChanged()
+            {
+                try
+                {
+                    return HeadingNow() == Path.GetFileName(ghostPath) ? FocusIsWithin(automation, returnedTree) : false;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    return null;
+                }
+            }
+
+            string? popChanged = FocusSettleWatch.WatchAcrossAKey(
+                NothingChanged, () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4), TimeSpan.FromSeconds(2));
+            string? popFailure = FocusSettleWatch.FailureOf(
+                popChanged,
+                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus.",
+                () => $" Focus is {DescribeFocusedElement(automation)}");
+            Assert.True(popFailure is null, popFailure);
 
             // The table's Show connections from the graph tab (B2-3, IGI-4):
             // the graph's group is focused first, then the leaf re-roots on
@@ -11691,6 +11782,11 @@ public sealed partial class ShellAccessibilityTests
                 $"the leaf re-rooted from the table did not take focus; focus is {DescribeFocusedElement(automation)}");
 
             AssertAxeClean(process, "graph-connections");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(GraphConnections_LeafWalkDepthAndReRoot_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -11963,6 +12059,25 @@ public sealed partial class ShellAccessibilityTests
             + "Content items in SlateWindows.AccessibilityTests.csproj and "
             + "must be copied to the output directory.");
         return canvases;
+    }
+
+    /// <summary>Copies a canvas fixture into a vault a journey is about to
+    /// open, through the gate's reader (<see cref="GateFile.CopyFixture"/>);
+    /// <see cref="DemoVaultCanvasDirectory"/> says why when the fixtures
+    /// are not there.</summary>
+    private static void CopyCanvasFixture(string name, string destination)
+    {
+        _ = DemoVaultCanvasDirectory();
+        GateFile.CopyFixture(destination, "fixtures", "canvas", name);
+    }
+
+    /// <summary>Copies the CSL fixture into a vault a journey is about to
+    /// open, through the gate's reader; <see cref="CitationStyleFixture"/>
+    /// says why when it is not there.</summary>
+    private static void CopyCitationStyleFixture(string destination)
+    {
+        _ = CitationStyleFixture();
+        GateFile.CopyFixture(destination, "fixtures", "ieee.csl");
     }
 
     /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>.</summary>
@@ -12285,21 +12400,8 @@ public sealed partial class ShellAccessibilityTests
         return WaitForElement(window, itemAutomationId, timeout);
     }
 
-    private static string ReadSharedLog(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return "<no app log>";
-        }
-
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
-    }
+    private static string ReadSharedLog(string path) =>
+        GateFile.TryReadText(path) ?? (File.Exists(path) ? "<the app log could not be read>" : "<no app log>");
 
     private static AutomationElement? TryWaitForElement(
         Window window,

@@ -318,10 +318,13 @@ public sealed partial class ShellAccessibilityTests
             // Whatever opening the popover raised has arrived; the presses
             // below must add nothing.
             int mark = QuietMark(heard, process.Id);
-            PressKey(VirtualKeyShort.F6);
-            AssertKeepsFocus(automation, close, "F6 inside the popover moved focus (W7-6 §4, #1281).");
-            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertKeepsFocus(automation, close, "Shift+F6 inside the popover moved focus (W7-6 §4, #1281).");
+            AssertAKeyKeepsFocus(
+                automation, close, () => PressKey(VirtualKeyShort.F6), "F6 inside the popover moved focus (W7-6 §4, #1281).");
+            AssertAKeyKeepsFocus(
+                automation,
+                close,
+                () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6),
+                "Shift+F6 inside the popover moved focus (W7-6 §4, #1281).");
             AwaitHeard(
                 () => [.. HeardFrom(heard, process.Id).Skip(mark).Select(notification => notification.DisplayString)],
                 [],
@@ -340,6 +343,11 @@ public sealed partial class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && IsDescendantOf(focused, tabs), TimeSpan.FromSeconds(10)),
                 $"F6 with focus outside the open popover did not move to the tab bar. {FocusDiagnosis()}");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(EditorPopover_F6AndShiftF6StayInsideIt), logs);
+            throw;
+        }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
@@ -347,16 +355,235 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    /// <summary>A press that must move nothing: once the input is processed
-    /// and a moment has passed for a landing to arrive, focus is still on
-    /// <paramref name="element"/>.</summary>
-    private static void AssertKeepsFocus(UIA3Automation automation, AutomationElement element, string message)
+    /// <summary>A press that must move nothing. Focus is read on
+    /// <paramref name="element"/> once before <paramref name="press"/> (the
+    /// premise), the key is pressed, and from the press on every read for
+    /// <see cref="FocusSettle"/>, the time a landing would take to arrive,
+    /// must see it there: the first that sees it gone fails
+    /// (<see cref="FocusSettleWatch.WatchAcrossAKey"/>).</summary>
+    private static void AssertAKeyKeepsFocus(UIA3Automation automation, AutomationElement element, Action press, string message)
     {
-        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
-        Thread.Sleep(750);
-        Assert.True(
-            automation.FocusedElement() is { } focused && focused.Equals(element),
-            $"{message} {FocusDiagnosis()}");
+        // What the read that saw focus gone found: another element, or one
+        // of the same name with another runtime id (the element was
+        // published again). The message carries it.
+        string elsewhere = string.Empty;
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () => FocusIsOn(automation, element, found => elsewhere = found), press, FocusSettle);
+        AssertTheWatchPassed(why is null ? null : why + elsewhere, message, automation);
+    }
+
+    /// <summary>The end of a nothing-moved check. <paramref name="why"/> is
+    /// the watch's verdict and nothing read here can change it: a watch that
+    /// passed reads nothing more, and one that failed says where focus is
+    /// now and who holds the foreground only if those can be read
+    /// (<see cref="FocusSettleWatch.FailureOf"/>).</summary>
+    private static void AssertTheWatchPassed(string? why, string message, UIA3Automation automation)
+    {
+        string? failure = FocusSettleWatch.FailureOf(
+            why, message, () => $" Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+        Assert.True(failure is null, failure);
+    }
+
+    /// <summary>A key that must move nothing, for any state a journey can
+    /// read as in place, gone or unreadable: read once before the key,
+    /// watched from the press on for <paramref name="window"/>. No wait for
+    /// a read in place stands between the key and the watch, so a key that
+    /// moved the state away and let it come back fails.</summary>
+    private static void AssertAKeyMovesNothing(
+        UIA3Automation automation, Func<bool?> inPlace, Action press, string message, TimeSpan window)
+    {
+        AssertTheWatchPassed(FocusSettleWatch.WatchAcrossAKey(inPlace, press, window), message, automation);
+    }
+
+    /// <summary>Whether focus is on <paramref name="element"/>: true, false,
+    /// or null when UI Automation faulted or answered no element, which is
+    /// no observation either way. The verdict is the focused element and
+    /// its comparison, nothing else: a read that saw focus on another
+    /// element is false from there on, and what it found
+    /// (<see cref="FocusRecord"/>) is read after it, where a fault costs
+    /// words and never the verdict (<see cref="FocusSettleWatch.Decide"/>).</summary>
+    private static bool? FocusIsOn(UIA3Automation automation, AutomationElement element, Action<string>? elsewhere = null)
+    {
+        AutomationElement? focused = null;
+        return FocusSettleWatch.Decide(
+            () =>
+            {
+                focused = automation.FocusedElement();
+                return focused is null ? (bool?)null : focused.Equals(element);
+            },
+            () => FocusRecord(focused!, element),
+            elsewhere,
+            IsTransientUiaFault);
+    }
+
+    /// <summary>What a read that saw focus off <paramref name="expected"/>
+    /// found. Each part is read on its own, the runtime id and the window
+    /// record first: the answer can be gone by the time it is asked its
+    /// name, and a fault on one part costs that part only.</summary>
+    private static string FocusRecord(AutomationElement found, AutomationElement expected)
+    {
+        int[]? id = null;
+        string runtimeId = Part(() => string.Join(",", id = found.Properties.RuntimeId.ValueOrDefault ?? []));
+        string window = id is null
+            ? " No window record: the answer's runtime id could not be read."
+            : WindowFacts(id, expected);
+        return $" The read that saw it gone found {Part(() => found.Properties.ControlType.ValueOrDefault)} "
+            + $"'{Part(() => found.Properties.Name.ValueOrDefault)}' #{Part(() => found.Properties.AutomationId.ValueOrDefault)} "
+            + $"class {Part(() => found.Properties.ClassName.ValueOrDefault)}, runtime id [{runtimeId}], where runtime id "
+            + $"[{Part(() => string.Join(",", expected.Properties.RuntimeId.ValueOrDefault ?? []))}] was expected."
+            + window;
+
+        static string Part(Func<object?> read)
+        {
+            try
+            {
+                return read()?.ToString() ?? string.Empty;
+            }
+            catch (Exception exception)
+            {
+                return $"<unreadable: {exception.GetType().Name}>";
+            }
+        }
+    }
+
+    /// <summary>For a focus answer that is a bare window (runtime id
+    /// <c>[42, hwnd]</c>): whose window it is and how it stands to the
+    /// app's own, read at once. Never throws.</summary>
+    private static string WindowFacts(int[] runtimeId, AutomationElement expected)
+    {
+        try
+        {
+            if (runtimeId is not [42, int handle])
+            {
+                return " The answer is not a bare window.";
+            }
+
+            var window = new IntPtr(handle);
+            int app = expected.Properties.ProcessId.ValueOrDefault;
+            IntPtr main = IntPtr.Zero;
+            try
+            {
+                using var process = Process.GetProcessById(app);
+                main = process.MainWindowHandle;
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+            }
+
+            IntPtr nearest = IntPtr.Zero;
+            for (AutomationElement? at = expected; at is not null && nearest == IntPtr.Zero; at = at.Parent)
+            {
+                nearest = at.Properties.NativeWindowHandle.ValueOrDefault;
+            }
+
+            uint thread = NativeWindowFacts.GetWindowThreadProcessId(window, out uint owner);
+            IntPtr root = NativeWindowFacts.GetAncestor(window, 2);
+            _ = NativeWindowFacts.GetWindowThreadProcessId(root, out uint rootOwner);
+            IntPtr foreground = NativeWindowFacts.GetForegroundWindow();
+            _ = NativeWindowFacts.GetWindowThreadProcessId(foreground, out uint foregroundOwner);
+            uint uiThread = NativeWindowFacts.GetWindowThreadProcessId(main, out _);
+            var gui = new NativeWindowFacts.GuiThreadInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeWindowFacts.GuiThreadInfo>() };
+            bool haveGui = uiThread != 0 && NativeWindowFacts.GetGUIThreadInfo(uiThread, ref gui);
+            return $" WINDOW RECORD: hwnd 0x{handle:X} alive={NativeWindowFacts.IsWindow(window)} class '{ClassOf(window)}' "
+                + $"title '{TitleOf(window)}' process {owner} ({NameOf(owner)}) thread {thread}; the app is process {app}, "
+                + $"same process={owner == (uint)app}; the app's main window 0x{main.ToInt64():X} (same={window == main}); the nearest "
+                + $"window above the expected element 0x{nearest.ToInt64():X} (same={window == nearest}); the answer's root window "
+                + $"0x{root.ToInt64():X} class '{ClassOf(root)}' process {rootOwner} (root is the main window={root == main}); "
+                + $"foreground 0x{foreground.ToInt64():X} class '{ClassOf(foreground)}' process {foregroundOwner} ({NameOf(foregroundOwner)}); "
+                + (haveGui
+                    ? $"the app's UI thread {uiThread}: active 0x{gui.Active.ToInt64():X}, focus 0x{gui.Focus.ToInt64():X} "
+                        + $"class '{ClassOf(gui.Focus)}', capture 0x{gui.Capture.ToInt64():X}, flags 0x{gui.Flags:X}."
+                    : $"the app's UI thread {uiThread}: no GUI thread info.");
+        }
+        catch (Exception exception)
+        {
+            return $" WINDOW RECORD unreadable: {exception.GetType().Name}: {exception.Message}";
+        }
+
+        static string ClassOf(IntPtr window)
+        {
+            var name = new System.Text.StringBuilder(256);
+            return NativeWindowFacts.GetClassName(window, name, name.Capacity) > 0 ? name.ToString() : string.Empty;
+        }
+
+        static string TitleOf(IntPtr window)
+        {
+            var title = new System.Text.StringBuilder(256);
+            return NativeWindowFacts.GetWindowText(window, title, title.Capacity) > 0 ? title.ToString() : string.Empty;
+        }
+
+        static string NameOf(uint process)
+        {
+            try
+            {
+                using var found = Process.GetProcessById((int)process);
+                return found.ProcessName;
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+                return "gone";
+            }
+        }
+    }
+
+    private static class NativeWindowFacts
+    {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct GuiThreadInfo
+        {
+            public int Size;
+            public uint Flags;
+            public IntPtr Active;
+            public IntPtr Focus;
+            public IntPtr Capture;
+            public IntPtr MenuOwner;
+            public IntPtr MoveSize;
+            public IntPtr Caret;
+            public int CaretLeft;
+            public int CaretTop;
+            public int CaretRight;
+            public int CaretBottom;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool IsWindow(IntPtr window);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+    }
+
+    /// <summary>Whether focus is on <paramref name="container"/> or inside
+    /// it: true, false, or null when UI Automation faulted or answered no
+    /// element.</summary>
+    private static bool? FocusIsWithin(UIA3Automation automation, AutomationElement container)
+    {
+        try
+        {
+            return automation.FocusedElement() is { } focused
+                ? focused.Equals(container) || IsDescendantOf(focused, container)
+                : null;
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
     }
 
     /// <summary>Focuses the Files tree row starting with <paramref
