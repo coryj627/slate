@@ -563,7 +563,12 @@ impl VaultProvider for GoneBeforeTheReadProvider {
 /// Fact 11: the repair's read stages a new path's graph addition before it
 /// reads the file. A file gone between the stat and the read leaves that
 /// addition staged and no row inserted, so the graph is left as it was:
-/// nothing staged for the path is applied.
+/// nothing staged for the path is applied, so the graph's generation does
+/// not move, and nothing is announced.
+///
+/// The generation is read first: an applied addition followed by an applied
+/// removal of the same node leaves a graph that equals a rebuild, and only
+/// the generation shows that a replay ran.
 #[test]
 fn a_file_gone_between_the_stat_and_the_read_leaves_the_graph_as_it_was() {
     let tmp = tempfile::tempdir().unwrap();
@@ -580,9 +585,16 @@ fn a_file_gone_between_the_stat_and_the_read_leaves_the_graph_as_it_was() {
     a.with_graph(|graph| graph.node_count()).unwrap();
     assert!(!row_stands(&a, GHOST), "premise: no row stands at the path");
     plant_marker(&a, GHOST, false);
+    let graph_generation_before = a.graph_generation();
+    let recorder = Recorder::on(&a);
 
     vault_tasks(&a);
 
+    assert_eq!(
+        a.graph_generation(),
+        graph_generation_before,
+        "the graph's generation moved: a replay was applied for the path"
+    );
     assert_eq!(
         live_graph_paths(&a, "after the repair"),
         strings(&["real1683.md"])
@@ -590,6 +602,7 @@ fn a_file_gone_between_the_stat_and_the_read_leaves_the_graph_as_it_was() {
     assert_graph_matches_rebuild(&a, "after the repair");
     assert!(!row_stands(&a, GHOST));
     assert_eq!(markers_under(&a, GHOST), 0);
+    assert_eq!(recorder.take(), nothing());
 }
 
 /// A temporary folder that keeps two names differing only by case apart, or
