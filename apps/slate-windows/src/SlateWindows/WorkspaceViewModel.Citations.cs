@@ -498,15 +498,21 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Plan 47 CB-11 (#1714): another session's rename, applied
     /// from the change feed. The feed's plan moves a tab when its saved
-    /// baseline or its stale mark is the record's hash; only the first
-    /// proves the moved file is the version the tab holds, so only it
-    /// carries the press. No core call runs here: the feed is applied
-    /// inside a rescan's re-sync.</summary>
-    private void FollowParkedSummaryThroughFeed(WorkspaceTabViewModel tab, string destination, string? movedFileHash)
+    /// baseline or its stale mark is the record's hash, which is the hash
+    /// this window was shown at the origin; a window that coalesces another
+    /// session's deletion, re-creation and rename of the path keeps it, so
+    /// the tab can be moved onto a different note's file. The press goes
+    /// only when the moved file is proved the tab's version: the record's
+    /// hash and the window's present hash for the destination are both
+    /// the tab's saved baseline. No core call runs here: the feed is
+    /// applied inside a rescan's re-sync.</summary>
+    private void FollowParkedSummaryThroughFeed(
+        WorkspaceTabViewModel tab, string destination, FeedRename rename)
     {
         if (ParkedSummaryCanFollow(tab, destination)
-            && movedFileHash is not null
-            && string.Equals(tab.SavedContentHash, movedFileHash, StringComparison.Ordinal))
+            && tab.SavedContentHash is string baseline
+            && string.Equals(baseline, rename.FromHash, StringComparison.Ordinal)
+            && string.Equals(baseline, rename.ToHash, StringComparison.Ordinal))
         {
             _parkedSummaryPath = destination;
         }

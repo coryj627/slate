@@ -881,7 +881,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                     _ = other.RenameFile("cited.md", "renamed.md");
                 }
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                    [new WorkspaceViewModel.FeedRename("cited.md", "renamed.md", baseline, OldIsGone: true)]);
+                    [new WorkspaceViewModel.FeedRename("cited.md", "renamed.md", baseline, OldIsGone: true, ToHash: baseline)]);
                 Assert.Equal([0], moved.MovedTabs);
                 Assert.Equal("renamed.md", workspace.Citations.Path);
                 Assert.Null(workspace.CitationSummary);
@@ -949,7 +949,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                 // The feed's record for the other session's rename: only the
                 // tab whose baseline is the moved note's goes.
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: false)]);
+                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: false, ToHash: firstBaseline)]);
                 Assert.Equal([0], moved.MovedTabs);
                 Assert.Equal("moved.md", first.Path);
                 Assert.Equal("other.md", cited.Path);
@@ -1023,7 +1023,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                 Assert.Equal("other.md", workspace.Citations.Path);
 
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: false)]);
+                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: false, ToHash: firstBaseline)]);
                 Assert.Equal([0], moved.MovedTabs);
                 Assert.Equal("moved.md", first.Path);
                 Assert.Equal("other.md", cited.Path);
@@ -1087,8 +1087,8 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                 // the press's tab still names it.
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
                 [
-                    new WorkspaceViewModel.FeedRename("other.md", "cited.md", otherBaseline, OldIsGone: false),
-                    new WorkspaceViewModel.FeedRename("cited.md", "other.md", citedBaseline, OldIsGone: false),
+                    new WorkspaceViewModel.FeedRename("other.md", "cited.md", otherBaseline, OldIsGone: false, ToHash: otherBaseline),
+                    new WorkspaceViewModel.FeedRename("cited.md", "other.md", citedBaseline, OldIsGone: false, ToHash: citedBaseline),
                 ]);
                 Assert.Equal([0, 1], moved.MovedTabs);
                 Assert.Equal("cited.md", first.Path);
@@ -1214,7 +1214,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                         _ = other.RenameFile("cited.md", "renamed.md");
                     }
                     WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                        [new WorkspaceViewModel.FeedRename("cited.md", "renamed.md", baseline, OldIsGone: true)]);
+                        [new WorkspaceViewModel.FeedRename("cited.md", "renamed.md", baseline, OldIsGone: true, ToHash: baseline)]);
                     Assert.Equal([0], moved.MovedTabs);
                 }
                 else
@@ -1291,7 +1291,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                 Assert.Equal("other.md", workspace.Citations.Path);
 
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: true)]);
+                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: true, ToHash: firstBaseline)]);
                 Assert.Equal([0], moved.MovedTabs);
                 Assert.Equal("moved.md", first.Path);
                 Assert.Equal("moved.md", workspace.Citations.Path);
@@ -1472,7 +1472,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                     _ = other.RenameFile("cited.md", "c.md");
                 }
                 WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                    [new WorkspaceViewModel.FeedRename("cited.md", "c.md", replacement, OldIsGone: true)]);
+                    [new WorkspaceViewModel.FeedRename("cited.md", "c.md", replacement, OldIsGone: true, ToHash: replacement)]);
                 Assert.Equal([0], moved.MovedTabs);
                 Assert.Equal("c.md", tab.Path);
                 Assert.Equal("c.md", workspace.Citations.Path);
@@ -1909,7 +1909,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
                         _ = other.RenameFile("cited.md", "cited.txt");
                     }
                     WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
-                        [new WorkspaceViewModel.FeedRename("cited.md", "cited.txt", baseline, OldIsGone: true)]);
+                        [new WorkspaceViewModel.FeedRename("cited.md", "cited.txt", baseline, OldIsGone: true, ToHash: baseline)]);
                     Assert.Equal([0], moved.MovedTabs);
                 }
                 else
