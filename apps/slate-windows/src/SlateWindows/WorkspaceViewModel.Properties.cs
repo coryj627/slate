@@ -275,10 +275,13 @@ internal sealed partial class WorkspaceViewModel
                 {
                     AddPropertySheet = null;
                 }
-                _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
-                RefreshPropertiesFor(path);
-                NotePersisted(path);
-                _announce(new A11yEvent.PropertyChanged(key, false));
+                // Plan 47 CB-9b (#1955's CB-9a item 3): every step runs even
+                // when one before it throws (a dirty tab's sentence, say).
+                AdmittedPublication.RunEvery(
+                    () => _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash),
+                    () => RefreshPropertiesFor(path),
+                    () => NotePersisted(path),
+                    () => _announce(new A11yEvent.PropertyChanged(key, false)));
                 return;
             }
             sheet?.MarkAddFailed();
@@ -298,9 +301,12 @@ internal sealed partial class WorkspaceViewModel
                     () => DiscardAddDraftAndReload(path, sheet));
                 return;
             }
-            _announce(new A11yEvent.PropertyEditFailed(
-                failure?.Message ?? "unknown failure"));
-            ReconcileAfterReadBack(path, postFailureDiskHash);
+            // Plan 47 CB-9b (#1955's CB-9a item 3): the read-back reconcile
+            // runs even when the failure's sentence throws.
+            AdmittedPublication.RunEvery(
+                () => _announce(new A11yEvent.PropertyEditFailed(
+                    failure?.Message ?? "unknown failure")),
+                () => ReconcileAfterReadBack(path, postFailureDiskHash));
         };
 
     /// <summary>Reload after an ADD conflict: the edit the dialog was
@@ -596,10 +602,13 @@ internal sealed partial class WorkspaceViewModel
             if (report is not null)
             {
                 row.MarkCommitted(dispatched);
-                _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
-                RefreshPropertiesFor(path);
-                NotePersisted(path);
-                _announce(new A11yEvent.PropertyChanged(row.Key, deleted));
+                // Plan 47 CB-9b (#1955's CB-9a item 3): every step runs even
+                // when one before it throws (a dirty tab's sentence, say).
+                AdmittedPublication.RunEvery(
+                    () => _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash),
+                    () => RefreshPropertiesFor(path),
+                    () => NotePersisted(path),
+                    () => _announce(new A11yEvent.PropertyChanged(row.Key, deleted)));
                 return;
             }
             if (failure is VaultException.WriteConflict)
@@ -620,9 +629,12 @@ internal sealed partial class WorkspaceViewModel
                 }
                 return;
             }
-            _announce(new A11yEvent.PropertyEditFailed(
-                failure?.Message ?? "unknown failure"));
-            ReconcileAfterReadBack(path, postFailureDiskHash);
+            // Plan 47 CB-9b (#1955's CB-9a item 3): the read-back reconcile
+            // runs even when the failure's sentence throws.
+            AdmittedPublication.RunEvery(
+                () => _announce(new A11yEvent.PropertyEditFailed(
+                    failure?.Message ?? "unknown failure")),
+                () => ReconcileAfterReadBack(path, postFailureDiskHash));
         };
 
     /// <summary>The W4-3 read-back rule: a non-conflict failure whose
@@ -984,15 +996,18 @@ internal sealed partial class WorkspaceViewModel
     internal bool ReconcileTabsAfterPropertyWrite(string path, string newContentHash)
     {
         bool allSettled = true;
-        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        // Plan 47 CB-9b (#1955's CB-9a item 3): each tab is a step of its
+        // own, so a dirty tab whose sentence throws skips no tab after it;
+        // the first fault is rethrown once every tab has run.
+        WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal))];
+        AdmittedPublication.RunEvery([.. tabs.Select<WorkspaceTabViewModel, Action>(tab => () =>
         {
-            if (tab.IsMarkdown
-                && string.Equals(tab.Path, path, StringComparison.Ordinal)
-                && !tab.RebaselineAfterPropertyWrite(newContentHash, _announce))
+            if (!tab.RebaselineAfterPropertyWrite(newContentHash, _announce))
             {
                 allSettled = false;
             }
-        }
+        })]);
         return allSettled;
     }
 
@@ -1310,11 +1325,53 @@ internal sealed partial class WorkspaceViewModel
     {
         committedFrom.WriteInFlight = false;
         target.WriteInFlight = true;
-        _saves.TrackWorker(tab.WriteProperty(
+        Task worker = tab.WriteProperty(
             expectedHash,
             write,
-            WithLeaseRelease(path, EndingWith(PropertyWriteCompletion(path, target, deleted, dispatched), done))));
+            WithLeaseRelease(path, EndingWith(PropertyWriteCompletion(path, target, deleted, dispatched), done)));
+        _saves.TrackWorker(worker);
+        EndPropertyWriteIfTheWorkerFaults(worker, path, done, () => target.WriteInFlight = false);
     }
+
+    /// <summary>Plan 47 CB-9b (#1955's CB-9a item 1): the backstop of a
+    /// property write's worker. The worker catches every fault but out of
+    /// memory, stack overflow and access violation; one of those posts no
+    /// completion, so nothing above would end the operation, release the
+    /// note's write lease or clear the write's in-flight state. On the save
+    /// dispatcher, and only while the operation has not ended, the lease is
+    /// released, <paramref name="notLanded"/> runs, and the operation ends
+    /// carrying the fault (its ticket logs it once). Nothing is spoken, as
+    /// nothing was for it before.</summary>
+    private void EndPropertyWriteIfTheWorkerFaults(
+        Task worker, string path, TaskCompletionSource done, Action notLanded) =>
+        _ = worker.ContinueWith(
+            faulted =>
+            {
+                Exception fault = faulted.Exception!.GetBaseException();
+                RunOnSaveDispatcher(() =>
+                {
+                    if (done.Task.IsCompleted)
+                    {
+                        return;
+                    }
+                    ReleasePropertyWriteLease(path);
+                    try
+                    {
+                        notLanded();
+                    }
+                    catch (Exception exception)
+                    {
+                        HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+                    }
+                    finally
+                    {
+                        _ = done.TrySetException(fault);
+                    }
+                });
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     /// <summary>The admitted add. A first add waits for a header and adds on
     /// its fresh hash; a Keep Mine retry (<paramref name="freshHash"/>)
@@ -1347,14 +1404,16 @@ internal sealed partial class WorkspaceViewModel
             }
             if (freshHash)
             {
-                _saves.TrackWorker(tab.WriteProperty(
+                Task freshWorker = tab.WriteProperty(
                     null,
                     _ =>
                     {
                         string fresh = _session.ReadNoteParts(path).ContentHash;
                         return _session.SetProperty(path, key, value, fresh);
                     },
-                    WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done))));
+                    WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done)));
+                _saves.TrackWorker(freshWorker);
+                EndPropertyWriteIfTheWorkerFaults(freshWorker, path, done, () => sheet?.MarkAddFailed());
                 return done.Task;
             }
             if (HeaderFor(path) is not { } header)
@@ -1402,10 +1461,12 @@ internal sealed partial class WorkspaceViewModel
                         return;
                     }
                     string expected = header.ContentHash;
-                    _saves.TrackWorker(live.WriteProperty(
+                    Task worker = live.WriteProperty(
                         expected,
                         expectedHash => _session.SetProperty(path, key, value, expectedHash),
-                        WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done))));
+                        WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done)));
+                    _saves.TrackWorker(worker);
+                    EndPropertyWriteIfTheWorkerFaults(worker, path, done, () => sheet?.MarkAddFailed());
                 },
                 exception =>
                 {
