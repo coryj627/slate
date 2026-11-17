@@ -1169,6 +1169,78 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>CB-11 (#1714), from Codex's third round: the press is parked
+    /// in a split pane, that pane closes and the first pane, on the same
+    /// note, takes the leaf over (WB-23 keeps the press), and then the note
+    /// is renamed, by this window or through another session's feed. The
+    /// press passes to the tab that took the leaf over and follows the
+    /// rename with it.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ADeferredSummaryKeptThroughASplitPaneCloseFollowsALaterRename(bool throughTheFeed)
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                WorkspaceTabViewModel firstPane = workspace.ActiveGroup.ActiveTab!;
+                string baseline = firstPane.SavedContentHash!;
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.SplitRightCommand.Execute(null);
+                Assert.NotSame(firstPane, workspace.ActiveGroup.ActiveTab);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                // The split's own pane closes; the first pane, on the same
+                // note, takes over, and the press is kept.
+                workspace.CloseActiveTabCommand.Execute(null);
+                Assert.Same(firstPane, workspace.ActiveGroup.ActiveTab);
+                Assert.Equal("cited.md", workspace.Citations.Path);
+
+                if (throughTheFeed)
+                {
+                    using (VaultSession other = VaultSession.OpenFilesystem(_fixture.Root))
+                    {
+                        _ = other.RenameFile("cited.md", "renamed.md");
+                    }
+                    WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
+                        [new WorkspaceViewModel.FeedRename("cited.md", "renamed.md", baseline, OldIsGone: true)]);
+                    Assert.Equal([0], moved.MovedTabs);
+                }
+                else
+                {
+                    _ = session.RenameFile("cited.md", "renamed.md");
+                    workspace.RetargetPath("cited.md", "renamed.md");
+                }
+                Assert.Equal("renamed.md", firstPane.Path);
+                Assert.Equal("renamed.md", workspace.Citations.Path);
+                Assert.Null(workspace.CitationSummary);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.Equal("renamed.md", workspace.Citations.Path);
+            Assert.NotNull(workspace.CitationSummary);
+            Assert.Equal(2, workspace.CitationSummary!.Total);
+            Assert.Equal(1, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            _ = Assert.Single(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>CB-11 (#1714): a re-seat can respell the leaf's tab without
     /// syncing the panels (a missing Ghost.md whose file is back as
     /// ghost.md), so the leaf still names the old spelling when the press is
