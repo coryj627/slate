@@ -2341,6 +2341,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
             }
 
+            // Plan 47 CB-9b (CD5(b); F9): clean tabs follow the rewritten
+            // links, once the standing changes are retargeted.
+            if (report.Rewritten.Length > 0)
+            {
+                LinksRewritten?.Invoke(report.Rewritten);
+            }
+
             StoredPathsFollowed(journalEntry);
 
             // W5-4 F10: a SUCCEEDED batch move is undoable through the

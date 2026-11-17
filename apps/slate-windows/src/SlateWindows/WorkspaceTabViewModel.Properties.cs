@@ -164,6 +164,24 @@ internal sealed partial class WorkspaceTabViewModel
         return true;
     }
 
+    /// <summary>
+    /// Plan 47 CB-9b (Design 5; CD5(b)): a rename or a move rewrote the links
+    /// of this tab's note, and <paramref name="read"/>, made now, should hold
+    /// the bytes after the rewrite (<paramref name="hashAfter"/>, core's hash
+    /// in the report). A clean tab with no save pending takes the read as
+    /// <see cref="RebaselineToRead"/> does: its text, identity and saved
+    /// baseline, with no undo step back across it, its caret kept on its line
+    /// and its stale mark cleared, and its same-path peers take it too. It
+    /// never speaks and never marks a tab stale. It returns false, changing
+    /// nothing, for a read that does not hold the bytes asked for, a dirty
+    /// tab, or a tab with a save pending.
+    /// </summary>
+    internal bool RebaselineAfterLinkRewrite(IdentifiedText read, string hashAfter)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        return string.Equals(read.ContentHash, hashAfter, StringComparison.Ordinal) && RebaselineToRead(read);
+    }
+
     /// <summary>A clean tab's adoption of another writer's bytes, read from
     /// disk: its text and baseline (<see cref="TakeAnotherWritersBytes"/>),
     /// the read's identity, clean and not stale, its interactions told, and

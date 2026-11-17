@@ -316,6 +316,8 @@ public sealed class SaveChainAdmissionCensus
         "RebaselineAfterPropertyWrite",
         // Plan 47 CB-9b: the catch-up's rebaseline of a clean tab to a read.
         "RebaselineToRead",
+        // Plan 47 CB-9b: a clean tab's rebaseline after a link rewrite.
+        "RebaselineAfterLinkRewrite",
     ];
 
     /// <summary>One route that writes a note, or reloads a tab, outside the
@@ -333,7 +335,8 @@ public sealed class SaveChainAdmissionCensus
 
     private const string LinkRewriteReason =
         "core rewrites the notes that link to the item and reports them, each under its own compare-and-swap, "
-        + "and the set is not known before the call, so there is no path to admit";
+        + "and the set is not known before the call, so there is no path to admit; clean open tabs are brought "
+        + "up to the report's bytes (CB-9b)";
 
     private const string AcceptedLinkRewrite = "accepted (plan 47 CD5(b)); put to the owner again in CB-46's table";
 
@@ -2698,6 +2701,21 @@ public sealed class SaveChainAdmissionCensus
             InAClass(
                 "void PlantedM(WorkspaceTabViewModel tab) { if (!saves.HasAdmittedSaveFor(\"a.md\")) "
                 + "{ _ = tab.RebaselineToRead(session.ReadTextIdentified(\"a.md\")); } }"),
+            "guarded"
+        },
+        {
+            // Plan 47 CB-9b: a link rewrite's rebaseline is a reload.
+            "RebaselineAfterLinkRewrite in a plain method",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) "
+                + "{ _ = tab.RebaselineAfterLinkRewrite(session.ReadTextIdentified(\"a.md\"), \"hash\"); }"),
+            "unguarded"
+        },
+        {
+            "HasAdmittedSaveFor before RebaselineAfterLinkRewrite",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) { if (!saves.HasAdmittedSaveFor(\"a.md\")) "
+                + "{ _ = tab.RebaselineAfterLinkRewrite(session.ReadTextIdentified(\"a.md\"), \"hash\"); } }"),
             "guarded"
         },
 

@@ -1134,6 +1134,74 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    // ---- Plan 47 CB-9b (#1889; CD5(b)): clean tabs follow a link rewrite --------
+
+    /// <summary>
+    /// A rename or a move from the Files sidebar (a batch move, or the undo or
+    /// redo of one, included) rewrote the links of the notes in
+    /// <paramref name="rewritten"/>: core's report, each note under its own
+    /// compare-and-swap, made outside the save chain (CD5(b)), in this same
+    /// dispatcher turn and after the moved pairs were retargeted. Per note, in
+    /// report order, from the first outcome's hash before to the last
+    /// outcome's hash after (one note can be rewritten twice, chained): each
+    /// clean Markdown tab with no save pending that holds the bytes from
+    /// before the rewrite takes a read made now, when the read holds the bytes
+    /// after it, with no undo step back across them and its caret kept on its
+    /// line (<see cref="WorkspaceTabViewModel.RebaselineAfterLinkRewrite"/>).
+    /// A note with a save or an operation admitted is left to it, and so are
+    /// a dirty tab and a tab on other bytes: the change event marks them
+    /// stale. Nothing is spoken: the change's own sentence counts the notes
+    /// whose links it updated. A fault here is logged, never thrown into the
+    /// structural change that raised it.
+    /// </summary>
+    internal void RebaselineCleanTabsAfterLinkRewrite(IReadOnlyList<RewriteOutcome> rewritten)
+    {
+        ArgumentNullException.ThrowIfNull(rewritten);
+        if (_workspaceDisposed)
+        {
+            return;
+        }
+        foreach (IGrouping<string, RewriteOutcome> note in rewritten.GroupBy(outcome => outcome.Path, StringComparer.Ordinal))
+        {
+            string path = note.Key;
+            string before = note.First().HashBefore;
+            string after = note.Last().HashAfter;
+            try
+            {
+                WorkspaceTabViewModel[] behind = [.. Groups.SelectMany(group => group.Tabs)
+                    .Where(tab => tab.IsMarkdown
+                        && string.Equals(tab.Path, path, StringComparison.Ordinal)
+                        && !tab.IsDirty
+                        && !tab.HasPendingSaves
+                        && string.Equals(tab.SavedContentHash, before, StringComparison.Ordinal))];
+                if (behind.Length == 0 || _saves.HasAdmittedSaveFor(path))
+                {
+                    continue;
+                }
+                IdentifiedText read;
+                try
+                {
+                    read = _session.ReadTextIdentified(path);
+                }
+                catch (VaultException)
+                {
+                    continue;
+                }
+                foreach (WorkspaceTabViewModel tab in behind)
+                {
+                    _ = tab.RebaselineAfterLinkRewrite(read, after);
+                }
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+        }
+    }
+
     /// <summary>Contract 8 fan-out: every open same-path tab either
     /// re-baselines its buffer to the just-written disk state (clean
     /// tabs) or takes the stale-flag honesty (dirty tabs). Returns

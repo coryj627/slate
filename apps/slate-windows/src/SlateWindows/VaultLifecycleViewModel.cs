@@ -1677,6 +1677,9 @@ internal sealed partial class VaultLifecycleViewModel
         // Plan 47 CB-9b (#1889; CD5(a)): a tag edit waits its turn in the
         // checked notes' save chains, through the workspace.
         sidebar.TagEditRequested = capturedWorkspace.EditTagAdmitted;
+        // Plan 47 CB-9b (CD5(b)): a link rewrite stays outside the chain,
+        // and clean tabs on the rewritten notes follow it.
+        sidebar.LinksRewritten = capturedWorkspace.RebaselineCleanTabsAfterLinkRewrite;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         // §G2 TG2-6 (IG2-6): the sidebar is the canvas's note creator.
         workspace.CanvasNoteCreator = sidebar;

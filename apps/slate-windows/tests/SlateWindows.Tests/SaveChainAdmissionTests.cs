@@ -5275,6 +5275,7 @@ public sealed class SaveChainAdmissionTests
                 _session, Announce, vaultRoot: Root, localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot());
             sidebar.RetargetRequested = (oldPath, newPath) => Workspace.RetargetPath(oldPath, newPath);
             sidebar.TagEditRequested = Workspace.EditTagAdmitted;
+            sidebar.LinksRewritten = Workspace.RebaselineCleanTabsAfterLinkRewrite;
             _sidebars.Add(sidebar);
             return sidebar;
         }
