@@ -389,7 +389,7 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Plan 47 CB-11 (#1714): the tab the citations leaf followed
     /// when the press was parked. A rename moves the press only with this
-    /// tab (<see cref="FollowParkedSummary"/>).</summary>
+    /// tab (<see cref="ParkedSummaryCanFollow"/>).</summary>
     private WorkspaceTabViewModel? _parkedSummaryTab;
 
     /// <summary>WB-23 (#1314): how often the parked press's handler ran.</summary>
@@ -473,14 +473,40 @@ internal sealed partial class WorkspaceViewModel
     /// tab without syncing the panels, and the press was parked under the
     /// leaf's spelling. A destination that is not a note moves nothing
     /// either: the index has no note row there, so a load at that path
-    /// would answer the press with no citations.</summary>
-    private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination, bool checkTheMovedFile)
+    /// would answer the press with no citations. And the file the rename
+    /// moved must be the version the tab holds, or the press stays behind
+    /// and the sync drops it, as on main: each caller proves that its own
+    /// way.</summary>
+    private bool ParkedSummaryCanFollow(WorkspaceTabViewModel tab, string destination) =>
+        _summaryParked
+        && ReferenceEquals(tab, _parkedSummaryTab)
+        && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
+        && CoreDocumentClassification.IsMarkdown(destination);
+
+    /// <summary>Plan 47 CB-11 (#1714): Slate's own rename, move, undo or
+    /// redo. It moves whatever file is at the path, and another session
+    /// can have put a different note there before this window's rescan,
+    /// so the moved file is proved the tab's version by the index, which
+    /// the rename has already moved (<see cref="IndexHoldsTheTabsVersion"/>).</summary>
+    private void FollowParkedSummaryThroughOwnRename(WorkspaceTabViewModel tab, string destination)
     {
-        if (_summaryParked
-            && ReferenceEquals(tab, _parkedSummaryTab)
-            && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
-            && CoreDocumentClassification.IsMarkdown(destination)
-            && (!checkTheMovedFile || IndexHoldsTheTabsVersion(tab, destination)))
+        if (ParkedSummaryCanFollow(tab, destination) && IndexHoldsTheTabsVersion(tab, destination))
+        {
+            _parkedSummaryPath = destination;
+        }
+    }
+
+    /// <summary>Plan 47 CB-11 (#1714): another session's rename, applied
+    /// from the change feed. The feed's plan moves a tab when its saved
+    /// baseline or its stale mark is the record's hash; only the first
+    /// proves the moved file is the version the tab holds, so only it
+    /// carries the press. No core call runs here: the feed is applied
+    /// inside a rescan's re-sync.</summary>
+    private void FollowParkedSummaryThroughFeed(WorkspaceTabViewModel tab, string destination, string? movedFileHash)
+    {
+        if (ParkedSummaryCanFollow(tab, destination)
+            && movedFileHash is not null
+            && string.Equals(tab.SavedContentHash, movedFileHash, StringComparison.Ordinal))
         {
             _parkedSummaryPath = destination;
         }
@@ -492,11 +518,11 @@ internal sealed partial class WorkspaceViewModel
     /// saved baseline at the new path. A rename moves whatever file is at
     /// the path, and another session can have put a different note there
     /// before this window's rescan; the tab is then moved onto that note's
-    /// file (as on main), but the press does not go with it. The change
-    /// feed's moves need no such read: its plan moves a tab only when the
-    /// tab's baseline is the record's own hash. A tab with no baseline, or
-    /// an index that cannot be read, proves nothing, and the press falls
-    /// back to main's drop.</summary>
+    /// file (as on main), but the press does not go with it. A tab with no
+    /// baseline, or an index that cannot be read, proves nothing, and the
+    /// press falls back to main's drop. The read runs on the dispatcher,
+    /// once per rename, only while a press is parked and its own tab
+    /// moves.</summary>
     private bool IndexHoldsTheTabsVersion(WorkspaceTabViewModel tab, string path)
     {
         if (tab.SavedContentHash is not string baseline)
@@ -509,7 +535,7 @@ internal sealed partial class WorkspaceViewModel
             return string.Equals(
                 _session.IndexedContentHashes([path], cancel)[0], baseline, StringComparison.Ordinal);
         }
-        catch (VaultException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             return false;
         }

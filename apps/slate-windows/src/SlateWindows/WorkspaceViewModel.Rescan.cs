@@ -211,7 +211,7 @@ internal sealed partial class WorkspaceViewModel
     {
         WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)];
         var claimed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
-        var moves = new List<(WorkspaceTabViewModel Tab, string Destination)>();
+        var moves = new List<(WorkspaceTabViewModel Tab, string Destination, string? FromHash)>();
         var follows = new List<(int Index, string Source, string Destination, bool FollowersOnly)>();
         var moved = new HashSet<int>();
         for (int index = 0; index < renames.Count; index++)
@@ -243,7 +243,7 @@ internal sealed partial class WorkspaceViewModel
                 if (FollowsFeedRename(tab, rename))
                 {
                     _ = claimed.Add(tab);
-                    moves.Add((tab, destination));
+                    moves.Add((tab, destination, rename.FromHash));
                     _ = moved.Add(index);
                 }
                 else
@@ -258,10 +258,10 @@ internal sealed partial class WorkspaceViewModel
             }
         }
 
-        foreach ((WorkspaceTabViewModel tab, string destination) in moves)
+        foreach ((WorkspaceTabViewModel tab, string destination, string? fromHash) in moves)
         {
             _saves.ContinueChain(tab.Path, destination);
-            FollowParkedSummary(tab, destination, checkTheMovedFile: false);
+            FollowParkedSummaryThroughFeed(tab, destination, fromHash);
             tab.RetargetPath(destination);
         }
 
