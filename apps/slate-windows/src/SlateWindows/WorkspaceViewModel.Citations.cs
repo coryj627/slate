@@ -435,20 +435,19 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    /// <summary>Plan 47 CB-11 (#1714): two tabs at one path hold the same
-    /// note when they hold the same saved version: the same baseline hash
-    /// and, where core gives both an identity, the same file identity.
-    /// Tabs of one note are kept so by the workspace's mirroring
+    /// <summary>Plan 47 CB-11 (#1714): two tabs at one path are proved to
+    /// hold the same note when they hold the same saved version: the same
+    /// baseline hash and the same file identity, both known. Tabs of one
+    /// note are kept so by the workspace's mirroring
     /// (<see cref="MirrorSamePathDocumentState"/>). Two different notes at
-    /// one path differ in their file, so in their identity, and almost
-    /// always in their bytes. A tab with no baseline holds no known
-    /// note.</summary>
+    /// one path are different files, so their identities differ even when
+    /// their bytes match. Without a hash or an identity nothing is proved,
+    /// and the press falls back to main's drop.</summary>
     private static bool HoldTheSameNote(WorkspaceTabViewModel tab, WorkspaceTabViewModel other) =>
         tab.SavedContentHash is string hash
         && string.Equals(hash, other.SavedContentHash, StringComparison.Ordinal)
-        && (tab.FileIdentity is null
-            || other.FileIdentity is null
-            || string.Equals(tab.FileIdentity, other.FileIdentity, StringComparison.Ordinal));
+        && tab.FileIdentity is string identity
+        && string.Equals(identity, other.FileIdentity, StringComparison.Ordinal);
 
     /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
     /// <paramref name="tab"/> to <paramref name="destination"/> in place. A
