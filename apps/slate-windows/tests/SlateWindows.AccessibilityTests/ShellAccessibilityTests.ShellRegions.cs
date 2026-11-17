@@ -361,8 +361,16 @@ public sealed partial class ShellAccessibilityTests
     /// <see cref="FocusSettle"/>, the time a landing would take to arrive,
     /// must see it there: the first that sees it gone fails
     /// (<see cref="FocusSettleWatch.WatchAcrossAKey"/>).</summary>
-    private static void AssertAKeyKeepsFocus(UIA3Automation automation, AutomationElement element, Action press, string message) =>
-        AssertAKeyMovesNothing(automation, () => FocusIsOn(automation, element), press, message, FocusSettle);
+    private static void AssertAKeyKeepsFocus(UIA3Automation automation, AutomationElement element, Action press, string message)
+    {
+        // What the read that saw focus gone found: another element, or one
+        // of the same name with another runtime id (the element was
+        // published again). The message carries it.
+        string elsewhere = string.Empty;
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () => FocusIsOn(automation, element, found => elsewhere = found), press, FocusSettle);
+        Assert.True(why is null, $"{message} {why}{elsewhere} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+    }
 
     /// <summary>A key that must move nothing, for any state a journey can
     /// read as in place, gone or unreadable: read once before the key,
@@ -379,11 +387,27 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>Whether focus is on <paramref name="element"/>: true, false,
     /// or null when UI Automation faulted or answered no element, which is
     /// no observation either way.</summary>
-    private static bool? FocusIsOn(UIA3Automation automation, AutomationElement element)
+    private static bool? FocusIsOn(UIA3Automation automation, AutomationElement element, Action<string>? elsewhere = null)
     {
         try
         {
-            return automation.FocusedElement() is { } focused ? focused.Equals(element) : null;
+            if (automation.FocusedElement() is not { } focused)
+            {
+                return null;
+            }
+
+            if (focused.Equals(element))
+            {
+                return true;
+            }
+
+            elsewhere?.Invoke(
+                $" The read that saw it gone found {focused.Properties.ControlType.ValueOrDefault} "
+                + $"'{focused.Properties.Name.ValueOrDefault}' #{focused.Properties.AutomationId.ValueOrDefault} "
+                + $"class {focused.Properties.ClassName.ValueOrDefault}, runtime id "
+                + $"[{string.Join(",", focused.Properties.RuntimeId.ValueOrDefault ?? [])}], where runtime id "
+                + $"[{string.Join(",", element.Properties.RuntimeId.ValueOrDefault ?? [])}] was expected.");
+            return false;
         }
         catch (Exception exception) when (IsTransientUiaFault(exception))
         {
