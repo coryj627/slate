@@ -623,8 +623,16 @@ public sealed class ComboBoxRowPlacesTests
             Assert.True(combo.IsDropDownOpen, "the list did not open.");
         }
 
-        /// <summary>The app's theme layers swapped for a new set, as a theme
-        /// change from Settings swaps them.</summary>
+        /// <summary>The bench window's own merged dictionaries swapped for a new
+        /// set of the app's theme layers (<c>ThemeManager.DictionariesFor</c>).
+        /// The app swaps the same layers in <c>Application.Resources</c>
+        /// (<c>ThemeManager.ApplyResources</c>); a combo box resolves its
+        /// implicit style and its row template by key through its window's
+        /// resources before the application's, so a swap at the window gives it
+        /// a new template and new rows the same way. The swap stays in this
+        /// fact's window: one in <c>Application.Resources</c> would reach every
+        /// window in the process and race the facts that run beside this
+        /// one.</summary>
         public void Theme(SlateTheme theme)
         {
             foreach (ResourceDictionary layer in _layers)

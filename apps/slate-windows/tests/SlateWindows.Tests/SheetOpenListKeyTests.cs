@@ -326,7 +326,7 @@ public sealed class SheetOpenListKeyTests
     /// stay open until the fact hands them a file.</summary>
     private static FilesSidebarViewModel AttachASidebar(ShownShell host, ImportsOnHold imports)
     {
-        string root = VaultRootOf(host);
+        string root = host.Root;
         var sidebar = new FilesSidebarViewModel(
             host.Session,
             _ => { },
@@ -346,15 +346,14 @@ public sealed class SheetOpenListKeyTests
         PumpedDispatcher.PumpUntilDrained(sidebar.BeginSessionShutdownAndCaptureWork().SessionWork);
     }
 
+    /// <summary>The lifecycle's own setter, which is private and has no
+    /// internal twin, so the observation the shell wires on it runs
+    /// (ImportEscapePrecedenceTests' shape).</summary>
     private static void SetLifecycleState(ShownShell host, string name, object? value) =>
         (typeof(VaultLifecycleViewModel).GetProperty(name, BindingFlags.Public | BindingFlags.Instance)
-            ?? throw new InvalidOperationException($"Missing state property: {name}"))
+            ?? throw new InvalidOperationException(
+                $"VaultLifecycleViewModel.{name} is gone; the import fact attaches its sidebar through that property's setter."))
         .SetValue(host.Lifecycle, value);
-
-    private static string VaultRootOf(ShownShell host) =>
-        ((FixtureVault)(typeof(ShownShell).GetField("_fixture", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? throw new InvalidOperationException("ShownShell no longer keeps its vault in _fixture"))
-        .GetValue(host)!).Root;
 
     /// <summary>Imports whose source picker stays open until the fact hands it
     /// one real file outside the vault (PendingImport's shape, one picker for

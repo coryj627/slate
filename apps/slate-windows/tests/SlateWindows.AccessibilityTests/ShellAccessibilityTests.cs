@@ -1039,30 +1039,30 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>CB-19 (#1783, #1836): a scan of a list that closed under it is
     /// clean, so after a scan with a list open the list must still be open and
-    /// its popup window still there.</summary>
+    /// its own popup window still there: the one that holds its rows (a
+    /// tooltip or a context menu is a popup window too).</summary>
     internal static void AssertTheListIsStillOpen(Window window, AutomationElement combo, string surface)
     {
         Assert.True(
             combo.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault == ExpandCollapseState.Expanded,
             $"{surface}: the list closed during the scan, so the scan did not see it open.");
+        (string[] names, AutomationElement[]? rows, List<string> found) = TheListsPopupRows(window, combo);
         Assert.True(
-            window.FindFirstDescendant(window.Automation.ConditionFactory.ByClassName("Popup")
-                .And(window.Automation.ConditionFactory.ByControlType(ControlType.Window))) is not null,
-            $"{surface}: the list says it is open and no popup window is there.");
+            rows is not null && names.Length > 0,
+            $"{surface}: the list says it is open and no popup window holds its rows "
+            + $"[{string.Join(", ", names.Select(name => "'" + name + "'"))}]; the popups found hold "
+            + $"{(found.Count == 0 ? "nothing" : string.Join(" and ", found))}.");
     }
 
-    /// <summary>CB-19 (#1783, #1836): WPF publishes an open combo box's rows
-    /// twice, under the combo box and under the open list's own window, and a
-    /// client that walks or hit-tests the popup reads the second copy. The
-    /// popup is the one whose rows have the combo box's own rows' names, in
-    /// order (a tooltip or a context menu is a popup window too). It has at
-    /// least one row and as many as the combo box; row i says it is i + 1 of
-    /// n, and so does the combo box's own row i.</summary>
-    internal static void AssertOpenListRowsSayTheirPlace(Window window, AutomationElement combo)
+    /// <summary>The rows of the combo box's own popup window: the popup whose
+    /// rows have the combo box's own rows' names, in order. Also the combo
+    /// box's own row names and what every popup found holds, for a
+    /// message.</summary>
+    private static (string[] Names, AutomationElement[]? Rows, List<string> Found) TheListsPopupRows(Window window, AutomationElement combo)
     {
         var conditions = window.Automation.ConditionFactory;
-        AutomationElement[] own = combo.FindAllChildren(conditions.ByControlType(ControlType.ListItem));
-        string[] names = [.. own.Select(row => row.Properties.Name.ValueOrDefault ?? string.Empty)];
+        string[] names = [.. combo.FindAllChildren(conditions.ByControlType(ControlType.ListItem))
+            .Select(row => row.Properties.Name.ValueOrDefault ?? string.Empty)];
         AutomationElement[] popups = window.FindAllDescendants(
             conditions.ByClassName("Popup").And(conditions.ByControlType(ControlType.Window)));
         var found = new List<string>();
@@ -1078,6 +1078,21 @@ public sealed partial class ShellAccessibilityTests
             }
         }
 
+        return (names, rows, found);
+    }
+
+    /// <summary>CB-19 (#1783, #1836): WPF publishes an open combo box's rows
+    /// twice, under the combo box and under the open list's own window, and a
+    /// client that walks or hit-tests the popup reads the second copy. The
+    /// popup is the one whose rows have the combo box's own rows' names, in
+    /// order (a tooltip or a context menu is a popup window too). It has at
+    /// least one row and as many as the combo box; row i says it is i + 1 of
+    /// n, and so does the combo box's own row i.</summary>
+    internal static void AssertOpenListRowsSayTheirPlace(Window window, AutomationElement combo)
+    {
+        var conditions = window.Automation.ConditionFactory;
+        AutomationElement[] own = combo.FindAllChildren(conditions.ByControlType(ControlType.ListItem));
+        (string[] names, AutomationElement[]? rows, List<string> found) = TheListsPopupRows(window, combo);
         string comboName = combo.Properties.Name.ValueOrDefault ?? string.Empty;
         Assert.True(
             rows is not null,
