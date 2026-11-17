@@ -20,12 +20,16 @@ namespace SlateWindows;
 /// <see cref="AutomationProperties.PositionInSetProperty"/> and
 /// <see cref="AutomationProperties.SizeOfSetProperty"/> on every realized row
 /// equal to what WPF's item peer says without them, so both copies say the
-/// same. A stamp that went stale would make the item peer, which a screen
-/// reader reads today and which is right today, wrong: so every event that can
-/// move a row or change the count restamps every realized row, and where WPF's
-/// answer is not "index plus one, of the count" (a grouped list, whose places
-/// are within each group, or rows that are recycled) the tracker removes its
-/// stamps and leaves WPF's answer.
+/// same, and it keeps them only while the list is open, which is the only time
+/// the popup's copies exist. When the list closes it clears them, so a closed
+/// combo box reports exactly what it reported with no tracker, and a list
+/// whose source is refilled while closed costs no pass and no write. A stamp
+/// that went stale would make the item peer, which a screen reader reads and
+/// which is right with no stamp, wrong: so while the list is open every event
+/// that can move a row or change the count restamps every realized row, and
+/// where WPF's answer is not "index plus one, of the count" (a grouped list,
+/// whose places are within each group, or rows that are recycled) the tracker
+/// removes its stamps and leaves WPF's answer.
 /// </summary>
 internal sealed class ComboBoxRowPlaces
 {
@@ -34,21 +38,47 @@ internal sealed class ComboBoxRowPlaces
 
     private readonly WeakReference<ComboBox> _combo;
 
-    /// <summary>The containers this tracker wrote to, so one the generator let
-    /// go of can be cleared.</summary>
+    /// <summary>The containers this tracker wrote to, so it can clear them when
+    /// the list closes, and clear one the generator let go of.</summary>
     private readonly HashSet<DependencyObject> _stamped = new(ReferenceEqualityComparer.Instance);
 
-    /// <summary>It restamps when the generator makes or drops rows (a first
-    /// open, a new items host after a theme change) and when the items change.
-    /// It does not listen for the list opening: at every open after the first
-    /// the stamps are already current, and with that subscription removed no
-    /// fact turned red (CB-19, mutation A3).</summary>
+    private readonly EventHandler _opened;
+    private readonly EventHandler _closed;
+    private readonly EventHandler _generated;
+    private readonly NotifyCollectionChangedEventHandler _changed;
+
+    /// <summary>It stamps when the list opens, and while it is open whenever the
+    /// generator makes or drops rows (a first open, a new items host after a
+    /// theme change) and whenever the items change; it clears when the list
+    /// closes. A tracker that cannot attach (anything thrown while it
+    /// subscribes or runs its first pass) takes its subscriptions back and
+    /// stands down for good: the combo box keeps WPF's own answers, as it did
+    /// with no tracker, and the table holds the failed tracker, so it is not
+    /// tried again at every SizeChanged.</summary>
     private ComboBoxRowPlaces(ComboBox combo)
     {
         _combo = new WeakReference<ComboBox>(combo);
-        combo.ItemContainerGenerator.StatusChanged += (_, _) => Restamp();
-        ((INotifyCollectionChanged)combo.Items).CollectionChanged += (_, _) => Restamp();
-        Restamp();
+        _opened = (_, _) => Restamp();
+        _closed = (_, _) => ClearStamps();
+        _generated = (_, _) => Restamp();
+        _changed = (_, _) => Restamp();
+        try
+        {
+            combo.DropDownOpened += _opened;
+            combo.DropDownClosed += _closed;
+            combo.ItemContainerGenerator.StatusChanged += _generated;
+            ((INotifyCollectionChanged)combo.Items).CollectionChanged += _changed;
+            Restamp();
+        }
+        catch (Exception)
+        {
+            combo.DropDownOpened -= _opened;
+            combo.DropDownClosed -= _closed;
+            combo.ItemContainerGenerator.StatusChanged -= _generated;
+            ((INotifyCollectionChanged)combo.Items).CollectionChanged -= _changed;
+            ClearStamps();
+            StoodDown = true;
+        }
     }
 
     /// <summary>
@@ -92,6 +122,18 @@ internal sealed class ComboBoxRowPlaces
     internal static ComboBoxRowPlaces? For(ComboBox combo) =>
         Trackers.TryGetValue(combo, out ComboBoxRowPlaces? tracker) ? tracker : null;
 
+    /// <summary>Whether this tracker failed to attach and stood down.</summary>
+    internal bool StoodDown { get; private set; }
+
+    /// <summary>For the facts: how many passes over the items have run.</summary>
+    internal int Passes { get; private set; }
+
+    /// <summary>For the facts: how many values the passes have written.</summary>
+    internal int Writes { get; private set; }
+
+    /// <summary>For the facts: how many containers hold a stamp of this tracker's.</summary>
+    internal int StampedCount => _stamped.Count;
+
     /// <summary>Whether WPF's own answer is something other than "index plus
     /// one, of the count": a grouped list (each row's place is within its
     /// group), or rows that are recycled (a container changes its item with no
@@ -119,23 +161,29 @@ internal sealed class ComboBoxRowPlaces
     }
 
     /// <summary>
-    /// One pass over the items. A container the generator no longer owns loses
-    /// both values; under grouping or recycling every realized row loses them;
-    /// otherwise every realized row gets its item's first index plus one (two
-    /// equal items both get the first one's place, as WPF's IndexOf gives
-    /// them), of the count, written only where it differs. It runs from a
-    /// class handler for every combo box, inside layout, so it never throws: a
-    /// view held in DeferRefresh refuses Count and IndexOf, and the Reset that
-    /// ends the deferral runs this again.
+    /// One pass over the items, only while the list is open (closed, it does
+    /// nothing: no pass, no map). A container the generator no longer owns
+    /// loses both values; under grouping or recycling every realized row loses
+    /// them; otherwise every realized row gets its item's first index plus one
+    /// (two equal items both get the first one's place, as WPF's IndexOf gives
+    /// them), of the count, written only where it differs. It runs from class
+    /// and instance handlers inside layout, so it catches the
+    /// <see cref="InvalidOperationException"/> a view held in DeferRefresh gives
+    /// for Count and IndexOf (nothing else is caught), and the stamps then stay
+    /// as they were until the next event that runs the pass: the list opening,
+    /// the generator making or dropping rows, or a change to the items. A
+    /// deferral that changed no sort, filter or grouping ends with no Reset, so
+    /// it reruns nothing by itself.
     /// </summary>
     internal void Restamp()
     {
-        if (!_combo.TryGetTarget(out ComboBox? combo))
+        if (StoodDown || !_combo.TryGetTarget(out ComboBox? combo) || !combo.IsDropDownOpen)
         {
             return;
         }
 
         ItemContainerGenerator generator = combo.ItemContainerGenerator;
+        Passes++;
         try
         {
             if (_stamped.Count > 0)
@@ -160,12 +208,7 @@ internal sealed class ComboBoxRowPlaces
             int count = items.Count;
             if (LeavesItToWpf(combo))
             {
-                foreach (DependencyObject container in _stamped)
-                {
-                    Clear(container);
-                }
-
-                _stamped.Clear();
+                ClearStamps();
                 for (int index = 0; index < count; index++)
                 {
                     if (generator.ContainerFromItem(items[index]) is DependencyObject container)
@@ -208,11 +251,13 @@ internal sealed class ComboBoxRowPlaces
                 if (AutomationProperties.GetPositionInSet(container) != at + 1)
                 {
                     AutomationProperties.SetPositionInSet(container, at + 1);
+                    Writes++;
                 }
 
                 if (AutomationProperties.GetSizeOfSet(container) != count)
                 {
                     AutomationProperties.SetSizeOfSet(container, count);
+                    Writes++;
                 }
 
                 _ = _stamped.Add(container);
@@ -220,9 +265,21 @@ internal sealed class ComboBoxRowPlaces
         }
         catch (InvalidOperationException)
         {
-            // A view under DeferRefresh: the stamps stay as they are until the
-            // Reset that ends the deferral runs this again.
+            // A view held in DeferRefresh: the stamps stay as they were until
+            // the next event that runs the pass.
         }
+    }
+
+    /// <summary>Every stamp this tracker made is cleared: the list closed, or
+    /// its rows are left to WPF.</summary>
+    private void ClearStamps()
+    {
+        foreach (DependencyObject container in _stamped)
+        {
+            Clear(container);
+        }
+
+        _stamped.Clear();
     }
 
     private static void Clear(DependencyObject container)

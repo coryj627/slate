@@ -68,9 +68,11 @@ public sealed class ComboBoxRowPlacesTests
     /// exactly what WPF's item peer would have said with no stamp. Each arm
     /// runs twice on the bench: on a tracked combo box, and on a twin whose
     /// stamps are cleared before each read, which reads WPF's own answer. At
-    /// every mark the tracked item peers say what the twin's say, and every
-    /// tracked row's own peer (the one under the open list's window) says what
-    /// its item peer says.</summary>
+    /// every mark the tracked item peers say what the twin's say. While the
+    /// list is open every tracked row's own peer (the one under the open list's
+    /// window) says what its item peer says; while it is closed no row holds a
+    /// stamp, so its own peer says none, and the item peers say WPF's own
+    /// answer.</summary>
     [Theory]
     [MemberData(nameof(Operations))]
     public void AStampedRowSaysWhatWpfsItemPeerSays(string arm) => OpenLists.RunSta(() =>
@@ -84,7 +86,7 @@ public sealed class ComboBoxRowPlacesTests
         var wrong = new List<string>();
         for (int index = 0; index < tracked.Marks.Count; index++)
         {
-            (string label, List<RowRead> rows) = tracked.Marks[index];
+            (string label, bool open, List<RowRead> rows) = tracked.Marks[index];
             List<RowRead> wpf = twin.Marks[index].Rows;
             string said = string.Join(" ", rows.Select(row => row.Item));
             string wpfSaid = string.Join(" ", wpf.Select(row => row.Item));
@@ -93,9 +95,16 @@ public sealed class ComboBoxRowPlacesTests
                 wrong.Add($"[{label}] the tracked item peers say {said}; WPF alone says {wpfSaid}");
             }
 
-            foreach (RowRead row in rows.Where(row => row.Own is not null && row.Own != row.Item))
+            foreach (RowRead row in rows.Where(row => row.Own is not null))
             {
-                wrong.Add($"[{label}] '{row.Name}': its own peer says {row.Own}; its item peer says {row.Item}");
+                if (open && row.Own != row.Item)
+                {
+                    wrong.Add($"[{label}] '{row.Name}': its own peer says {row.Own}; its item peer says {row.Item}");
+                }
+                else if (!open && row.Own != "-1/-1")
+                {
+                    wrong.Add($"[{label}] '{row.Name}': the list is closed and its row still holds a stamp, {row.Own}");
+                }
             }
         }
 
@@ -194,19 +203,30 @@ public sealed class ComboBoxRowPlacesTests
 
     /// <summary>Fact 5: on every route that opens a list, the rows are stamped
     /// inside the open, so no dispatcher operation (and so no UI Automation
-    /// call) starts with a realized row unstamped.</summary>
+    /// call) starts while the list is open with a realized row unstamped. The
+    /// reopen route opens a list whose rows were realized at an earlier open
+    /// and lost their stamps when it closed.</summary>
     [Theory]
     [InlineData("Alt+Down")]
     [InlineData("F4")]
     [InlineData("the toggle")]
     [InlineData("IsDropDownOpen")]
     [InlineData("UIA Expand")]
+    [InlineData("reopen")]
     public void EveryOpenRouteStampsBeforeARowCanBeRead(string route) => OpenLists.RunSta(() =>
     {
         using var bench = new Bench();
         (ComboBox combo, _) = Plain();
         bench.Panel.Children.Add(combo);
         bench.Settle();
+        if (route == "reopen")
+        {
+            bench.Open(combo);
+            combo.IsDropDownOpen = false;
+            bench.Settle();
+            Assert.True(OpenLists.ContainerAt(combo, 0) is not null, "the closed list let its rows go.");
+        }
+
         using var scan = new BoundaryScan(combo);
         switch (route)
         {
@@ -223,7 +243,7 @@ public sealed class ComboBoxRowPlacesTests
                 // checks the template's toggle, which is bound to the list.
                 Descendants(combo).OfType<ToggleButton>().First().IsChecked = true;
                 break;
-            case "IsDropDownOpen":
+            case "IsDropDownOpen" or "reopen":
                 combo.IsDropDownOpen = true;
                 break;
             case "UIA Expand":
@@ -322,6 +342,184 @@ public sealed class ComboBoxRowPlacesTests
         bench.Panel.Children.Remove(combo);
         bench.Settle();
         return (new WeakReference(combo), new WeakReference(tracker));
+    }
+
+    /// <summary>The tracker keeps stamps only while the list is open: the
+    /// popup's copies exist only then. When the list closes every stamp is
+    /// cleared, and the item peers say WPF's own answer.</summary>
+    [Fact]
+    public void AClosedListHoldsNoStamp() => OpenLists.RunSta(() =>
+    {
+        using var bench = new Bench();
+        (ComboBox combo, _) = Plain();
+        bench.Panel.Children.Add(combo);
+        bench.Settle();
+        bench.Open(combo);
+        OpenLists.AssertPopupRule(combo, "open");
+
+        combo.IsDropDownOpen = false;
+        bench.Settle();
+
+        Assert.True(
+            Enumerable.Range(0, combo.Items.Count).All(index => OpenLists.ContainerAt(combo, index) is not null),
+            "the closed list let its rows go, so the fact proves nothing.");
+        AssertNoRowIsStamped(combo, "closed after an open");
+        Assert.Equal(
+            "b:1/5 d:2/5 a:3/5 c:4/5 e:5/5",
+            string.Join(" ", RowRead.All(combo).Select(row => $"{row.Name}:{row.Item}")));
+    });
+
+    /// <summary>A list refilled while closed costs no pass and no write (the
+    /// dashboard editor's picker stays realized after its first open, and its
+    /// source is refilled by Clear and one Add for each saved query whenever
+    /// the queries refresh); the next open stamps the refilled rows.</summary>
+    [Fact]
+    public void ARefillWhileClosedWritesNothing() => OpenLists.RunSta(() =>
+    {
+        using var bench = new Bench();
+        var rows = new ObservableCollection<string>(Enumerable.Range(1, 300).Select(number => "row " + number));
+        var combo = new ComboBox { ItemsSource = rows, ItemContainerStyle = RowStyle() };
+        bench.Panel.Children.Add(combo);
+        bench.Settle();
+        bench.Open(combo);
+        combo.IsDropDownOpen = false;
+        bench.Settle();
+        ComboBoxRowPlaces tracker = Assert.IsType<ComboBoxRowPlaces>(ComboBoxRowPlaces.For(combo));
+        (int passes, int writes) = (tracker.Passes, tracker.Writes);
+
+        rows.Clear();
+        foreach (int number in Enumerable.Range(1, 300))
+        {
+            rows.Add("row " + number);
+        }
+
+        bench.Settle();
+
+        Assert.True(
+            (tracker.Passes, tracker.Writes) == (passes, writes),
+            $"the refill while closed ran {tracker.Passes - passes} passes and wrote {tracker.Writes - writes} values.");
+        AssertNoRowIsStamped(combo, "refilled while closed");
+        bench.Open(combo);
+        OpenLists.AssertPopupRule(combo, "opened after the refill");
+    });
+
+    /// <summary>A container the generator lets go of while the list is open
+    /// loses its stamp and leaves the tracker: after four refills the tracker
+    /// holds exactly the containers that are realized.</summary>
+    [Fact]
+    public void ARefilledOpenListHoldsNoContainerItLetGoOf() => OpenLists.RunSta(() =>
+    {
+        using var bench = new Bench();
+        var rows = new ObservableCollection<string> { "a", "b", "c", "d", "e" };
+        var combo = new ComboBox { ItemsSource = rows, ItemContainerStyle = RowStyle() };
+        bench.Panel.Children.Add(combo);
+        bench.Settle();
+        bench.Open(combo);
+        ComboBoxRowPlaces tracker = Assert.IsType<ComboBoxRowPlaces>(ComboBoxRowPlaces.For(combo));
+
+        for (int round = 1; round <= 4; round++)
+        {
+            rows.Clear();
+            foreach (string row in new[] { "a", "b", "c", "d", "e" })
+            {
+                rows.Add($"{row}{round}");
+            }
+
+            bench.Settle();
+        }
+
+        int realized = Enumerable.Range(0, combo.Items.Count).Count(index => OpenLists.ContainerAt(combo, index) is not null);
+        Assert.True(
+            tracker.StampedCount == realized,
+            $"the tracker holds {tracker.StampedCount} containers for {realized} realized rows: it kept the ones the generator let go of.");
+        OpenLists.AssertPopupRule(combo, "refilled while open");
+    });
+
+    /// <summary>The plan lead's condition for clearing stamps on close: a
+    /// closed combo box reports to UI Automation exactly what it reports with
+    /// no stamp at all, which is what main reports (main has no tracker). Its
+    /// name, its expand state, its value, its selection, and the children UI
+    /// Automation gets when it asks the closed combo box for them (its item
+    /// peers, offscreen, with their names and places) are read, then every row
+    /// container's stamp is cleared and they are read again: the two reads are
+    /// the same. One combo box of each family, never opened and closed after
+    /// an open.</summary>
+    [Theory]
+    [InlineData("SettingsTheme", false)]
+    [InlineData("SettingsTheme", true)]
+    [InlineData("BuilderCombinator", false)]
+    [InlineData("BuilderCombinator", true)]
+    [InlineData("ConnectionsDepth", false)]
+    [InlineData("ConnectionsDepth", true)]
+    public void AClosedComboBoxReportsWhatItReportsWithNoStamp(string key, bool openedBefore) => OpenLists.RunSta(() =>
+    {
+        using ShownShell host = OpenLists.NewShell();
+        ComboBox combo = OpenLists.Reach(host, key);
+        if (openedBefore)
+        {
+            OpenLists.Open(host, combo, key);
+            combo.IsDropDownOpen = false;
+            OpenLists.Settle(host);
+        }
+
+        Assert.False(combo.IsDropDownOpen);
+        string tracked = ClosedReport(combo);
+        for (int index = 0; index < combo.Items.Count; index++)
+        {
+            if (OpenLists.ContainerAt(combo, index) is { } container)
+            {
+                container.ClearValue(AutomationProperties.PositionInSetProperty);
+                container.ClearValue(AutomationProperties.SizeOfSetProperty);
+            }
+        }
+
+        Assert.Equal(ClosedReport(combo), tracked);
+    });
+
+    /// <summary>What UI Automation gets from a closed combo box.</summary>
+    private static string ClosedReport(ComboBox combo)
+    {
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(combo);
+        peer.ResetChildrenCache();
+
+        // An item peer with no row behind it (a never-opened list) has no place to give.
+        static string Place(AutomationPeer item)
+        {
+            try
+            {
+                return $"{item.GetPositionInSet()} of {item.GetSizeOfSet()}";
+            }
+            catch (ElementNotAvailableException)
+            {
+                return "(no row)";
+            }
+        }
+
+        var lines = new List<string>
+        {
+            $"name '{peer.GetName()}'",
+            $"state {((IExpandCollapseProvider)peer.GetPattern(PatternInterface.ExpandCollapse)).ExpandCollapseState}",
+            $"value {(peer.GetPattern(PatternInterface.Value) is IValueProvider value ? "'" + value.Value + "'" : "(no Value pattern)")}",
+        };
+        AutomationPeer[] children = [.. peer.GetChildren() ?? []];
+        if (combo.SelectedItem is { } selected)
+        {
+            // The selection as UI Automation reads it: the item peer the combo
+            // box's own peer holds for it, or makes for it when it holds none.
+            AutomationPeer chosen = children.OfType<ItemAutomationPeer>().FirstOrDefault(child => Equals(child.Item, selected))
+                ?? (AutomationPeer)typeof(ItemsControlAutomationPeer)
+                    .GetMethod("CreateItemAutomationPeer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(peer, [selected])!;
+            lines.Add($"selection '{chosen.GetName()}' {Place(chosen)}");
+        }
+
+        lines.Add($"{children.Length} children");
+        foreach (AutomationPeer child in children)
+        {
+            lines.Add($"  {child.GetAutomationControlType()} '{child.GetName()}' {Place(child)} offscreen={child.IsOffscreen()} control={child.IsControlElement()}");
+        }
+
+        return string.Join("\n", lines);
     }
 
     // ---- the bench and its reads ------------------------------------------------------
@@ -519,7 +717,7 @@ public sealed class ComboBoxRowPlacesTests
 
         public ObservableCollection<string> Rows => rows;
 
-        public List<(string Label, List<RowRead> Rows)> Marks { get; } = [];
+        public List<(string Label, bool Open, List<RowRead> Rows)> Marks { get; } = [];
 
         public static TwinRun Run(Bench bench, Arm arm, bool tracked)
         {
@@ -564,7 +762,7 @@ public sealed class ComboBoxRowPlacesTests
                 }
             }
 
-            Marks.Add((label, RowRead.All(combo)));
+            Marks.Add((label, combo.IsDropDownOpen, RowRead.All(combo)));
         }
     }
 
@@ -753,27 +951,29 @@ public sealed class ComboBoxRowPlacesTests
         arms["a deferral"] = new(Plain, run =>
         {
             // A combo box on a static array, whose default view every control on
-            // that array shares, is laid out (and so attached, and restamped)
-            // while that view is held in DeferRefresh, which refuses Count and
-            // IndexOf. WPF itself throws under a deferral when the source changes
-            // (its view reads CurrentPosition) and when a layout pass updates a
-            // peer of an items control on that view (the peer reads Count),
-            // tracked or not; so the combo box is laid out on its own, out of
-            // the window, and the source does not change during the deferral.
+            // that array shares, is open when that view is held in DeferRefresh,
+            // which refuses Count and IndexOf, and the pass runs: it must not
+            // throw, and it leaves the stamps as they were. The pass is run
+            // directly: WPF itself fails under a deferral on every route that
+            // would run it from an event while the list is open (a change to the
+            // source throws from the view's CurrentPosition, the generator reads
+            // the items, a layout pass that updates a peer reads Count, and
+            // opening the popup hangs in the popup window's first layout), tracked
+            // or not. A deferral that changed no sort, filter or grouping ends
+            // with no Reset, so it reruns nothing by itself.
             string[] shared = ["p", "q", "r"];
             var late = new ComboBox { ItemsSource = shared, ItemContainerStyle = RowStyle() };
-            using (CollectionViewSource.GetDefaultView(shared).DeferRefresh())
-            {
-                late.Measure(new Size(200, 40));
-                late.Arrange(new Rect(0, 0, 200, 40));
-                late.UpdateLayout();
-                Assert.NotNull(ComboBoxRowPlaces.For(late));
-            }
-
             run.Bench.Other.Children.Add(late);
             run.Settle();
             run.Bench.Open(late);
-            OpenLists.AssertPopupRule(late, "a combo box attached during a deferral");
+            ComboBoxRowPlaces tracker = Assert.IsType<ComboBoxRowPlaces>(ComboBoxRowPlaces.For(late));
+            using (CollectionViewSource.GetDefaultView(shared).DeferRefresh())
+            {
+                tracker.Restamp();
+            }
+
+            run.Settle();
+            OpenLists.AssertPopupRule(late, "a pass run during a deferral");
             late.IsDropDownOpen = false;
             run.Bench.Other.Children.Remove(late);
             run.Settle();
@@ -784,9 +984,9 @@ public sealed class ComboBoxRowPlacesTests
     }
 
     /// <summary>Counts the dispatcher operations that start while the combo
-    /// box has a realized row whose stamp is missing or wrong. A UI Automation
-    /// call is such an operation, so each is a moment a client could have read
-    /// a row with no place.</summary>
+    /// box's list is open and it has a realized row whose stamp is missing or
+    /// wrong. A UI Automation call is such an operation, so each is a moment a
+    /// client could have read a row with no place.</summary>
     private sealed class BoundaryScan : IDisposable
     {
         private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
@@ -807,7 +1007,8 @@ public sealed class ComboBoxRowPlacesTests
 
         private void Check()
         {
-            if (ComboBoxRowPlaces.LeavesItToWpf(_combo))
+            // The popup's copies exist only while the list is open.
+            if (!_combo.IsDropDownOpen || ComboBoxRowPlaces.LeavesItToWpf(_combo))
             {
                 return;
             }
