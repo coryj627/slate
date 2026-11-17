@@ -426,12 +426,16 @@ internal sealed partial class WorkspaceViewModel
     /// syncing the panels, and the press was parked under the leaf's
     /// spelling. A tab that is not the one the leaf follows moves nothing
     /// here: two tabs at one path can be different notes for a while, and
-    /// when the leaf's own tab stays, so does the press.</summary>
+    /// when the leaf's own tab stays, so does the press. A destination that
+    /// is not a note moves nothing either: the index has no note row there,
+    /// so a load at that path would answer the press with no citations, and
+    /// the sync drops the press instead.</summary>
     private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination)
     {
         if (_summaryParked
             && ReferenceEquals(tab, ActiveGroup.ActiveTab)
-            && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal))
+            && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
+            && CoreDocumentClassification.IsMarkdown(destination))
         {
             _parkedSummaryPath = destination;
         }
