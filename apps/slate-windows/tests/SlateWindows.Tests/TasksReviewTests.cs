@@ -72,8 +72,9 @@ public sealed class TasksReviewTests : IDisposable
 
     /// <summary>A note's save chain with nothing admitted: an operation runs
     /// at once, and no worker is tracked. The review's own facts need no
-    /// more; <c>SaveChainAdmissionTests</c> drives the real chain.</summary>
-    private sealed class IdleChain : INoteSaveChain
+    /// more, nor does any other fact that only builds a review;
+    /// <c>SaveChainAdmissionTests</c> drives the real chain.</summary>
+    internal sealed class IdleChain : INoteSaveChain
     {
         public Task<bool> Admit(string path, Func<Task> operation)
         {
