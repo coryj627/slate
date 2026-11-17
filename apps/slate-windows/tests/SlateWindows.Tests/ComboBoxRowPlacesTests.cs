@@ -109,17 +109,19 @@ public sealed class ComboBoxRowPlacesTests
     }
 
     /// <summary>Fact 3: under grouping WPF's item peer gives each row its place
-    /// within its group, so the tracker stamps nothing and leaves WPF's answer;
-    /// the open list's window then holds the item peers themselves, and the
-    /// popup rule passes. With grouping off again the rows are restamped.</summary>
+    /// within its group, so the tracker stamps nothing and leaves WPF's answer,
+    /// through a change that restamps while the grouped rows are realized; the
+    /// open list's window then holds the item peers themselves, and the popup
+    /// rule passes. With grouping off again the rows are restamped.</summary>
     [Fact]
     public void AGroupedListKeepsWpfsOwnPlaces() => OpenLists.RunSta(() =>
     {
         using var bench = new Bench();
-        var view = new ListCollectionView(new[]
+        var fruit = new ObservableCollection<Fruit>
         {
-            new Fruit("Apple"), new Fruit("Avocado"), new Fruit("Banana"), new Fruit("Blueberry"), new Fruit("Cherry"),
-        });
+            new("Apple"), new("Avocado"), new("Banana"), new("Blueberry"), new("Cherry"),
+        };
+        var view = new ListCollectionView(fruit);
         var combo = new ComboBox { ItemsSource = view, DisplayMemberPath = nameof(Fruit.Title), ItemContainerStyle = RowStyle() };
         combo.GroupStyle.Add(GroupStyle.Default);
         bench.Panel.Children.Add(combo);
@@ -127,11 +129,14 @@ public sealed class ComboBoxRowPlacesTests
         bench.Open(combo);
         view.GroupDescriptions!.Add(new PropertyGroupDescription(nameof(Fruit.Group)));
         bench.Settle();
+        // A change while grouped and open restamps with the grouped rows realized.
+        fruit.Add(new Fruit("Cranberry"));
+        bench.Settle();
 
         Assert.True(combo.IsGrouping);
         AssertNoRowIsStamped(combo, "grouped");
         Assert.Equal(
-            "Apple:1/2 Avocado:2/2 Banana:1/2 Blueberry:2/2 Cherry:1/1",
+            "Apple:1/2 Avocado:2/2 Banana:1/2 Blueberry:2/2 Cherry:1/2 Cranberry:2/2",
             string.Join(" ", RowRead.All(combo).Select(row => $"{row.Name}:{row.Item}")));
         OpenLists.AssertPopupRule(combo, "grouped");
 
@@ -139,7 +144,7 @@ public sealed class ComboBoxRowPlacesTests
         bench.Settle();
         Assert.False(combo.IsGrouping);
         Assert.Equal(
-            "Apple:1/5 Avocado:2/5 Banana:3/5 Blueberry:4/5 Cherry:5/5",
+            "Apple:1/6 Avocado:2/6 Banana:3/6 Blueberry:4/6 Cherry:5/6 Cranberry:6/6",
             string.Join(" ", RowRead.All(combo).Select(row => $"{row.Name}:{row.Own}")));
     });
 
