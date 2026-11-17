@@ -4,9 +4,10 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0, C1 and C2 are delivered (CB-0 to CB-6 and
-CB-8, all merged on 2026-11-16), and wave C3 (CB-7, CB-9a and CB-10) is
-under way. §12 keeps the delivery record. Written from the
+recommendation. Waves C0 to C4 are delivered (CB-0 to CB-8, CB-9a,
+CB-10, CB-13 and CB-27, merged on 2026-11-16 and 17), and wave C5
+(CB-9b, CB-11, CB-12 and CB-19) is under way. §12 keeps the delivery
+record. Written from the
 requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -547,7 +548,7 @@ work the chunk carries.
 | CB-24 | One NVDA session records #1846 and #1849; the note header's menu keeps its first row under a resting pointer, by #1944's remedy | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
 | CB-25 | A `LayoutItemsControl` drops a removed item's raw-view peer | #1860 | S | windows | — | — |
 | CB-26 | A callout is an element with its type and title over the FFI, and on Windows a reader can move to it and fold or unfold it; it opens with a short design the owner reads (the plan lead's call, 2026-11-16) | #1775 | L | rust, windows, swift | NVDA full, Narrator | CD17 |
-| CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (no known input reaches the panic sentence; the session-long sentences are reached without it) | CD18 |
+| CB-27 | One panicking diagram no longer disables diagrams for the session; a test-fault seam lets a field pass hear the new sentence | #1631 | S | rust, windows, swift | NVDA spot through the seam (as merged, no known input reaches the panic sentence or the session-long sentences; the seam reaches both) | CD18 |
 | CB-28 | A timed-out SVG decode is remembered, and a projection's decodes have a deadline | #1635 | M | windows, rust, swift | NVDA spot | CD19 |
 | CB-29 | The SVG guard refuses the documents that decode slowly, from recorded limits | #1610 | M | windows, rust, swift | NVDA spot | CD20 |
 | CB-30 | A scripted function after an ordinary atom is spoken as math; three or more primes are spoken as primes | #1629 #1628 | M | rust, swift | NVDA spot, speech and braille | CD21 |
@@ -654,6 +655,14 @@ members joined the rows below, with the same result. As before, the
 slotting of waves C3 onward is confirmed when each wave's specs are
 written.
 
+Waves C4 and C5 were re-cut on 2026-11-17. CB-9b left C4 because it
+and CB-13 both edit `TryRenameSelected` in
+`FilesSidebarViewModel.FileManagement.cs`. In C5 it shares
+`WorkspaceViewModel*.cs` with CB-11 and runs after it in one slot, a
+fifth allowed pair. It also stands in the `session.rs` row with CB-12,
+in another slot: if CB-9b's spec edits `session.rs`, CB-9b branches only
+after CB-12 has merged, and if it does not, the row is corrected.
+
 Wave C3 was checked again on 2026-11-16, when the specs for CB-9a and
 CB-10 were written. CB-7 shares no file with either: it edits the gate
 project and `TestWaitCensus.cs`, and its spec says it does not edit
@@ -715,7 +724,7 @@ Sequenced on purpose, because they share files:
 | `crates/slate-uniffi/src/lib.rs` | CB-14 (a new event), CB-28 (one doc comment), CB-16 (the import events), CB-23 (the three panel lines), CB-20b (a new event), CB-26 (the callout), CB-45b (the first phase of the scan-lock design); never two in a wave |
 | `diagram.rs`, `EditorInteractions.cs` | CB-27, CB-28, CB-29, then CB-15c and CB-22 |
 | `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-9b, CB-11, CB-14, CB-15c, CB-22 |
-| `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-9b, CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
+| `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-13 (one line in `TryRenameSelected`'s catch, merged), then CB-9b, CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
 | `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-10 (`OpenVaultAsync` in `VaultLifecycleViewModel.cs` only), then CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them. CB-9a's spec edits none of them |
 | `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-17a, CB-17b (the sheets, and the property-row and launcher buttons), CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
@@ -886,6 +895,11 @@ started:
 | CB-8 | `specs/cb08_a_quarantined_note_still_lists.md` |
 | CB-9a | `specs/cb09a_save_chain_admission_census_and_single_path_routes.md` |
 | CB-10 | `specs/cb10_a_failed_vault_switch_returns_to_the_welcome_view_once.md` |
+| CB-13 | `specs/cb13_a_case_only_rename_on_fat_is_refused_and_says_so.md` |
+| CB-27 | `specs/cb27_one_panicking_diagram_does_not_disable_diagrams.md` |
+
+CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
+each ends with the corrections its delivery made.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1003,12 +1017,12 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-5 | #1970 | 2026-11-16 (80925d72) | #1616 (CD4: rewrite) | 5 / 4 / 1 / 0 | One line on #1955: the computed-score comment prints `grade`, `criterion` and `name` unescaped |
 | CB-6 | #1971 | 2026-11-16 (ecf7f551) | none (the class) | 5 / 0 / 5 / 0 | Five lines on #1955: three product seams the remaining waits need, one `HotExitTests` fact whose count cannot see a second claim, and the pinned sites Design 1 may still reach |
 | CB-10 | #1972 | 2026-11-16 (48df4543) | #1730 | 2 / 1 / 1 / 0 | One line on #1955. The owner's ear on the failed first open, which is left as built. NVDA phrases are in the PR body |
-| CB-27 | #1978 | 2026-11-16 (b127a84a) | #1631 | 3 / 0 / 2 / 1 | Two lines on #1955 (the "unsupported" classification; a sequence diagram's name counts `participant` lines as interactions). Filed #1979. VoiceOver on #1954. NVDA phrases are in the PR body; the diagram key is Ctrl+Alt+D |
+| CB-27 | #1978 | 2026-11-17 (b127a84a) | #1631 | 3 / 0 / 2 / 1 | Two lines on #1955 (the "unsupported" classification; a sequence diagram's name counts `participant` lines as interactions). Filed #1979. VoiceOver on #1954. NVDA phrases are in the PR body; the diagram key is Ctrl+Alt+D |
 | #1975 (not a chunk: found by CB-13's step 0, merged first) | #1982 | 2026-11-17 (c84a08ef) | #1975 | 11 / 1 / 9 / 1 | Seven deferred lines and two possible flakes on #1955. Filed #1981 (a stopped rename's recovery loses the history binding). Nothing is notified for the alias path. The alias-row case is pinned in core only. A Mac check on #1954 |
 | #1979 (not a chunk: the math hook race that turned CB-27's lane red) | #1984 | 2026-11-17 (7d948eb3) | #1979 | 0 / 0 / 0 / 0 | Not delivered: the swap-first order under a forced interleaving, a pin on the lock's release, a census that every fact swaps through the helper |
 | CB-9a | #1983 | 2026-11-17 (3d56978f) | none (Refs #1889, open for CB-9b) | 11 / 5 / 5 / 1 | CB-9b ends four census rows (`BulkRenameViewModel.Run`, `FilesSidebarViewModel.EditTag`, `ExportSavedQueryAsBase`, the bulk-rename caller of `ReconcileTabsAfterPropertyWrite`). Filed #1980 (a tabless Bases cell edit names a path), pinned by a fact. Five lines on #1955. Not delivered: an NVDA hearing of the raced-tab sentence. The owner's ear on that sentence's new occasion |
 | CB-7 | #1986 | 2026-11-17 (3ae84200) | #1788 (CD3) | 6 / 0 / 4 / 2 | Filed #1974 (every Windows writer makes the classic replacing rename; the spec's mechanism was wrong) and #1976 (the app menu pointer fact). Four lines on #1955. Codoki was bypassed on an independent judge's verdict: its one finding, that xunit has no `Assert.Fail`, is false. Not delivered: a failing test for #1788's own run. Three local reds never reproduced and never seen on a lane |
-| CB-13 | #1985 | 2026-11-17 (0a417b84) | #1727 | 7 / 1 / 4 / 2 | Filed #1975 (merged first, above) and #1977 (an outside edit made just before a rename is dropped as the rename's own echo). Three lines and a possible flake on #1955. A refusal records no echo. Not delivered: an NVDA hearing on a real FAT32 or exFAT volume (an owner step); the read-back on an SMB share; either read after a rename a FAT volume applied; the mixed folder outcome. The Mac's twin on #1954 |
+| CB-13 | #1985 | 2026-11-17 (0a417b84) | #1727 | 7 / 1 / 4 / 2 | Filed #1975 (merged first, above) and #1977 (an outside edit made just before a rename is dropped as the rename's own echo). Three lines and a possible flake on #1955. A refusal records no echo. Run 43943403456: the read with the renamed handle still open equals the folder's listing in all twelve cases, and the watcher hears no event for either spelling around an ignored rename. Not delivered: an NVDA hearing on a real FAT32 or exFAT volume (an owner step); the read-back on an SMB share on the lane (it passed locally on a loopback share over NTFS); either read after a rename a FAT volume applied; the mixed folder outcome. The Mac's twin on #1954 |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1086,32 +1100,36 @@ for its review. Later probes run on a branch through
 Waves C3 and C4, 2026-11-16 and 17. Each chunk had a fresh Opus red
 team and Codex rounds to an approve, at effort high: CB-10, CB-27 one
 round, #1975 two, #1979 two, CB-13 three, CB-9a seven and CB-7 eight.
-CB-9a's and CB-7's rounds mostly found code shapes that a census did
-not read; both censuses now refuse by default and admit by name. Codoki
-reported Safe to merge at 5/5 on every PR but CB-7's. There it held
-"Requires changes" on one finding, that xunit has no `Assert.Fail`,
+Four of CB-9a's seven findings and three of CB-7's eight were code
+shapes that a census did not read; both censuses now refuse by default
+and admit by name. CB-7's other five were in the tests' own logic.
+Codoki reported Safe to merge at 5/5 on every PR but CB-7's. There it
+held "Requires changes" on one finding, that xunit has no `Assert.Fail`,
 answered once and repeated. An independent judge found it false (the
-project references xunit.v3 4.0.2, the call stands 44 times on `main`,
-the lane built and ran the file) and the PR merged on that verdict,
-recorded in its body.
+gate project references `xunit.v3.mtp-off` 4.0.2, whose assert library
+has the method; the call stood 44 times on `main` before the merge; the
+lane built and ran the file) and the PR merged on that verdict, recorded
+in its body.
 
 CB-9b moved from wave C4 to C5, behind CB-13, because both edit
 `TryRenameSelected`.
 
-Two specs had a wrong mechanism that a measurement caught before any
-product code. CB-7's said a delete-sharing read lets the app's rename
-through; every Windows writer makes the classic replacing rename, which
-is refused while any handle is open on the target (#1974). CB-13's
-spec recorded an echo on a refused rename; a run showed that echo hides
+Two specs had a wrong mechanism. CB-7's said a delete-sharing read lets
+the app's rename through; a measurement before any product code showed
+that every Windows writer makes the classic replacing rename, which is
+refused while any handle is open on the target (#1974). CB-13's spec
+recorded an echo on a refused rename. That one was built first; Codex's
+first round and a probe with the real watcher then showed the echo hides
 an outside edit made in the seconds before it, so a refusal records
 nothing. From wave C4 on, each spec has a step 0 measurement and its own
 red team before code.
 
-Two fixes merged ahead of their chunks, each as its own PR because it
-reached another module: #1975 (after a case-only rename the sweep
-inserted a second row; CB-13's step 0 found it) and #1979 (the math
-panic-hook fact raced a sibling's first MathCAT initialisation; it
-turned CB-27's lane red once).
+Two fixes went in as their own PRs because each reached another module.
+#1975 (after a case-only rename the sweep inserted a second row; CB-13's
+step 0 found it) merged ahead of CB-13. #1979 (the math panic-hook fact
+raced a sibling's first MathCAT initialisation) turned CB-27's lane red
+once; CB-27 merged on a rerun of that job, and #1979's own PR merged
+after it.
 
 Product defects on `main` that these waves found and filed, none placed
 in a wave yet; each waits for the owner's call:
