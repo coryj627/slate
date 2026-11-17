@@ -1371,6 +1371,60 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>CB-11 (#1714), from Codex's fifth round: another session
+    /// moves the open note away and moves a different note into its path,
+    /// and before this window's rescan the reader renames that path here.
+    /// The rename moves the other note's file, and the open tab is moved
+    /// with it, as on main. The press does not follow: the file the rename
+    /// moved is not the version the press's tab holds, so the sync drops
+    /// the press, as on main.</summary>
+    [Fact]
+    public void ADeferredSummaryDoesNotFollowItsTabOntoAnotherNotesFile()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                using (VaultSession other = VaultSession.OpenFilesystem(_fixture.Root))
+                {
+                    _ = other.RenameFile("cited.md", "away.md");
+                    _ = other.RenameFile("other.md", "cited.md");
+                }
+                _ = session.RenameFile("cited.md", "renamed.md");
+                workspace.RetargetPath("cited.md", "renamed.md");
+                Assert.Equal("renamed.md", tab.Path);
+                Assert.Equal("renamed.md", workspace.Citations.Path);
+                Assert.Equal(0, workspace.Citations.RowsPublishedSubscriberCountForTests);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.True(
+                workspace.CitationSummary is null,
+                $"the sheet opened with {workspace.CitationSummary?.Total} citations, the other note's");
+            Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>CB-11 (#1714): a re-seat can respell the leaf's tab without
     /// syncing the panels (a missing Ghost.md whose file is back as
     /// ghost.md), so the leaf still names the old spelling when the press is
