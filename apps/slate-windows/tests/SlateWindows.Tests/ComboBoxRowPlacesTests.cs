@@ -405,8 +405,12 @@ public sealed class ComboBoxRowPlacesTests
     });
 
     /// <summary>A container the generator lets go of while the list is open
-    /// loses its stamp and leaves the tracker: after four refills the tracker
-    /// holds exactly the containers that are realized.</summary>
+    /// loses its stamp and leaves the tracker. The rows realized at the open
+    /// are kept; after four refills the generator has let go of some of them,
+    /// and none of those holds a local value for either property (a released
+    /// row with a stale stamp would say a stale place wherever it is read
+    /// again); and the tracker holds exactly the containers that are
+    /// realized.</summary>
     [Fact]
     public void ARefilledOpenListHoldsNoContainerItLetGoOf() => OpenLists.RunSta(() =>
     {
@@ -417,6 +421,16 @@ public sealed class ComboBoxRowPlacesTests
         bench.Settle();
         bench.Open(combo);
         ComboBoxRowPlaces tracker = Assert.IsType<ComboBoxRowPlaces>(ComboBoxRowPlaces.For(combo));
+        DependencyObject[] atTheOpen =
+        [
+            .. Enumerable.Range(0, combo.Items.Count)
+                .Select(index => OpenLists.ContainerAt(combo, index))
+                .OfType<DependencyObject>(),
+        ];
+        Assert.True(
+            atTheOpen.Length == rows.Count
+                && atTheOpen.All(container => container.ReadLocalValue(AutomationProperties.PositionInSetProperty) != DependencyProperty.UnsetValue),
+            "the open did not realize and stamp every row, so the fact proves nothing.");
 
         for (int round = 1; round <= 4; round++)
         {
@@ -428,6 +442,22 @@ public sealed class ComboBoxRowPlacesTests
 
             bench.Settle();
         }
+
+        DependencyObject[] released =
+        [
+            .. atTheOpen.Where(container => combo.ItemContainerGenerator.ItemFromContainer(container) == DependencyProperty.UnsetValue),
+        ];
+        Assert.True(released.Length > 0, "the refills let go of none of the rows realized at the open, so the fact proves nothing.");
+        string[] stale =
+        [
+            .. released
+                .Where(container => container.ReadLocalValue(AutomationProperties.PositionInSetProperty) != DependencyProperty.UnsetValue
+                    || container.ReadLocalValue(AutomationProperties.SizeOfSetProperty) != DependencyProperty.UnsetValue)
+                .Select(container => $"{AutomationProperties.GetPositionInSet(container)} of {AutomationProperties.GetSizeOfSet(container)}"),
+        ];
+        Assert.True(
+            stale.Length == 0,
+            $"{stale.Length} of the {released.Length} rows the generator let go of still hold a stamp: {string.Join(", ", stale)}");
 
         int realized = Enumerable.Range(0, combo.Items.Count).Count(index => OpenLists.ContainerAt(combo, index) is not null);
         Assert.True(
