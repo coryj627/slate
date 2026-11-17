@@ -3474,6 +3474,203 @@ public sealed class SaveChainAdmissionTests
         }
     }, TimeSpan.FromSeconds(120), "STA test body timed out.");
 
+    // ---- No undo step restores another writer's bytes (plan 47 CB-9b, Design 0) --
+
+    private const string TwoKeyNote = "---\nstatus: draft\ntitle: A\n---\n\nBody.\n";
+
+    /// <summary>Plan 47 CB-9b, Design 0 (the plan lead's word of 2026-11-17).
+    /// Another writer's bytes land in a clean tab on a.md and in its split
+    /// peer. Afterwards neither tab can undo, so one Undo and a save from
+    /// either tab leave the write on disk, and each tab's caret keeps its
+    /// line (line 5, the blank line under the frontmatter, which every
+    /// route's new text keeps). Today the whole-document replace stays on
+    /// the source's undo stack and reaches the peer's through the mirroring,
+    /// and an Undo then a save writes the old bytes back (M10, M11).</summary>
+    [Theory]
+    [InlineData("property set from the header")]
+    [InlineData("property delete")]
+    [InlineData("property add")]
+    [InlineData("Bases cell edit through a tab")]
+    [InlineData("tabless Bases cell write with tabs that raced open")]
+    [InlineData("bulk rename")]
+    public void AnUndoCannotRestoreBytesAnotherWriterReplaced(string route) => RunSta(() =>
+    {
+        using var h = new Vault("undo-across-writer", ("a.md", TwoKeyNote), ("Notes.base", NotesBase));
+        bool tabless = route == "tabless Bases cell write with tabs that raced open";
+        WorkspaceTabViewModel? a = null;
+        WorkspaceTabViewModel? b = null;
+        void OpenBoth()
+        {
+            a = h.OpenNow("a.md");
+            WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+            b = OpenSplitPeer(h, "a.md");
+            h.Workspace.Activate(groupA, a);
+            foreach (WorkspaceTabViewModel tab in new[] { a, b })
+            {
+                Assert.False(tab.IsDirty, "premise: a tab opened dirty");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "premise: a tab opened with an undo step");
+                tab.EditorCaretOffset = tab.EditorDocument.GetLineByNumber(5).Offset;
+            }
+        }
+        HeldWork? held = null;
+        try
+        {
+            string expected;
+            Func<bool> landed;
+            if (tabless)
+            {
+                (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+                held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook);
+                document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+                h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+                OpenBoth();
+                held.Release();
+                expected = "status: done";
+                landed = () => h.Events.Any(e => e is A11yEvent.BasesCellSaved);
+            }
+            else
+            {
+                OpenBoth();
+                (expected, landed) = WriteThroughAnOpenTab(h, route);
+            }
+            h.PumpUntil(() => landed() && h.Workspace.SavesIdle, $"the {route} landing");
+            string written = h.Read("a.md");
+            Assert.Contains(expected, written, StringComparison.Ordinal);
+
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a!), ("the split peer", b!) })
+            {
+                Assert.Equal(written, tab.Text);
+                Assert.False(tab.IsDirty, $"{name} is dirty after the write");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, $"{name} can undo across the bytes another writer wrote");
+                Assert.InRange(tab.EditorCaretOffset, 0, tab.EditorDocument.TextLength);
+                Assert.Equal(5, tab.EditorDocument.GetLocation(tab.EditorCaretOffset).Line);
+            }
+            foreach (WorkspaceTabViewModel tab in new[] { a!, b! })
+            {
+                tab.EditorDocument!.UndoStack.Undo();
+                Task<bool> save = tab.SaveAsync();
+                h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a save after an Undo");
+                Assert.Equal(written, h.Read("a.md"));
+            }
+        }
+        finally
+        {
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain([.. held is null ? Array.Empty<HeldWork>() : [held]]);
+        }
+        held?.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Plan 47 CB-9b, the lead's ruling 8: another writer's bytes
+    /// keep the caret on its line, as the rescan's reload does
+    /// (<c>WorkspaceTabViewModel.ReloadKeepingCaretLine</c>), in the tab the
+    /// write rebaselines and in its split peer; a line past the new end
+    /// clamps to the last line, and the column clamps to that line. Today
+    /// the replace leaves the caret's offset where it was (headless; with
+    /// the editor view, AvalonEdit moves it to an end of the new
+    /// text).</summary>
+    [Theory]
+    [InlineData("a line the new text keeps")]
+    [InlineData("a line past the new end")]
+    public void ABaselineReplaceKeepsTheCaretsLineAndClampsALinePastTheNewEnd(string where) => RunSta(() =>
+    {
+        const string Before = "one\ntwo\nthree\nfour\nfive\n";
+        bool past = where == "a line past the new end";
+        string after = past ? "x\ny\n" : "a much longer first line than before\ntwo\nthree\nfour\nfive\n";
+        using var h = new Vault("baseline-caret", ("a.md", Before));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = OpenSplitPeer(h, "a.md");
+        foreach (WorkspaceTabViewModel tab in new[] { a, b })
+        {
+            // Line 5 ("five"), column 3.
+            tab.EditorCaretOffset = tab.EditorDocument!.GetLineByNumber(5).Offset + 2;
+        }
+
+        SaveReport report = h.Session.SaveText("a.md", after, a.SavedContentHash);
+        Assert.True(h.Workspace.ReconcileTabsAfterPropertyWrite("a.md", report.NewContentHash));
+
+        // "x\ny\n" has three lines, the last empty: line 5 clamps to line 3,
+        // and column 3 to that line's column 1.
+        (int line, int column) = past ? (3, 1) : (5, 3);
+        foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+        {
+            Assert.Equal(after, tab.Text);
+            Assert.InRange(tab.EditorCaretOffset, 0, tab.EditorDocument!.TextLength);
+            ICSharpCode.AvalonEdit.Document.TextLocation caret = tab.EditorDocument.GetLocation(tab.EditorCaretOffset);
+            Assert.True(
+                caret.Line == line && caret.Column == column,
+                $"{name}'s caret is at line {caret.Line}, column {caret.Column}; expected line {line}, column {column}");
+        }
+    });
+
+    /// <summary>Another writer's write to a.md, asked with its tabs open: what
+    /// it writes, and when it has landed.</summary>
+    private static (string Expected, Func<bool> Landed) WriteThroughAnOpenTab(Vault h, string route)
+    {
+        Func<bool> propertyChanged = () => h.Events.Any(e => e is A11yEvent.PropertyChanged);
+        if (route == "property set from the header")
+        {
+            PropertyRowViewModel status = LoadedHeader(h).Rows.Single(row => row.Key == "status");
+            status.EditorText = "done";
+            Assert.True(h.Workspace.SetPanelProperty(status));
+            return ("status: done", propertyChanged);
+        }
+        if (route == "property delete")
+        {
+            Assert.True(h.Workspace.DeletePanelProperty(LoadedHeader(h).Rows.Single(row => row.Key == "title")));
+            return ("status: draft\n---", propertyChanged);
+        }
+        if (route == "property add")
+        {
+            _ = LoadedHeader(h);
+            h.Workspace.OpenAddPropertySheet();
+            AddPropertyViewModel add = h.Workspace.AddPropertySheet!;
+            add.Key = "owner";
+            add.Value = "alice";
+            Assert.True(add.Add(), "premise: the add was refused at commit");
+            return ("owner: alice", propertyChanged);
+        }
+        if (route == "Bases cell edit through a tab")
+        {
+            (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            return ("status: done", () => h.Events.Any(e => e is A11yEvent.BasesCellSaved));
+        }
+        Assert.Equal("bulk rename", route);
+        BulkRenameViewModel sheet = h.Workspace.CreateBulkRename();
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        h.PumpUntil(() => sheet.CanApply, "premise: the preview arming the apply");
+        Assert.True(sheet.Apply(), "premise: the apply was refused");
+        return (
+            "state: draft",
+            () => !sheet.WorkInFlight && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }));
+    }
+
+    /// <summary>A second tab on <paramref name="path"/>'s note, in a split to
+    /// the right, opened with one drained turn and no fixed wait.</summary>
+    private static WorkspaceTabViewModel OpenSplitPeer(Vault h, string path)
+    {
+        WorkspaceTabViewModel first = h.Workspace.Groups.SelectMany(group => group.Tabs).Single(tab => tab.Path == path);
+        h.Workspace.OpenPath(path, WorkspaceOpenTarget.SplitRight);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel peer = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(first, peer);
+        Assert.Equal(path, peer.Path);
+        Assert.Equal(first.Text, peer.Text);
+        return peer;
+    }
+
+    /// <summary>The active tab's properties header, loaded.</summary>
+    private static NotePropertiesViewModel LoadedHeader(Vault h)
+    {
+        NotePropertiesViewModel header = h.Workspace.EnsureActiveTabProperties()!;
+        h.PumpUntil(() => header.Rows.Count > 0 && !header.IsLoading, "the header loading");
+        h.Events.Clear();
+        return header;
+    }
+
     // ---- Harness ---------------------------------------------------------------
 
     /// <summary>A vault on disk and a workspace over it in the app's mode:
