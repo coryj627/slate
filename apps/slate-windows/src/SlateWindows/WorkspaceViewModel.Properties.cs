@@ -774,9 +774,30 @@ internal sealed partial class WorkspaceViewModel
             started = true;
             return operation();
         });
+        AbandonIfNeverStarted(admitted, () => started, abandoned);
+    }
+
+    /// <summary>Plan 47 CB-9b (#1889; CD5(a)): the same admission over
+    /// several notes at once (<see cref="WorkspaceSaveCoordinator.Admit(IReadOnlyCollection{string}, Func{WorkspaceSaveCoordinator.SaveTicket, Task})"/>),
+    /// for an operation that may rewrite any of them.</summary>
+    private void AdmitPropertyWrite(IReadOnlyCollection<string> paths, Func<Task> operation, Action abandoned)
+    {
+        bool started = false;
+        Task<bool> admitted = _saves.Admit(paths, _ =>
+        {
+            started = true;
+            return operation();
+        });
+        AbandonIfNeverStarted(admitted, () => started, abandoned);
+    }
+
+    /// <summary><paramref name="abandoned"/>, on the dispatcher, when the
+    /// admitted operation never ran.</summary>
+    private void AbandonIfNeverStarted(Task<bool> admitted, Func<bool> started, Action abandoned)
+    {
         if (admitted.IsCompleted)
         {
-            if (!started)
+            if (!started())
             {
                 abandoned();
             }
@@ -787,7 +808,7 @@ internal sealed partial class WorkspaceViewModel
                 System.Windows.Threading.DispatcherPriority.Normal,
                 new Action(() =>
                 {
-                    if (!started)
+                    if (!started())
                     {
                         abandoned();
                     }

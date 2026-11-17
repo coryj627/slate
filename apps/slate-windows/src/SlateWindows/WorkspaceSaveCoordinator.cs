@@ -164,22 +164,51 @@ internal sealed class WorkspaceSaveCoordinator : INoteSaveChain
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         ArgumentNullException.ThrowIfNull(operation);
-        return Enqueue([PathKey(path)], ticket =>
+        return Enqueue([PathKey(path)], ticket => RunOperation(ticket, operation));
+    }
+
+    /// <summary>
+    /// Plan 47 CB-9b (#1889; CD5(a)): <see cref="Admit(string, Func{SaveTicket, Task})"/>
+    /// over several notes at once, for an operation that may rewrite any of
+    /// them (a bulk rename's apply over the notes its preview listed). It
+    /// takes ONE ticket under every note's chain: the operation runs once
+    /// every save and operation admitted for any of the notes before it has
+    /// completed, and each note's chain is held until the Task it returns
+    /// ends, so a save of any of them asked meanwhile waits for it. Spellings
+    /// that fold to one chain are one note. An empty set holds no note's
+    /// chain, and the ticket still counts until the operation ends, so
+    /// teardown's settle waits for it. A closed coordinator returns false and
+    /// the operation never runs.
+    /// </summary>
+    internal Task<bool> Admit(IReadOnlyCollection<string> paths, Func<SaveTicket, Task> operation)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(operation);
+        foreach (string path in paths)
         {
-            Task done = operation(ticket);
-            if (done.IsCompleted)
-            {
-                Finish(ticket, done);
-                return;
-            }
-            done.ContinueWith(
-                finished => _dispatcher.BeginInvoke(
-                    DispatcherPriority.Normal,
-                    new Action(() => Finish(ticket, finished))),
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default);
-        });
+            ArgumentException.ThrowIfNullOrEmpty(path);
+        }
+        string[] keys = [.. paths.Select(PathKey).Distinct(StringComparer.Ordinal)];
+        return Enqueue(keys, ticket => RunOperation(ticket, operation));
+    }
+
+    /// <summary>An admitted operation's run: its ticket completes when the
+    /// Task the operation returns does, on the dispatcher.</summary>
+    private void RunOperation(SaveTicket ticket, Func<SaveTicket, Task> operation)
+    {
+        Task done = operation(ticket);
+        if (done.IsCompleted)
+        {
+            Finish(ticket, done);
+            return;
+        }
+        done.ContinueWith(
+            finished => _dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() => Finish(ticket, finished))),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
     }
 
     /// <summary>Plan 47 CB-9a: <see cref="Admit"/> for an operation that

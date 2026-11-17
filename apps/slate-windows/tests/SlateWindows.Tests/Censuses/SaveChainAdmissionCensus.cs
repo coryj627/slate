@@ -2257,6 +2257,13 @@ public sealed class SaveChainAdmissionCensus
             "unjoined"
         },
         {
+            "a writer in the abandoned argument of AdmitPropertyWrite over several notes",
+            InTheWorkspace(
+                "void PlantedM() { AdmitPropertyWrite([\"a.md\", \"b.md\"], () => Task.CompletedTask, "
+                + "() => { _ = _session.SaveText(\"a.md\", \"text\", null); }); }"),
+            "unjoined"
+        },
+        {
             "RecoverDeletedFile in a plain method",
             InAClass("void PlantedM() { _ = session.RecoverDeletedFile(\"a.md\"); }"),
             "unjoined"
@@ -2534,6 +2541,21 @@ public sealed class SaveChainAdmissionCensus
         {
             "through INoteSaveChain.Admit",
             InAClass("void PlantedM() { _ = chain.Admit(\"a.md\", () => { " + AWrite + " return Task.CompletedTask; }); }"),
+            "joined"
+        },
+        {
+            // Plan 47 CB-9b: the admission over several notes.
+            "a writer in an Admit lambda over several notes",
+            InAClass(
+                "void PlantedM() { _ = saves.Admit([\"a.md\", \"b.md\"], ticket => { " + AWrite
+                + " return Task.CompletedTask; }); }"),
+            "joined"
+        },
+        {
+            "through AdmitPropertyWrite over several notes",
+            InTheWorkspace(
+                "void PlantedM() { AdmitPropertyWrite([\"a.md\", \"b.md\"], "
+                + "() => { _ = _session.SaveText(\"a.md\", \"text\", null); return Task.CompletedTask; }, () => { }); }"),
             "joined"
         },
         {
