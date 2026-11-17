@@ -4312,6 +4312,158 @@ public sealed class SaveChainAdmissionTests
         Assert.True(summary >= 0 && closed > summary, $"expected the apply's summary and then the close's sentence; heard {heard}");
     }
 
+    // ---- #1955's CB-9a items 1 and 3 (plan 47 CB-9b, Design 8) ----------------
+
+    /// <summary>Design 8, #1955's CB-9a item 3 (all three parts). A property
+    /// write from A's header is held on its worker; B, A's split peer, takes
+    /// an unsaved edit, so both tabs are dirty when the write lands. The
+    /// announcer throws at the property sentence a dirty tab is told, or at
+    /// the failure sentence when the write lands and then faults. The fan-out
+    /// still reaches every tab on the note (each is marked stale), and the
+    /// header refresh and the rest of the completion still run; after a
+    /// failure, the read-back reconcile still brings the clean tabs to the
+    /// landed bytes. Red today: the first sentence that throws skips every
+    /// step after it.</summary>
+    [Theory]
+    [InlineData("set", "the dirty tab's sentence")]
+    [InlineData("add", "the dirty tab's sentence")]
+    [InlineData("set", "the failure's sentence")]
+    [InlineData("add", "the failure's sentence")]
+    public void APropertyWriteCompletionRunsEveryStepWhenASentenceThrows(string write, string sentence) => RunSta(() =>
+    {
+        using var peers = new Peers("completion-steps");
+        bool failure = sentence == "the failure's sentence";
+        var held = new HeldWork(hook =>
+        {
+            peers.A.PropertyWriteHookForTests = hook;
+            peers.B.PropertyWriteHookForTests = hook;
+        });
+        if (failure)
+        {
+            peers.A.PropertyWriteFaultForTests = () => throw new InvalidOperationException("the write landed and then failed (test seam)");
+            peers.B.PropertyWriteFaultForTests = peers.A.PropertyWriteFaultForTests;
+        }
+        peers.H.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.PropertyEditFailed
+                || (spoken is A11yEvent.HostComposed composed
+                    && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            if (write == "set")
+            {
+                PropertyRowViewModel status = peers.Row("status");
+                status.EditorText = "done";
+                Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            }
+            else
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenAddPropertySheet();
+                AddPropertyViewModel sheet = peers.H.Workspace.AddPropertySheet!;
+                sheet.Key = "owner";
+                sheet.Value = "alice";
+                Assert.True(sheet.Add(), "premise: the add was refused at commit");
+            }
+            peers.H.PumpUntil(() => held.Entered, "premise: the write reaching its hold before its core call");
+            if (!failure)
+            {
+                peers.B.Text = NoteEdited;
+                Assert.True(peers.A.IsDirty && peers.B.IsDirty, "premise: the peers are not both dirty");
+            }
+
+            held.Release();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the write's completion");
+            string disk = peers.H.Read("a.md");
+            Assert.Contains(write == "set" ? "status: done" : "owner: alice", disk, StringComparison.Ordinal);
+            if (failure)
+            {
+                // The read-back reconcile ran after the failure's sentence.
+                foreach (WorkspaceTabViewModel tab in new[] { peers.A, peers.B })
+                {
+                    Assert.Equal(disk, tab.Text);
+                    Assert.False(tab.IsDirty);
+                    Assert.False(tab.IsExternallyStale);
+                }
+            }
+            else
+            {
+                // The fan-out reached the tab after the one whose sentence threw.
+                Assert.True(peers.A.IsExternallyStale, "the first tab on the note was not marked stale");
+                Assert.True(peers.B.IsExternallyStale, "the fan-out stopped at the tab whose sentence threw");
+                _ = Assert.Single(peers.H.Events, e => e is A11yEvent.PropertyChanged);
+            }
+            string hash = peers.H.Session.ReadNoteParts("a.md").ContentHash;
+            peers.H.PumpUntil(
+                () => !peers.Properties.IsLoading && peers.Properties.ContentHash == hash,
+                "the header's refresh to the written bytes");
+        }
+        finally
+        {
+            peers.H.BeforeAnnounce = null;
+            peers.A.PropertyWriteFaultForTests = null;
+            peers.B.PropertyWriteFaultForTests = null;
+            peers.H.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 8, #1955's CB-9a item 1. A property write's worker
+    /// faults outside its catch, on one of the three faults the catch leaves
+    /// alone, so it posts no completion. The write still ends: the note's
+    /// chain goes idle, the note's write lease is released, the row is no
+    /// longer in flight (a set) and the sheet hears the add did not land (an
+    /// add). Nothing is written and nothing new is spoken. Red today: the
+    /// wait for the end runs out.</summary>
+    [Theory]
+    [InlineData("set")]
+    [InlineData("add")]
+    public void APropertyWriteWhoseWorkerFaultsOutsideItsCatchStillEnds(string write) => RunSta(() =>
+    {
+        using var peers = new Peers("property-worker-faults");
+        Action fault = () => throw new OutOfMemoryException("the property write's worker faulted (test seam)");
+        peers.A.PropertyWriteHookForTests = fault;
+        peers.B.PropertyWriteHookForTests = fault;
+        PropertyRowViewModel status = peers.Row("status");
+        AddPropertyViewModel? sheet = null;
+        try
+        {
+            if (write == "set")
+            {
+                status.EditorText = "done";
+                Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            }
+            else
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenAddPropertySheet();
+                sheet = peers.H.Workspace.AddPropertySheet!;
+                sheet.Key = "owner";
+                sheet.Value = "alice";
+                Assert.True(sheet.Add(), "premise: the add was refused at commit");
+            }
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the faulted write's end");
+            Assert.Equal(Note, peers.H.Read("a.md"));
+            Assert.False(status.WriteInFlight);
+            Assert.DoesNotContain(peers.H.Events, e => e is A11yEvent.PropertyChanged);
+            AssertALaterOperationRuns(peers.H, "a.md");
+        }
+        finally
+        {
+            peers.A.PropertyWriteHookForTests = null;
+            peers.B.PropertyWriteHookForTests = null;
+            peers.H.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>The workspace's bulk rename sheet, opened and armed by a
     /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
     /// with what the preview spoke dropped.</summary>
