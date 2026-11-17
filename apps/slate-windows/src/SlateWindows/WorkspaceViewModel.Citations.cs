@@ -418,6 +418,15 @@ internal sealed partial class WorkspaceViewModel
             _parkedSummaryPath = null;
             _parkedSummaryTab = null;
         }
+        else if (_summaryParked
+            && !Groups.SelectMany(group => group.Tabs).Any(tab => ReferenceEquals(tab, _parkedSummaryTab)))
+        {
+            // CB-11 (#1714): the tab the press was parked on has closed and
+            // the leaf stayed on the note (a split pane's close hands it to
+            // the pane on the same note). The tab the leaf now follows takes
+            // the press over, so a later rename moves the press with it.
+            _parkedSummaryTab = ActiveGroup.ActiveTab;
+        }
     }
 
     /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
@@ -437,6 +446,9 @@ internal sealed partial class WorkspaceViewModel
     /// move one tab onto another's path before it moves the other. Any other
     /// tab moves nothing here; if the leaf then shows another path, the
     /// sync drops the press, as it drops it when the reader leaves the note.
+    /// When the press's tab closes and the leaf stays on the note (a split
+    /// pane's close), the tab the leaf then follows takes the press over
+    /// (<see cref="DropParkedSummaryIfNoteChanged"/>).
     /// The leaf's path is compared, not the tab's: a re-seat can respell the
     /// tab without syncing the panels, and the press was parked under the
     /// leaf's spelling. A destination that is not a note moves nothing
