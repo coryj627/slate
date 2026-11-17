@@ -2690,12 +2690,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             repairs: _taskIndexRepairs,
             synchronousForTests: !_startInteractionBackgroundWork);
         // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
-        // state, deliberately NOT keyed on the active note.
+        // state, deliberately NOT keyed on the active note. Its direct
+        // toggle joins the note's save chain (plan 47 CB-9a, #1889), so
+        // it is handed the workspace's coordinator.
         TasksReview = new Panels.TasksReviewViewModel(
             session,
             announce,
             TryActivateTaskRow,
             TryToggleTaskInOpenTab,
+            _saves,
             repairs: _taskIndexRepairs,
             synchronousForTests: !_startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's
@@ -2704,11 +2707,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // that raced-open tab's NOTE PANEL can also have finished a
         // pre-write read — NoteSaved re-snapshots it (and ignores
         // non-active paths).
+        // Both steps are attempted (plan 47 CB-9a; codex round 1): the
+        // sentence a stale tab is told may throw, and the note panel is
+        // still re-snapshotted.
         TasksReview.DiskWriteLanded = (path, newContentHash) =>
-        {
-            ReconcileTabsAfterDirectTaskWrite(path, newContentHash);
-            NotePersisted(path);
-        };
+            AdmittedPublication.RunEvery(
+                () => ReconcileTabsAfterDirectTaskWrite(path, newContentHash),
+                () => NotePersisted(path));
         // Round 15: a repair landing inside a review load worker
         // refreshes the note panel too — both surfaces converge.
         TasksReview.RepairLanded = path => NotePersisted(path);
@@ -3562,6 +3567,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>#1280 test seam: the workspace's save coordinator.</summary>
     internal WorkspaceSaveCoordinator SavesForTests => _saves;
 
+    /// <summary>Plan 47 CB-9a test seam: the workspace's one task-index
+    /// repair coordinator, which every write that re-indexes a note takes a
+    /// lease from.</summary>
+    internal Panels.TaskIndexRepairCoordinator TaskIndexRepairsForTests => _taskIndexRepairs;
+
     public void RetargetPath(string oldPath, string newPath)
     {
         string source = NormalizeWorkspacePath(oldPath);
@@ -4175,14 +4185,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// — it gets the tab's own divergence honesty.</summary>
     private void ReconcileTabsAfterDirectTaskWrite(string path, string newContentHash)
     {
-        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
-        {
-            if (tab.IsMarkdown
-                && string.Equals(tab.Path, path, StringComparison.Ordinal))
-            {
-                tab.ReconcileAfterExternalTaskWrite(newContentHash, _announce);
-            }
-        }
+        // Each tab is a step of its own (plan 47 CB-9a; codex round 1):
+        // the sentence one stale tab is told may throw, and the next tab
+        // on the note is still reconciled.
+        Action[] tabs = [.. Groups
+            .SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal))
+            .Select<WorkspaceTabViewModel, Action>(tab => () => tab.ReconcileAfterExternalTaskWrite(newContentHash, _announce))];
+        AdmittedPublication.RunEvery(tabs);
     }
 
     /// <summary>The panels' task-toggle seam (W4-3): the guarded tab

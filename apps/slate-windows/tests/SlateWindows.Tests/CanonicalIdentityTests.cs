@@ -186,6 +186,7 @@ public sealed class CanonicalIdentityTests
             _ => { },
             (_, _, _) => ReviewOpenRoute.Opened,
             (_, _, _) => ReviewToggleRoute.NoOpenTab,
+            new TasksReviewTests.IdleChain(),
             synchronousForTests: true);
         review.EnsureLoaded();
 
