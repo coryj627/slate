@@ -223,4 +223,154 @@ public sealed class FocusSettleWatchTests
         Assert.False(pressed, "the key was pressed though the premise failed");
         Assert.Equal(2, reads);
     }
+
+    /// <summary>The faults the gate's reads take for no observation, here
+    /// the one kind.</summary>
+    private static bool Unreadable(Exception exception) => exception is System.Runtime.InteropServices.COMException;
+
+    /// <summary>A fault a record can throw: of the kind the reads take for
+    /// no observation, or any other.</summary>
+    private static Exception RecordFault(bool ofTheUnreadableKind) =>
+        ofTheUnreadableKind
+            ? new System.Runtime.InteropServices.COMException("the element is gone")
+            : new InvalidOperationException("the element is gone");
+
+    /// <summary>The first read after the key sees the state elsewhere, the
+    /// record of what it found cannot be read, and every later read sees the
+    /// state back in place. The check fails on that first read and still
+    /// says the state was seen elsewhere. Read under the verdict's own
+    /// catch, a record that threw a UI Automation fault turned the read
+    /// into no observation, and the watch passed on the reads after it; one
+    /// that threw anything else lost the message.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AReadThatSawTheStateElsewhereStaysAFailureWhenItsRecordCannotBeRead(bool ofTheUnreadableKind)
+    {
+        Exception fault = RecordFault(ofTheUnreadableKind);
+        int presses = 0;
+        int after = 0;
+        string recorded = string.Empty;
+
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () => FocusSettleWatch.Decide(
+                () => (bool?)(presses == 0 || ++after > 1),
+                () => throw fault,
+                found => recorded = found,
+                Unreadable),
+            () => presses++,
+            Short,
+            poll: TimeSpan.Zero);
+
+        Assert.NotNull(why);
+        Assert.Contains("Focus left the row", why, StringComparison.Ordinal);
+        Assert.Equal(1, after);
+        Assert.Contains("could not be read", recorded, StringComparison.Ordinal);
+        Assert.Contains(fault.GetType().Name, recorded, StringComparison.Ordinal);
+        Assert.Contains("the element is gone", recorded, StringComparison.Ordinal);
+    }
+
+    /// <summary>A read that saw the state elsewhere hands over what it
+    /// found, and its verdict is false.</summary>
+    [Fact]
+    public void AReadThatSawTheStateElsewhereRecordsWhatItFound()
+    {
+        string recorded = string.Empty;
+
+        bool? seen = FocusSettleWatch.Decide(() => false, () => " found the tab bar", found => recorded = found, Unreadable);
+
+        Assert.False(seen);
+        Assert.Equal(" found the tab bar", recorded);
+    }
+
+    /// <summary>A verdict of true is final too: nothing more is read after
+    /// it, so nothing can fault after it.</summary>
+    [Fact]
+    public void AReadThatSawTheStateInPlaceAsksForNoRecord()
+    {
+        int described = 0;
+        int recorded = 0;
+
+        bool? seen = FocusSettleWatch.Decide(
+            () => true,
+            () =>
+            {
+                described++;
+                throw new InvalidOperationException("never asked");
+            },
+            _ => recorded++,
+            Unreadable);
+
+        Assert.True(seen);
+        Assert.Equal(0, described);
+        Assert.Equal(0, recorded);
+    }
+
+    /// <summary>Only the verdict's own read can be no observation: a fault
+    /// of the named kind there answers null and asks for no record, and any
+    /// other exception is the journey's to see.</summary>
+    [Fact]
+    public void OnlyTheVerdictsOwnFaultIsNoObservation()
+    {
+        int described = 0;
+        string Describe()
+        {
+            described++;
+            return string.Empty;
+        }
+
+        bool? seen = FocusSettleWatch.Decide(
+            () => throw new System.Runtime.InteropServices.COMException("busy"), Describe, _ => described++, Unreadable);
+
+        Assert.Null(seen);
+        Assert.Equal(0, described);
+        Assert.Throws<InvalidOperationException>(
+            () => FocusSettleWatch.Decide(() => throw new InvalidOperationException("a defect"), Describe, null, Unreadable));
+    }
+
+    /// <summary>A watch that passed asks its message for nothing: a read
+    /// made only to word a failure cannot fail a check that passed.</summary>
+    [Fact]
+    public void AWatchThatPassedAsksItsMessageForNothing()
+    {
+        int asked = 0;
+
+        string? failure = FocusSettleWatch.FailureOf(
+            null,
+            "The key moved focus.",
+            () =>
+            {
+                asked++;
+                throw new InvalidOperationException("never asked");
+            });
+
+        Assert.Null(failure);
+        Assert.Equal(0, asked);
+    }
+
+    /// <summary>A watch that failed keeps its reason when the rest of its
+    /// message cannot be read.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AWatchThatFailedKeepsItsReasonWhenItsRecordCannotBeRead(bool ofTheUnreadableKind)
+    {
+        Exception fault = RecordFault(ofTheUnreadableKind);
+        string? failure = FocusSettleWatch.FailureOf("Focus left the row after 12 ms.", "The key moved focus.", () => throw fault);
+
+        Assert.NotNull(failure);
+        Assert.StartsWith("The key moved focus. Focus left the row after 12 ms.", failure, StringComparison.Ordinal);
+        Assert.Contains("could not be read", failure, StringComparison.Ordinal);
+        Assert.Contains(fault.GetType().Name, failure, StringComparison.Ordinal);
+    }
+
+    /// <summary>A watch that failed and could read its record says
+    /// both.</summary>
+    [Fact]
+    public void AWatchThatFailedSaysItsReasonAndItsRecord()
+    {
+        string? failure = FocusSettleWatch.FailureOf("Focus left the row after 12 ms.", "The key moved focus.", () => " Focused: the tab bar.");
+
+        Assert.Equal("The key moved focus. Focus left the row after 12 ms. Focused: the tab bar.", failure);
+    }
 }

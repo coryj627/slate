@@ -11644,9 +11644,11 @@ public sealed partial class ShellAccessibilityTests
                     () => FocusIsWithin(automation, tree),
                     () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT),
                     TimeSpan.FromSeconds(2));
-                Assert.True(
-                    edgeMoved is null,
-                    $"Right from inside the tree moved focus out of the leaf. {edgeMoved} Focus is {DescribeFocusedElement(automation)}");
+                string? edgeFailure = FocusSettleWatch.FailureOf(
+                    edgeMoved,
+                    "Right from inside the tree moved focus out of the leaf.",
+                    () => $" Focus is {DescribeFocusedElement(automation)}");
+                Assert.True(edgeFailure is null, edgeFailure);
                 bool heardInTheWatch = EdgeLineHeard();
                 Assert.True(
                     SpinWait.SpinUntil(EdgeLineHeard, TimeSpan.FromSeconds(10)),
@@ -11655,10 +11657,11 @@ public sealed partial class ShellAccessibilityTests
                 if (!heardInTheWatch)
                 {
                     edgeMoved = FocusSettleWatch.Watch(() => FocusIsWithin(automation, tree), TimeSpan.FromSeconds(2));
-                    Assert.True(
-                        edgeMoved is null,
-                        "Right from inside the tree moved focus out of the leaf after its line was posted. "
-                        + $"{edgeMoved} Focus is {DescribeFocusedElement(automation)}");
+                    edgeFailure = FocusSettleWatch.FailureOf(
+                        edgeMoved,
+                        "Right from inside the tree moved focus out of the leaf after its line was posted.",
+                        () => $" Focus is {DescribeFocusedElement(automation)}");
+                    Assert.True(edgeFailure is null, edgeFailure);
                 }
             }
 
@@ -11745,10 +11748,11 @@ public sealed partial class ShellAccessibilityTests
 
             string? popChanged = FocusSettleWatch.WatchAcrossAKey(
                 NothingChanged, () => PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4), TimeSpan.FromSeconds(2));
-            Assert.True(
-                popChanged is null,
-                $"a second Ctrl+[ with nothing to pop changed the leaf or moved focus. {popChanged} "
-                + $"Focus is {DescribeFocusedElement(automation)}");
+            string? popFailure = FocusSettleWatch.FailureOf(
+                popChanged,
+                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus.",
+                () => $" Focus is {DescribeFocusedElement(automation)}");
+            Assert.True(popFailure is null, popFailure);
 
             // The table's Show connections from the graph tab (B2-3, IGI-4):
             // the graph's group is focused first, then the leaf re-roots on

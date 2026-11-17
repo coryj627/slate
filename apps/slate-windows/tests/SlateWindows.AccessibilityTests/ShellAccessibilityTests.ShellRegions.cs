@@ -369,7 +369,19 @@ public sealed partial class ShellAccessibilityTests
         string elsewhere = string.Empty;
         string? why = FocusSettleWatch.WatchAcrossAKey(
             () => FocusIsOn(automation, element, found => elsewhere = found), press, FocusSettle);
-        Assert.True(why is null, $"{message} {why}{elsewhere} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+        AssertTheWatchPassed(why is null ? null : why + elsewhere, message, automation);
+    }
+
+    /// <summary>The end of a nothing-moved check. <paramref name="why"/> is
+    /// the watch's verdict and nothing read here can change it: a watch that
+    /// passed reads nothing more, and one that failed says where focus is
+    /// now and who holds the foreground only if those can be read
+    /// (<see cref="FocusSettleWatch.FailureOf"/>).</summary>
+    private static void AssertTheWatchPassed(string? why, string message, UIA3Automation automation)
+    {
+        string? failure = FocusSettleWatch.FailureOf(
+            why, message, () => $" Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+        Assert.True(failure is null, failure);
     }
 
     /// <summary>A key that must move nothing, for any state a journey can
@@ -380,39 +392,57 @@ public sealed partial class ShellAccessibilityTests
     private static void AssertAKeyMovesNothing(
         UIA3Automation automation, Func<bool?> inPlace, Action press, string message, TimeSpan window)
     {
-        string? why = FocusSettleWatch.WatchAcrossAKey(inPlace, press, window);
-        Assert.True(why is null, $"{message} {why} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
+        AssertTheWatchPassed(FocusSettleWatch.WatchAcrossAKey(inPlace, press, window), message, automation);
     }
 
     /// <summary>Whether focus is on <paramref name="element"/>: true, false,
     /// or null when UI Automation faulted or answered no element, which is
-    /// no observation either way.</summary>
+    /// no observation either way. The verdict is the focused element and
+    /// its comparison, nothing else: a read that saw focus on another
+    /// element is false from there on, and what it found
+    /// (<see cref="FocusRecord"/>) is read after it, where a fault costs
+    /// words and never the verdict (<see cref="FocusSettleWatch.Decide"/>).</summary>
     private static bool? FocusIsOn(UIA3Automation automation, AutomationElement element, Action<string>? elsewhere = null)
     {
-        try
-        {
-            if (automation.FocusedElement() is not { } focused)
+        AutomationElement? focused = null;
+        return FocusSettleWatch.Decide(
+            () =>
             {
-                return null;
-            }
+                focused = automation.FocusedElement();
+                return focused is null ? (bool?)null : focused.Equals(element);
+            },
+            () => FocusRecord(focused!, element),
+            elsewhere,
+            IsTransientUiaFault);
+    }
 
-            if (focused.Equals(element))
-            {
-                return true;
-            }
+    /// <summary>What a read that saw focus off <paramref name="expected"/>
+    /// found. Each part is read on its own, the runtime id and the window
+    /// record first: the answer can be gone by the time it is asked its
+    /// name, and a fault on one part costs that part only.</summary>
+    private static string FocusRecord(AutomationElement found, AutomationElement expected)
+    {
+        int[]? id = null;
+        string runtimeId = Part(() => string.Join(",", id = found.Properties.RuntimeId.ValueOrDefault ?? []));
+        string window = id is null
+            ? " No window record: the answer's runtime id could not be read."
+            : WindowFacts(id, expected);
+        return $" The read that saw it gone found {Part(() => found.Properties.ControlType.ValueOrDefault)} "
+            + $"'{Part(() => found.Properties.Name.ValueOrDefault)}' #{Part(() => found.Properties.AutomationId.ValueOrDefault)} "
+            + $"class {Part(() => found.Properties.ClassName.ValueOrDefault)}, runtime id [{runtimeId}], where runtime id "
+            + $"[{Part(() => string.Join(",", expected.Properties.RuntimeId.ValueOrDefault ?? []))}] was expected."
+            + window;
 
-            int[] found = focused.Properties.RuntimeId.ValueOrDefault ?? [];
-            elsewhere?.Invoke(
-                $" The read that saw it gone found {focused.Properties.ControlType.ValueOrDefault} "
-                + $"'{focused.Properties.Name.ValueOrDefault}' #{focused.Properties.AutomationId.ValueOrDefault} "
-                + $"class {focused.Properties.ClassName.ValueOrDefault}, runtime id [{string.Join(",", found)}], where runtime id "
-                + $"[{string.Join(",", element.Properties.RuntimeId.ValueOrDefault ?? [])}] was expected."
-                + WindowFacts(found, element));
-            return false;
-        }
-        catch (Exception exception) when (IsTransientUiaFault(exception))
+        static string Part(Func<object?> read)
         {
-            return null;
+            try
+            {
+                return read()?.ToString() ?? string.Empty;
+            }
+            catch (Exception exception)
+            {
+                return $"<unreadable: {exception.GetType().Name}>";
+            }
         }
     }
 

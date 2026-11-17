@@ -129,4 +129,61 @@ internal static class FocusSettleWatch
         press();
         return Watch(inPlace, window, cap, poll);
     }
+
+    /// <summary>One read of a check that a key moved nothing, in two steps
+    /// that cannot touch each other. The verdict is asked first and alone:
+    /// true (in place), false (elsewhere), or no observation when the
+    /// verdict's own read throws a fault <paramref name="unreadable"/> names
+    /// (a UI Automation fault). Once the verdict is false it stays false:
+    /// what that read found is asked for after it, best effort
+    /// (<see cref="RecordOf"/>), and a fault there only shortens the
+    /// message. Were the record read under the verdict's catch, a fault in
+    /// it would turn a read that saw the state elsewhere into no
+    /// observation, and the watch could pass once the state came back. A
+    /// verdict of true, and one that could not be read, ask for no
+    /// record.</summary>
+    internal static bool? Decide(
+        Func<bool?> verdict, Func<string> describe, Action<string>? record, Func<Exception, bool> unreadable)
+    {
+        bool? seen;
+        try
+        {
+            seen = verdict();
+        }
+        catch (Exception exception) when (unreadable(exception))
+        {
+            return null;
+        }
+
+        if (seen is false)
+        {
+            record?.Invoke(RecordOf(describe));
+        }
+
+        return seen;
+    }
+
+    /// <summary>What a decided check adds to its message, read after the
+    /// verdict and never able to change it: <paramref name="describe"/>'s
+    /// words, or, when it throws anything at all, that the record could not
+    /// be read and why.</summary>
+    internal static string RecordOf(Func<string> describe)
+    {
+        try
+        {
+            return describe();
+        }
+        catch (Exception exception)
+        {
+            return $" The record of what the read found could not be read: {exception.GetType().Name}: {exception.Message}";
+        }
+    }
+
+    /// <summary>The failure message of a watch that has decided, or null
+    /// when it passed. <paramref name="why"/> is the verdict. A pass asks
+    /// <paramref name="record"/> for nothing, so no read made for a message
+    /// can fail a check that passed; a failure keeps <paramref name="why"/>
+    /// whatever the record does (<see cref="RecordOf"/>).</summary>
+    internal static string? FailureOf(string? why, string message, Func<string> record) =>
+        why is null ? null : $"{message} {why}{RecordOf(record)}";
 }
