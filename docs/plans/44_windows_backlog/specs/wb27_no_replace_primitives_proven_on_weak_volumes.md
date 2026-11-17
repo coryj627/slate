@@ -52,7 +52,10 @@ below, it wins.
   runner's FAT32 and exFAT volumes (Windows Server 10.0.20348.5761) all
   six renames were reported as done and not made on `main`'s product
   code (run 43935566159), and all six are refused in core's sentence
-  with the read-back in (run 43943403456): doc 24's P-W3.
+  with the read-back in (run 43943403456): doc 24's P-W3. Since #1975
+  merged (PR #1982) the session fact also runs a vault-wide task query
+  after each rename and checks that the rows stay as the volume has
+  them, one for each file, with no marker left.
 - **A third non-ignored fact.**
   `weak_volume_gate_decides_each_kind_from_what_the_volume_reports`. The
   gate is split in two:

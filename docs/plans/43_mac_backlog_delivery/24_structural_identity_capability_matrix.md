@@ -621,6 +621,17 @@ makes a FAT32 and an exFAT VHD with `diskpart` and sets
   OBSERVED FAT32 session case-only Note.md -> note.md: refused: This drive keeps the capitalization a file was created with, so Note.md was not renamed to note.md. (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["Docs/Docs.md", "Docs/Inner.md", "Note.md"], dirs ["Docs"])
   OBSERVED FAT32 session case-only Docs -> docs: refused: This drive keeps the capitalization a file was created with, so Docs was not renamed to docs. (listing ["Docs", "Note.md"], in the folder ["Docs.md", "Inner.md"], files ["Docs/Docs.md", "Docs/Inner.md", "Note.md"], dirs ["Docs"])
   ```
+- **The task query after each rename.** The three runs above were made
+  before #1975 merged (PR #1982), and the session fact then stopped at
+  the rename. It now also runs a vault-wide task query after each rename
+  and checks that the rows stay as the volume has them, one for each
+  file, that each note's task is returned once, and that no marker is
+  left, with one more `OBSERVED … after the task query: …` line for each
+  rename. On these volumes that half is first seen in the pull request's
+  own lane run. On NTFS the same assertions, in
+  `canonical_identity::a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes`,
+  fail against the sweep as it was before #1975 (each task returned
+  twice, with rows under `note.md` and `docs/`) and pass with it.
 - **SMB, local only.** The job has no share. On the loopback share of
   P-W1 (Windows 11 10.0.26300, 2026-11-16) the fact passed with the
   read-back in: all six cases `renamed`, each read equal to the listing

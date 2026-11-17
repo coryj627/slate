@@ -1211,6 +1211,10 @@ fn case_only_refusal(stored: &str, requested: &str) -> String {
 /// capitalization a file was created with, so Docs.md was not renamed to
 /// docs.md." The fact accepts that sentence with the old spellings.
 ///
+/// After each rename a vault-wide task query settles the markers it left
+/// (#1975): the rows stay as the volume has them, one for each file, each
+/// note's task is returned once, and no marker is left.
+///
 /// Each volume and rename is recorded before anything is asserted. The
 /// volumes are WB-27's scratch folders, which CI's `rust-weak-volumes` job
 /// makes on VHDs.
@@ -1270,10 +1274,10 @@ fn a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_
             "{variable}: {} is on a volume that names itself {file_system}",
             scratch.display()
         );
-        std::fs::write(vault.path().join("Note.md"), "# Note\n").unwrap();
+        std::fs::write(vault.path().join("Note.md"), "- [ ] note\n").unwrap();
         std::fs::create_dir(vault.path().join("Docs")).unwrap();
-        std::fs::write(vault.path().join("Docs").join("Docs.md"), "# Docs\n").unwrap();
-        std::fs::write(vault.path().join("Docs").join("Inner.md"), "# Inner\n").unwrap();
+        std::fs::write(vault.path().join("Docs").join("Docs.md"), "- [ ] docs\n").unwrap();
+        std::fs::write(vault.path().join("Docs").join("Inner.md"), "- [ ] inner\n").unwrap();
         let session = session_at(vault.path()).unwrap();
         scanned(&session);
         assert_eq!(
@@ -1350,6 +1354,29 @@ fn a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_
             if files != expected_files || dirs != sorted(&[&folder]) {
                 breaches.push(format!("{case}: the index and the volume disagree: {seen}"));
             }
+
+            // The rename left a marker under each spelling, whether it landed
+            // or was refused. The next vault-wide task query settles them
+            // under the spelling the volume stores (#1975): the rows stay as
+            // the volume has them, one for each file, each note's task is
+            // returned once, and no marker is left.
+            let queried = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(10));
+            let tasks = queried.as_ref().map(|page| page.items.len());
+            let files = rows(&session, "files");
+            let dirs = rows(&session, "dirs");
+            let markers = rows(&session, "text_write_intents");
+            let after =
+                format!("files {files:?}, dirs {dirs:?}, markers {markers:?}, tasks {tasks:?}");
+            println!("OBSERVED {case}: after the task query: {after}");
+            if files != expected_files
+                || dirs != sorted(&[&folder])
+                || !markers.is_empty()
+                || !matches!(tasks, Ok(3))
+            {
+                breaches.push(format!(
+                    "{case}: after the task query the index is not as the volume has it: {after}"
+                ));
+            }
         }
 
         drop(session);
@@ -1365,6 +1392,7 @@ fn a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_
         breaches.join("\n  ")
     );
 }
+
 /// A vault on a volume with no drive letter and no mount folder, reached
 /// only as `\\?\Volume{…}\…`: the held path's drive-letter form fails there,
 /// so the open, the scan, a save, a rename and the display path all go

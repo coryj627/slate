@@ -210,7 +210,11 @@ this document it succeeds, and the index row moves to the new spelling.
 provider reads the entry's stored spelling back after a case-only
 rename. Where the volume kept the old spelling the rename fails with
 core's sentence (`a11y::case_only_rename_refused`) and the row, the
-links and the report do not move. Facts:
+links and the report do not move. A refusal leaves the move's markers
+under both spellings, as any failed move does; the next sweep settles
+them under the spelling the volume stores (I3's note for #1975, PR
+#1982), so the rows and the tasks are as they were and no marker is
+left. Facts:
 `canonical_identity::a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes`,
 `weak_volume_case_only_rename_keeps_the_entry`.
 

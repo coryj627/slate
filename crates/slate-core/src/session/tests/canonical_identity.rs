@@ -354,11 +354,15 @@ fn root_listing(root: &std::path::Path) -> Vec<String> {
 fn a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes() {
     let mut env = fault_guard();
     let (tmp, session) = make_vault(|provider| {
-        provider.write_file("Note.md", b"# note\n").unwrap();
+        provider.write_file("Note.md", b"- [ ] note\n").unwrap();
         provider.write_file("Other.md", b"[[Note]]\n").unwrap();
         provider.create_dir("Docs").unwrap();
-        provider.write_file("Docs/Docs.md", b"# docs\n").unwrap();
-        provider.write_file("Docs/Inner.md", b"# inner\n").unwrap();
+        provider
+            .write_file("Docs/Docs.md", b"- [ ] docs\n")
+            .unwrap();
+        provider
+            .write_file("Docs/Inner.md", b"- [ ] inner\n")
+            .unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let files_before = strings(&["Docs/Docs.md", "Docs/Inner.md", "Note.md", "Other.md"]);
@@ -432,6 +436,30 @@ fn a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes() {
         root_listing(&tmp.path().join("Docs")),
         strings(&["Docs.md", "Inner.md"])
     );
+
+    // Each refusal left its markers under both spellings: for the note, and
+    // for each file in the folder. The next vault-wide task query settles
+    // them under the spelling the volume stores (#1975), so each task is
+    // returned once, the rows are the old paths and nothing else, and no
+    // marker is left.
+    assert_eq!(
+        vault_tasks(&session),
+        strings(&[
+            "Docs/Docs.md: docs",
+            "Docs/Inner.md: inner",
+            "Note.md: note"
+        ])
+    );
+    let files = index_paths(&session, "files");
+    assert_eq!(files, files_before);
+    assert!(
+        !files
+            .iter()
+            .any(|path| path == "note.md" || path.starts_with("docs/")),
+        "a row stands under a spelling the volume does not store: {files:?}"
+    );
+    assert_eq!(index_paths(&session, "dirs"), strings(&["Docs"]));
+    assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
 
     // With the seam off the volume applies the rename and core reports it.
     env.clear("SLATE_TEST_CASE_ONLY_RENAME_IGNORED");
