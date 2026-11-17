@@ -8037,6 +8037,12 @@ impl VaultSession {
     /// exactly what's wrong.
     pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // #1975 (contract 32 I2, I3 and I7): the host's spelling binds as
+        // a save's does, so a repair through an alias reads the stored
+        // row again and adds none. A lookup that fails is the caller's
+        // failure; nothing is read through the unresolved spelling.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         // No intent clearing from the host route (round 22): this
         // caller cannot know whose registration currently occupies
         // the path, and deleting by path alone could erase a NEWER
@@ -8066,6 +8072,17 @@ impl VaultSession {
     /// database must stay loud (round 29).
     pub fn repair_or_contain_path(&self, path: &str) -> Result<TaskIndexRepairOutcome, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // #1975 (contract 32 I2, I3 and I7): the host's spelling binds as
+        // a save's does, so the held-marker check, the epoch, the read
+        // and the containment below all key on the stored spelling. A
+        // lookup that fails is the repair's failure: nothing is read
+        // through the unresolved spelling, and a file condition is
+        // contained under the spelling the host gave.
+        let (bound_path, lookup_failure) = match self.bind_source_path(path) {
+            Ok(bound) => (bound, None),
+            Err(lookup_err) => (Cow::Borrowed(path), Some(lookup_err)),
+        };
+        let path: &str = &bound_path;
         // A path owned by an ACTIVE move must not be repaired or
         // contained mid-operation (final-confirmation review): if a
         // HELD marker stands and the nonblocking structural claim
@@ -8092,7 +8109,11 @@ impl VaultSession {
                 |row| row.get(0),
             )
             .optional()?;
-        match self.reindex_path_locked(&mut conn, path, &[]) {
+        let repair = match lookup_failure {
+            Some(lookup_err) => Err(lookup_err),
+            None => self.reindex_path_locked(&mut conn, path, &[]),
+        };
+        match repair {
             Ok(()) => Ok(TaskIndexRepairOutcome::Repaired),
             Err(repair_err) => match &repair_err {
                 VaultError::Io(_)
@@ -8702,7 +8723,46 @@ impl VaultSession {
         // transaction survives untouched - deleting by path alone
         // could erase the only durable marker covering that writer's
         // own post-write rollback.
+        //
+        // BIND first (#1975, contract 32 I3): each selected marker is
+        // settled under the spelling the volume stores. A marker under
+        // an alias has its tokens moved onto the stored spelling's key,
+        // so the repair below reads each file once and the quarantine,
+        // the supersession rule and the per-path deferral all see
+        // stored spellings. A lookup that fails is that marker's repair
+        // error: nothing is read through a spelling that did not
+        // resolve, and the marker stays (contract 32 I7).
+        let mut bound: Vec<(String, Vec<i64>)> = Vec::new();
+        let mut bound_slot: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (path, tokens) in candidates {
+            let key = match self.bind_marker_to_stored_spelling_locked(
+                conn,
+                &path,
+                &tokens,
+                &mut orphan_guard,
+            ) {
+                Ok(MarkerBinding::Own) => path,
+                Ok(MarkerBinding::Moved(stored)) => stored,
+                Ok(MarkerBinding::Waits) => continue,
+                Err(lookup_err) => {
+                    self.contain_repair_failure_locked(conn, &path, &tokens, lookup_err)?;
+                    continue;
+                }
+            };
+            // One entry for each key, in first-seen order: a marker under
+            // its own key is repaired in the order it always was, and a
+            // folder's markers (two for each file) merge without a search
+            // of the list for each of them.
+            match bound_slot.get(&key) {
+                Some(&at) => bound[at].1.extend(tokens),
+                None => {
+                    bound_slot.insert(key.clone(), bound.len());
+                    bound.push((key, tokens));
+                }
+            }
+        }
+        for (path, tokens) in bound {
             // Test-only seam (adversarial round 41): stalls a
             // sweep's repair so a test can observe that the orphan
             // guard is HELD across it — a mover attempting to start
@@ -8747,24 +8807,7 @@ impl VaultSession {
             // lock: markers registered before the current epoch are
             // provably obsolete, deleted without containment.
             if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
-                match &repair_err {
-                    // InvalidPath joins the containable class
-                    // (re-confirmation review): a marker stranded on
-                    // a provider-invalid spelling — a Windows
-                    // reserved name — can never repair by reading,
-                    // and propagating would fail every vault-wide
-                    // query forever over one impossible path.
-                    // Containment serves honest-empty and keeps the
-                    // marker, which is idempotent and quiet.
-                    VaultError::Io(_)
-                    | VaultError::InvalidUtf8 { .. }
-                    | VaultError::FileTooLarge { .. }
-                    | VaultError::InvalidPath { .. } => {
-                        self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
-                            .map_err(|_| repair_err)?;
-                    }
-                    _ => return Err(repair_err),
-                }
+                self.contain_repair_failure_locked(conn, &path, &tokens, repair_err)?;
             }
         }
         // The orphan guard (rounds 40-41) rides back to the caller,
@@ -8772,6 +8815,189 @@ impl VaultSession {
         // AND the query they served stay fenced against a mover
         // starting mid-flight.
         Ok(orphan_guard.flatten())
+    }
+
+    /// What the sweep does with a marker whose repair failed, or whose
+    /// stored spelling could not be looked up (#1975): contain a file
+    /// condition under the marker's own key and keep the marker, or
+    /// hand anything else back to fail the query.
+    fn contain_repair_failure_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        tokens: &[i64],
+        repair_err: VaultError,
+    ) -> Result<(), VaultError> {
+        match &repair_err {
+            // InvalidPath joins the containable class
+            // (re-confirmation review): a marker stranded on
+            // a provider-invalid spelling — a Windows
+            // reserved name — can never repair by reading,
+            // and propagating would fail every vault-wide
+            // query forever over one impossible path.
+            // Containment serves honest-empty and keeps the
+            // marker, which is idempotent and quiet.
+            VaultError::Io(_)
+            | VaultError::InvalidUtf8 { .. }
+            | VaultError::FileTooLarge { .. }
+            | VaultError::InvalidPath { .. } => self
+                .quarantine_unrepairable_path_locked(conn, path, tokens)
+                .map_err(|_| repair_err),
+            _ => Err(repair_err),
+        }
+    }
+
+    /// Settle one selected marker under the spelling the volume stores
+    /// (#1975; contract 32 I1, I3 and I7), before the sweep repairs it.
+    ///
+    /// A move plants a marker under both spellings before the kernel
+    /// call, so after a case-only rename (landed, refused or cut short)
+    /// one of the two names an ALIAS: a spelling the volume resolves to a
+    /// file it stores under another. Repairing that path by its own
+    /// spelling read the file through the alias and inserted a second
+    /// `files` row for it. Only the volume says what an alias is: no fold
+    /// rule is used, so two real files whose names differ by case stay
+    /// two files.
+    ///
+    /// - The lookup answers the marker's own spelling, or nothing is
+    ///   there: [`MarkerBinding::Own`]. The sweep repairs the path as it
+    ///   always has; a path that names nothing converges to deletion.
+    /// - The lookup fails: the error is returned and is this marker's
+    ///   repair error. Nothing was read and nothing was cleared.
+    /// - The lookup answers another spelling: in ONE writer transaction a
+    ///   `files` row under the alias is removed as the not-found arm
+    ///   removes one (the volume stores nothing under that spelling), and
+    ///   the selected tokens MOVE from the alias key to the stored key.
+    ///   Nothing is cleared here: the tokens stand until the sweep's
+    ///   repair of the stored spelling commits a full read
+    ///   ([`MarkerBinding::Moved`]).
+    /// - A move owns either spelling (a HELD marker stands under the alias
+    ///   or under the stored spelling and the structural lock cannot be
+    ///   claimed): the per-path deferral follows both and nothing is done
+    ///   ([`MarkerBinding::Waits`]).
+    /// - The volume's answer moved between the lookup and the writer
+    ///   transaction (a second lookup, inside it, no longer names the same
+    ///   stored spelling): nothing is done either, and the next sweep
+    ///   binds the marker afresh ([`MarkerBinding::Waits`]). The marker
+    ///   keeps its `created_ms`, so that sweep selects it again.
+    ///
+    /// A moved token keeps its `created_ms`, so a held marker stays held
+    /// and an aged one stays aged. Its `registered_epoch` becomes the
+    /// stored row's CURRENT epoch (0 with no row): the stamp is taken
+    /// here, under the writer lock, after the divergence it guards, so
+    /// the quarantine can call it superseded only when a full-file index
+    /// commit lands after this move, never because of a read that came
+    /// before it. Where the stored key already holds the same token the
+    /// two rows merge into the stronger of each column (the later
+    /// `created_ms`, so held wins; the higher epoch), so the move cannot
+    /// fail on the table's key and cannot weaken a marker.
+    fn bind_marker_to_stored_spelling_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        tokens: &[i64],
+        orphan_guard: &mut Option<Option<VaultStructuralLock>>,
+    ) -> Result<MarkerBinding, VaultError> {
+        let stored = match self.provider.canonical_path(path)? {
+            Some(stored) if stored != path => stored,
+            _ => return Ok(MarkerBinding::Own),
+        };
+        let tx = db::begin_fenced(conn)?;
+        if !matches!(orphan_guard, Some(Some(_))) {
+            // The per-path deferral, read under the writer lock a mover's
+            // plant needs, so a mover that planted after this sweep's
+            // selection is seen too. A held marker under either spelling
+            // is an active move's until this sweep holds the structural
+            // lock: one nonblocking claim per sweep, as for a held marker
+            // under its own key (rounds 40-41). It never blocks, so
+            // claiming with the writer lock held cannot deadlock a mover
+            // that took the structural lock first.
+            let held: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM text_write_intents
+                               WHERE path IN (?1, ?2) AND created_ms = ?3)",
+                rusqlite::params![path, stored, Self::HELD_MOVE_MARKER_MS],
+                |row| row.get(0),
+            )?;
+            if held
+                && orphan_guard
+                    .get_or_insert_with(|| Self::try_acquire_structural_guard(&self.interior))
+                    .is_none()
+            {
+                return Ok(MarkerBinding::Waits);
+            }
+        }
+        // The first lookup ran before this transaction, so another
+        // process's case-only rename can have landed in between: the
+        // spelling this sweep took for the alias is then the stored one,
+        // the index row stands under it, and removing that row would cost
+        // the note its history binding and its inbound links. Ask again,
+        // here. A coordinated mover has by now either committed (this
+        // lookup sees its result) or still has held markers standing (the
+        // check above waited). An answer that moved changes nothing in
+        // this sweep: the marker stays as it is and the next sweep binds
+        // it afresh. A lookup that fails is the marker's repair error, as
+        // the first one's is.
+        if self.provider.canonical_path(path)?.as_deref() != Some(stored.as_str()) {
+            return Ok(MarkerBinding::Waits);
+        }
+        let mut graph_sink = self.graph_sink();
+        let row_under_alias: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE path = ?1)",
+            rusqlite::params![path],
+            |row| row.get(0),
+        )?;
+        if row_under_alias {
+            // No change-feed write scope: this removal is not announced
+            // (see below), so it is not one of this session's own announced
+            // writes. The feed records it as it records a scan's removal of
+            // the same row, and a host applies it from its next window.
+            graph_sink.stage_with(|| {
+                Ok(crate::graph::GraphOp::FileRemoved {
+                    path: path.to_string(),
+                    inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
+                })
+            })?;
+            tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+        }
+        for token in tokens {
+            tx.execute(
+                "INSERT INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 SELECT ?1, created_ms, token,
+                        COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0)
+                 FROM text_write_intents WHERE path = ?2 AND token = ?3
+                 ON CONFLICT(path, token) DO UPDATE SET
+                    created_ms = max(text_write_intents.created_ms, excluded.created_ms),
+                    registered_epoch =
+                        max(text_write_intents.registered_epoch, excluded.registered_epoch)",
+                rusqlite::params![stored, path, token],
+            )?;
+            tx.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, token],
+            )?;
+        }
+        tx.commit()?;
+        if row_under_alias {
+            self.graph_apply(graph_sink);
+            self.bump_bases_generation();
+            // NOTHING is sent for the alias path, with a row under it or
+            // without. The repair that follows sends the stored spelling's
+            // `Modified`, and that is all a host hears.
+            //
+            // Not `Deleted`: the Windows host marks a tab held under that
+            // path missing and gives it the line "... no longer exists on
+            // disk" (`WorkspaceViewModel.cs`, `InvalidatePath`, reached
+            // from `VaultLifecycleViewModel.FileChanges.cs`), while the
+            // file is on disk under the stored spelling.
+            //
+            // Not `Renamed` to the stored spelling: where the index held
+            // both rows a host can hold a tab under each, and the retarget
+            // would put two buffers on one path, which the Windows host
+            // then mirrors into each other on the next edit
+            // (`WorkspaceViewModel.cs`, `MirrorSamePathDocumentState`):
+            // unsaved text in one of them could be overwritten.
+        }
+        Ok(MarkerBinding::Moved(stored))
     }
 
     /// The round-28 containment for a path whose repair cannot
@@ -13159,6 +13385,21 @@ fn fresh_intent_token() -> i64 {
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_i64(now_ms());
     hasher.finish() as i64
+}
+
+/// What the sweep's bind step did with one selected marker (#1975); see
+/// `VaultSession::bind_marker_to_stored_spelling_locked`.
+enum MarkerBinding {
+    /// The marker is under the spelling the volume stores, or its path
+    /// names nothing: the sweep repairs it under its own key.
+    Own,
+    /// The marker was under an alias: its selected tokens now stand under
+    /// this stored spelling, which the sweep repairs.
+    Moved(String),
+    /// A move owns one of the two spellings, or the volume's answer moved
+    /// under the sweep: nothing was done, and the marker stands as it was
+    /// for the next sweep.
+    Waits,
 }
 
 // --- Internal: save_text helpers ---
@@ -19056,7 +19297,19 @@ fn rename_prefix_in_index(
         // review): a source directory recreated by a racing save
         // keeps its row — relocating it would split the file and
         // directory trees.
-        if old_path != from && provider.stat(&old_path).is_ok() {
+        //
+        // "Still there" means stored under its OWN spelling (#1975,
+        // found on the way): after a case-only rename of the folder
+        // (`Docs` to `docs`) the old path of a folder inside it still
+        // answers, as an alias of the new one. A plain existence check
+        // kept that row under the old spelling, and the Files tree
+        // showed no folder inside `docs` until the next scan.
+        if old_path != from
+            && matches!(
+                provider.canonical_path(&old_path),
+                Ok(Some(stored)) if stored == old_path
+            )
+        {
             continue;
         }
         let new_path = if old_path == from {

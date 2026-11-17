@@ -151,6 +151,48 @@ resolved, the canonical spelling is what binds: the `files`/`dirs` row,
 through an alias updates the canonical row rather than inserting a
 second one.
 
+*#1975 (2026-11-16):* a move's marker was the exception. A move plants a
+marker under both spellings before the rename (write-intent INV1), so after
+a case-only rename, landed, refused or cut short, one of the two was keyed
+on an alias, and the next task query's sweep read the file through it and
+inserted a second `files` row. The sweep now binds every selected marker to
+the spelling the volume stores before it repairs: an alias marker's tokens
+move onto the stored spelling's key, a row under the alias is removed, and
+the stored spelling is read once (`docs/plans/21_write_intent_protocol_invariants.md`,
+"The bind step"). The two host repair routes (`reindex_path`,
+`repair_or_contain_path`) bind at entry as a save does. Only the volume says
+what an alias is: two real files whose names differ by case keep two rows.
+Facts (`session/tests/canonical_identity.rs`):
+`a_case_only_rename_leaves_one_row_after_the_next_task_query`,
+`a_failed_case_only_rename_leaves_one_row_after_the_next_task_query`,
+`a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_query`,
+`a_case_only_folder_note_rename_leaves_one_row_after_the_next_task_query`,
+`a_case_only_rename_is_undone_after_a_task_query`,
+`a_case_only_rename_the_volume_applied_and_the_index_never_recorded_leaves_one_row`,
+`a_marker_under_an_alias_is_settled_by_reading_the_stored_spelling` (a
+provider that stands in for an aliasing volume, so it runs on every
+platform), `a_marker_under_an_alias_is_cleared_only_with_the_files_bytes_indexed`,
+`a_moved_marker_keeps_its_age_and_takes_the_stored_rows_epoch`,
+`a_hosts_repair_through_an_alias_reads_the_stored_row_and_adds_none`,
+`two_files_whose_names_differ_only_by_case_keep_two_rows`; Windows
+`ACaseOnlyRenameListsEachTaskOnce`. The same change corrects the `dirs` row
+of a folder inside a case-renamed folder
+(`a_folders_case_only_rename_moves_the_rows_of_the_folders_inside_it`). Not
+verified on APFS: no lane runs the Rust facts on macOS.
+
+Where the bind cannot see an alias (limits, by reading, not verified
+behaviour): the bind knows only what `canonical_path` answers. On Linux the
+provider keeps the identity default (ID-1), so on a mount that aliases
+names (vfat, exFAT, ext4 with casefold, CIFS) an existing alias answers with
+its own spelling and the second row can still be added there. On Windows a
+link at the END of a path answers with the requested spelling verbatim
+("a link keeps its own spelling", `fs_root.rs` `stored_spelling_beneath`),
+so an alias of a link's own name is not seen either; the scanner skips
+links, so that reaches only rows Slate itself writes on link paths. The
+lookup is also a probe (IR-1): the bind asks twice, once before its writer
+transaction and once inside it, and changes nothing when the two answers
+differ (`a_marker_whose_stored_spelling_moved_under_the_sweep_is_left_for_the_next_one`).
+
 **I4 — A case-only rename BECOMES expressible (a behavior change).**
 `A.md → a.md` is the sharp edge: source and destination alias each
 other, so canonicalizing the DESTINATION would collapse it onto the
@@ -268,6 +310,17 @@ as well (`testAStoredSpellingThatCannotBeReadLeavesTheTabMissing`: the note
 is back on disk, so only the failed answer keeps the tab missing; it runs
 through the `canonicalPathProbe` seam, the twin of Windows' rescan seam
 `CanonicalPathForTests`).
+
+*#1975 (2026-11-16):* the sweep and the host repair routes fail closed too.
+When a marker's stored spelling cannot be looked up, nothing is read through
+the spelling that did not resolve, no row is added, the marker stays and the
+task query still answers; the first sweep that can look the spelling up
+settles it (`a_marker_whose_stored_spelling_cannot_be_looked_up_stays_and_adds_no_row`).
+`reindex_path` hands the failure back, and `repair_or_contain_path` answers
+`Contained` and leaves an aged marker
+(`a_hosts_repair_whose_lookup_fails_reads_nothing_and_adds_no_row`). A path
+that names nothing is not a failure: it converges to deletion as before
+(`a_marker_under_a_path_that_names_nothing_is_settled_as_before`).
 
 **I8 — A hashless save never lands on an existing file (host-side,
 owner-decided).** A tab with no content hash has never loaded bytes
