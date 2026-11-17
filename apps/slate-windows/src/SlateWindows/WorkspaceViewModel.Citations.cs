@@ -413,6 +413,30 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
+    /// <paramref name="tab"/> to <paramref name="destination"/> in place. A
+    /// press parked on the note the citations leaf shows goes with the
+    /// leaf's own tab, the active group's active tab, so the sync that
+    /// follows the rename finds the leaf still on the note the press asked
+    /// about. The leaf loads the note again at its new path, and that load's
+    /// publish answers the press. Called before the tab moves, by Slate's
+    /// own rename and by another session's (the change feed's), each of
+    /// which syncs the panels once its tabs have moved. The leaf's path is
+    /// compared, not the tab's: a re-seat can respell the tab without
+    /// syncing the panels, and the press was parked under the leaf's
+    /// spelling. A tab that is not the one the leaf follows moves nothing
+    /// here: two tabs at one path can be different notes for a while, and
+    /// when the leaf's own tab stays, so does the press.</summary>
+    private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination)
+    {
+        if (_summaryParked
+            && ReferenceEquals(tab, ActiveGroup.ActiveTab)
+            && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal))
+        {
+            _parkedSummaryPath = destination;
+        }
+    }
+
     /// <summary>The deferred Ctrl+Shift+J landing. Detaches on the
     /// first publish either way: an answer about a different note is
     /// not an answer, and re-parking it would leave a request armed

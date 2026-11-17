@@ -261,6 +261,7 @@ internal sealed partial class WorkspaceViewModel
         foreach ((WorkspaceTabViewModel tab, string destination) in moves)
         {
             _saves.ContinueChain(tab.Path, destination);
+            FollowParkedSummary(tab, destination);
             tab.RetargetPath(destination);
         }
 
