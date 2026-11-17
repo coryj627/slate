@@ -1313,6 +1313,64 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>CB-11 (#1714), from Codex's fifth round: a handoff needs the
+    /// same saved version proved, file identity included. Here the tab that
+    /// takes the leaf over holds the same bytes but no file identity (as a
+    /// tab restored from a hot-exit entry without one does, or any tab on a
+    /// volume that gives none), so it does not take the press over, and the
+    /// later rename drops the press, as on main.</summary>
+    [Fact]
+    public void ADeferredSummaryIsNotHandedToATabWhoseFileIdentityIsUnknown()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                WorkspaceTabViewModel firstPane = workspace.ActiveGroup.ActiveTab!;
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                Assert.NotNull(firstPane.FileIdentity);
+                workspace.SplitRightCommand.Execute(null);
+                Assert.NotSame(firstPane, workspace.ActiveGroup.ActiveTab);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                // The first pane keeps the same bytes and baseline, and loses
+                // its file identity.
+                firstPane.AdoptHotExitEntry(
+                    firstPane.Text, firstPane.SavedContentHash, baselineFileIdentity: null, externallyStale: false);
+                Assert.Null(firstPane.FileIdentity);
+
+                workspace.CloseActiveTabCommand.Execute(null);
+                Assert.Same(firstPane, workspace.ActiveGroup.ActiveTab);
+                Assert.Equal("cited.md", workspace.Citations.Path);
+
+                _ = session.RenameFile("cited.md", "renamed.md");
+                workspace.RetargetPath("cited.md", "renamed.md");
+                Assert.Equal("renamed.md", workspace.Citations.Path);
+                Assert.Equal(0, workspace.Citations.RowsPublishedSubscriberCountForTests);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.Null(workspace.CitationSummary);
+            Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>CB-11 (#1714): a re-seat can respell the leaf's tab without
     /// syncing the panels (a missing Ghost.md whose file is back as
     /// ghost.md), so the leaf still names the old spelling when the press is
