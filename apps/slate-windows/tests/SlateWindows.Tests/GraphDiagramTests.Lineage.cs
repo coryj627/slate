@@ -920,6 +920,144 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>#1788 (plan 47 CB-7): a forces edit is saved while the diagram
+    /// it re-heated is still settling. The issue's theory was that the save's
+    /// Background timer starves under the settle's Render cadence when each
+    /// layout step outlasts that cadence. Here every compute is held for 40 ms,
+    /// more than twice the cadence, and the settle never rests while the fact
+    /// waits: where a run converges, the driver's own <c>Converged</c> event
+    /// starts the next, in the same dispatcher turn, before any other work can
+    /// run. So a save that lands at all lands under a settle, and a save that
+    /// waited for the diagram to come to rest would never land and would fail
+    /// the fact at its bound. The overlap is not left to that argument alone:
+    /// every look the wait takes records whether the driver was at rest, and
+    /// one such look fails the fact. The workspace, the driver and the
+    /// preferences are the real ones: the save's timer runs at its production
+    /// priority and window, and nothing fires its tick by hand. A settle is
+    /// running, with a compute held, before the edit is made, and the fact
+    /// then waits until the save has left the preferences and a later step
+    /// and a later held compute have been counted. No duration is asserted,
+    /// and the file is read once, after the writer has drained.</summary>
+    /// <remarks>What this fact does not catch: a dispatcher that is busy every
+    /// frame with a hosted diagram's layout, render and input (there is no
+    /// window here, so a step costs the dispatcher its apply and nothing
+    /// more); a save that is delayed and still lands inside the ten seconds
+    /// with the settle running; starvation by a real window's layout or input
+    /// queue; a save that needs the dispatcher idle rather than the diagram at
+    /// rest (the dispatcher is idle here while a compute is held on its
+    /// worker); and a holder on
+    /// <c>graph.json</c> at the instant of the rename, which #1865's own facts
+    /// cover (<c>GraphConfigWriterTests</c>).</remarks>
+    [Fact]
+    public void AForcesEditIsSavedWhileTheDiagramIsStillSettling()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-save-while-settling");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            GraphLayoutDriver driver = model.Driver;
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            // The switch to Diagram saved the mode. That save lands first, so
+            // the only save the wait below can see is the edit's.
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !preferences.HasPendingForTests && preferences.OutstandingForTests == 0),
+                "premise: the mode switch's own save never landed");
+            PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
+            GraphForcesConfig before = preferences.CurrentConfig.Forces;
+            // The shell gate's step: Right on the Repel slider, one SmallChange.
+            GraphForcesConfig stepped = before with { Repel = before.Repel + 0.01 };
+
+            TimeSpan hold = TimeSpan.FromMilliseconds(40);
+            Assert.True(hold > GraphLayoutDriver.Cadence * 2, $"premise: a {hold.TotalMilliseconds} ms compute does not outlast the cadence");
+            int held = 0;
+            model.InsideGateForTests = () =>
+            {
+                Interlocked.Increment(ref held);
+                Thread.Sleep(hold);
+            };
+            // The settle never rests while the fact waits. A run that
+            // converges raises the driver's Converged event on the dispatcher,
+            // inside the apply that ended it, and this starts the next run
+            // there: no dispatcher turn begins with the diagram at rest, so
+            // the save's Background tick can never find it so. Restarting
+            // from the wait's own looks instead would leave the diagram at
+            // rest from the convergence to the next look, and a save that
+            // only became runnable at rest would land in that gap and pass.
+            int restarts = 0;
+            void StartTheNextRun()
+            {
+                restarts++;
+                driver.StartSettle();
+            }
+
+            driver.Converged += StartTheNextRun;
+            try
+            {
+                // Premise: the hold stands in the settle's way before the edit
+                // is made. A settle is started and the fact waits for its
+                // first compute to enter the hold, so the edit lands on a
+                // diagram that is settling with a compute held.
+                driver.StartSettle();
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(() => Volatile.Read(ref held) > 0, TimeSpan.FromSeconds(10)),
+                    "premise: the settle ran no compute through the hold, so nothing here would slow a step");
+
+                host.Workspace.Inspector.SetForces(stepped);
+                // Read after the edit: a step or a held compute counted past
+                // these came after the edit was made.
+                int steps = driver.StepsForTests;
+                int heldAtTheEdit = Volatile.Read(ref held);
+
+                // The wait ends when the save has left the preferences (no
+                // pending pair, no outstanding write), the settle has issued a
+                // step since the edit and a compute has entered the hold since
+                // the edit. Every look also records whether the driver was at
+                // rest: the look that sees the save landed is one of them.
+                int looks = 0;
+                int looksAtRest = 0;
+                bool saved = PumpedDispatcher.PumpUntil(
+                    () =>
+                    {
+                        looks++;
+                        if (!driver.IsSettling)
+                        {
+                            looksAtRest++;
+                        }
+                        return !preferences.HasPendingForTests
+                            && preferences.OutstandingForTests == 0
+                            && driver.StepsForTests > steps
+                            && Volatile.Read(ref held) > heldAtTheEdit;
+                    },
+                    TimeSpan.FromSeconds(10));
+                string seen =
+                    $"Pending pair: {preferences.HasPendingForTests}; save timer running: {preferences.TimerEnabledForTests}; "
+                    + $"outstanding writes: {preferences.OutstandingForTests}; layout steps since the edit: {driver.StepsForTests - steps}; "
+                    + $"computes held since the edit: {Volatile.Read(ref held) - heldAtTheEdit}; runs restarted where they converged: "
+                    + $"{restarts}; looks: {looks}, at rest: {looksAtRest}; settling: {driver.IsSettling}.";
+                Assert.True(saved, "the forces edit was not saved while the diagram kept settling. " + seen);
+                Assert.True(
+                    looksAtRest == 0,
+                    "the diagram was at rest between the edit and the save's landing, so the save is not shown to have landed "
+                    + "under a settle. " + seen);
+            }
+            finally
+            {
+                driver.Converged -= StartTheNextRun;
+            }
+
+            PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
+            double onDisk = new GraphConfigStore(host.Vault.Root).Read().Config.Forces.Repel;
+            Assert.True(
+                Math.Abs(onDisk - stepped.Repel) < 1e-9,
+                $"graph.json carries repel {onDisk} after the edit to {stepped.Repel}: the edit was not saved");
+
+            model.InsideGateForTests = null;
+            WaitForTheSettle(host, document, model);
+        });
+    }
+
     [Fact]
     public void ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns()
     {

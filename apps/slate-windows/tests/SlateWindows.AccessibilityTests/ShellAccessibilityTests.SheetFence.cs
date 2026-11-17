@@ -151,7 +151,12 @@ public sealed partial class ShellAccessibilityTests
             AssertElementDisappears(window, automation, "BulkRenameSheet");
             AssertTheNoteIsUntouched(editor, tab, Note, "after the Bulk rename sheet");
 
-            Assert.Equal(Note, File.ReadAllText(Path.Combine(vault, "agenda.md")));
+            Assert.Equal(Note, GateFile.ReadText(Path.Combine(vault, "agenda.md")));
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PromptTabTraversalStaysInTheSheet), logs);
+            throw;
         }
         finally
         {
@@ -244,7 +249,12 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 EditorText(editor) == typed,
                 $"The note behind the sheet changed: '{EditorText(editor)}'.");
-            Assert.Equal(Note, File.ReadAllText(Path.Combine(vault, "agenda.md")));
+            Assert.Equal(Note, GateFile.ReadText(Path.Combine(vault, "agenda.md")));
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Templates_PromptUndoLeavesTheNoteAlone), logs);
+            throw;
         }
         finally
         {
