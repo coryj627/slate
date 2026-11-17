@@ -907,10 +907,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
         if (_editorSession is not null && sourceSession is not null)
         {
-            _editorSession.SynchronizeFromPeer(
-                source.Text,
-                sourceSession.SavedBaseline,
-                reconstructUndoHistory);
+            if (source._tookAnotherWritersBytes)
+            {
+                // Plan 47 CB-9b (Design 0): the source took another
+                // writer's bytes with no undo step back across them, and so
+                // does this peer, keeping its own caret's line.
+                TakeAnotherWritersBytes(source.Text);
+            }
+            else
+            {
+                _editorSession.SynchronizeFromPeer(
+                    source.Text,
+                    sourceSession.SavedBaseline,
+                    reconstructUndoHistory);
+            }
         }
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(IsDirty));

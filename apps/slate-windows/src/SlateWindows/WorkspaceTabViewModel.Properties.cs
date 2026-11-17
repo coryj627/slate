@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows.Threading;
+using ICSharpCode.AvalonEdit.Document;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -96,6 +97,9 @@ internal sealed partial class WorkspaceTabViewModel
     /// dirty tab takes the stale-flag honesty with PROPERTY copy
     /// (adversarial round 1: never the task-toggle wording) because
     /// overwriting unsaved edits is worse than a reopen prompt.
+    /// Plan 47 CB-9b (Design 0): a clean tab, and each same-path peer,
+    /// keeps no undo step back across the written bytes, and its caret
+    /// keeps its line (<see cref="TakeAnotherWritersBytes"/>).
     /// Returns false only when the reload attempt itself failed —
     /// the caller aggregates that into RenameReloadFailed.</summary>
     internal bool RebaselineAfterPropertyWrite(
@@ -129,11 +133,7 @@ internal sealed partial class WorkspaceTabViewModel
             return false;
         }
         string fresh = read.Text;
-        if (_editorSession is not null)
-        {
-            _editorSession.ReplaceAll(fresh);
-            _editorSession.MarkSaved(fresh);
-        }
+        TakeAnotherWritersBytes(fresh);
         _text = fresh;
         _contentHash = SlateUniffiMethods.EditorTextContentHash(fresh);
         FileIdentity = read.FileIdentity;
@@ -141,8 +141,56 @@ internal sealed partial class WorkspaceTabViewModel
         IsDirty = false;
         IsExternallyStale = false;
         _editorInteractions?.InvalidateExternalState();
-        _documentChanged?.Invoke(this, null);
+        TellPeersOfAnotherWritersBytes();
         return true;
+    }
+
+    // Plan 47 CB-9b (Design 0): true while this tab tells its same-path
+    // peers that another writer's bytes became its text and baseline, so each
+    // peer takes them the same way (MirrorDocumentStateFrom) instead of
+    // adopting the baseline over an undo step that reaches the old bytes.
+    private bool _tookAnotherWritersBytes;
+
+    /// <summary>Plan 47 CB-9b (Design 0; the plan lead's word of 2026-11-17):
+    /// another writer's bytes, read from disk, become this tab's text and its
+    /// saved baseline with no undo step back across them
+    /// (<see cref="AvalonDocumentBufferSession.ReplaceAsSavedBaseline"/>), and
+    /// the caret keeps its line and column where the new text allows, by the
+    /// rescan's rule (<see cref="ReloadKeepingCaretLine"/>): a line past the
+    /// new end clamps to the last line, and the column to that line. The
+    /// caret lands through the bound offset, never a caret-navigation request,
+    /// which would take keyboard focus into the editor.</summary>
+    private void TakeAnotherWritersBytes(string text)
+    {
+        if (_editorSession is not { } session)
+        {
+            return;
+        }
+        TextDocument document = session.Document;
+        TextLocation caret = document.GetLocation(Math.Clamp(EditorCaretOffset, 0, document.TextLength));
+        session.ReplaceAsSavedBaseline(text);
+        int line = Math.Clamp(caret.Line, 1, document.LineCount);
+        DocumentLine target = document.GetLineByNumber(line);
+        int column = Math.Clamp(caret.Column, 1, target.Length + 1);
+        EditorCaretOffset = target.Offset + column - 1;
+        BumpContentGeneration();
+        OnPropertyChanged(nameof(Text));
+    }
+
+    /// <summary>The state change every same-path peer mirrors, said as
+    /// another writer's bytes: each peer takes them through
+    /// <see cref="TakeAnotherWritersBytes"/>, with its own caret.</summary>
+    private void TellPeersOfAnotherWritersBytes()
+    {
+        _tookAnotherWritersBytes = true;
+        try
+        {
+            _documentChanged?.Invoke(this, null);
+        }
+        finally
+        {
+            _tookAnotherWritersBytes = false;
+        }
     }
 
     private void MarkPropertyStale(Action<A11yEvent> announce)

@@ -312,6 +312,42 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     }
 
     /// <summary>
+    /// Plan 47 CB-9b (Design 0): another writer's bytes, read from disk,
+    /// become this document's text and its saved baseline. The replace is one
+    /// update that is not mirrored as an edit (each same-path peer takes the
+    /// same bytes the same way, through its own tab), and the undo history is
+    /// emptied after it, as a peer's reconstruction empties it: no undo step
+    /// reaches text from before the replace, so an Undo and then a save can
+    /// never write the replaced bytes back.
+    /// </summary>
+    internal void ReplaceAsSavedBaseline(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        _suppressSyncNotifications = true;
+        try
+        {
+            ReplacePeerDocument(text);
+        }
+        finally
+        {
+            _suppressSyncNotifications = false;
+        }
+
+        Document.UndoStack.ClearAll();
+        string contentHash;
+        uint length;
+        lock (_gate)
+        {
+            length = _buffer.LenUtf16();
+            contentHash = _buffer.ContentHash();
+        }
+
+        AdoptSavedBaseline(new EditorSavedBaseline(text, length, contentHash));
+    }
+
+    /// <summary>
     /// Initializes or reloads a mirrored tab as one native undo group. A
     /// dirty source stays undoable back to the disk baseline; a clean source
     /// advances this view's saved marker after synchronization.
