@@ -46,12 +46,44 @@ public sealed class BulkRenameTests : IDisposable
         List<A11yEvent>? announced = null,
         Func<bool>? anyDirty = null,
         List<RenameReport>? reconciled = null)
-        => new(
+    {
+        List<A11yEvent> heard = announced ?? [];
+        return new(
             _session,
-            (announced ?? []).Add,
+            heard.Add,
             anyDirty ?? (() => false),
-            report => reconciled?.Add(report),
+            ApplyAtOnce(heard.Add, reconciled is null ? null : reconciled.Add),
             synchronousForTests: true);
+    }
+
+    /// <summary>Plan 47 CB-9b: the workspace's admission of an apply,
+    /// stood in for a sheet with no workspace. The apply runs at once, on a
+    /// synchronous sheet's worker inline, and ends as the workspace ends it:
+    /// its report reconciled and its summary spoken first, then the sheet's
+    /// own publication; an apply whose worker never reported ends as one
+    /// that did not run.</summary>
+    internal static Action<BulkRenameViewModel, BulkRenameViewModel.BulkRenameApply> ApplyAtOnce(
+        Action<A11yEvent> announce, Action<RenameReport>? reconcile = null) =>
+        (sheet, apply) =>
+        {
+            BulkRenameViewModel.ApplyOutcome? outcome = null;
+            _ = sheet.StartApplyWork(apply, ran => outcome = ran);
+            if (outcome is null)
+            {
+                sheet.EndApplyUnrun(apply);
+                return;
+            }
+            if (outcome.Report is { } report)
+            {
+                reconcile?.Invoke(report);
+                announce(new A11yEvent.RenameSummary(
+                    Applied: true,
+                    Renamed: (uint)report.Affected.Length,
+                    Skipped: (uint)report.Skipped.Length,
+                    Failed: (uint)report.Failed.Length));
+            }
+            sheet.PublishApply(apply, outcome.Report, outcome.Error);
+        };
 
     [Fact]
     public void ApplyArmsOnlyAfterAPreviewOnTheExactKeyPair()
@@ -231,7 +263,7 @@ public sealed class BulkRenameTests : IDisposable
         int rows = sheet.Rows.Count;
 
         // A stale requestId publish is a no-op.
-        sheet.PublishRun(-1, true, "oldkey", "renamed", null, "stale");
+        sheet.PublishPreview(-1, "oldkey", "renamed", null, "stale");
         Assert.Equal(rows, sheet.Rows.Count);
         Assert.Null(sheet.ErrorText);
 
@@ -240,30 +272,40 @@ public sealed class BulkRenameTests : IDisposable
         Assert.Equal(rows, sheet.Rows.Count);
     }
 
+    /// <summary>Contract 7/8 (adversarial round 1): a close mid-apply must
+    /// not discard the landed writes' reconciliation — disk truth
+    /// publishes regardless of UI liveness. Plan 47 CB-9b: the
+    /// reconcile and the summary are the workspace's, in the apply's
+    /// publication inside its turn, ahead of the sheet's own: here the
+    /// sheet shuts down while the apply's worker runs, and the open tab is
+    /// still rebaselined and the summary still spoken, while the shut-down
+    /// sheet shows nothing.</summary>
     [Fact]
     public void ApplyReportsReconcileTabsEvenAfterTheSheetShutsDown()
     {
         var announced = new List<A11yEvent>();
-        var reconciled = new List<RenameReport>();
-        var sheet = MakeSheet(announced, reconciled: reconciled);
-        var report = new RenameReport(
-            Affected:
-            [
-                new RenameAffected("a.md", "old", "new", true, "hash-after"),
-            ],
-            Skipped: [],
-            Failed: []);
+        using var workspace = new WorkspaceViewModel(
+            _session, _fixture.Root, () => [], announced.Add, startInteractionBackgroundWork: false);
+        workspace.OpenPath("a.md");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        workspace.OpenBulkRenameSheet(synchronousForTests: true);
+        BulkRenameViewModel sheet = workspace.BulkRenameSheet!;
+        sheet.OldKey = "oldkey";
+        sheet.NewKey = "newkey";
+        sheet.Preview();
+        sheet.ApplyHookForTests = sheet.Shutdown;
+        announced.Clear();
 
-        // Contract 7/8 (adversarial round 1): a close mid-apply must
-        // not discard the landed writes' reconciliation — disk truth
-        // publishes regardless of UI liveness.
-        sheet.Shutdown();
-        sheet.PublishRun(0, dryRun: false, "oldkey", "newkey", report, null);
-        Assert.Same(report, Assert.Single(reconciled));
+        Assert.True(sheet.Apply());
+        Assert.Contains("newkey: alpha", tab.Text, StringComparison.Ordinal);
+        Assert.Equal(_session.ReadNoteParts("a.md").ContentHash, tab.SavedContentHash);
+        Assert.False(tab.IsDirty);
         Assert.Contains(
             announced,
             item => item is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
-        Assert.Empty(sheet.Rows);
+        Assert.DoesNotContain(sheet.Rows, row => row.Status == "Applied");
+        Assert.True(workspace.SavesIdle);
     }
 
     [Fact]
@@ -308,19 +350,23 @@ public sealed class BulkRenameTests : IDisposable
         // apply report's disk truth still reconciles (unconditional
         // block).
         sheet.OldKey = "oldkey";
-        sheet.PublishRun(
-            sheet.RequestIdForTests, dryRun: true, "oldkey", "renamed",
+        sheet.PublishPreview(
+            sheet.RequestIdForTests, "oldkey", "renamed",
             new RenameReport(Affected: [], Skipped: [], Failed: []), null);
         Assert.Empty(sheet.Rows);
         Assert.Equal("", sheet.FooterText);
     }
 
+    /// <summary>Adversarial round 2: runs are serialized. Plan 47 CB-9b:
+    /// a stale apply's publication on the sheet shows nothing; the landed
+    /// writes' disk truth (the reconcile and the summary) is the workspace's
+    /// and never consults the request
+    /// (<see cref="ApplyReportsReconcileTabsEvenAfterTheSheetShutsDown"/>).</summary>
     [Fact]
-    public void RunsAreSerializedAndStaleApplyReportsStillLandDiskTruth()
+    public void RunsAreSerializedAndAStaleApplyPublicationShowsNothing()
     {
         var announced = new List<A11yEvent>();
-        var reconciled = new List<RenameReport>();
-        var sheet = MakeSheet(announced, reconciled: reconciled);
+        var sheet = MakeSheet(announced);
         sheet.OldKey = "oldkey";
         sheet.NewKey = "renamed";
 
@@ -333,19 +379,19 @@ public sealed class BulkRenameTests : IDisposable
         Assert.False(sheet.CanPreview);
         Assert.False(sheet.CanApply);
 
-        // And even a stale-requestId APPLY report reconciles and
-        // announces — landed writes are never discarded by later
-        // requests.
         var report = new RenameReport(
             Affected: [new RenameAffected("a.md", "old", "new", true, "hash-after")],
             Skipped: [],
             Failed: []);
-        sheet.PublishRun(
-            sheet.RequestIdForTests - 1, dryRun: false, "oldkey", "renamed", report, null);
-        Assert.Same(report, Assert.Single(reconciled));
-        Assert.Contains(
-            announced,
-            item => item is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+        using var token = new CancelToken();
+        sheet.PublishApply(
+            new BulkRenameViewModel.BulkRenameApply(
+                sheet.RequestIdForTests - 1, "oldkey", "renamed", null, token, ["a.md"]),
+            report,
+            null);
+        Assert.Empty(sheet.Rows);
+        Assert.True(sheet.WorkInFlight);
+        Assert.Empty(announced);
     }
 
     [Fact]
@@ -365,7 +411,7 @@ public sealed class BulkRenameTests : IDisposable
         sheet.MarkWorkInFlightForTests();
         sheet.RequestClose();
         Assert.Equal(1, settled);
-        sheet.PublishRun(sheet.RequestIdForTests, true, "oldkey", "renamed", null, "cancelled");
+        sheet.PublishPreview(sheet.RequestIdForTests, "oldkey", "renamed", null, "cancelled");
         Assert.Equal(2, settled);
     }
 

@@ -643,15 +643,15 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Build the bulk-rename sheet VM, wired to this
     /// workspace: the old key prefills from the active note's first
     /// property, the dirty-draft gate scans every open tab's header,
-    /// and applied reports reconcile open tabs (contract 8).</summary>
+    /// and each apply is admitted into its notes' chains, where its
+    /// report reconciles open tabs (contract 8; plan 47 CB-9b).</summary>
     internal BulkRenameViewModel CreateBulkRename(bool synchronousForTests = false)
     {
         var sheet = new BulkRenameViewModel(
             _session,
             _announce,
-            () => Groups.SelectMany(group => group.Tabs)
-                .Any(tab => tab.Properties?.AnyRowDirty == true),
-            ReconcileTabsAfterBulkRename,
+            AnyOpenDraftDirty,
+            ApplyBulkRenameAdmitted,
             synchronousForTests);
         if (ActiveGroup.ActiveTab is WorkspaceTabViewModel { IsMarkdown: true } tab
             && tab.Properties?.Rows.FirstOrDefault() is { } firstRow)
@@ -691,6 +691,258 @@ internal sealed partial class WorkspaceViewModel
             _announce(new A11yEvent.RenameReloadFailed(
                 "Some open notes could not be reloaded."));
         }
+    }
+
+    /// <summary>Whether any open tab's header holds a draft not yet
+    /// committed: the bulk rename's apply refuses while one does, at the
+    /// press and again at its turn.</summary>
+    private bool AnyOpenDraftDirty() =>
+        Groups.SelectMany(group => group.Tabs).Any(tab => tab.Properties?.AnyRowDirty == true);
+
+    // ---- Plan 47 CB-9b (#1889; CD5(a)): the bulk rename's apply in the notes' chains ----
+    //
+    // The apply rewrites every note that has the key, so it takes its turn in
+    // the chains of the notes its armed preview listed (core picks the notes
+    // at its turn, from the index, so no set computed before it is complete;
+    // a note that gained the key after the preview is the leftover race, and
+    // each writer's compare-and-swap ends it in one refused write). It waits
+    // for every save and operation admitted for those notes before it, a save
+    // of one of them asked meanwhile waits for its publication, and its turn
+    // re-checks the header-draft gate. Its publication, inside the turn,
+    // reconciles the notes' tabs, catches up a tab a rescan or a re-seat had
+    // to leave while it held the note, and speaks the summary. Every path
+    // ends the operation.
+
+    /// <summary>The sheet's apply request: admitted over the armed
+    /// preview's notes. An apply that never runs, because the chain closed
+    /// first, ends on the sheet as one that did not run.</summary>
+    private void ApplyBulkRenameAdmitted(BulkRenameViewModel sheet, BulkRenameViewModel.BulkRenameApply apply) =>
+        AdmitPropertyWrite(
+            apply.Paths,
+            () => BulkRenameApplyAtItsTurn(sheet, apply),
+            abandoned: () => sheet.EndApplyUnrun(apply));
+
+    /// <summary>The apply at its turn: a torn-down workspace or a closed
+    /// chain ends it unrun; a dirty header draft refuses it with the press's
+    /// sentence; otherwise its worker starts, tracked by the chain, and its
+    /// publication ends the operation. A cancelled token (Escape, or
+    /// teardown's settle, while it waited) still runs: core answers at once
+    /// with every note cancelled. Every fault but the fatal three, here or in
+    /// a step before the worker starts, ends the apply as a failure with the
+    /// existing RenameFailed.</summary>
+    private Task BulkRenameApplyAtItsTurn(BulkRenameViewModel sheet, BulkRenameViewModel.BulkRenameApply apply)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            BulkRenameApplyTurnHookForTests?.Invoke();
+            if (_workspaceDisposed || _saves.IsClosed)
+            {
+                EndBulkRenameApply(() => sheet.EndApplyUnrun(apply), done);
+                return done.Task;
+            }
+            if (AnyOpenDraftDirty())
+            {
+                EndBulkRenameApply(() => sheet.RefuseApplyForDirtyDrafts(apply), done);
+                return done.Task;
+            }
+            BulkRenameViewModel.ApplyOutcome? outcome = null;
+            Task worker = sheet.StartApplyWork(apply, ran => Volatile.Write(ref outcome, ran));
+            _saves.TrackWorker(worker);
+            if (worker.IsCompleted)
+            {
+                FinishBulkRenameApply(sheet, apply, Volatile.Read(ref outcome), done);
+                return done.Task;
+            }
+            // The backstop and the publication in one: when the worker ends,
+            // however it ends, the apply is finished on the save dispatcher.
+            // A body that never reported (a shutdown skipped it, or it faulted
+            // outside its catch) finishes as an apply that did not run.
+            _ = worker.ContinueWith(
+                _ => RunOnSaveDispatcher(() => FinishBulkRenameApply(sheet, apply, Volatile.Read(ref outcome), done)),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            EndBulkRenameApply(() => sheet.PublishApply(apply, null, exception.Message), done);
+        }
+        return done.Task;
+    }
+
+    /// <summary>An apply that ends without its worker's publication: the
+    /// sheet's step, then the operation ends, carrying the step's fault if it
+    /// threw.</summary>
+    private static void EndBulkRenameApply(Action onTheSheet, TaskCompletionSource done)
+    {
+        try
+        {
+            onTheSheet();
+        }
+        catch (Exception exception)
+        {
+            _ = done.TrySetException(exception);
+            return;
+        }
+        _ = done.TrySetResult();
+    }
+
+    /// <summary>
+    /// The apply's publication, on the save dispatcher and inside its turn,
+    /// as steps that each run even when one before throws
+    /// (<see cref="AdmittedPublication.RunEvery"/>): the reconcile of the
+    /// renamed notes' tabs (contract 8, skipped once the workspace is torn
+    /// down), the catch-up of the listed notes' clean tabs, the summary
+    /// (spoken whenever a report exists, today's disk-truth rule), and the
+    /// sheet's own publication. An apply whose worker never reported ends
+    /// on the sheet as one that did not run. The operation ends when this
+    /// returns.
+    /// </summary>
+    private void FinishBulkRenameApply(
+        BulkRenameViewModel sheet,
+        BulkRenameViewModel.BulkRenameApply apply,
+        BulkRenameViewModel.ApplyOutcome? outcome,
+        TaskCompletionSource done)
+    {
+        try
+        {
+            if (outcome is null)
+            {
+                sheet.EndApplyUnrun(apply);
+            }
+            else
+            {
+                RenameReport? report = outcome.Report;
+                AdmittedPublication.RunEvery(
+                    () =>
+                    {
+                        if (report is not null && !_workspaceDisposed)
+                        {
+                            ReconcileTabsAfterBulkRename(report);
+                        }
+                    },
+                    () =>
+                    {
+                        if (!_workspaceDisposed)
+                        {
+                            CatchUpCleanTabsAfterAdmittedWrite(apply.Paths);
+                        }
+                    },
+                    () =>
+                    {
+                        if (report is not null)
+                        {
+                            _announce(new A11yEvent.RenameSummary(
+                                Applied: true,
+                                Renamed: (uint)report.Affected.Length,
+                                Skipped: (uint)report.Skipped.Length,
+                                Failed: (uint)report.Failed.Length));
+                        }
+                    },
+                    () => sheet.PublishApply(apply, report, outcome.Error));
+            }
+        }
+        catch (Exception exception)
+        {
+            _ = done.TrySetException(exception);
+            return;
+        }
+        _ = done.TrySetResult();
+    }
+
+    /// <summary>
+    /// Plan 47 CB-9b (Design 2's catch-up), inside an admitted operation's
+    /// ticket over <paramref name="paths"/>. While the operation held a
+    /// note, a rescan's reload had to mark a clean tab on it stale and keep
+    /// its bytes, and a re-seat had to mark a returning tab back on disk with
+    /// its old bytes (both ask the chain and keep the tab while it is held).
+    /// Nothing reloads either afterwards, so here every clean Markdown tab
+    /// with no save pending whose saved hash is not the index's is brought
+    /// up to disk from a read made now, with no undo step back
+    /// (<see cref="WorkspaceTabViewModel.RebaselineToRead"/>). The index is
+    /// read in slices of core's bound, for the notes with such a tab only. A
+    /// read that fails leaves its tabs as they are, silently: nothing is
+    /// spoken here.
+    /// </summary>
+    private void CatchUpCleanTabsAfterAdmittedWrite(IReadOnlyCollection<string> paths)
+    {
+        HashSet<string> listed = new(paths, StringComparer.Ordinal);
+        string[] open = [.. Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && listed.Contains(tab.Path) && CanCatchUp(tab))
+            .Select(tab => tab.Path)
+            .Distinct(StringComparer.Ordinal)];
+        if (open.Length == 0)
+        {
+            return;
+        }
+        Dictionary<string, string?> indexed;
+        try
+        {
+            indexed = IndexedHashesInSlices(open);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            return;
+        }
+        foreach (string path in open)
+        {
+            if (indexed.GetValueOrDefault(path) is not { Length: > 0 } hash)
+            {
+                continue;
+            }
+            WorkspaceTabViewModel[] behind = [.. Groups.SelectMany(group => group.Tabs)
+                .Where(tab => tab.IsMarkdown
+                    && string.Equals(tab.Path, path, StringComparison.Ordinal)
+                    && CanCatchUp(tab)
+                    && !string.Equals(tab.SavedContentHash, hash, StringComparison.Ordinal))];
+            if (behind.Length == 0)
+            {
+                continue;
+            }
+            IdentifiedText read;
+            try
+            {
+                read = _session.ReadTextIdentified(path);
+            }
+            catch (VaultException)
+            {
+                continue;
+            }
+            foreach (WorkspaceTabViewModel tab in behind)
+            {
+                _ = tab.RebaselineToRead(read);
+            }
+        }
+    }
+
+    private static bool CanCatchUp(WorkspaceTabViewModel tab) =>
+        !tab.IsDirty && !tab.HasPendingSaves && !tab.IsMissingFromDisk;
+
+    /// <summary>The index's content hash of each path, read in slices of
+    /// core's bound on one lookup (the rescan's slicing,
+    /// <c>VaultLifecycleViewModel.ReadIndexedPaths</c>).</summary>
+    private Dictionary<string, string?> IndexedHashesInSlices(IReadOnlyList<string> paths)
+    {
+        var indexed = new Dictionary<string, string?>(StringComparer.Ordinal);
+        int slice = (int)Math.Max(1U, SlateUniffiMethods.MaxIndexedHashPaths());
+        using var cancel = new CancelToken();
+        for (int start = 0; start < paths.Count; start += slice)
+        {
+            string[] part = [.. paths.Skip(start).Take(slice)];
+            IReadOnlyList<string?> hashes = _session.IndexedContentHashes(part, cancel);
+            for (int index = 0; index < part.Length; index++)
+            {
+                indexed[part[index]] = hashes[index];
+            }
+        }
+        return indexed;
     }
 
     /// <summary>Contract 8 fan-out: every open same-path tab either

@@ -490,7 +490,7 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "Panels/BulkRenameViewModel.cs#BulkRenameViewModel.Apply@1": {
+      "Panels/BulkRenameViewModel.cs#BulkRenameViewModel.AnnounceDirtyDrafts@1": {
         "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"

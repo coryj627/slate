@@ -132,6 +132,44 @@ internal sealed partial class WorkspaceTabViewModel
             MarkPropertyStale(announce);
             return false;
         }
+        AdoptAnotherWritersRead(read);
+        return true;
+    }
+
+    /// <summary>
+    /// Plan 47 CB-9b (Design 2's catch-up): a clean tab with no save pending
+    /// takes <paramref name="read"/>, made from disk by an admitted operation
+    /// inside its ticket, as its text, identity and saved baseline, with no
+    /// undo step back across it and its caret kept on its line; its same-path
+    /// peers take it too. It never speaks and never marks a tab stale. It
+    /// returns false, changing nothing, for a tab that is not a live Markdown
+    /// tab, is dirty, or has a save pending, whose next save publishes to it.
+    /// A tab that already holds the read's bytes keeps its buffer and only
+    /// loses a stale mark.
+    /// </summary>
+    internal bool RebaselineToRead(IdentifiedText read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        if (!IsMarkdown || _disposed || IsDirty || HasPendingSaves)
+        {
+            return false;
+        }
+        if (string.Equals(
+            _contentHash, SlateUniffiMethods.EditorTextContentHash(read.Text), StringComparison.Ordinal))
+        {
+            IsExternallyStale = false;
+            return true;
+        }
+        AdoptAnotherWritersRead(read);
+        return true;
+    }
+
+    /// <summary>A clean tab's adoption of another writer's bytes, read from
+    /// disk: its text and baseline (<see cref="TakeAnotherWritersBytes"/>),
+    /// the read's identity, clean and not stale, its interactions told, and
+    /// its same-path peers told the same way.</summary>
+    private void AdoptAnotherWritersRead(IdentifiedText read)
+    {
         string fresh = read.Text;
         TakeAnotherWritersBytes(fresh);
         _text = fresh;
@@ -142,7 +180,6 @@ internal sealed partial class WorkspaceTabViewModel
         IsExternallyStale = false;
         _editorInteractions?.InvalidateExternalState();
         TellPeersOfAnotherWritersBytes();
-        return true;
     }
 
     // Plan 47 CB-9b (Design 0): true while this tab tells its same-path
