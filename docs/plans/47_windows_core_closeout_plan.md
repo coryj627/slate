@@ -612,8 +612,8 @@ each wave's specs are written.
 | C1 | CB-1 | CB-2 | CB-4 | CD2 |
 | C2 | CB-3, then CB-5 | CB-6 | CB-8 | CD4 CD41 |
 | C3 | CB-7 | CB-9a | CB-10 | CD3 CD5 |
-| C4 | CB-9b | CB-13 | CB-27 | CD5 CD7 CD18 |
-| C5 | CB-11 | CB-12 | CB-19 | CD6 |
+| C4 | CB-13 | CB-27 | — | CD7 CD18 |
+| C5 | CB-11, then CB-9b | CB-12 | CB-19 | CD5 CD6 |
 | C6 | CB-14 | CB-30 | CB-25 | CD8 CD21 |
 | C7 | CB-15a | CB-28 | CB-24 | CD9 CD16 CD19 |
 | C8 | CB-31 | CB-15b | CB-29 | CD9 CD20 |
@@ -1008,6 +1008,7 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | #1979 (not a chunk: the math hook race that turned CB-27's lane red) | #1984 | 2026-11-17 (7d948eb3) | #1979 | 0 / 0 / 0 / 0 | Not delivered: the swap-first order under a forced interleaving, a pin on the lock's release, a census that every fact swaps through the helper |
 | CB-9a | #1983 | 2026-11-17 (3d56978f) | none (Refs #1889, open for CB-9b) | 11 / 5 / 5 / 1 | CB-9b ends four census rows (`BulkRenameViewModel.Run`, `FilesSidebarViewModel.EditTag`, `ExportSavedQueryAsBase`, the bulk-rename caller of `ReconcileTabsAfterPropertyWrite`). Filed #1980 (a tabless Bases cell edit names a path), pinned by a fact. Five lines on #1955. Not delivered: an NVDA hearing of the raced-tab sentence. The owner's ear on that sentence's new occasion |
 | CB-7 | #1986 | 2026-11-17 (3ae84200) | #1788 (CD3) | 6 / 0 / 4 / 2 | Filed #1974 (every Windows writer makes the classic replacing rename; the spec's mechanism was wrong) and #1976 (the app menu pointer fact). Four lines on #1955. Codoki was bypassed on an independent judge's verdict: its one finding, that xunit has no `Assert.Fail`, is false. Not delivered: a failing test for #1788's own run. Three local reds never reproduced and never seen on a lane |
+| CB-13 | #1985 | 2026-11-17 (0a417b84) | #1727 | 7 / 1 / 4 / 2 | Filed #1975 (merged first, above) and #1977 (an outside edit made just before a rename is dropped as the rename's own echo). Three lines and a possible flake on #1955. A refusal records no echo. Not delivered: an NVDA hearing on a real FAT32 or exFAT volume (an owner step); the read-back on an SMB share; either read after a rename a FAT volume applied; the mixed folder outcome. The Mac's twin on #1954 |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1081,3 +1082,50 @@ They used most of an hour's Codoki quota, which is ten reviews an hour
 for the account, and CB-6's PR met the limit and waited sixteen minutes
 for its review. Later probes run on a branch through
 `workflow_dispatch`, with no PR open.
+
+Waves C3 and C4, 2026-11-16 and 17. Each chunk had a fresh Opus red
+team and Codex rounds to an approve, at effort high: CB-10, CB-27 one
+round, #1975 two, #1979 two, CB-13 three, CB-9a seven and CB-7 eight.
+CB-9a's and CB-7's rounds mostly found code shapes that a census did
+not read; both censuses now refuse by default and admit by name. Codoki
+reported Safe to merge at 5/5 on every PR but CB-7's. There it held
+"Requires changes" on one finding, that xunit has no `Assert.Fail`,
+answered once and repeated. An independent judge found it false (the
+project references xunit.v3 4.0.2, the call stands 44 times on `main`,
+the lane built and ran the file) and the PR merged on that verdict,
+recorded in its body.
+
+CB-9b moved from wave C4 to C5, behind CB-13, because both edit
+`TryRenameSelected`.
+
+Two specs had a wrong mechanism that a measurement caught before any
+product code. CB-7's said a delete-sharing read lets the app's rename
+through; every Windows writer makes the classic replacing rename, which
+is refused while any handle is open on the target (#1974). CB-13's
+spec recorded an echo on a refused rename; a run showed that echo hides
+an outside edit made in the seconds before it, so a refusal records
+nothing. From wave C4 on, each spec has a step 0 measurement and its own
+red team before code.
+
+Two fixes merged ahead of their chunks, each as its own PR because it
+reached another module: #1975 (after a case-only rename the sweep
+inserted a second row; CB-13's step 0 found it) and #1979 (the math
+panic-hook fact raced a sibling's first MathCAT initialisation; it
+turned CB-27's lane red once).
+
+Product defects on `main` that these waves found and filed, none placed
+in a wave yet; each waits for the owner's call:
+
+- #1974: a save is refused while another program holds the file open.
+- #1977: an outside edit made just before a rename is dropped as the
+  rename's own echo and never reaches the index.
+- #1980: a Bases cell edit on a note with no tab names a path, not a
+  file, and can land on a note created there meanwhile.
+- #1981: a stopped rename's recovery loses the history binding and
+  names no creation in the change feed.
+- #1976: opened with Alt+F, the File menu rests above its own row, and
+  the resting-pointer gate fact can miss because of it.
+
+The home Mac runner stopped answering at 00:55 UTC on 2026-11-17. A run
+routed to it two minutes earlier stayed queued for ninety minutes; a
+cancel and a rerun routed it to Namespace.
