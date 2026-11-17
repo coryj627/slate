@@ -9305,11 +9305,14 @@ impl VaultSession {
         //   CD6). With no file and no row the repair changed nothing
         //   outside `text_write_intents`, so it applies no graph op,
         //   moves no generation and sends no event. That is the old
-        //   path of every move that landed, swept by the first task
-        //   query that covers it: in the session that made the move
-        //   (whose listeners heard its own Renamed) and in every other
-        //   session on the vault (whose hosts learn of it from their
-        //   next change-feed window, as a rename). A Deleted there
+        //   path of every move that landed (other than a case-only
+        //   rename on a volume that answers both spellings, which the
+        //   bind step settles), repaired by the first task query that
+        //   covers it, in the session that made the move (whose
+        //   listeners heard its own Renamed) or in any other session
+        //   on the vault (whose hosts learn of it from their next
+        //   change-feed window, as a rename). Only that first sweep
+        //   repairs it: its commit clears the marker. A Deleted there
         //   made the Windows host mark a tab still at the old path
         //   missing and say so.
         let kind = match outcome {
@@ -13447,8 +13450,9 @@ enum MarkerBinding {
 enum ReindexOutcome {
     /// The path was indexed again from disk: announced as `Modified`.
     Reindexed,
-    /// The file is gone and a `files` row stood under the path: the row and
-    /// its graph node were removed, announced as `Deleted`.
+    /// The file is gone and a `files` row stood under the path: the row was
+    /// removed, and so was its graph node where this session's graph is live
+    /// and holds one; announced as `Deleted`.
     RemovedRow,
     /// The file is gone and no `files` row stood: only the selected marker
     /// tokens were cleared, and nothing is applied, moved or announced.
