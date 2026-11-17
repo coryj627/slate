@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -163,6 +164,34 @@ public sealed class CanonicalIdentityTests
             body,
             StringComparison.Ordinal);
         Assert.Contains("workspace?.ReseatMissingTabs();", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>#1975 (contract I3): a case-only rename plants a
+    /// write-intent marker under each spelling, and the vault-wide task
+    /// list sweeps them before it reads. The note keeps one index row, so
+    /// Tasks Review lists each task once, under the spelling the volume
+    /// holds. On a volume that keeps case the rename is a plain one and
+    /// the same holds. The review loads on the calling thread, so the fact
+    /// waits on nothing.</summary>
+    [Fact]
+    public void ACaseOnlyRenameListsEachTaskOnce()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "identity-one-row");
+        File.WriteAllText(Path.Combine(fixture.Root, "Note.md"), "- [ ] one\n");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        session.RenameFile("Note.md", "note.md");
+
+        var review = new TasksReviewViewModel(
+            session,
+            _ => { },
+            (_, _, _) => ReviewOpenRoute.Opened,
+            (_, _, _) => ReviewToggleRoute.NoOpenTab,
+            synchronousForTests: true);
+        review.EnsureLoaded();
+
+        ReviewTaskRowViewModel row = Assert.Single(review.Rows);
+        Assert.Equal("note.md", row.Path);
+        Assert.Equal("Tasks Review, 1 shown", review.Header);
     }
 
     private static string FindSource(string fileName)
