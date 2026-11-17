@@ -609,6 +609,10 @@ fn ensure_mathcat_initialized_on_this_thread() -> Result<(), MathCatError> {
 fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> {
     static CHAINED: std::sync::Once = std::sync::Once::new();
     CHAINED.call_once(|| {
+        #[cfg(test)]
+        let _swap = HOOK_SWAP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::panic::take_hook();
         #[cfg(test)]
         hook_chain_pause(HookChainStep::PreviousTaken);
@@ -623,6 +627,29 @@ fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> 
     });
     libmathcat::set_rules_dir("Rules")
 }
+
+/// #1979, test builds only: makes a fact's swap of the process panic hook and
+/// the `Once` body of [`set_rules_dir_chaining_panic_hook`] one at a time.
+///
+/// A fact that puts a hook over the current one makes two calls, `take_hook`
+/// and `set_hook`. The body makes four, two of them MathCAT's. With the
+/// fact's two between the body's, on another thread, the fact's hook was
+/// handed to MathCAT, which never calls it, or replaced by the chain. The
+/// body holds this from before its first hook call until after its last,
+/// and a fact holds it around its two (`tests::swap_in_a_recorder`). So
+/// either the fact goes first and the body's `previous` is the fact's hook,
+/// or the body goes first and the fact's hook wraps the finished chain.
+///
+/// A holder makes its hook calls and nothing else. A fact never renders or
+/// reaches [`set_rules_dir_chaining_panic_hook`] while it holds this: the
+/// body takes it too and would never get it. The body, while it holds it,
+/// calls the hook functions, [`hook_chain_pause`] (which waits only on the
+/// fact that armed it, never on this lock), and
+/// `libmathcat::init_panic_handler`, which makes the same two hook calls
+/// once and calls nothing of Slate's. Builds that are not tests have no
+/// lock: there, nothing but the body changes the hook.
+#[cfg(test)]
+static HOOK_SWAP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// #1979, test builds only: a place inside the `Once` body of
 /// [`set_rules_dir_chaining_panic_hook`] where the process panic hook is
@@ -643,8 +670,8 @@ enum HookChainStep {
 
 /// #1979, test builds only: what the first MathCAT init of the process runs
 /// at each [`HookChainStep`], on the thread that runs the init. One fact sets
-/// it, in a process where it runs alone, to hold the init there. Unset, a
-/// step does nothing.
+/// it, in a process where it runs alone, to hold the init there, with
+/// [`HOOK_SWAP`] held. Unset, a step does nothing.
 #[cfg(test)]
 static HOOK_CHAIN_PAUSE: std::sync::OnceLock<Box<dyn Fn(HookChainStep) + Send + Sync>> =
     std::sync::OnceLock::new();
@@ -1359,34 +1386,25 @@ mod tests {
     /// #1583: MathCAT's own panic hook, installed on the first call into
     /// MathCAT, calls the hook it replaced only under MathCAT's `cfg(test)`.
     /// After a math render, a panic anywhere in the process must still reach
-    /// the hook that was installed before. This proves the chain when the
-    /// render is the first MathCAT init in its process (nextest runs each
-    /// fact in its own; under `cargo test` run it alone with `--exact`). In
-    /// a shared process where an earlier fact already initialized MathCAT,
-    /// the probe wraps the chain and passes either way.
+    /// the hook that was installed before.
+    ///
+    /// Alone in its process (nextest runs each fact in its own; under `cargo
+    /// test`, run it with `--exact`), the render is the first MathCAT init,
+    /// the recorder is the hook the chain must call, and the fact proves the
+    /// chain: it is red when the chain drops the previous hook. In a shared
+    /// `cargo test` process it can prove less. Where an earlier fact already
+    /// initialized MathCAT, the recorder wraps the finished chain and passes
+    /// whatever the chain does. Where another fact's thread runs the first
+    /// init at the same moment, the swap and the init's hook calls go one at
+    /// a time ([`HOOK_SWAP`], #1979): either the swap goes first, the
+    /// recorder is the init's previous hook and the fact proves the chain as
+    /// it does alone, or the init goes first and the recorder wraps the
+    /// finished chain. The recorder is never handed to MathCAT or replaced by
+    /// the chain, so with a sound chain the probe panic always reaches it.
     #[test]
     fn a_panic_after_mathcat_initializes_still_reaches_the_previous_hook() {
-        use std::sync::{Arc, Mutex, PoisonError};
-        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
-        let recorder = Arc::clone(&seen);
-        let current = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let payload = info.payload();
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_string())
-                })
-                .unwrap_or_default();
-            recorder
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(message);
-            current(info);
-        }));
+        use std::sync::PoisonError;
+        let seen = swap_in_a_recorder();
         let raw = RawMathBlock {
             source: "x^2".to_string(),
             display_style: MathDisplayStyle::Block,
@@ -1413,13 +1431,18 @@ mod tests {
     }
 
     /// Puts a hook over the current one that records each panic's message
-    /// and then calls the hook it replaced, as
-    /// [`a_panic_after_mathcat_initializes_still_reaches_the_previous_hook`]
-    /// does. Returns what the hook has recorded.
+    /// and then calls the hook it replaced. Returns what the hook has
+    /// recorded.
+    ///
+    /// The two hook calls, and nothing else, are made under [`HOOK_SWAP`], so
+    /// the first MathCAT init of the process, on another thread, cannot land
+    /// between them, nor they inside it (#1979). Every fact that swaps the
+    /// hook does it here.
     fn swap_in_a_recorder() -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
         use std::sync::{Arc, Mutex, PoisonError};
         let seen: Arc<Mutex<Vec<String>>> = Arc::default();
         let recorder = Arc::clone(&seen);
+        let _swap = HOOK_SWAP.lock().unwrap_or_else(PoisonError::into_inner);
         let current = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let payload = info.payload();
@@ -1451,9 +1474,10 @@ mod tests {
     /// and the panic hook are the process's, so the init can be held between
     /// its hook calls only where nothing has run it yet: this runs
     /// [`a_hook_swap_inside_the_first_mathcat_init_child`] alone in a fresh
-    /// copy of the test binary and reports its result. That holds under
-    /// nextest (a process per fact) and in a shared `cargo test` process
-    /// alike.
+    /// copy of the test binary (`session::run_alone`), and fails when that
+    /// process fails or does not run it. It proves the same under nextest (a
+    /// process per fact), with `--exact`, and in a shared `cargo test`
+    /// process, because the child's process is always its own.
     #[test]
     fn a_hook_swap_inside_the_first_mathcat_init_keeps_its_recorder() {
         crate::session::run_alone(SWAP_INSIDE_INIT_CHILD);
@@ -1461,17 +1485,23 @@ mod tests {
 
     /// The body of
     /// [`a_hook_swap_inside_the_first_mathcat_init_keeps_its_recorder`], which
-    /// starts the one process this runs in. Anywhere else (a test runner's
-    /// own process, nextest's or a shared `cargo test` one) it returns at
-    /// once and proves nothing.
+    /// starts the one process this runs in, with `SLATE_WB31_CHILD` naming
+    /// this fact. Anywhere else (nextest's process for this fact, a shared
+    /// `cargo test` process, or `--exact` without the variable) it returns
+    /// at once and passes, proving nothing.
     ///
     /// A render on another thread starts the first MathCAT init of the
     /// process, and the init is held at each [`HookChainStep`] in turn. At
-    /// each, a recorder is swapped in, and the init is let go. A panic after
-    /// the render must reach both recorders.
+    /// each, a thread is started to swap a recorder in. Before the init is
+    /// let go, that thread finds [`HOOK_SWAP`] held by the init, so its swap
+    /// waits for the finished chain. A panic after the render must reach both
+    /// recorders. With the init not taking the lock, the thread finds it free
+    /// and the fact fails at the first step: a swap made there lands inside
+    /// the init, and its recorder is handed to MathCAT or replaced by the
+    /// chain and never sees the panic.
     #[test]
     fn a_hook_swap_inside_the_first_mathcat_init_child() {
-        use std::sync::{Mutex, PoisonError, mpsc};
+        use std::sync::{Mutex, PoisonError, TryLockError, mpsc};
         if !crate::session::is_alone_child(SWAP_INSIDE_INIT_CHILD) {
             return;
         }
@@ -1500,7 +1530,7 @@ mod tests {
             let _ = events.send(Event::Rendered);
             block
         });
-        let mut recorders = Vec::new();
+        let mut swaps = Vec::new();
         for step in [HookChainStep::PreviousTaken, HookChainStep::MathcatTaken] {
             // The render answers only after the init, so `Rendered` first
             // means the init never stopped here.
@@ -1508,11 +1538,27 @@ mod tests {
                 Event::Held(at) => assert_eq!(at, step),
                 Event::Rendered => panic!("the first MathCAT init was not held at {step:?}"),
             }
-            recorders.push((step, swap_in_a_recorder()));
+            // The init is let go only after the swap's thread has looked at
+            // the lock, so what it finds is the lock as the held init has it.
+            let (found, lock_was_held) = mpsc::channel::<bool>();
+            let swap = thread::spawn(move || {
+                let lock_held = matches!(HOOK_SWAP.try_lock(), Err(TryLockError::WouldBlock));
+                let _ = found.send(lock_held);
+                swap_in_a_recorder()
+            });
+            swaps.push((step, swap));
+            assert!(
+                lock_was_held.recv().expect("the swap's thread is alive"),
+                "a hook swap could land inside the first MathCAT init, held at {step:?}"
+            );
             let_go.send(()).expect("the init is held at the pause");
         }
         let block = render.join().expect("the render thread joined");
         assert!(!block.mathml.is_empty(), "the render must reach MathCAT");
+        let recorders: Vec<_> = swaps
+            .into_iter()
+            .map(|(step, swap)| (step, swap.join().expect("the swap's thread joined")))
+            .collect();
         let marker = "slate-1979: a panic after a hook swap inside the first init";
         let outcome = thread::spawn(move || std::panic::catch_unwind(|| panic!("{marker}"))).join();
         assert!(
@@ -1529,7 +1575,7 @@ mod tests {
             .collect();
         assert!(
             lost.is_empty(),
-            "a recorder swapped in inside the first MathCAT init never saw the panic: {lost:?}"
+            "a recorder asked for inside the first MathCAT init never saw the panic: {lost:?}"
         );
     }
 
