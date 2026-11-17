@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Windows.Threading;
 using SlateWindows.Bases;
 using SlateWindows.Panels;
@@ -25,6 +26,7 @@ public sealed class SaveChainAdmissionTests
     private const string Edit = "v3 the reader's edit\n";
     private const string Note = "---\nstatus: draft\n---\n\nBody.\n";
     private const string NoteEdited = "---\nstatus: draft\n---\n\nBody.\nAn edit on its way to disk.\n";
+    private const string Gone = "# Gone\n\nSaved before it was deleted.\n";
     private static readonly TimeSpan Hold = TimeSpan.FromSeconds(10);
     private const string TaskNote = "---\nstatus: draft\n---\n\n- [ ] the task\n";
     private const string TaskNoteEdited = "---\nstatus: draft\n---\n\n- [ ] the task\nAn edit on its way to disk.\n";
@@ -1174,6 +1176,2156 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    // ---- The rescan's reload (plan 47 CB-9a, #1889) ---------------------------
+
+    /// <summary>A rescan's reload of a changed note is unadmitted, so it asks
+    /// the chain: while any operation is admitted for the note, a clean tab
+    /// keeps its buffer and its document and is marked stale against the
+    /// index hash. The next rescan, on an idle chain, reloads it.</summary>
+    [Fact]
+    public void ARescanNeverReloadsATabUnderAnOperationAdmittedForItsNote() => RunSta(() =>
+    {
+        const string Outside = "written outside Slate\n";
+        using var h = new Vault("rescan-under-admitted", ("a.md", "v0\n"));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            int document = tab.ItemIdentity;
+            File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+
+            h.ReSyncDocuments("a.md");
+            Assert.Equal(document, tab.ItemIdentity);
+            Assert.Equal("v0\n", tab.Text);
+            Assert.True(tab.IsExternallyStale, "the tab kept under the admitted operation was not marked stale");
+
+            ahead.SetResult();
+            h.PumpUntil(() => held.IsCompleted && h.Workspace.SavesIdle, "the operation ahead ending");
+            h.ReSyncDocuments("a.md");
+            Assert.NotEqual(document, tab.ItemIdentity);
+            Assert.Equal(Outside, tab.Text);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+        }
+    });
+
+    // ---- A deleted file's recovery (plan 47 CB-9a, #1889; CD5(c)) -------------
+
+    /// <summary>A recover asked while another operation is admitted for the
+    /// path takes a ticket behind it: nothing is created until that
+    /// operation ends, and then the file is recovered once.</summary>
+    [Fact]
+    public void ARecoverStartedUnderAnAdmittedOperationWaitsThenRecoversOnce() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("recover-behind-op", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("gone.md", _ => ahead.Task);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")), "the recover created the file beside the operation admitted before it");
+            Assert.Empty(answers);
+
+            ahead.SetResult();
+            h.PumpUntil(() => !answers.IsEmpty && h.Workspace.SavesIdle, "the recover after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal([(true, false)], answers);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RestoredFile);
+            Assert.Equal(Gone, h.Read("gone.md"));
+            Assert.Empty(alerts);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>A tab that names the deleted path and holds no hash saves by
+    /// create. Its save
+    /// is held before its write when the recover is asked, so the recover
+    /// waits; the save then creates the file, and core's exclusive create
+    /// answers the recover that the path is taken: the row opens Restore As,
+    /// nothing is spoken for the recover, and the file keeps the tab's
+    /// text.</summary>
+    [Fact]
+    public void ARecoverBehindAGhostTabsSaveAnswersDestinationExistsAndOverwritesNothing() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("recover-behind-ghost-save", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        WorkspaceTabViewModel ghost = h.OpenNow("gone.md");
+        Assert.Null(ghost.SavedContentHash);
+        var held = new HeldWork(hook => ghost.SaveWriteHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            ghost.Text = Edit;
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")), "the recover created the file beside the save admitted before it");
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && h.Workspace.SavesIdle, "the save and then the recover's answer");
+            Assert.True(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            Assert.Equal([(false, true)], answers);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RestoredFile);
+            Assert.Empty(alerts);
+            Assert.Equal(Edit, h.Read("gone.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ghost.SaveWriteHookForTests = null;
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The other direction: the recover is held before its create
+    /// when a tab on the path asks to save. The save waits for the recover's
+    /// publication, then finds the recovered file and is blocked, so the
+    /// recovered bytes are kept and the tab keeps its edits.</summary>
+    [Fact]
+    public void ASaveStartedUnderAnAdmittedRecoverWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = Vault.WithADeletedNote("save-behind-recover", "gone.md", Gone);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        WorkspaceTabViewModel ghost = h.OpenNow("gone.md");
+        var held = new HeldWork(hook => h.Workspace.HistoryCreateHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            h.Events.Clear();
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            h.PumpUntil(() => held.Entered, "premise: the recover reaching its hold before its create");
+
+            ghost.Text = Edit;
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the recover");
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && h.Workspace.SavesIdle, "the recover and then the save");
+            Assert.Equal([(true, false)], answers);
+            Assert.False(save.Result, "the save overwrote the recovered file");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RestoredFile);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveBlocked);
+            Assert.True(
+                h.Events.FindIndex(e => e is A11yEvent.RestoredFile) < h.Events.FindIndex(e => e is A11yEvent.NoteSaveBlocked),
+                "the save spoke before the recover it waited for");
+            Assert.Empty(alerts);
+            Assert.Equal(Gone, h.Read("gone.md"));
+            Assert.Equal(Edit, ghost.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The admission moves the recover's publication behind the
+    /// `Created` event's re-seat: the listener posts that event to the
+    /// dispatcher before the worker posts its continuation, so the re-seat
+    /// runs inside the ticket, sees an operation admitted for the path, and
+    /// only marks a clean tab back on disk. The recover therefore reloads
+    /// every clean tab on its path itself, inside its ticket: the tab shows
+    /// the recovered file as a new document, with that file's identity. It
+    /// takes a vault opened through the lifecycle, whose event listener is
+    /// attached, in background mode; no workspace-level fact receives the
+    /// event.</summary>
+    [Fact]
+    public void ARecoverReloadsACleanTabThatWasMissingOnItsPath() => RunSta(() =>
+    {
+        using var v = new OpenedVault("recover-reloads-tab", "gone.md", Gone);
+        v.Workspace.OpenPath("gone.md", WorkspaceOpenTarget.NewTab);
+        // What a Deleted event does to a tab on the path (the route
+        // FinalMergeDeltaTests takes to a missing tab).
+        v.Workspace.InvalidatePath("gone.md");
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = v.Workspace.Groups.SelectMany(group => group.Tabs).Single(candidate => candidate.Path == "gone.md");
+        Assert.True(tab.IsMarkdown);
+        Assert.False(tab.IsDirty);
+        Assert.True(tab.IsMissingFromDisk, "premise: the tab on the deleted path does not report its file missing");
+        int document = tab.ItemIdentity;
+        string? identity = tab.FileIdentity;
+
+        v.Workspace.History.LoadDeletedFiles();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(30)),
+            "the deleted files list never loaded");
+        HistoryDeletedRow deleted = v.Workspace.History.DeletedRows.Single(row => row.Path == "gone.md");
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        v.Workspace.RecoverDeletedFile(deleted, (ok, collision) => answers.Enqueue((ok, collision)));
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !answers.IsEmpty && v.Workspace.SavesIdle, TimeSpan.FromSeconds(30)),
+            "the recover never answered its row");
+        // The `Created` event's own turn, whichever side of the publication it
+        // fell on, has run by the time the dispatcher is drained.
+        PumpedDispatcher.Drain();
+
+        Assert.Equal([(true, false)], answers);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal(Gone, tab.Text);
+        Assert.False(tab.IsDirty);
+        Assert.NotEqual(document, tab.ItemIdentity);
+        Assert.NotNull(tab.FileIdentity);
+        Assert.NotEqual(identity, tab.FileIdentity);
+    });
+
+    /// <summary>The red team's F4: the reload stands INSIDE the recover's
+    /// ticket. The recover is held before its create; the clean missing
+    /// tab asks to save, which queues behind the recover; the save records
+    /// what the tab shows when it runs. It runs against the recovered
+    /// text, on a document that has already moved. The row's answer is the
+    /// sharper witness: it is given inside the ticket, with both tickets
+    /// still counted, and the tab is reloaded by then. A reload posted to
+    /// run after the operation would not have run yet.</summary>
+    [Fact]
+    public void ASaveQueuedBehindARecoverRunsAgainstTheTabTheRecoverReloaded() => RunSta(() =>
+    {
+        using var v = new OpenedVault("recover-reloads-inside-ticket", "gone.md", Gone);
+        v.Workspace.OpenPath("gone.md", WorkspaceOpenTarget.NewTab);
+        v.Workspace.InvalidatePath("gone.md");
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = v.Workspace.Groups.SelectMany(group => group.Tabs).Single(candidate => candidate.Path == "gone.md");
+        Assert.True(tab.IsMissingFromDisk, "premise: the tab on the deleted path does not report its file missing");
+        Assert.False(tab.IsDirty);
+        int document = tab.ItemIdentity;
+        v.Workspace.History.LoadDeletedFiles();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(30)),
+            "the deleted files list never loaded");
+        HistoryDeletedRow deleted = v.Workspace.History.DeletedRows.Single(row => row.Path == "gone.md");
+        var held = new HeldWork(hook => v.Workspace.HistoryCreateHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            string? textAtTheAnswer = null;
+            int documentAtTheAnswer = -1;
+            int admittedAtTheAnswer = -1;
+            v.Workspace.RecoverDeletedFile(deleted, (ok, collision) =>
+            {
+                textAtTheAnswer = tab.Text;
+                documentAtTheAnswer = tab.ItemIdentity;
+                admittedAtTheAnswer = v.Workspace.SavesForTests.AdmittedForTests;
+                answers.Enqueue((ok, collision));
+            });
+            Assert.True(PumpedDispatcher.PumpUntil(() => held.Entered, TimeSpan.FromSeconds(30)), "premise: the recover never reached its hold");
+
+            string? textAtTheSave = null;
+            int documentAtTheSave = -1;
+            Task<bool> save = tab.SaveAsync(onSaved: () =>
+            {
+                textAtTheSave = tab.Text;
+                documentAtTheSave = tab.ItemIdentity;
+            });
+            Assert.Equal(2, v.Workspace.SavesForTests.AdmittedForTests);
+
+            held.Release();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => save.IsCompleted && !answers.IsEmpty && v.Workspace.SavesIdle, TimeSpan.FromSeconds(30)),
+                "the recover and then the save never ended");
+            Assert.Equal([(true, false)], answers);
+            Assert.True(save.Result);
+            Assert.Equal(2, admittedAtTheAnswer);
+            Assert.Equal(Gone, textAtTheAnswer);
+            Assert.NotEqual(document, documentAtTheAnswer);
+            Assert.Equal(Gone, textAtTheSave);
+            Assert.NotEqual(document, documentAtTheSave);
+            Assert.Equal(tab.ItemIdentity, documentAtTheSave);
+        }
+        finally
+        {
+            held.Release();
+            _ = PumpedDispatcher.PumpUntil(() => v.Workspace.SavesIdle, TimeSpan.FromSeconds(30));
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A vault opened through the vault lifecycle, as the app opens
+    /// one: its event listener is attached, so a file core creates reaches
+    /// the workspace as a `Created` event, and interaction work runs in the
+    /// background. Its note at <c>deleted</c> was saved and deleted in an
+    /// earlier session.</summary>
+    private sealed class OpenedVault : IDisposable
+    {
+        private readonly SynchronizationContext? _previous;
+        private readonly string _state;
+
+        public OpenedVault(string label, string deleted, string text)
+        {
+            _previous = SynchronizationContext.Current;
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            Root = Path.Combine(Path.GetTempPath(), $"slate-save-chain-{label}-{Guid.NewGuid():N}");
+            _state = Root + "-state";
+            Directory.CreateDirectory(Root);
+            Directory.CreateDirectory(_state);
+            File.WriteAllText(Path.Combine(Root, "keeper.md"), "# Keeper\n");
+            using (VaultSession earlier = VaultSession.OpenFilesystem(Root))
+            {
+                using (var scan = new CancelToken())
+                {
+                    earlier.ScanInitial(scan);
+                }
+                _ = earlier.SaveText(deleted, text, expectedContentHash: null);
+                StaThread.Run(() => earlier.DeleteFile(deleted));
+            }
+            Lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(Root),
+                enqueueUi: action => dispatcher.BeginInvoke(action),
+                recentVaultsStore: new RecentVaultsStore(Path.Combine(_state, "recent-vaults.json")),
+                announce: spoken =>
+                {
+                    BeforeAnnounce?.Invoke(spoken);
+                    Events.Add(spoken);
+                },
+                confirmUnsavedClose: () => VaultCloseDecision.Discard);
+            Task open = Lifecycle.OpenVaultAsync(Root);
+            Assert.True(PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)), "the vault never opened");
+            open.GetAwaiter().GetResult();
+            Workspace = Assert.IsType<WorkspaceViewModel>(Lifecycle.Workspace);
+            Assert.True(Workspace.StartsInteractionBackgroundWorkForTests);
+        }
+
+        public string Root { get; }
+
+        public VaultLifecycleViewModel Lifecycle { get; }
+
+        public WorkspaceViewModel Workspace { get; }
+
+        public List<A11yEvent> Events { get; } = [];
+
+        /// <summary>Runs before each announcement is recorded: a fact makes
+        /// the announcer throw here.</summary>
+        public Action<A11yEvent>? BeforeAnnounce { get; set; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Lifecycle.Dispose();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(_previous);
+                foreach (string folder in (string[])[Root, _state])
+                {
+                    try
+                    {
+                        Directory.Delete(folder, recursive: true);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Found and fixed with the recover: a Restore As whose worker
+    /// meets a fault outside VaultException (a core panic) still answers its
+    /// row. It is a failed create, the existing "Can't restore" alert with
+    /// the fault's message, and nothing is created.</summary>
+    [Theory]
+    [InlineData("version")]
+    [InlineData("deleted")]
+    public void ARestoreAsWhoseWorkerFaultsStillAnswersItsRow(string what) => RunSta(() =>
+    {
+        const string Destination = "restored copy.md";
+        using Vault h = what == "version"
+            ? new Vault("restore-as-faults-version", ("a.md", "v0\n"))
+            : Vault.WithADeletedNote("restore-as-faults-deleted", "gone.md", Gone);
+        var alerts = new ConcurrentQueue<string>();
+        var answers = new ConcurrentQueue<(bool Ok, string? Refusal)>();
+        HistoryVersionRow? version = what == "version" ? AnOlderVersion(h) : null;
+        h.Workspace.HistoryAlert = (title, message) => alerts.Enqueue($"{title}: {message}");
+        h.Workspace.HistoryCreateHookForTests = () =>
+            throw new InvalidOperationException("the create's core call panicked (test seam)");
+        try
+        {
+            if (version is not null)
+            {
+                h.Workspace.CommitRestoreAsVersion(
+                    version.ContentHashAfter, version.AbsoluteDate, Destination, (ok, refusal) => answers.Enqueue((ok, refusal)));
+            }
+            else
+            {
+                h.Workspace.CommitRestoreAsDeleted("gone.md", Destination, (ok, refusal) => answers.Enqueue((ok, refusal)));
+            }
+            h.PumpUntil(() => !answers.IsEmpty, "the faulted Restore As answering its row");
+            Assert.Equal([(false, null)], answers);
+            Assert.Equal(["Can't restore: the create's core call panicked (test seam)"], alerts);
+            Assert.False(File.Exists(Path.Combine(h.Root, Destination)));
+        }
+        finally
+        {
+            h.Workspace.HistoryCreateHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    // ---- A Bases cell edit on a note with no tab (plan 47 CB-9a, #1889) -------
+
+    /// <summary>A cell edit on a note with no tab takes the note's property
+    /// lease and a ticket in the note's chain: nothing is written until the
+    /// operation admitted before it ends, and then it writes once.</summary>
+    [Fact]
+    public void ATablessBasesCellEditWaitsForAnOperationAdmittedForTheNoteAndWritesOnce() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-behind-op", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int writes = 0;
+        h.Workspace.BasesTablessWriteHookForTests = () => Interlocked.Increment(ref writes);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, Volatile.Read(ref writes));
+            Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.True(h.Workspace.PropertyWriteInFlightFor("a.md"), "the lease was not held while the write waited");
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.BasesCellSaved) && h.Workspace.SavesIdle,
+                "the cell write after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal(1, Volatile.Read(ref writes));
+            Assert.Contains("status: done", h.Read("a.md"), StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+            Assert.False(h.Workspace.PropertyWriteInFlightFor("a.md"));
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>A pin of the present behaviour, not the wanted one (issue
+    /// #1980). A Bases row carries no file identity, so a cell edit on a
+    /// note with no tab names a path and nothing else. While the edit waits
+    /// its turn, the note is renamed away and another note is created at
+    /// the path. At its turn the edit lands on the note that is at the path
+    /// now: the property is written into the new note, the renamed note is
+    /// untouched, and the cell's saved sentence is spoken once. When #1980
+    /// gives the row an identity this fact turns into a refusal: nothing is
+    /// written, and the reader hears that the row no longer matches.</summary>
+    [Fact]
+    public void ATablessBasesCellEditLandsOnTheNoteAtItsPathAtItsTurnEvenWhenThatNoteWasReplaced() => RunSta(() =>
+    {
+        const string Replacement = "---\nstatus: other\n---\n\nAnother note at the path.\n";
+        using var h = new Vault("tabless-cell-note-replaced", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            // The note the row was read from moves away, and another takes
+            // its path, while the edit waits.
+            _ = h.Session.RenameFile("a.md", "b.md");
+            _ = h.Session.SaveText("a.md", Replacement, expectedContentHash: null);
+            Assert.Equal(Note, h.Read("b.md"));
+            Assert.Equal(Replacement, h.Read("a.md"));
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => e is A11yEvent.BasesCellSaved or A11yEvent.BasesCellRowNoLongerMatches or A11yEvent.BasesCellEditFailed),
+                "the cell edit's outcome at its turn");
+            Assert.True(held.Result);
+            string atThePath = h.Read("a.md");
+            Assert.Contains("status: done", atThePath, StringComparison.Ordinal);
+            Assert.Contains("Another note at the path.", atThePath, StringComparison.Ordinal);
+            Assert.Equal(Note, h.Read("b.md"));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellRowNoLongerMatches or A11yEvent.BasesCellEditFailed
+                or A11yEvent.PropertyEditConflict);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The route is decided again at the write's turn. A tab that
+    /// opened on the note while the write waited takes it: a clean tab
+    /// writes on its saved hash and is rebaselined, and a dirty tab refuses
+    /// with the dirty-note sentence. Either way the tabless write does not
+    /// run too.</summary>
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("dirty")]
+    public void ATablessBasesCellEditWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute(string tab) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-tab-opened-" + tab, ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int tablessWrites = 0;
+        int tabWrites = 0;
+        h.Workspace.BasesTablessWriteHookForTests = () => Interlocked.Increment(ref tablessWrites);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            opened.PropertyWriteHookForTests = () => Interlocked.Increment(ref tabWrites);
+            if (tab == "dirty")
+            {
+                opened.Text = Note + "An unsaved line.\n";
+            }
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => tab == "dirty" ? e is A11yEvent.HostComposed : e is A11yEvent.BasesCellSaved),
+                "the write's turn on the tab that opened");
+            Assert.True(held.Result);
+            Assert.Equal(0, Volatile.Read(ref tablessWrites));
+            if (tab == "dirty")
+            {
+                Assert.Equal(0, Volatile.Read(ref tabWrites));
+                Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+                _ = Assert.Single(
+                    h.Events.OfType<A11yEvent.HostComposed>(),
+                    line => line.Text == "Save the note before editing properties. The editor has unsaved changes in a.md.");
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellSaved);
+            }
+            else
+            {
+                Assert.Equal(1, Volatile.Read(ref tabWrites));
+                string written = h.Read("a.md");
+                Assert.Contains("status: done", written, StringComparison.Ordinal);
+                Assert.Equal(written, opened.Text);
+                Assert.False(opened.IsExternallyStale);
+                Assert.False(opened.IsDirty);
+                _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The other direction: the tabless write is held before its
+    /// core call when a tab opens on the note and saves. The save waits for
+    /// the write's publication, which rebaselines the tab that raced open,
+    /// so the save then finds a clean tab on the written bytes.</summary>
+    [Fact]
+    public void ASaveStartedUnderATablessBasesCellEditWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-tabless-cell", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        int writes = 0;
+        var held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook is null
+            ? null
+            : () =>
+            {
+                _ = Interlocked.Increment(ref writes);
+                hook();
+            });
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(Note, opened.Text);
+            string? textWhenTheSavePublished = null;
+            Task<bool> save = opened.SaveAsync(onSaved: () => textWhenTheSavePublished = opened.Text, announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the cell write");
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Events.Any(e => e is A11yEvent.BasesCellSaved) && h.Workspace.SavesIdle,
+                "the cell write and then the save");
+            Assert.True(save.Result);
+            Assert.Equal(1, Volatile.Read(ref writes));
+            string written = h.Read("a.md");
+            Assert.Contains("status: done", written, StringComparison.Ordinal);
+            Assert.Equal(written, textWhenTheSavePublished);
+            Assert.Equal(written, opened.Text);
+            Assert.False(opened.IsExternallyStale);
+            Assert.False(opened.IsDirty);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict or A11yEvent.PropertyEditConflict);
+            Assert.False(h.Workspace.PropertyWriteInFlightFor("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Found and fixed with the tabless write: a property write
+    /// rewrites the note and re-indexes it, tasks included, so the shared
+    /// task-index repair lease brackets the session write, as it does for a
+    /// tab's property write. While the write is in flight no task query
+    /// gets a clean ticket, and a write that fails leaves the note waiting
+    /// for a repair, since its index may no longer match the file.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATablessBasesCellWriteHoldsTheTaskIndexRepairLeaseAcrossItsWrite(bool fails) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-cell-repair-lease", ("a.md", Note), ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+        TaskIndexRepairCoordinator repairs = h.Workspace.TaskIndexRepairsForTests;
+        Assert.True(repairs.TryBeginCleanQuery(out _, out _), "premise: a write was already in flight");
+        var held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook is null
+            ? null
+            : () =>
+            {
+                hook();
+                if (fails)
+                {
+                    throw new InvalidOperationException("the cell write failed (test seam)");
+                }
+            });
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+            Assert.False(
+                repairs.TryBeginCleanQuery(out _, out bool onlyByAWriteInFlight),
+                "a task query could read the index while the cell write was in flight");
+            Assert.True(onlyByAWriteInFlight);
+
+            held.Release();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !h.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the cell write's end");
+            Assert.Equal(fails, repairs.HasPendingFor("a.md"));
+            Assert.Equal(!fails, repairs.TryBeginCleanQuery(out _, out bool stillInFlight));
+            Assert.False(stillInFlight, "the lease outlived the write");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Found and fixed with the tabless write (the red team's
+    /// F1): a cell write that goes through a tab runs on the tab's
+    /// property-write worker, whose catch leaves out of memory, stack
+    /// overflow and access violation alone. Such a fault posts no
+    /// completion, so without a backstop the operation never ends, the
+    /// note's chain stays held and its property lease is never released.
+    /// Both ways into that worker: a tab that opened while a tabless write
+    /// waited, and a cell edit asked with the tab already open.</summary>
+    [Theory]
+    [InlineData("the tab opened while the write waited")]
+    [InlineData("the tab was open at the request")]
+    public void ABasesCellWriteThroughATabWhoseWorkerFaultsOutsideItsCatchStillEnds(string route) => RunSta(() =>
+    {
+        using var h = new Vault("cell-tab-worker-faults", ("a.md", Note), ("Notes.base", NotesBase));
+        bool openAtTheRequest = route == "the tab was open at the request";
+        WorkspaceTabViewModel? opened = openAtTheRequest ? h.OpenNow("a.md") : null;
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            opened ??= h.OpenNow("a.md");
+            opened.PropertyWriteHookForTests = () =>
+                throw new OutOfMemoryException("a fault the worker's catch does not take (test seam)");
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !h.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the cell write ending after its worker faulted");
+            Assert.True(held.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellEditFailed);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain("status: done", h.Read("a.md"), StringComparison.Ordinal);
+
+            bool ran = false;
+            Task<bool> later = h.Workspace.SavesForTests.Admit("a.md", _ =>
+            {
+                ran = true;
+                return Task.CompletedTask;
+            });
+            h.PumpUntil(() => later.IsCompleted, "an operation admitted after the faulted write");
+            Assert.True(ran && later.Result, "the note's chain was still held");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            if (opened is not null)
+            {
+                opened.PropertyWriteHookForTests = null;
+            }
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The base's row for a.md and its status column, with no tab
+    /// on the note.</summary>
+    private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) TablessStatusCell(Vault h)
+    {
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+        return StatusCellOf(h);
+    }
+
+    /// <summary>The base's row for a.md and its status column.</summary>
+    private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) StatusCellOf(Vault h)
+    {
+        BaseDocumentViewModel document = h.Workspace.BaseDocumentFor("Notes.base");
+        h.PumpUntil(
+            () => document.Result?.Rows.Any(row => row.FilePath == "a.md") == true,
+            "the base's rows");
+        BasesRow row = document.Result!.Rows.Single(candidate => candidate.FilePath == "a.md");
+        BasesColumn column = document.Result.Columns.Single(candidate => candidate.Id == "note.status");
+        h.Events.Clear();
+        return (document, row, column);
+    }
+
+    // ---- A Tasks Review toggle on a note with no tab (plan 47 CB-9a, #1889) ---
+
+    /// <summary>A review toggle on a note with no tab takes a ticket in the
+    /// note's chain: the box is not ticked until the operation admitted
+    /// before it ends, and then it is ticked once.</summary>
+    [Fact]
+    public void ATablessReviewToggleWaitsForAnOperationAdmittedForTheNoteAndTogglesOnce() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-behind-op", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(TaskNote, h.Read("a.md"));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.TaskToggled) && h.Workspace.SavesIdle,
+                "the toggle after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The row's task is an ordinal in the text the row was read
+    /// from. The operation ahead rewrites the note, so when the toggle's turn
+    /// comes core's compare-and-swap on the row's snapshot hash refuses it:
+    /// the conflict is spoken once, the operation's bytes are kept, and the
+    /// rows reload.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseNoteChangedWhileItWaitedRefusesAsStale() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-note-changed", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            int loads = review.LoadRequestIdForTests;
+
+            // The operation ahead writes the note, then ends.
+            _ = h.Session.SaveText("a.md", TaskNoteEdited, expectedContentHash: null);
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.TaskToggleConflict) && h.Workspace.SavesIdle,
+                "the toggle's refusal after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Equal(TaskNoteEdited, h.Read("a.md"));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleConflict);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.True(review.LoadRequestIdForTests > loads, "the rows did not reload after the refusal");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The route is decided again at the toggle's turn. A tab that
+    /// opened on the note while it waited takes the toggle through its own
+    /// admitted route, or refuses with that route's sentence when it is
+    /// dirty. Either way the direct toggle does not run too.</summary>
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("dirty")]
+    public void ATablessReviewToggleWhoseNoteOpenedWhileItWaitedTakesTheOpenNoteRoute(string tab) => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-tab-opened-" + tab, ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            if (tab == "dirty")
+            {
+                opened.Text = TaskNote + "An unsaved line.\n";
+            }
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !opened.IsTaskToggleInFlight
+                    && h.Events.Any(e => tab == "dirty" ? e is A11yEvent.TaskToggleUnsaved : e is A11yEvent.TaskToggled),
+                "the toggle's turn on the tab that opened");
+            Assert.True(held.Result);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            if (tab == "dirty")
+            {
+                Assert.Equal(TaskNote, h.Read("a.md"));
+                _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleUnsaved);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled);
+            }
+            else
+            {
+                string written = h.Read("a.md");
+                Assert.Contains("- [x] the task", written, StringComparison.Ordinal);
+                Assert.Equal(written, opened.Text);
+                Assert.False(opened.IsExternallyStale);
+                Assert.False(opened.IsDirty);
+                _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+                Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The other direction: the direct toggle is held before its
+    /// core call when a tab opens on the note and saves. The save waits for
+    /// the toggle's publication. The tab holds the bytes from before the
+    /// toggle, so that publication marks it stale with the sentence it gets
+    /// today, and the one write is the toggle's.</summary>
+    [Fact]
+    public void ASaveStartedUnderATablessReviewToggleWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-tabless-toggle", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        var held = new HeldWork(hook => review.DirectToggleBeforeWriteForTests = hook);
+        try
+        {
+            review.ToggleTask(row);
+            h.PumpUntil(() => held.Entered, "premise: the toggle reaching its hold before its core call");
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(TaskNote, opened.Text);
+            Task<bool> save = opened.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the toggle");
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Events.Any(e => e is A11yEvent.TaskToggled) && h.Workspace.SavesIdle,
+                "the toggle and then the save");
+            Assert.True(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
+            Assert.True(
+                h.Events.FindIndex(e => e is A11yEvent.TaskToggled) < h.Events.FindIndex(e => e is A11yEvent.NoteSaved),
+                "the save spoke before the toggle it waited for");
+            Assert.True(opened.IsExternallyStale, "the tab that raced open was not told the disk moved");
+            _ = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(),
+                line => line.Text == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
+            Assert.Equal(TaskNote, opened.Text);
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ReleaseAndDrainTheReview(h, review);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A pin of the present behaviour, which is the spec's Design 6
+    /// and not a wanted order. A review toggle on a note with no tab waits
+    /// its turn. Meanwhile the note is opened in a tab, and a Bases cell
+    /// edit on it is asked, which queues behind the toggle. At its turn the
+    /// toggle finds the tab and hands itself to the tab's own admitted
+    /// route, which takes a new ticket behind the cell edit. So the later
+    /// request writes first, the tab's saved bytes move, and the toggle is
+    /// refused as stale at its own turn: the conflict is spoken once, the
+    /// task is not ticked, the rows reload and the chain is freed. Nothing
+    /// is lost in silence. A fix would run the tab's toggle inside the
+    /// review's ticket, so the earlier request kept its place.</summary>
+    [Fact]
+    public void ATablessReviewToggleReroutedThroughATabIsOvertakenByAWriteQueuedMeanwhileAndRefusesAloud() => RunSta(() =>
+    {
+        using var h = new Vault("toggle-rerouted-overtaken", ("a.md", TaskNote), ("Notes.base", NotesBase));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel task) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        string? onDiskAtTheRefusal = null;
+        int loadsAtTheRefusal = -1;
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.TaskToggleConflict)
+            {
+                onDiskAtTheRefusal = h.Read("a.md");
+                loadsAtTheRefusal = review.LoadRequestIdForTests;
+            }
+        };
+        try
+        {
+            review.ToggleTask(task);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(3, h.Workspace.SavesForTests.AdmittedForTests);
+            int loads = review.LoadRequestIdForTests;
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !opened.IsTaskToggleInFlight
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => e is A11yEvent.BasesCellSaved)
+                    && h.Events.Any(e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggled or A11yEvent.TaskToggleFailed),
+                "the cell edit and then the toggle's outcome");
+            Assert.True(held.Result);
+
+            // The later request wrote first, and whole.
+            string written = h.Read("a.md");
+            Assert.Contains("status: done", written, StringComparison.Ordinal);
+            Assert.NotNull(onDiskAtTheRefusal);
+            Assert.Contains("status: done", onDiskAtTheRefusal, StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+
+            // The earlier request, the toggle, wrote nothing and said so.
+            Assert.Contains("- [ ] the task", written, StringComparison.Ordinal);
+            Assert.DoesNotContain("- [x]", written, StringComparison.Ordinal);
+            Assert.Equal(written, onDiskAtTheRefusal);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleConflict);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled or A11yEvent.TaskToggleFailed);
+            // The rows' reload is asked when the cell write refreshes the tab,
+            // with the re-routed toggle's refresh armed: before the refusal,
+            // which only disarms it.
+            Assert.True(loadsAtTheRefusal > loads, "the rows' reload was not asked by the time the toggle was refused");
+
+            // The tab shows the written note, and the chain is free.
+            Assert.Equal(written, opened.Text);
+            Assert.False(opened.IsExternallyStale);
+            Assert.False(opened.IsDirty);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>The review's row for a.md's task, loaded, with no tab on the
+    /// note.</summary>
+    private static (TasksReviewViewModel Review, ReviewTaskRowViewModel Row) ReviewRow(Vault h)
+    {
+        TasksReviewViewModel review = h.Workspace.TasksReview;
+        review.EnsureLoaded();
+        h.PumpUntil(() => !review.IsLoading && review.Rows.Any(row => row.Path == "a.md"), "the review's rows");
+        ReviewTaskRowViewModel row = review.Rows.Single(candidate => candidate.Path == "a.md");
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+        h.Events.Clear();
+        return (review, row);
+    }
+
+    /// <summary>For a fact's <c>finally</c>: the admitted work ends, and then
+    /// the review's own workers (a reload a toggle's publication started)
+    /// end, before the vault is disposed. It asserts nothing.</summary>
+    private static void ReleaseAndDrainTheReview(Vault h, TasksReviewViewModel review)
+    {
+        h.ReleaseAndDrain();
+        Task drained = review.WhenAllWorkDrained();
+        _ = PumpedDispatcher.PumpUntil(() => drained.IsCompleted, TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>The deleted note's row, loaded, and the alerts the workspace
+    /// raises from here on.</summary>
+    private static (HistoryDeletedRow Row, ConcurrentQueue<string> Alerts) RecoverSetup(Vault h)
+    {
+        var alerts = new ConcurrentQueue<string>();
+        h.Workspace.HistoryAlert = (title, message) => alerts.Enqueue($"{title}: {message}");
+        h.Workspace.History.LoadDeletedFiles();
+        h.PumpUntil(
+            () => h.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"),
+            "the deleted files list");
+        HistoryDeletedRow row = h.Workspace.History.DeletedRows.Single(candidate => candidate.Path == "gone.md");
+        Assert.True(row.Recoverable, "premise: the deleted note is not recoverable");
+        h.Events.Clear();
+        return (row, alerts);
+    }
+
+    // ---- The exclusive creates (plan 47 CB-9a, #1889; CD5(c)) -----------------
+
+    /// <summary>The create class stays outside the save chain, and this is
+    /// why it may: an exclusive create at a path the reader or the namer
+    /// chose is its own check. Core refuses an occupied path, and a tab that
+    /// names the path and holds no hash saves by create too, so whichever of
+    /// the two lands second is refused and neither overwrites the other. One
+    /// row for each creator the shell calls outside the chain (the census
+    /// holds this list to them), in both orders.</summary>
+    [Theory]
+    [InlineData("CreateExclusiveReporting", false)]
+    [InlineData("CreateExclusiveReporting", true)]
+    [InlineData("RecoverDeletedFileAs", false)]
+    [InlineData("RecoverDeletedFileAs", true)]
+    [InlineData("CreateExclusiveBytes", false)]
+    [InlineData("CreateExclusiveBytes", true)]
+    public void AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther(string creator, bool saveFirst) => RunSta(() =>
+    {
+        const string Copy = "copy.md";
+        const string Imported = "imported bytes\n";
+        using Vault h = creator == "RecoverDeletedFileAs"
+            ? Vault.WithADeletedNote("create-class-deleted", "gone.md", Gone, background: false)
+            : Vault.Inline("create-class", ("a.md", "v0\n"));
+        // Restore As a version creates through CreateExclusiveReporting,
+        // Restore As a deleted file through RecoverDeletedFileAs, and an
+        // import through CreateExclusiveBytes, the session call made here.
+        HistoryVersionRow? version = creator == "CreateExclusiveReporting" ? AnOlderVersion(h) : null;
+        string created = creator switch
+        {
+            "CreateExclusiveReporting" => V1,
+            "RecoverDeletedFileAs" => Gone,
+            _ => Imported,
+        };
+        var answers = new List<(bool Ok, string? Refusal)>();
+        void Create()
+        {
+            switch (creator)
+            {
+                case "CreateExclusiveReporting":
+                    h.Workspace.CommitRestoreAsVersion(
+                        version!.ContentHashAfter, version.AbsoluteDate, Copy, (ok, refusal) => answers.Add((ok, refusal)));
+                    break;
+                case "RecoverDeletedFileAs":
+                    h.Workspace.CommitRestoreAsDeleted("gone.md", Copy, (ok, refusal) => answers.Add((ok, refusal)));
+                    break;
+                default:
+                    try
+                    {
+                        _ = h.Session.CreateExclusiveBytes(Copy, System.Text.Encoding.UTF8.GetBytes(Imported));
+                        answers.Add((true, null));
+                    }
+                    catch (VaultException.DestinationExists)
+                    {
+                        answers.Add((false, "A file already exists at copy.md."));
+                    }
+                    break;
+            }
+        }
+
+        WorkspaceTabViewModel ghost = h.OpenNow(Copy);
+        Assert.Null(ghost.SavedContentHash);
+        ghost.Text = Edit;
+        if (version is not null)
+        {
+            // The History panel followed the ghost tab when it opened; the
+            // version being restored is a.md's.
+            h.Workspace.History.NoteChanged("a.md");
+            Assert.Equal("a.md", h.Workspace.History.Path);
+        }
+        if (saveFirst)
+        {
+            Task<bool> first = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => first.IsCompleted && h.Workspace.SavesIdle, "the ghost tab's save");
+            Assert.True(first.Result);
+
+            Create();
+            (bool ok, string? refusal) = Assert.Single(answers);
+            Assert.False(ok, "the create overwrote the file the tab's save created");
+            Assert.StartsWith("A file already exists at", refusal, StringComparison.Ordinal);
+            Assert.Equal(Edit, h.Read(Copy));
+            return;
+        }
+
+        var held = new HeldWork(hook => ghost.SaveWriteHookForTests = hook);
+        try
+        {
+            Task<bool> save = ghost.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the ghost tab's save reaching its hold before its write");
+            h.Events.Clear();
+
+            Create();
+            (bool ok, string? refusal) = Assert.Single(answers);
+            Assert.True(ok, $"premise: the create was refused: {refusal}");
+            Assert.Equal(created, h.Read(Copy));
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the save after the create");
+            Assert.False(save.Result, "the ghost tab's save overwrote the created file");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveBlocked);
+            Assert.Equal(created, h.Read(Copy));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+            ghost.SaveWriteHookForTests = null;
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>a.md with two saved versions, v1 then v2 on disk, its tab
+    /// clean and the History panel listing it; v1's row. As
+    /// <see cref="RestoreSetup"/>, waiting on conditions only.</summary>
+    private static HistoryVersionRow AnOlderVersion(Vault h)
+    {
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        tab.Text = V1;
+        SaveNow(h, tab);
+        string v1 = tab.SavedContentHash!;
+        tab.Text = V2;
+        SaveNow(h, tab);
+        h.Workspace.History.NoteChanged("a.md");
+        h.PumpUntil(() => Version(h, v1) is not null, "the history rows loading");
+        return Version(h, v1)!;
+    }
+
+    // ---- Faults, teardown and the settle for the three routes (CB-9a) ---------
+    //
+    // WorkspaceSaveCoordinator.SettlePumping has no bound, so one ticket that
+    // never ends hangs Close Vault and every later save of the note. Each
+    // fact here drives one way an admitted route could have left its ticket
+    // open, and shows the note's chain idle afterwards.
+
+    /// <summary>A fault outside VaultException on the route's worker (a core
+    /// panic) is the route's failed outcome, given once, and the operation
+    /// ends: the chain goes idle and a later operation on the path runs.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle before its write")]
+    [InlineData("toggle after its write")]
+    public void AnAdmittedSinglePathRouteWhoseWorkerFaultsEndsAndFreesTheNotesChain(string route) => RunSta(() =>
+    {
+        const string Fault = "the route's core call panicked (test seam)";
+        using var r = new SinglePathRoute(route, "route-faults");
+        Action thrower = () => throw new InvalidOperationException(Fault);
+        if (route == "toggle after its write")
+        {
+            r.H.Workspace.TasksReview.DirectToggleFaultForTests = thrower;
+        }
+        else
+        {
+            r.SetSeam(thrower);
+        }
+        try
+        {
+            int before = r.H.Workspace.SavesForTests.AdmittedForTests;
+            r.Ask();
+            Assert.Equal(before + 1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => r.FailureGiven && r.H.Workspace.SavesIdle, "the faulted route ending");
+            r.AssertFailedOnce(Fault);
+            if (route.StartsWith("toggle", StringComparison.Ordinal))
+            {
+                // The seam stands inside the body's try, after the repair
+                // lease is taken, so the body's own arms settled the lease:
+                // none is left held, whatever repair is pending.
+                _ = r.H.Workspace.TaskIndexRepairsForTests.TryBeginCleanQuery(out _, out bool onlyALeaseBars);
+                Assert.False(onlyALeaseBars, "the toggle's repair lease was left held");
+            }
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.H.Workspace.TasksReview.DirectToggleFaultForTests = null;
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The same when the worker faults outside its own catch (the
+    /// catch leaves out of memory, stack overflow and access violation
+    /// alone), so no publication was posted: the route still fails aloud,
+    /// once, writes nothing, and its operation ends.</summary>
+    [Theory]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteWhoseWorkerFaultsOutsideItsCatchStillEnds(string route) => RunSta(() =>
+    {
+        const string Fault = "a fault the worker's catch does not take (test seam)";
+        using var r = new SinglePathRoute(route, "route-faults-outside-catch");
+        r.SetSeam(() => throw new OutOfMemoryException(Fault));
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => r.FailureGiven && r.H.Workspace.SavesIdle, "the route ending after its worker faulted");
+            r.AssertFailedOnce(Fault);
+            Assert.False(r.Written);
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The recover's backstop. Its worker faults outside its catch
+    /// (out of memory, which the catch leaves alone), so its own publication
+    /// was never posted. The row is still answered, once, with "nothing
+    /// happened"; the recover fails aloud with the existing alert; nothing is
+    /// created; and the path's chain is free. The second row makes that
+    /// alert throw: the row is answered all the same, and the operation
+    /// still ends.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARecoverWhoseWorkerFaultsOutsideItsCatchStillEndsAndAnswersItsRow(bool theAlertThrows) => RunSta(() =>
+    {
+        const string Fault = "a fault the worker's catch does not take (test seam)";
+        using var r = new SinglePathRoute("recover", "recover-faults-outside-catch");
+        if (theAlertThrows)
+        {
+            r.H.Workspace.HistoryAlert = (_, _) =>
+                throw new System.Runtime.InteropServices.COMException("the alert failed (test seam)");
+        }
+        r.SetSeam(() => throw new OutOfMemoryException(Fault));
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => !r.Answers.IsEmpty && r.H.Workspace.SavesIdle, "the recover ending after its worker faulted");
+            PumpedDispatcher.Drain();
+            Assert.Equal([(false, false)], r.Answers);
+            if (!theAlertThrows)
+            {
+                Assert.Equal(["Can't restore: " + Fault], r.Alerts);
+            }
+            Assert.False(r.Written);
+            Assert.DoesNotContain(r.H.Events, e => e is A11yEvent.RestoredFile);
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The red team's F2. In the shell the "Can't restore" alert is
+    /// a modal box. A close that arrives inside its loop settles the saves
+    /// from a frame nested above the box, and that settle returns only when
+    /// every ticket has ended. So a failed recover ends its operation
+    /// first, then shows its alert, then answers its row: nothing was
+    /// written, and a save queued behind may start once the failure is
+    /// known. The alert here stands for that close: it pumps until the
+    /// saves are idle, with a bound, and then settles them.</summary>
+    [Theory]
+    [InlineData("its worker's catch takes the fault")]
+    [InlineData("its worker faults outside its catch")]
+    [InlineData("no history is left")]
+    public void ARecoverThatFailsEndsItsOperationBeforeItsAlert(string how) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("recover", "recover-ends-before-alert");
+        int alerts = 0;
+        bool idleInsideTheAlert = false;
+        bool settledInsideTheAlert = false;
+        r.H.Workspace.HistoryAlert = (_, _) =>
+        {
+            alerts++;
+            idleInsideTheAlert = PumpedDispatcher.PumpUntil(() => r.H.Workspace.SavesIdle, TimeSpan.FromSeconds(10));
+            settledInsideTheAlert = idleInsideTheAlert && r.H.Workspace.SettleSaves();
+        };
+        if (how == "its worker's catch takes the fault")
+        {
+            r.SetSeam(() => throw new InvalidOperationException("the create's core call panicked (test seam)"));
+        }
+        else if (how == "its worker faults outside its catch")
+        {
+            r.SetSeam(() => throw new OutOfMemoryException("a fault the worker's catch does not take (test seam)"));
+        }
+        int asked = how == "no history is left" ? 2 : 1;
+        try
+        {
+            for (int ask = 0; ask < asked; ask++)
+            {
+                r.Ask();
+            }
+            Assert.Equal(asked, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(
+                () => alerts == 1 && r.Answers.Count == asked && r.H.Workspace.SavesIdle,
+                "the failed recover's alert and answer");
+            Assert.True(idleInsideTheAlert, "the recover's operation was still open while its alert stood");
+            Assert.True(settledInsideTheAlert, "a settle inside the alert did not return true");
+            Assert.Equal((false, false), r.Answers.Last());
+            PumpedDispatcher.Drain();
+            Assert.Equal(1, alerts);
+            Assert.Equal(asked, r.Answers.Count);
+        }
+        finally
+        {
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>The red team's F5. In background mode a recover whose
+    /// create faults is answered by its catch or, were the catch narrow, by
+    /// its backstop, and the two look alike. Run inline the worker is no
+    /// task, so only the worker's own wide catch can answer the row: a
+    /// fault outside VaultException is a failed recover, with the alert and
+    /// the row's answer, and nothing is created.</summary>
+    [Fact]
+    public void ARecoverRunInlineWhoseCreateFaultsIsAnsweredByItsOwnCatch() => RunSta(() =>
+    {
+        const string Fault = "the create's core call panicked (test seam)";
+        using var h = Vault.WithADeletedNote("recover-inline-fault", "gone.md", Gone, background: false);
+        (HistoryDeletedRow row, ConcurrentQueue<string> alerts) = RecoverSetup(h);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        h.Workspace.HistoryCreateHookForTests = () => throw new InvalidOperationException(Fault);
+        try
+        {
+            h.Workspace.RecoverDeletedFile(row, (ok, collision) => answers.Enqueue((ok, collision)));
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the inline recover ending");
+            Assert.Equal([(false, false)], answers);
+            Assert.Equal(["Can't restore: " + Fault], alerts);
+            Assert.False(File.Exists(Path.Combine(h.Root, "gone.md")));
+        }
+        finally
+        {
+            h.Workspace.HistoryCreateHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Two recovers of one path, the second queued behind the
+    /// first. The first creates the file and drops the deleted file's
+    /// history, so core answers the second that no such history is left: the
+    /// existing "Can't restore" alert, the row answered that nothing
+    /// happened, and the file written once.</summary>
+    [Fact]
+    public void ARecoverQueuedBehindAnotherRecoverOfItsPathIsToldNoHistoryIsLeft() => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("recover", "recover-behind-recover");
+        var held = new HeldWork(r.SetSeam);
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the first recover reaching its hold before its create");
+            r.Ask();
+            Assert.Equal(2, r.H.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Empty(r.Answers);
+
+            held.Release();
+            r.H.PumpUntil(() => r.Answers.Count == 2 && r.H.Workspace.SavesIdle, "both recovers answering");
+            Assert.Equal([(true, false), (false, false)], r.Answers);
+            _ = Assert.Single(r.H.Events, e => e is A11yEvent.RestoredFile);
+            Assert.StartsWith("Can't restore: ", Assert.Single(r.Alerts), StringComparison.Ordinal);
+            Assert.Equal(Gone, r.H.Read("gone.md"));
+        }
+        finally
+        {
+            r.H.ReleaseAndDrain(held);
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A tab that raced open can have a toggle of its own in flight
+    /// when the tabless toggle's turn comes. The route decided again then
+    /// refuses as busy, with the tab route's existing sentence, heard after
+    /// the wait and not at the press; the direct toggle does not run, and
+    /// the tab's own toggle is the one write.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseNoteOpenedWithAToggleInFlightHearsBusyAndWritesNothing() => RunSta(() =>
+    {
+        using var h = new Vault("tabless-toggle-tab-busy", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(TabTaskToggle.Started, opened.ToggleTask(h.Session.TasksForFile("a.md")[0], h.Events.Add));
+            Assert.Equal(3, h.Workspace.SavesForTests.AdmittedForTests);
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && !opened.IsTaskToggleInFlight && h.Events.Any(e => e is A11yEvent.TaskToggled),
+                "the tabless toggle's refusal and then the tab's own toggle");
+            Assert.True(held.Result);
+            _ = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(),
+                line => line.Text == "A task update is already in progress.");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggled);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            Assert.Contains("- [x] the task", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>A publication that throws (the recover's row callback; the
+    /// announcer under the cell write's failure and under the toggle's
+    /// success) still ends the operation.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteEndsEvenWhenItsPublicationThrows(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-publication-throws");
+        bool thrown = false;
+        void ThrowOnce()
+        {
+            if (!thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the publication failed (test seam)");
+            }
+        }
+        switch (route)
+        {
+            case "recover":
+                r.WhenAnswered = ThrowOnce;
+                break;
+            case "cell write":
+                r.SetSeam(() => throw new InvalidOperationException("the cell write failed (test seam)"));
+                r.H.BeforeAnnounce = spoken =>
+                {
+                    if (spoken is A11yEvent.BasesCellEditFailed)
+                    {
+                        ThrowOnce();
+                    }
+                };
+                break;
+            default:
+                r.H.BeforeAnnounce = spoken =>
+                {
+                    if (spoken is A11yEvent.TaskToggled)
+                    {
+                        ThrowOnce();
+                    }
+                };
+                break;
+        }
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.PumpUntil(() => thrown && r.H.Workspace.SavesIdle, "the route ending after its publication threw");
+            Assert.False(r.H.Workspace.PropertyWriteInFlightFor(r.Path), "the lease was not released");
+            r.AssertALaterOperationRuns();
+        }
+        finally
+        {
+            r.H.BeforeAnnounce = null;
+            r.SetSeam(null);
+            r.Drain();
+        }
+    });
+
+    /// <summary>Codex round 1 (C1), for the class: a sentence that throws in
+    /// an admitted route's publication skips no state step of it. Here the
+    /// recover's success sentence is spoken by an announcer that throws. The
+    /// clean tab on the path is still reloaded, inside the ticket, so the
+    /// save queued behind the recover runs against the recovered document;
+    /// the Deleted list is still reloaded; the row is still answered that
+    /// the file is back, once; and the note's chain is freed.</summary>
+    [Fact]
+    public void ARecoverWhoseSuccessSentenceThrowsStillReloadsItsTabAndAnswersItsRow() => RunSta(() =>
+    {
+        using var v = new OpenedVault("recover-sentence-throws", "gone.md", Gone);
+        v.Workspace.OpenPath("gone.md", WorkspaceOpenTarget.NewTab);
+        v.Workspace.InvalidatePath("gone.md");
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = v.Workspace.Groups.SelectMany(group => group.Tabs).Single(candidate => candidate.Path == "gone.md");
+        Assert.True(tab.IsMissingFromDisk, "premise: the tab on the deleted path does not report its file missing");
+        Assert.False(tab.IsDirty);
+        int document = tab.ItemIdentity;
+        v.Workspace.History.LoadDeletedFiles();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(30)),
+            "the deleted files list never loaded");
+        HistoryDeletedRow deleted = v.Workspace.History.DeletedRows.Single(row => row.Path == "gone.md");
+        bool thrown = false;
+        v.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.RestoredFile && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        var held = new HeldWork(hook => v.Workspace.HistoryCreateHookForTests = hook);
+        var answers = new ConcurrentQueue<(bool Ok, bool Collision)>();
+        try
+        {
+            v.Workspace.RecoverDeletedFile(deleted, (ok, collision) => answers.Enqueue((ok, collision)));
+            Assert.True(PumpedDispatcher.PumpUntil(() => held.Entered, TimeSpan.FromSeconds(30)), "premise: the recover never reached its hold");
+
+            string? textAtTheSave = null;
+            int documentAtTheSave = -1;
+            Task<bool> save = tab.SaveAsync(onSaved: () =>
+            {
+                textAtTheSave = tab.Text;
+                documentAtTheSave = tab.ItemIdentity;
+            });
+            Assert.Equal(2, v.Workspace.SavesForTests.AdmittedForTests);
+
+            held.Release();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => thrown && save.IsCompleted && v.Workspace.SavesIdle, TimeSpan.FromSeconds(30)),
+                "the recover whose sentence threw, and then the save, never ended");
+            bool listReloaded = PumpedDispatcher.PumpUntil(
+                () => !v.Workspace.History.DeletedRows.Any(row => row.Path == "gone.md"), TimeSpan.FromSeconds(10));
+            AssertNoStepSkipped(
+                (textAtTheSave == Gone && documentAtTheSave != document, "the clean tab's reload before the queued save ran"),
+                (listReloaded, "the Deleted list's reload"),
+                (answers.SequenceEqual([(true, false)]), "the row's one answer that the file is back"));
+            Assert.True(save.Result);
+
+            bool ran = false;
+            Task<bool> later = v.Workspace.SavesForTests.Admit("gone.md", _ =>
+            {
+                ran = true;
+                return Task.CompletedTask;
+            });
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => later.IsCompleted, TimeSpan.FromSeconds(30)),
+                "an operation admitted after the recover never ran");
+            Assert.True(ran && later.Result, "the note's chain was still held");
+        }
+        finally
+        {
+            v.BeforeAnnounce = null;
+            held.Release();
+            _ = PumpedDispatcher.PumpUntil(() => v.Workspace.SavesIdle, TimeSpan.FromSeconds(30));
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The class again, for a Bases cell write on either route. A
+    /// tab on the note is dirty by the time the write is published, so the
+    /// publication tells it the disk moved, and that sentence is spoken by
+    /// an announcer that throws. The base's refresh still runs (it carries
+    /// the cell's own sentence), the lease is released, and the note's chain
+    /// is freed.</summary>
+    [Theory]
+    [InlineData("no tab at the request: one opened while the write ran")]
+    [InlineData("a tab at the request")]
+    public void ABasesCellWriteStillRefreshesItsBaseWhenTheSentenceToADirtyTabThrows(string route) => RunSta(() =>
+    {
+        using var h = new Vault("cell-stale-sentence-throws", ("a.md", Note), ("Notes.base", NotesBase));
+        WorkspaceTabViewModel? opened = route == "a tab at the request" ? h.OpenNow("a.md") : null;
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+        WorkspaceTabViewModel? atTheRequest = opened;
+        var held = new HeldWork(hook =>
+        {
+            if (atTheRequest is not null)
+            {
+                atTheRequest.PropertyWriteHookForTests = hook;
+            }
+            else
+            {
+                h.Workspace.BasesTablessWriteHookForTests = hook;
+            }
+        });
+        bool thrown = false;
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.HostComposed line
+                && line.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal)
+                && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+            opened ??= h.OpenNow("a.md");
+            opened.Text = Note + "An unsaved line.\n";
+            Assert.True(opened.IsDirty, "premise: the tab is not dirty");
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(() => thrown && h.Workspace.SavesIdle, "the cell write ending after its sentence threw");
+            bool baseRefreshed = PumpedDispatcher.PumpUntil(
+                () => h.Events.Any(e => e is A11yEvent.BasesCellSaved), TimeSpan.FromSeconds(10));
+            AssertNoStepSkipped(
+                (opened.IsExternallyStale, "the dirty tab's stale flag"),
+                (baseRefreshed, "the base's refresh, which carries the cell's sentence"),
+                (!h.Workspace.PropertyWriteInFlightFor("a.md"), "the lease's release"));
+            Assert.Contains("status: done", h.Read("a.md"), StringComparison.Ordinal);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The class again, for a review toggle on a note with no tab:
+    /// each sentence its publication speaks, spoken by an announcer that
+    /// throws. The steps beside the sentence still run: the rows reload; a
+    /// write that landed is still told to the workspace; after a failure
+    /// that left the index behind the file, the repair still runs; and when
+    /// the sentence that throws is the one to a tab that opened while the
+    /// toggle ran, the toggle's own sentence is still spoken.</summary>
+    [Theory]
+    [InlineData("its success sentence")]
+    [InlineData("the sentence to a tab that opened while it ran")]
+    [InlineData("its conflict sentence")]
+    [InlineData("its failure sentence, after the write landed")]
+    public void ATablessReviewToggleStillRunsItsStateStepsWhenASentenceThrows(string sentence) => RunSta(() =>
+    {
+        using var h = new Vault("toggle-sentence-throws", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        TaskIndexRepairCoordinator repairs = h.Workspace.TaskIndexRepairsForTests;
+        int landed = 0;
+        Action<string, string>? toTheWorkspace = review.DiskWriteLanded;
+        review.DiskWriteLanded = (path, hash) =>
+        {
+            landed++;
+            toTheWorkspace?.Invoke(path, hash);
+        };
+        bool thrown = false;
+        h.BeforeAnnounce = spoken =>
+        {
+            bool theSentence = sentence switch
+            {
+                "its success sentence" => spoken is A11yEvent.TaskToggled,
+                "the sentence to a tab that opened while it ran" => spoken is A11yEvent.HostComposed line
+                    && line.Text.StartsWith("Task toggled on disk", StringComparison.Ordinal),
+                "its conflict sentence" => spoken is A11yEvent.TaskToggleConflict,
+                _ => spoken is A11yEvent.TaskToggleFailed,
+            };
+            if (theSentence && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        var held = new HeldWork(hook => review.DirectToggleBeforeWriteForTests = hook);
+        try
+        {
+            if (sentence == "its failure sentence, after the write landed")
+            {
+                review.DirectToggleFaultForTests = () =>
+                    throw new InvalidOperationException("the toggle failed after its write (test seam)");
+            }
+            review.ToggleTask(row);
+            h.PumpUntil(() => held.Entered, "premise: the toggle reaching its hold before its core call");
+            WorkspaceTabViewModel? opened = sentence == "the sentence to a tab that opened while it ran" ? h.OpenNow("a.md") : null;
+            if (sentence == "its conflict sentence")
+            {
+                _ = h.Session.SaveText("a.md", TaskNoteEdited, expectedContentHash: null);
+            }
+            int loads = review.LoadRequestIdForTests;
+            h.Events.Clear();
+
+            held.Release();
+            h.PumpUntil(() => thrown && h.Workspace.SavesIdle, "the toggle ending after its sentence threw");
+            bool rowsReloaded = review.LoadRequestIdForTests > loads;
+            switch (sentence)
+            {
+                case "its success sentence":
+                    AssertNoStepSkipped(
+                        (landed == 1, "the workspace told that the write landed"),
+                        (rowsReloaded, "the rows' reload"));
+                    break;
+                case "the sentence to a tab that opened while it ran":
+                    AssertNoStepSkipped(
+                        (opened!.IsExternallyStale, "the stale flag of the tab that opened"),
+                        (h.Events.Count(e => e is A11yEvent.TaskToggled) == 1, "the toggle's own sentence"),
+                        (rowsReloaded, "the rows' reload"));
+                    break;
+                case "its conflict sentence":
+                    AssertNoStepSkipped((rowsReloaded, "the rows' reload"));
+                    Assert.Equal(TaskNoteEdited, h.Read("a.md"));
+                    break;
+                default:
+                    AssertNoStepSkipped(
+                        (!repairs.HasPendingFor("a.md"), "the task index's repair"),
+                        (landed == 1, "the workspace told that the write landed"),
+                        (rowsReloaded, "the rows' reload"));
+                    break;
+            }
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            review.DirectToggleFaultForTests = null;
+            h.ReleaseAndDrain(held);
+            ReleaseAndDrainTheReview(h, review);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The class once more, at the toggle's turn. A tab opened on
+    /// the note while the toggle waited, over bytes the row was not read
+    /// from, so the open-note route refuses as stale: it speaks the conflict
+    /// and then answers, and the rows reload on its answer. That sentence
+    /// is spoken by an announcer that throws, so the answer never comes.
+    /// The rows still reload, the operation ends, and nothing is
+    /// written.</summary>
+    [Fact]
+    public void ATablessReviewToggleRefusedAsStaleAtItsTurnStillReloadsItsRowsWhenTheSentenceThrows() => RunSta(() =>
+    {
+        using var h = new Vault("toggle-stale-at-turn-sentence-throws", ("a.md", TaskNote));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel row) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        bool thrown = false;
+        try
+        {
+            review.ToggleTask(row);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            _ = h.Session.SaveText("a.md", TaskNoteEdited, expectedContentHash: null);
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            Assert.Equal(TaskNoteEdited, opened.Text);
+            int loads = review.LoadRequestIdForTests;
+            h.BeforeAnnounce = spoken =>
+            {
+                if (spoken is A11yEvent.TaskToggleConflict && !thrown)
+                {
+                    thrown = true;
+                    throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+                }
+            };
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(() => thrown && h.Workspace.SavesIdle, "the toggle's refusal ending after its sentence threw");
+            Assert.True(held.Result);
+            AssertNoStepSkipped((review.LoadRequestIdForTests > loads, "the rows' reload"));
+            Assert.Equal(0, Volatile.Read(ref direct));
+            Assert.Equal(TaskNoteEdited, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
+    /// <summary>Each state step of a publication whose sentence threw, with
+    /// whether it ran: the failure names every one that was skipped.</summary>
+    private static void AssertNoStepSkipped(params (bool Ran, string Step)[] steps)
+    {
+        string[] skipped = [.. steps.Where(step => !step.Ran).Select(step => step.Step)];
+        Assert.True(skipped.Length == 0, "the sentence that threw skipped: " + string.Join("; ", skipped));
+    }
+
+    /// <summary>The note's chain is free: an operation admitted now runs.</summary>
+    private static void AssertALaterOperationRuns(Vault h, string path)
+    {
+        bool ran = false;
+        Task<bool> later = h.Workspace.SavesForTests.Admit(path, _ =>
+        {
+            ran = true;
+            return Task.CompletedTask;
+        });
+        h.PumpUntil(() => later.IsCompleted, "an operation admitted after the route ended");
+        Assert.True(ran && later.Result, "the note's chain was still held");
+    }
+
+    /// <summary>The review's scheduler can skip a body it had queued, when
+    /// it shuts down first. The toggle's worker then ends having posted no
+    /// publication, and the operation still ends: nothing written, nothing
+    /// spoken.</summary>
+    [Fact]
+    public void ATablessReviewToggleWhoseBodyAShutdownSkipsStillEndsItsOperation() => RunSta(() =>
+    {
+        using var r = new SinglePathRoute("toggle", "toggle-body-skipped");
+        TasksReviewViewModel review = r.H.Workspace.TasksReview;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        review.GateWorkOn(gate.Task);
+        try
+        {
+            r.Ask();
+            Assert.Equal(1, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            review.Shutdown();
+            gate.SetResult();
+            r.H.PumpUntil(() => r.H.Workspace.SavesIdle, "the toggle's operation ending after its body was skipped");
+            Assert.False(r.Written);
+            r.AssertNothingSpoken();
+        }
+        finally
+        {
+            _ = gate.TrySetResult();
+            r.Drain();
+        }
+    });
+
+    /// <summary>Contract 35 A-1 for the three routes: each worker is among
+    /// the workers the save coordinator joins, without a bound, before the
+    /// session goes. The hold is released inside the join, so the join
+    /// returns only when the write has landed.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void TeardownJoinsAnAdmittedRecoverAndTheTablessWrites(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-teardown-join");
+        var held = new HeldWork(r.SetSeam);
+        int trackedAtJoin = -1;
+        r.H.Workspace.SavesForTests.BeforeJoinForTests = () =>
+        {
+            trackedAtJoin = r.H.Workspace.SavesForTests.TrackedWorkersForTests;
+            held.Release();
+        };
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the route's worker reaching its hold");
+
+            r.H.DisposeWorkspace();
+            Assert.Equal(1, trackedAtJoin);
+            Assert.True(r.Written, "teardown returned before the route's write landed");
+        }
+        finally
+        {
+            held.Release();
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Close Vault's first step: settling the saves waits for an
+    /// admitted route, and returns once its outcome has been published. The
+    /// release is queued on the dispatcher, so it can only run inside the
+    /// settle's own pumping.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void SettlingSavesWaitsForAnAdmittedSinglePathRouteAndReturns(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-settle");
+        var held = new HeldWork(r.SetSeam);
+        try
+        {
+            r.Ask();
+            r.H.PumpUntil(() => held.Entered, "premise: the route's worker reaching its hold");
+
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(held.Release));
+            Assert.True(r.H.Workspace.SettleSaves(), "the settle did not return true");
+            Assert.True(r.Succeeded, "the settle returned before the route's outcome was published");
+            Assert.True(r.H.Workspace.SavesIdle);
+        }
+        finally
+        {
+            held.Release();
+            r.Drain();
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>A route still waiting its turn when the workspace is torn
+    /// down never runs: nothing is written or spoken, the cell write's lease
+    /// is released, and the recover's row is answered that nothing
+    /// happened.</summary>
+    [Theory]
+    [InlineData("recover")]
+    [InlineData("cell write")]
+    [InlineData("toggle")]
+    public void AnAdmittedSinglePathRouteStillWaitingAtTeardownEndsUnwritten(string route) => RunSta(() =>
+    {
+        using var r = new SinglePathRoute(route, "route-waiting-at-teardown");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = r.H.Workspace.SavesForTests.Admit(r.Path, _ => ahead.Task);
+        try
+        {
+            r.Ask();
+            Assert.Equal(2, r.H.Workspace.SavesForTests.AdmittedForTests);
+
+            r.H.DisposeWorkspace();
+            ahead.SetResult();
+            r.H.PumpUntil(
+                () => r.H.Workspace.SavesForTests.IsIdle
+                    && !r.H.Workspace.PropertyWriteInFlightFor(r.Path)
+                    && (route != "recover" || !r.Answers.IsEmpty),
+                "the queued route ending after teardown");
+            Assert.True(held.Result);
+            Assert.False(r.Written);
+            r.AssertNothingSpoken();
+            if (route == "recover")
+            {
+                Assert.Equal([(false, false)], r.Answers);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            r.Drain();
+        }
+    });
+
+    /// <summary>One of the three routes this chunk admits, in a vault of its
+    /// own with no tab on its note, ready to be asked once: "recover", "cell
+    /// write" or "toggle" (the route is its name's first word).</summary>
+    private sealed class SinglePathRoute : IDisposable
+    {
+        private readonly string _kind;
+        private readonly HistoryDeletedRow? _deleted;
+        private readonly BaseDocumentViewModel? _document;
+        private readonly BasesRow? _row;
+        private readonly BasesColumn? _column;
+        private readonly ReviewTaskRowViewModel? _task;
+
+        public SinglePathRoute(string route, string label)
+        {
+            _kind = route.Split(' ')[0];
+            switch (_kind)
+            {
+                case "recover":
+                    H = Vault.WithADeletedNote(label + "-recover", "gone.md", Gone);
+                    Path = "gone.md";
+                    (_deleted, Alerts) = RecoverSetup(H);
+                    break;
+                case "cell":
+                    H = new Vault(label + "-cell", ("a.md", Note), ("Notes.base", NotesBase));
+                    Path = "a.md";
+                    (_document, _row, _column) = TablessStatusCell(H);
+                    break;
+                default:
+                    H = new Vault(label + "-toggle", ("a.md", TaskNote));
+                    Path = "a.md";
+                    (_, _task) = ReviewRow(H);
+                    break;
+            }
+        }
+
+        public Vault H { get; }
+
+        public string Path { get; }
+
+        public ConcurrentQueue<string> Alerts { get; } = new();
+
+        /// <summary>The recover's row answers.</summary>
+        public ConcurrentQueue<(bool Ok, bool Collision)> Answers { get; } = new();
+
+        /// <summary>Runs inside the recover's row callback, after the answer
+        /// is recorded: a fact makes the callback throw.</summary>
+        public Action? WhenAnswered { get; set; }
+
+        public void Ask()
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    H.Workspace.RecoverDeletedFile(_deleted!, (ok, collision) =>
+                    {
+                        Answers.Enqueue((ok, collision));
+                        WhenAnswered?.Invoke();
+                    });
+                    break;
+                case "cell":
+                    _document!.ApplyPropertyEdit!(_row!, _column!, new PropertyValue.Text("done"));
+                    break;
+                default:
+                    H.Workspace.TasksReview.ToggleTask(_task!);
+                    break;
+            }
+        }
+
+        /// <summary>The seam on the route's worker, before its core call.</summary>
+        public void SetSeam(Action? hook)
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    H.Workspace.HistoryCreateHookForTests = hook;
+                    break;
+                case "cell":
+                    H.Workspace.BasesTablessWriteHookForTests = hook;
+                    break;
+                default:
+                    H.Workspace.TasksReview.DirectToggleBeforeWriteForTests = hook;
+                    break;
+            }
+        }
+
+        public bool Written => _kind switch
+        {
+            "recover" => File.Exists(System.IO.Path.Combine(H.Root, Path)),
+            "cell" => H.Read(Path).Contains("status: done", StringComparison.Ordinal),
+            _ => H.Read(Path).Contains("- [x] the task", StringComparison.Ordinal),
+        };
+
+        /// <summary>The route's outcome on success, published.</summary>
+        public bool Succeeded => _kind switch
+        {
+            "recover" => Answers.Contains((true, false)) && H.Events.Any(e => e is A11yEvent.RestoredFile),
+            "cell" => Written && !H.Workspace.PropertyWriteInFlightFor(Path),
+            _ => H.Events.Any(e => e is A11yEvent.TaskToggled),
+        };
+
+        public bool FailureGiven => _kind switch
+        {
+            "recover" => !Alerts.IsEmpty && !Answers.IsEmpty,
+            "cell" => H.Events.Any(e => e is A11yEvent.BasesCellEditFailed) && !H.Workspace.PropertyWriteInFlightFor(Path),
+            _ => H.Events.Any(e => e is A11yEvent.TaskToggleFailed),
+        };
+
+        /// <summary>The route's existing failure, given once.</summary>
+        public void AssertFailedOnce(string message)
+        {
+            switch (_kind)
+            {
+                case "recover":
+                    Assert.Equal(["Can't restore: " + message], Alerts);
+                    Assert.Equal([(false, false)], Answers);
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.RestoredFile);
+                    break;
+                case "cell":
+                    _ = Assert.Single(H.Events, e => e is A11yEvent.BasesCellEditFailed);
+                    Assert.False(H.Workspace.PropertyWriteInFlightFor(Path), "the lease was not released");
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.BasesCellSaved);
+                    break;
+                default:
+                    _ = Assert.Single(H.Events, e => e is A11yEvent.TaskToggleFailed);
+                    Assert.DoesNotContain(H.Events, e => e is A11yEvent.TaskToggled);
+                    break;
+            }
+        }
+
+        public void AssertNothingSpoken()
+        {
+            Assert.Empty(Alerts);
+            Assert.DoesNotContain(H.Events, e => e is A11yEvent.RestoredFile
+                or A11yEvent.BasesCellSaved or A11yEvent.BasesCellCleared or A11yEvent.BasesCellEditFailed
+                or A11yEvent.TaskToggled or A11yEvent.TaskToggleConflict or A11yEvent.TaskToggleFailed);
+        }
+
+        /// <summary>The note's chain is free: an operation admitted now runs.</summary>
+        public void AssertALaterOperationRuns()
+        {
+            bool ran = false;
+            Task<bool> later = H.Workspace.SavesForTests.Admit(Path, _ =>
+            {
+                ran = true;
+                return Task.CompletedTask;
+            });
+            H.PumpUntil(() => later.IsCompleted, "an operation admitted after the route ended");
+            Assert.True(ran && later.Result, "the note's chain was still held");
+        }
+
+        /// <summary>For a fact's <c>finally</c>: everything admitted ends and
+        /// the review's own workers end, before the vault is disposed.</summary>
+        public void Drain() => ReleaseAndDrainTheReview(H, H.Workspace.TasksReview);
+
+        public void Dispose() => H.Dispose();
+    }
+
     // ---- Teardown -------------------------------------------------------------
 
     /// <summary>Contract 35 A-1: teardown joins an admitted restore's worker
@@ -1332,8 +3484,40 @@ public sealed class SaveChainAdmissionTests
     {
         private readonly FixtureVault _fixture;
         private readonly VaultSession _session;
+        private bool _workspaceDisposed;
 
         public Vault(string label, params (string Path, string Text)[] files)
+            : this(label, background: true, earlierSession: null, files)
+        {
+        }
+
+        /// <summary>A vault whose note at <paramref name="path"/> was saved
+        /// and then deleted in an earlier session. Core builds the deleted
+        /// list when a session opens, so the note is listed, and can be
+        /// recovered, in this one (the two-session shape of
+        /// <c>HistoryPanelTests</c>).</summary>
+        public static Vault WithADeletedNote(
+            string label, string path, string text, bool background = true, params (string Path, string Text)[] files) =>
+            new(
+                label,
+                background,
+                earlier =>
+                {
+                    _ = earlier.SaveText(path, text, expectedContentHash: null);
+                    // The delete goes through the system trash, whose COM
+                    // apartment is a thread of its own.
+                    StaThread.Run(() => earlier.DeleteFile(path));
+                },
+                files);
+
+        /// <summary>A vault whose workspace runs its interaction work inline
+        /// (a History create and its publication, on the calling thread). A
+        /// tab's save still writes on a worker and publishes on the pumped
+        /// dispatcher, so it can be held.</summary>
+        public static Vault Inline(string label, params (string Path, string Text)[] files) =>
+            new(label, background: false, earlierSession: null, files);
+
+        private Vault(string label, bool background, Action<VaultSession>? earlierSession, (string Path, string Text)[] files)
         {
             _fixture = FixtureVault.Create(0, label);
             foreach ((string path, string text) in files)
@@ -1342,14 +3526,33 @@ public sealed class SaveChainAdmissionTests
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
                 File.WriteAllText(full, text);
             }
+            if (earlierSession is not null)
+            {
+                using VaultSession earlier = VaultSession.OpenFilesystem(_fixture.Root);
+                using (var scan = new CancelToken())
+                {
+                    earlier.ScanInitial(scan);
+                }
+                earlierSession(earlier);
+            }
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {
                 _session.ScanInitial(cancel);
             }
             Workspace = new WorkspaceViewModel(
-                _session, _fixture.Root, () => [], Events.Add, startInteractionBackgroundWork: true);
-            Assert.True(Workspace.StartsInteractionBackgroundWorkForTests);
+                _session, _fixture.Root, () => [], Announce, startInteractionBackgroundWork: background);
+            Assert.Equal(background, Workspace.StartsInteractionBackgroundWorkForTests);
+        }
+
+        /// <summary>Runs before each announcement is recorded: a fact makes
+        /// the announcer throw here.</summary>
+        public Action<A11yEvent>? BeforeAnnounce { get; set; }
+
+        private void Announce(A11yEvent spoken)
+        {
+            BeforeAnnounce?.Invoke(spoken);
+            Events.Add(spoken);
         }
 
         public string Root => _fixture.Root;
@@ -1370,6 +3573,17 @@ public sealed class SaveChainAdmissionTests
             return Workspace.Groups.SelectMany(group => group.Tabs).Last(tab => tab.Path == path);
         }
 
+        /// <summary>A new tab on the path, waited for by one drained turn of
+        /// the dispatcher and no fixed time. What its open speaks is left in
+        /// <see cref="Events"/>: a fact that counts events clears them, or
+        /// asks for the kinds it means.</summary>
+        public WorkspaceTabViewModel OpenNow(string path)
+        {
+            Workspace.OpenPath(path, WorkspaceOpenTarget.NewTab);
+            PumpedDispatcher.Drain();
+            return Workspace.Groups.SelectMany(group => group.Tabs).Last(tab => tab.Path == path);
+        }
+
         public string Read(string path) => File.ReadAllText(Path.Combine(Root, path));
 
         public void PumpUntil(Func<bool> condition, string what) =>
@@ -1377,6 +3591,45 @@ public sealed class SaveChainAdmissionTests
 
         public void Wait(ManualResetEventSlim signal, string failure) =>
             Assert.True(PumpedDispatcher.PumpUntil(() => signal.IsSet, Hold), failure);
+
+        /// <summary>For a fact's <c>finally</c>: let held work go and pump
+        /// until every admitted operation has ended and the workspace's
+        /// tracked workers have finished, so a failed fact tears down with
+        /// nothing still on its way to the session. It asserts nothing: a
+        /// failure here would hide the fact's own.</summary>
+        public void ReleaseAndDrain(params HeldWork[] held)
+        {
+            foreach (HeldWork work in held)
+            {
+                work.Release();
+            }
+            _ = PumpedDispatcher.PumpUntil(
+                () => Workspace.SavesIdle && Workspace.RetiredBasesDrains.All(drain => drain.IsCompleted),
+                TimeSpan.FromSeconds(30));
+        }
+
+        /// <summary>The documents re-sync of a rescan whose index holds
+        /// <paramref name="path"/>'s current bytes, run to its end.</summary>
+        public void ReSyncDocuments(string path)
+        {
+            string hash;
+            using (var cancel = new CancelToken())
+            {
+                hash = _session.IndexedContentHashes([path], cancel)[0]!;
+            }
+            Task<WorkspaceViewModel.RescanDocumentsOutcome> documents = Workspace.ReSyncOpenDocumentsAsync(
+                new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal) { [path] = new(hash, OnDisk: true) },
+                read => Task.Run<WorkspaceViewModel.RescanRead?>(() =>
+                {
+                    string text = _session.ReadText(read);
+                    return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+                }),
+                _ => Task.FromResult<IReadOnlyDictionary<string, WorkspaceViewModel.ReseatProbe>>(
+                    new Dictionary<string, WorkspaceViewModel.ReseatProbe>(StringComparer.Ordinal)),
+                CancellationToken.None);
+            PumpUntil(() => documents.IsCompleted, "the documents re-sync");
+            _ = documents.GetAwaiter().GetResult();
+        }
 
         /// <summary>A while of pumped turns, for a fact that asserts nothing
         /// happened.</summary>
@@ -1389,11 +3642,22 @@ public sealed class SaveChainAdmissionTests
             }
         }
 
+        /// <summary>The workspace's teardown, once: a fact that disposes
+        /// the workspace itself leaves the session to <see cref="Dispose"/>.</summary>
+        public void DisposeWorkspace()
+        {
+            if (!_workspaceDisposed)
+            {
+                _workspaceDisposed = true;
+                Workspace.Dispose();
+            }
+        }
+
         public void Dispose()
         {
             try
             {
-                Workspace.Dispose();
+                DisposeWorkspace();
                 _session.Dispose();
             }
             finally

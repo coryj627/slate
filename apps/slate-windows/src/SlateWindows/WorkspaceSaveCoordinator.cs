@@ -24,7 +24,7 @@ namespace SlateWindows;
 /// prompt is never "discarded" after it has already landed).</item>
 /// </list>
 /// </summary>
-internal sealed class WorkspaceSaveCoordinator
+internal sealed class WorkspaceSaveCoordinator : INoteSaveChain
 {
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<string, Task> _tails = new(StringComparer.Ordinal);
@@ -43,6 +43,19 @@ internal sealed class WorkspaceSaveCoordinator
 
     /// <summary>True once teardown has closed the coordinator.</summary>
     internal bool IsClosed => _closed;
+
+    /// <summary>Plan 47 CB-9a test seam: the admitted tickets not yet
+    /// completed. A fact reads it straight after a request to see whether the
+    /// route asked the chain, so no fact waits for a time to show that nothing
+    /// was written. Dispatcher only, like every admission.</summary>
+    internal int AdmittedForTests
+    {
+        get
+        {
+            _dispatcher.VerifyAccess();
+            return _pending;
+        }
+    }
 
     /// <summary>Workers not yet finished — a test observes the join.</summary>
     internal int LiveWorkersForTests
@@ -168,6 +181,17 @@ internal sealed class WorkspaceSaveCoordinator
                 TaskScheduler.Default);
         });
     }
+
+    /// <summary>Plan 47 CB-9a: <see cref="Admit"/> for an operation that
+    /// needs no ticket, as <see cref="INoteSaveChain"/> offers it. Explicit:
+    /// the coordinator's own members stay internal.</summary>
+    Task<bool> INoteSaveChain.Admit(string path, Func<Task> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return Admit(path, _ => operation());
+    }
+
+    void INoteSaveChain.TrackWorker(Task worker) => TrackWorker(worker);
 
     private static void Finish(SaveTicket ticket, Task done)
     {
@@ -380,6 +404,53 @@ internal sealed class WorkspaceSaveCoordinator
                 _owner.Completed(this);
             }
         }
+    }
+}
+
+/// <summary>
+/// Plan 47 CB-9a (#1889): a note's save chain as a view model with no tab on
+/// the note sees it. <see cref="Admit"/> runs the operation on the dispatcher
+/// once every save and operation admitted for the path before it has
+/// completed, and holds the path's chain until the Task the operation returns
+/// ends; it answers false when the chain is closed and the operation never
+/// runs. The operation hands any worker it starts to
+/// <see cref="TrackWorker"/>, so teardown joins it before the session goes.
+/// The workspace's coordinator is the one implementer (a census holds that).
+/// </summary>
+internal interface INoteSaveChain
+{
+    Task<bool> Admit(string path, Func<Task> operation);
+
+    void TrackWorker(Task worker);
+}
+
+/// <summary>
+/// Plan 47 CB-9a (#1889; codex round 1): the publication of an admitted
+/// operation, as steps. Every step is attempted, in order, even when an
+/// earlier one throws, so a sentence that throws (an announcer, an alert)
+/// skips no state step beside it: a tab's reload or reconcile, a row's
+/// answer, a list's reload. The operation ends either way, and a save queued
+/// behind it then starts against whatever the publication left. The first
+/// fault is rethrown once every step has run, for the operation to end
+/// carrying it.
+/// </summary>
+internal static class AdmittedPublication
+{
+    internal static void RunEvery(params Action[] steps)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? first = null;
+        foreach (Action step in steps)
+        {
+            try
+            {
+                step();
+            }
+            catch (Exception exception)
+            {
+                first ??= System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+        first?.Throw();
     }
 }
 

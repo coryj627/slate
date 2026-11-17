@@ -177,6 +177,11 @@ internal sealed partial class WorkspaceViewModel
     /// restore's core write — a fact parks the restore there.</summary>
     internal Action? HistoryRestoreHookForTests { get; set; }
 
+    /// <summary>Plan 47 CB-9a test seam: runs on the history worker before a
+    /// create's core call (a deleted file's recovery, and both Restore As
+    /// creates). A fact holds the create there, or throws.</summary>
+    internal Action? HistoryCreateHookForTests { get; set; }
+
     /// <summary>WB-2 (#1322; contract 38 D-10): a restore IS a save of the
     /// note, so it joins the file's chain. It never writes beside a save
     /// admitted before it, and a save requested after it waits for its
@@ -221,7 +226,7 @@ internal sealed partial class WorkspaceViewModel
             : request.ExpectedContentHash;
         var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Action? hook = HistoryRestoreHookForTests;
-        RunAdmittedHistoryWork(() =>
+        _ = RunAdmittedHistoryWork(() =>
         {
             string? failure = null;
             bool conflict = false;
@@ -316,17 +321,18 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The admitted restore's worker: tracked by the save
     /// coordinator, so teardown joins it before the session goes, and by
     /// the bounded drain as any history work is. Inline in synchronous test
-    /// mode.</summary>
-    private void RunAdmittedHistoryWork(Action body)
+    /// mode. Returns the worker, already finished when it ran inline.</summary>
+    private Task RunAdmittedHistoryWork(Action body)
     {
         if (!_startInteractionBackgroundWork)
         {
             body();
-            return;
+            return Task.CompletedTask;
         }
         Task worker = Task.Run(body);
         _saves.TrackWorker(worker);
         TrackRetiredBasesWork(worker);
+        return worker;
     }
 
     /// <summary>Run on the dispatcher the save chain completes on (the
@@ -448,6 +454,7 @@ internal sealed partial class WorkspaceViewModel
             completed(false, "Enter a destination path.");
             return;
         }
+        Action? hook = HistoryCreateHookForTests;
         RunHistoryWork(() =>
         {
             string? refusal = null;
@@ -455,6 +462,7 @@ internal sealed partial class WorkspaceViewModel
             string? caveat = null;
             try
             {
+                hook?.Invoke();
                 string content = _session.VersionContent(path, versionHash);
                 // #1123: a post-publish failure is a LANDED restore —
                 // the bytes are at the destination and readable; only
@@ -469,6 +477,16 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
+                failure = exception.Message;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // Plan 47 CB-9a: a fault outside VaultException (a core
+                // panic) is a failed create, so the row still gets its
+                // answer.
                 failure = exception.Message;
             }
             RunOnDispatcher(() =>
@@ -511,6 +529,14 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Recovery to the ORIGINAL path is primary; a
     /// DestinationExists routes into the inline Restore As… row (the
     /// view drives that through the completion).</summary>
+    /// <remarks>Plan 47 CB-9a (#1889; CD5(c)): the recovery creates the
+    /// note's file, so it joins the file's save chain. It waits for every
+    /// save and operation admitted for the path before it (a tab that names
+    /// the path and holds no hash saves by create; one that still holds the
+    /// deleted file's hash saves on it), and a save asked for after it waits for
+    /// its publication. <paramref name="completed"/> answers the row once,
+    /// whatever happens: a recover that never ran, because the chain closed
+    /// first, answers <c>(false, false)</c>.</remarks>
     internal void RecoverDeletedFile(
         HistoryDeletedRow row, Action<bool, bool> completed)
     {
@@ -520,12 +546,61 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
         string path = row.Path;
-        RunHistoryWork(() =>
+        AdmitPropertyWrite(
+            path,
+            () => RecoverAdmitted(path, completed),
+            abandoned: () => completed(false, false));
+    }
+
+    /// <summary>The admitted recover: its create and its publication, as one
+    /// operation whose Task ends when the publication has run. Nothing is
+    /// re-checked on the host at its turn: the target is a path, and core's
+    /// exclusive create is the check, so a file a save ahead of it created
+    /// answers DestinationExists.</summary>
+    private Task RecoverAdmitted(string path, Action<bool, bool> completed)
+    {
+        if (_workspaceDisposed)
+        {
+            completed(false, false);
+            return Task.CompletedTask;
+        }
+        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Publish(bool destinationExists, string? failure)
+        {
+            if (failure is not null && !destinationExists)
+            {
+                // A failed recover wrote nothing, so its operation ends
+                // BEFORE its alert. The alert is a modal box in the shell:
+                // a close that arrives inside its loop settles the saves
+                // from a frame above the box, and a ticket still open then
+                // could end only when the box returns, which waits for
+                // that frame. A save queued behind may start once the
+                // failure is known.
+                _ = recovered.TrySetResult();
+                FailRecover(completed, failure);
+                return;
+            }
+            try
+            {
+                FinishRecover(path, completed, destinationExists);
+            }
+            catch (Exception exception)
+            {
+                // A sentence or a callback that throws still ends the
+                // operation; the coordinator logs the fault once.
+                _ = recovered.TrySetException(exception);
+                return;
+            }
+            _ = recovered.TrySetResult();
+        }
+        Action? hook = HistoryCreateHookForTests;
+        Task worker = RunAdmittedHistoryWork(() =>
         {
             bool destinationExists = false;
             string? failure = null;
             try
             {
+                hook?.Invoke();
                 _ = _session.RecoverDeletedFile(path);
             }
             catch (VaultException.DestinationExists)
@@ -536,35 +611,123 @@ internal sealed partial class WorkspaceViewModel
             {
                 failure = exception.Message;
             }
-            RunOnDispatcher(() =>
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
             {
-                if (_workspaceDisposed)
+                // An admitted recover always ends: a fault outside
+                // VaultException (a core panic) is a failed recover, never a
+                // ticket left holding the path's chain.
+                failure = exception.Message;
+            }
+            RunOnSaveDispatcher(() => Publish(destinationExists, failure));
+        });
+        // The backstop, as a tab's task toggle has. The worker faulted
+        // outside its catch, on one of the three faults the catch leaves
+        // alone, so its publication was never posted. On the save
+        // dispatcher, and only while the operation has not ended, the
+        // operation ends carrying the fault, and then the recover fails
+        // aloud with the existing alert and the row is answered that
+        // nothing happened (FailRecover: the operation ends before the
+        // alert, and an alert that throws still answers the row).
+        _ = worker.ContinueWith(
+            faulted =>
+            {
+                Exception fault = faulted.Exception!.GetBaseException();
+                RunOnSaveDispatcher(() =>
                 {
-                    completed(false, false);
-                    return;
-                }
-                if (destinationExists)
-                {
-                    completed(false, true);
-                    return;
-                }
-                if (failure is not null)
+                    if (recovered.Task.IsCompleted)
+                    {
+                        return;
+                    }
+                    _ = recovered.TrySetException(fault);
+                    FailRecover(completed, fault.Message);
+                });
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
+        return recovered.Task;
+    }
+
+    /// <summary>A failed recover's alert and answer, run after its
+    /// operation has ended (see <c>Publish</c>). The row is answered once,
+    /// in a finally, so an alert that throws still answers it. The ticket
+    /// can no longer carry a fault from here, so one is logged once, as a
+    /// failed ticket's would be.</summary>
+    private void FailRecover(Action<bool, bool> completed, string failure)
+    {
+        try
+        {
+            try
+            {
+                if (!_workspaceDisposed)
                 {
                     HistoryAlert("Can't restore", failure);
-                    completed(false, false);
-                    return;
                 }
-                _announce(new A11yEvent.RestoredFile(
-                    System.IO.Path.GetFileName(path)));
-                // Announce + refresh ONLY (the mac shape): recovery
-                // deliberately does NOT navigate — selection stays in
-                // the Deleted list so recovering several files in a
-                // row is not disruptive (red team round 1). Restore
-                // As… is the flow that opens the new file (H9).
-                History.ReloadDeletedFilesIfLoaded();
-                completed(true, false);
-            });
-        });
+            }
+            finally
+            {
+                completed(false, false);
+            }
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+        }
+    }
+
+    /// <summary>The recover's publication when it did not fail: inside its
+    /// ticket.</summary>
+    private void FinishRecover(
+        string path, Action<bool, bool> completed, bool destinationExists)
+    {
+        if (_workspaceDisposed)
+        {
+            completed(false, false);
+            return;
+        }
+        if (destinationExists)
+        {
+            completed(false, true);
+            return;
+        }
+        // Announce + refresh ONLY (the mac shape): recovery
+        // deliberately does NOT navigate — selection stays in
+        // the Deleted list so recovering several files in a
+        // row is not disruptive (red team round 1). Restore
+        // As… is the flow that opens the new file (H9).
+        //
+        // A clean tab on the path is reloaded here, inside the ticket.
+        // Core fires Created on the worker, and the listener posts it to
+        // the dispatcher before the worker posts this publication, so the
+        // event's re-seat runs under this recover's ticket: it sees an
+        // operation admitted for the path, keeps the buffer, and only
+        // marks the tab back on disk. Left there the tab would keep its
+        // old file identity, its document and its undo history over a
+        // file that was created anew. A dirty tab is not reloaded: its
+        // buffer outranks the recovered bytes, as in the template's
+        // sweep, and a save queued on a clean tab is kept.
+        //
+        // Every step is attempted, the tabs' reload first (codex round
+        // 1). A save queued behind the recover starts when the ticket
+        // ends, against the tab as this publication left it, so the
+        // reload never waits behind a sentence; and a sentence that
+        // throws skips neither the Deleted list's reload nor the row's
+        // answer.
+        WorkspaceTabViewModel[] clean = [.. Groups
+            .SelectMany(group => group.Tabs)
+            .Where(candidate => candidate.IsMarkdown
+                && string.Equals(candidate.Path, path, StringComparison.Ordinal)
+                && !candidate.IsDirty)];
+        AdmittedPublication.RunEvery(
+        [
+            .. clean.Select<WorkspaceTabViewModel, Action>(samePath => () => samePath.ReloadKeepingQueuedSave()),
+            () => _announce(new A11yEvent.RestoredFile(System.IO.Path.GetFileName(path))),
+            () => History.ReloadDeletedFilesIfLoaded(),
+            () => completed(true, false),
+        ]);
     }
 
     /// <summary>Recover a deleted file to a caller-chosen destination
@@ -584,12 +747,14 @@ internal sealed partial class WorkspaceViewModel
             completed(false, "Enter a destination path.");
             return;
         }
+        Action? hook = HistoryCreateHookForTests;
         RunHistoryWork(() =>
         {
             string? refusal = null;
             string? failure = null;
             try
             {
+                hook?.Invoke();
                 _ = _session.RecoverDeletedFileAs(sourcePath, trimmed);
             }
             catch (VaultException.DestinationExists)
@@ -599,6 +764,14 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
+                failure = exception.Message;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // Plan 47 CB-9a: as for Restore As a version, above.
                 failure = exception.Message;
             }
             RunOnDispatcher(() =>
