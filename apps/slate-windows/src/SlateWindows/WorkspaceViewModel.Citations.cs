@@ -279,6 +279,7 @@ internal sealed partial class WorkspaceViewModel
             // so the -= dedupe would silently stop matching and repeat
             // presses would stack handlers.
             _parkedSummaryPath = Citations.Path;
+            _parkedSummaryTab = ActiveGroup.ActiveTab;
             if (!_summaryParked)
             {
                 _summaryParked = true;
@@ -386,6 +387,11 @@ internal sealed partial class WorkspaceViewModel
     private string? _parkedSummaryPath;
     private bool _summaryParked;
 
+    /// <summary>Plan 47 CB-11 (#1714): the tab the citations leaf followed
+    /// when the press was parked. A rename moves the press only with this
+    /// tab (<see cref="FollowParkedSummary"/>).</summary>
+    private WorkspaceTabViewModel? _parkedSummaryTab;
+
     /// <summary>WB-23 (#1314): how often the parked press's handler ran.</summary>
     internal int OpenSummaryWhenPublishedInvokedForTests { get; private set; }
 
@@ -410,52 +416,42 @@ internal sealed partial class WorkspaceViewModel
             Citations.RowsPublished -= OpenSummaryWhenPublished;
             _summaryParked = false;
             _parkedSummaryPath = null;
+            _parkedSummaryTab = null;
         }
     }
 
     /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
     /// <paramref name="tab"/> to <paramref name="destination"/> in place. A
-    /// press parked on the note the citations leaf shows goes with the
-    /// leaf's own tab, the active group's active tab, so the sync that
-    /// follows the rename finds the leaf still on the note the press asked
-    /// about. The leaf loads the note again at its new path, and that load's
-    /// publish answers the press. Called before the tab moves, by Slate's
-    /// own rename and by another session's (the change feed's), each of
-    /// which syncs the panels once its tabs have moved. The leaf's path is
-    /// compared, not the tab's: a re-seat can respell the tab without
-    /// syncing the panels, and the press was parked under the leaf's
-    /// spelling. A tab that is not the one the leaf follows moves nothing
-    /// here: two tabs at one path can be different notes for a while, and
-    /// when the leaf's own tab stays, so does the press. A destination that
-    /// is not a note moves nothing either: the index has no note row there,
-    /// so a load at that path would answer the press with no citations, and
-    /// the sync drops the press instead.</summary>
+    /// press goes with the tab it was parked on, the tab the citations leaf
+    /// followed when the reader pressed, so the sync that follows the rename
+    /// finds the leaf still on the note the press asked about. The leaf
+    /// loads the note again at its new path, and that load's publish
+    /// answers the press. Called before the tab moves, by Slate's own
+    /// rename and by another session's (the change feed's), each of which
+    /// syncs the panels once its tabs have moved.
+    ///
+    /// The tab is the press's owner, not the path and not whichever tab is
+    /// active: two tabs at one path can be different notes for a while
+    /// (another session moved one away and this window renamed a second
+    /// into the freed name), the reader can activate either, and a feed can
+    /// move one tab onto another's path before it moves the other. Any other
+    /// tab moves nothing here; if the leaf then shows another path, the
+    /// sync drops the press, as it drops it when the reader leaves the note.
+    /// The leaf's path is compared, not the tab's: a re-seat can respell the
+    /// tab without syncing the panels, and the press was parked under the
+    /// leaf's spelling. A destination that is not a note moves nothing
+    /// either: the index has no note row there, so a load at that path
+    /// would answer the press with no citations.</summary>
     private void FollowParkedSummary(WorkspaceTabViewModel tab, string destination)
     {
         if (_summaryParked
-            && ReferenceEquals(tab, ActiveGroup.ActiveTab)
+            && ReferenceEquals(tab, _parkedSummaryTab)
             && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
-            && CoreDocumentClassification.IsMarkdown(destination)
-            && !AnotherNoteSharesThePathOf(tab))
+            && CoreDocumentClassification.IsMarkdown(destination))
         {
             _parkedSummaryPath = destination;
         }
     }
-
-    /// <summary>Plan 47 CB-11 (#1714): another Markdown tab names the same
-    /// path as <paramref name="tab"/> but holds a different saved baseline,
-    /// so the two can be different notes (another session moved one away
-    /// and this window renamed a second into the freed name, and the reader
-    /// may have activated either). The leaf follows the path, not the note,
-    /// so it cannot say which note the press was asked about; the press is
-    /// not moved, and the sync drops it. Tabs of one note share their
-    /// baseline, so a split pane on the note still moves it.</summary>
-    private bool AnotherNoteSharesThePathOf(WorkspaceTabViewModel tab) =>
-        Groups.SelectMany(group => group.Tabs).Any(other =>
-            !ReferenceEquals(other, tab)
-            && other.IsMarkdown
-            && string.Equals(other.Path, tab.Path, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(other.SavedContentHash, tab.SavedContentHash, StringComparison.Ordinal));
 
     /// <summary>The deferred Ctrl+Shift+J landing. Detaches on the
     /// first publish either way: an answer about a different note is
@@ -468,6 +464,7 @@ internal sealed partial class WorkspaceViewModel
         _summaryParked = false;
         string? asked = _parkedSummaryPath;
         _parkedSummaryPath = null;
+        _parkedSummaryTab = null;
         if (string.Equals(Citations.Path, asked, StringComparison.Ordinal))
         {
             OpenCitationSummary();
