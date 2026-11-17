@@ -549,6 +549,12 @@ impl FsVaultProvider {
     /// pinned destination folder as `RootDirectory` and `ReplaceIfExists`
     /// false, so neither end is ever resolved by path. `before_kernel_rename`
     /// is a test seam that runs after every check, just before that call.
+    ///
+    /// #1727 (plan 47 CB-13): when the destination is the source under
+    /// another spelling, the entry's stored name is read back after the
+    /// kernel call. A volume that reported the rename as done and kept the
+    /// old spelling (FAT32 and exFAT have been seen to) gets core's refusal
+    /// (`a11y::case_only_rename_refused`), never a reported success.
     #[cfg(windows)]
     fn rename_beneath_root(
         &self,
@@ -634,24 +640,51 @@ impl FsVaultProvider {
             VaultError::Io(error) => destination_parent.failed(error),
             other => other,
         };
-        match windows_entry::rename_into(&source, destination_parent.handle(), to_leaf, false) {
-            Ok(()) => Ok(()),
-            // NTFS renames a case-only alias of the source without
-            // replacement (contract IR-5: Windows never takes this arm). A
-            // volume that reports the source's own alias as occupied gets
-            // the case change the filesystem applies to ONE entry, still on
-            // the source handle and into the pinned folder.
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && destination_is_source => {
-                windows_entry::rename_into(&source, destination_parent.handle(), to_leaf, true)
-                    .map_err(changed)
+        // The seam stands in for a volume that reports a case-only rename as
+        // done and keeps the old spelling: no kernel call, and the result
+        // taken as success. The read-back below then runs as in production.
+        let renamed = if destination_is_source && case_only_rename_ignored_by_seam(&self.root) {
+            Ok(())
+        } else {
+            match windows_entry::rename_into(&source, destination_parent.handle(), to_leaf, false) {
+                Ok(()) => Ok(()),
+                // NTFS renames a case-only alias of the source without
+                // replacement (contract IR-5: Windows never takes this arm).
+                // A volume that reports the source's own alias as occupied
+                // gets the case change the filesystem applies to ONE entry,
+                // still on the source handle and into the pinned folder.
+                Err(error)
+                    if error.kind() == io::ErrorKind::AlreadyExists && destination_is_source =>
+                {
+                    windows_entry::rename_into(&source, destination_parent.handle(), to_leaf, true)
+                        .map_err(changed)
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    Err(VaultError::DestinationExists {
+                        path: to.to_string(),
+                    })
+                }
+                Err(error) => Err(changed(error)),
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                Err(VaultError::DestinationExists {
-                    path: to.to_string(),
-                })
+        };
+        renamed?;
+        if destination_is_source {
+            // #1727: the kernel reported the case-only rename as done. The
+            // name the volume holds decides whether it was. The comparison is
+            // exact, and a read that fails is its own error: the rename is
+            // never reported as done on a spelling core could not read.
+            let stored = windows_entry::stored_name(destination_parent.handle(), to_leaf)
+                .map_err(|error| destination_parent.failed(error))?;
+            if stored.as_os_str() != to_leaf {
+                return Err(VaultError::InvalidArgument {
+                    message: crate::a11y::case_only_rename_refused(
+                        &stored.to_string_lossy(),
+                        &to_leaf.to_string_lossy(),
+                    ),
+                });
             }
-            Err(error) => Err(changed(error)),
         }
+        Ok(())
     }
 
     /// The path-addressed rename for targets without a root-relative one.
@@ -2778,6 +2811,22 @@ impl FsVaultProvider {
         let to_path = self.resolve_for_mutation(to)?;
         self.rename_beneath_root(from, &from_path, to, &to_path, before_kernel_rename)
     }
+}
+
+/// Plan 47 CB-13 (#1727): the test seam for a volume that reports a
+/// case-only rename as done and keeps the old spelling, as FAT32 and exFAT
+/// have been seen to. `SLATE_TEST_CASE_ONLY_RENAME_IGNORED` holds a substring
+/// and is set for a provider whose root path contains it, the form of the
+/// root identity seams (`fs_root::sys::Seams::for_root`). It is read at each
+/// case-only rename and is never set outside a test or a field pass.
+#[cfg(windows)]
+fn case_only_rename_ignored_by_seam(root: &Path) -> bool {
+    std::env::var_os("SLATE_TEST_CASE_ONLY_RENAME_IGNORED").is_some_and(|trigger| {
+        !trigger.is_empty()
+            && root
+                .to_string_lossy()
+                .contains(trigger.to_string_lossy().as_ref())
+    })
 }
 
 /// #1077 (contract I4): are two mutation paths ONE real filesystem entry?

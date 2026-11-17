@@ -46,7 +46,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vault, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
-        File.Copy(CitationStyleFixture(), Path.Combine(vault, "ieee.csl"));
+        CopyCitationStyleFixture(Path.Combine(vault, "ieee.csl"));
         File.WriteAllText(
             Path.Combine(vault, "slate.json"),
             "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
@@ -74,8 +74,8 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(contentPane, "F6 from Files with no tab did not land on the empty editor pane.");
             foreach (VirtualKeyShort arrow in new[] { VirtualKeyShort.DOWN, VirtualKeyShort.UP, VirtualKeyShort.LEFT, VirtualKeyShort.RIGHT })
             {
-                PressKey(arrow);
-                AssertFocusStays(automation, contentPane, $"{arrow} on the empty editor stop moved focus off it");
+                AssertAKeyKeepsFocusById(
+                    automation, contentPane, () => PressKey(arrow), $"{arrow} on the empty editor stop moved focus off it");
             }
 
             //    The bar closed to arrows still wraps its OWN: Left on File
@@ -239,6 +239,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "region-stops");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(RegionStops_ArrowsStayInRegion), logs);
+            throw;
+        }
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
@@ -332,6 +337,9 @@ public sealed partial class ShellAccessibilityTests
         var focused = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var heard = new System.Collections.Concurrent.ConcurrentQueue<string>();
         int slate = process.Id;
+        string choiceId = choice.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+        string filterSet = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
+            new uniffi.slate_uniffi.A11yEvent.TasksFilterSet(filterName)).Text;
         var recorder = automation.RegisterFocusChangedEvent(element =>
         {
             try
@@ -365,7 +373,13 @@ public sealed partial class ShellAccessibilityTests
 
             AssertEventuallyFocused(choice, $"a click on the {filterName} filter did not give it the keys");
             Assert.True(SpinWait.SpinUntil(() => IsChosen(choice), TimeSpan.FromSeconds(10)), $"the click did not choose {filterName}");
-            // The focus events and the click's line arrive.
+            // The click's own focus event and line arrive: the wait for
+            // what must come. A miss fails below, where what was seen is
+            // named.
+            _ = SpinWait.SpinUntil(
+                () => focused.LastOrDefault() == choiceId && heard.Contains(filterSet), TimeSpan.FromSeconds(10));
+            // Then the window in which a further focus event or line, which
+            // must not come, would arrive.
             Thread.Sleep(TimeSpan.FromMilliseconds(1500));
         }
         finally
@@ -374,12 +388,9 @@ public sealed partial class ShellAccessibilityTests
         }
 
         string[] order = [.. focused];
-        string choiceId = choice.Properties.AutomationId.ValueOrDefault ?? string.Empty;
         Assert.True(
             order.Length > 0 && order[^1] == choiceId && !order.Any(neverFocused.Contains),
             $"the click's UIA focus events went [{string.Join(", ", order)}], not straight to {choiceId}");
-        string filterSet = uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(
-            new uniffi.slate_uniffi.A11yEvent.TasksFilterSet(filterName)).Text;
         Assert.Equal([filterSet], heard.ToArray());
     }
 
@@ -396,7 +407,7 @@ public sealed partial class ShellAccessibilityTests
         string vault = Path.Combine(root, "Vault");
         string logs = Path.Combine(root, "logs");
         Directory.CreateDirectory(vault);
-        File.Copy(Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"), Path.Combine(vault, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vault, "sample.canvas"));
         // The review's filter is the right pane's first stop — the ring's
         // next region after the editor.
         File.WriteAllText(Path.Combine(vault, "tasks.md"), "# Tasks\n\n- [ ] one open task\n");
@@ -439,6 +450,11 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 WaitForElement(window, "PanelReviewFilterAll", TimeSpan.FromSeconds(10)),
                 "F6 from the canvas switcher did not land on the right pane's first stop.");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(RegionStops_CanvasSwitcherArrowChecksAndShowsTheProjection), logs);
+            throw;
         }
         finally
         {
@@ -540,29 +556,34 @@ public sealed partial class ShellAccessibilityTests
         return Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
     }
 
-    /// <summary>After a key that must not move focus. Directional
-    /// navigation runs inside the key's own input processing, which
-    /// <see cref="PressKey"/> already waits out; the settle absorbs the UIA
-    /// focus event's delivery before the focused element is read.</summary>
-    private static void AssertFocusStays(UIA3Automation automation, AutomationElement element, string message)
+    /// <summary>A key that must not move focus. Focus is read on the
+    /// element with <paramref name="element"/>'s automation id once before
+    /// <paramref name="press"/> (the premise), the key is pressed, and from
+    /// the press on every read for <see cref="FocusSettle"/> must see it
+    /// there (<see cref="AssertAKeyMovesNothing"/>). After the key a UI
+    /// Automation fault, or no focused element, is no observation either
+    /// way.</summary>
+    private static void AssertAKeyKeepsFocusById(UIA3Automation automation, AutomationElement element, Action press, string message)
     {
-        Thread.Sleep(300);
         string id = element.Properties.AutomationId.ValueOrDefault ?? string.Empty;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
+        AssertAKeyMovesNothing(
+            automation,
+            () =>
+            {
+                try
                 {
-                    try
-                    {
-                        return automation.FocusedElement()?.Properties.AutomationId.ValueOrDefault == id;
-                    }
-                    catch (Exception exception) when (IsTransientUiaFault(exception))
-                    {
-                        return false;
-                    }
-                },
-                TimeSpan.FromSeconds(2)),
-            $"{message}: focus is on {DescribeFocusedElement(automation)}. {FocusDiagnosis()}");
+                    return automation.FocusedElement() is { } focused
+                        ? focused.Properties.AutomationId.ValueOrDefault == id
+                        : null;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    return null;
+                }
+            },
+            press,
+            message + ".",
+            FocusSettle);
     }
 
     /// <summary>The focused element is a ROW of <paramref name="list"/>

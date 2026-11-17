@@ -30,10 +30,15 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             Choose(root, device, logs, "Light", VirtualKeyShort.HOME, expectLight: true);
-            Assert.Contains("\"theme\": \"light\"", File.ReadAllText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
+            Assert.Contains("\"theme\": \"light\"", GateFile.ReadText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
             AssertFirstPaint(device, logs, expectLight: true, thenChoose: VirtualKeyShort.DOWN);
-            Assert.Contains("\"theme\": \"dark\"", File.ReadAllText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
+            Assert.Contains("\"theme\": \"dark\"", GateFile.ReadText(Path.Combine(device, "preferences.json")), StringComparison.Ordinal);
             AssertFirstPaint(device, logs, expectLight: false, thenChoose: null);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(ThemePreference_ChoosingLightStaysLightAcrossARestart), logs);
+            throw;
         }
         finally
         {
@@ -104,7 +109,7 @@ public sealed partial class ShellAccessibilityTests
             WaitForGold(window, expected: false);
             AssertEventuallyFocused(combo, "the accent's change took focus off the combo.");
             AssertAxeClean(process!, "settings-sheet-accent");
-            Assert.Contains("\"accentColor\": \"windows\"", File.ReadAllText(preferences), StringComparison.Ordinal);
+            Assert.Contains("\"accentColor\": \"windows\"", GateFile.ReadText(preferences), StringComparison.Ordinal);
             process!.Kill(entireProcessTree: true);
             process.WaitForExit(10_000);
 
@@ -118,6 +123,11 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.UP);
             Retry.WhileFalse(() => ComboValue(combo) == "Slate gold", TimeSpan.FromSeconds(5));
             WaitForGold(window, expected: true);
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart), logs);
+            throw;
         }
         finally
         {
@@ -184,19 +194,45 @@ public sealed partial class ShellAccessibilityTests
             if (!HasInteractiveDesktop(process, "theme-preference")) { return; }
             // The first frame is read from the moment the window is visible, before UI
             // Automation finds it, which can be seconds later: a shorter flash would be gone.
-            AssertFirstFrameIsLight(WaitForVisibleMainWindowHandle(process), expectLight);
+            IntPtr handle = WaitForVisibleMainWindowHandle(process);
+            AssertFirstFrameIsLight(handle, expectLight);
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
             if (thenChoose is VirtualKeyShort key)
             {
                 ChooseThemeByKeys(window, key);
-                DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-                string preferences = Path.Combine(device, "preferences.json");
-                while (!File.ReadAllText(preferences).Contains("\"theme\": \"dark\"", StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+                // The preference is saved once, and a read open at that instant would
+                // refuse the save and lose it (GateFile). So the file is not opened until
+                // the app shows what follows the save: the combo reads the choice and the
+                // window is drawn in it (DevicePreference.Choose saves, then applies).
+                AutomationElement combo = WaitForElement(window, "SettingsTheme", TimeSpan.FromSeconds(5));
+                // A UI Automation fault on the combo's read is "not yet", and the
+                // window's handle is the one the launch already gave: no one-shot
+                // read stands between the key and the file.
+                if (!EventuallyByUia(() => ComboValue(combo) == "Dark", TimeSpan.FromSeconds(10)))
                 {
-                    Thread.Sleep(100);
+                    string shown;
+                    try
+                    {
+                        shown = ComboValue(combo) ?? "nothing";
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        shown = "<unreadable>";
+                    }
+
+                    Assert.Fail($"the key did not choose Dark; the theme reads '{shown}'.");
                 }
+
+                WaitForAppliedTheme(handle, light: false);
+                _ = ExpectFileText(
+                    Path.Combine(device, "preferences.json"),
+                    text => text.Contains("\"theme\": \"dark\"", StringComparison.Ordinal),
+                    "the Dark choice never reached preferences.json.",
+                    nameof(ThemePreference_ChoosingLightStaysLightAcrossARestart),
+                    logs,
+                    TimeSpan.FromSeconds(10));
             }
         }
         finally
@@ -204,6 +240,46 @@ public sealed partial class ShellAccessibilityTests
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             process?.WaitForExit(10_000);
         }
+    }
+
+    /// <summary>Waits until the window's own pixels are the chosen theme's. The app applies
+    /// a choice after it has saved it, so this is what a journey waits for before it reads
+    /// the preferences file. Pure black is the window before its first render, not a
+    /// theme, and a capture the window refused is no frame at all: the wait goes on
+    /// past both and fails at its own bound.</summary>
+    private static void WaitForAppliedTheme(IntPtr handle, bool light)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        int color = 0;
+        int refused = 0;
+        while (true)
+        {
+            try
+            {
+                (int[] pixels, Size size) = OwnPixels(handle);
+                color = CommonestColor(pixels, size);
+                double brightness = ((color >> 16 & 255) + (color >> 8 & 255) + (color & 255)) / 3.0;
+                if (color != 0x000000 && (light ? brightness > 180 : brightness < 80))
+                {
+                    return;
+                }
+            }
+            catch (Xunit.Sdk.XunitException)
+            {
+                refused++;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            Thread.Sleep(GateFile.PollInterval);
+        }
+
+        Assert.Fail(
+            $"the window never drew the {(light ? "light" : "dark")} theme; its commonest colour is #{color:X6}, "
+            + $"and {refused} captures were refused.");
     }
 
     /// <summary>What a reader hears as a closed combo box's value: a combo that can't be

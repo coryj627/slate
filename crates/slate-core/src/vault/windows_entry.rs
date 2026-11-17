@@ -486,6 +486,67 @@ pub(super) fn entry_exists(parent: &fs::File, name: &OsStr) -> io::Result<bool> 
     }
 }
 
+/// The spelling the volume holds for the entry `name` in `parent` (plan 47
+/// CB-13, #1727): the entry opened as itself with attribute access, as
+/// [`entry_exists`] opens it, and the last component of the handle's final
+/// path. This is the read `canonical_path` trusts for the stored spelling
+/// beneath a held root (`fs_root::stored_spelling_beneath`), so the read-back
+/// after a case-only rename and the index's own binding read the same thing.
+pub(super) fn stored_name(parent: &fs::File, name: &OsStr) -> io::Result<std::ffi::OsString> {
+    let entry = create_relative(
+        parent,
+        name,
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT,
+    )?;
+    super::trash_handoff::final_path_any(&entry)?
+        .file_name()
+        .map(OsStr::to_os_string)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the entry's final path has no name",
+            )
+        })
+}
+
+/// [`stored_name`] read from the folder's own listing instead: the listed
+/// name equal to `name`, or the one listed name that differs from it only by
+/// case. It needs list access on the folder and reads the whole folder.
+/// Compiled for tests only (plan 47 CB-13): the gated weak-volume fact prints
+/// both reads beside its own listing, and this one replaces [`stored_name`]'s
+/// body only if a volume shows the final-path read to be wrong.
+#[cfg(test)]
+pub(super) fn stored_name_by_listing(
+    parent: &fs::File,
+    name: &OsStr,
+) -> io::Result<std::ffi::OsString> {
+    let listing = reopen(
+        parent,
+        super::fs_root::sys::LIST_ACCESS,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )?;
+    let entries = super::fs_root::sys::read_dir_entries(&listing)?;
+    if let Some((exact, _)) = entries.iter().find(|(listed, _)| listed == name) {
+        return Ok(exact.clone());
+    }
+    let wanted = name.to_string_lossy().to_lowercase();
+    let mut aliases = entries
+        .into_iter()
+        .map(|(listed, _)| listed)
+        .filter(|listed| listed.to_string_lossy().to_lowercase() == wanted);
+    match (aliases.next(), aliases.next()) {
+        (Some(only), None) => Ok(only),
+        (None, _) => Err(io::Error::from(io::ErrorKind::NotFound)),
+        (Some(_), Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "more than one listed name differs from this one only by case",
+        )),
+    }
+}
+
 /// Make the folder `name` in `parent` and return it open as a walk handle.
 /// `FILE_CREATE` makes an entry already there `AlreadyExists`, never opened.
 /// `FILE_OPEN_REPARSE_POINT` is load-bearing: without it, an existing

@@ -1186,6 +1186,213 @@ fn a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_an
     );
 }
 
+/// The owner's sentence for a case-only rename the volume did not apply
+/// (plan 47 CB-13, CD7), written out here and not read from the product, so
+/// this file is a golden against core's copy.
+fn case_only_refusal(stored: &str, requested: &str) -> String {
+    format!(
+        "This drive keeps the capitalization a file was created with, so {stored} was not renamed to {requested}."
+    )
+}
+
+/// Plan 47 CB-13 (#1727), on real volumes: after a case-only rename of a
+/// note and of a folder with its note in a vault on FAT32 or exFAT, the
+/// index and the volume agree. Either the rename landed and the rows and
+/// the listings hold the new spelling, or it was refused in core's sentence
+/// and all of them hold the old one. A row that moved while the volume kept
+/// the old name is the breach. The folder goes through
+/// `rename_folder_with_note`, the Files sidebar's one route.
+///
+/// The mixed outcome: a volume that applies a folder's case-only rename and
+/// ignores a file's. The compound rename then moves the folder, is refused
+/// at the note, and rolls the folder back, so everything holds the old
+/// spelling and the error is "renaming the folder note failed and the folder
+/// rename was rolled back: invalid argument: This drive keeps the
+/// capitalization a file was created with, so Docs.md was not renamed to
+/// docs.md." The fact accepts that sentence with the old spellings.
+///
+/// After each rename a vault-wide task query settles the markers it left
+/// (#1975): the rows stay as the volume has them, one for each file, each
+/// note's task is returned once, and no marker is left.
+///
+/// Each volume and rename is recorded before anything is asserted. The
+/// volumes are WB-27's scratch folders, which CI's `rust-weak-volumes` job
+/// makes on VHDs.
+#[test]
+#[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]
+#[allow(clippy::disallowed_macros)]
+fn a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_agreeing() {
+    use crate::vault::fs_root::sys::identity_reads_for_tests;
+    fn rows(session: &VaultSession, table: &str) -> Vec<String> {
+        let conn = session.conn.lock().unwrap();
+        let mut statement = conn
+            .prepare(&format!("SELECT path FROM {table} ORDER BY path"))
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap();
+        rows.map(|row| row.unwrap()).collect()
+    }
+    fn listing(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != ".slate")
+            .collect();
+        names.sort();
+        names
+    }
+    /// The spelling the listing holds for `name`, whatever its case.
+    fn stored(listed: &[String], name: &str) -> String {
+        listed
+            .iter()
+            .find(|listed| listed.eq_ignore_ascii_case(name))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn sorted(items: &[&str]) -> Vec<String> {
+        let mut items: Vec<String> = items.iter().map(|item| item.to_string()).collect();
+        items.sort();
+        items
+    }
+
+    let mut ran = Vec::new();
+    let mut breaches: Vec<String> = Vec::new();
+    for (variable, file_system) in [
+        ("SLATE_WEAK_VOLUME_FAT32", "FAT32"),
+        ("SLATE_WEAK_VOLUME_EXFAT", "exFAT"),
+    ] {
+        let Some(scratch) = std::env::var_os(variable) else {
+            continue;
+        };
+        let scratch = std::path::PathBuf::from(scratch);
+        let vault = tempfile::tempdir_in(&scratch).unwrap();
+        let (_, name, _) = identity_reads_for_tests(vault.path()).unwrap();
+        assert_eq!(
+            name.as_deref().ok(),
+            Some(file_system),
+            "{variable}: {} is on a volume that names itself {file_system}",
+            scratch.display()
+        );
+        std::fs::write(vault.path().join("Note.md"), "- [ ] note\n").unwrap();
+        std::fs::create_dir(vault.path().join("Docs")).unwrap();
+        std::fs::write(vault.path().join("Docs").join("Docs.md"), "- [ ] docs\n").unwrap();
+        std::fs::write(vault.path().join("Docs").join("Inner.md"), "- [ ] inner\n").unwrap();
+        let session = session_at(vault.path()).unwrap();
+        scanned(&session);
+        assert_eq!(
+            rows(&session, "files"),
+            sorted(&["Docs/Docs.md", "Docs/Inner.md", "Note.md"]),
+            "{variable}"
+        );
+        assert_eq!(rows(&session, "dirs"), sorted(&["Docs"]), "{variable}");
+
+        // The note, then the folder with its note.
+        for (from, to, is_folder) in [("Note.md", "note.md", false), ("Docs", "docs", true)] {
+            let case = format!("{file_system} session case-only {from} -> {to}");
+            let outcome = if is_folder {
+                session.rename_folder_with_note(from, to)
+            } else {
+                session.rename_file(from, to)
+            };
+            // What the volume holds, read from its own listings.
+            let root = listing(vault.path());
+            let note = stored(&root, "note.md");
+            let folder = stored(&root, "docs");
+            let inside = listing(&vault.path().join(&folder));
+            let folder_note = stored(&inside, "docs.md");
+            let files = rows(&session, "files");
+            let dirs = rows(&session, "dirs");
+            let seen = format!(
+                "listing {root:?}, in the folder {inside:?}, files {files:?}, dirs {dirs:?}"
+            );
+            let (kept, all_new, all_old) = if is_folder {
+                (
+                    format!("{folder}/{folder_note}"),
+                    folder == "docs" && folder_note == "docs.md",
+                    folder == "Docs" && folder_note == "Docs.md",
+                )
+            } else {
+                (note.clone(), note == to, note == from)
+            };
+            let rolled_back = format!(
+                "renaming the folder note failed and the folder rename was rolled back: \
+                 invalid argument: {}",
+                case_only_refusal("Docs.md", "docs.md")
+            );
+            match &outcome {
+                Ok(_) if all_new => println!("OBSERVED {case}: renamed ({seen})"),
+                Ok(_) => {
+                    println!("OBSERVED {case}: REPORTED SUCCESS AND KEPT {kept} ({seen})");
+                    breaches.push(format!("{case}: reported success and kept {kept}"));
+                }
+                Err(VaultError::InvalidArgument { message })
+                    if all_old && *message == case_only_refusal(from, to) =>
+                {
+                    println!("OBSERVED {case}: refused: {message} ({seen})");
+                }
+                Err(VaultError::InvalidArgument { message })
+                    if is_folder && all_old && *message == rolled_back =>
+                {
+                    println!(
+                        "OBSERVED {case}: the folder renamed, the note was refused and the folder was rolled back: {message} ({seen})"
+                    );
+                }
+                Err(error) => {
+                    println!("OBSERVED {case}: failed: {error:?} ({seen})");
+                    breaches.push(format!(
+                        "{case}: neither renamed nor refused in core's sentence: {error:?}"
+                    ));
+                }
+            }
+            // What the volume holds decides what the index must hold.
+            let expected_files = sorted(&[
+                &format!("{folder}/{folder_note}"),
+                &format!("{folder}/Inner.md"),
+                &note,
+            ]);
+            if files != expected_files || dirs != sorted(&[&folder]) {
+                breaches.push(format!("{case}: the index and the volume disagree: {seen}"));
+            }
+
+            // The rename left a marker under each spelling, whether it landed
+            // or was refused. The next vault-wide task query settles them
+            // under the spelling the volume stores (#1975): the rows stay as
+            // the volume has them, one for each file, each note's task is
+            // returned once, and no marker is left.
+            let queried = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(10));
+            let tasks = queried.as_ref().map(|page| page.items.len());
+            let files = rows(&session, "files");
+            let dirs = rows(&session, "dirs");
+            let markers = rows(&session, "text_write_intents");
+            let after =
+                format!("files {files:?}, dirs {dirs:?}, markers {markers:?}, tasks {tasks:?}");
+            println!("OBSERVED {case}: after the task query: {after}");
+            if files != expected_files
+                || dirs != sorted(&[&folder])
+                || !markers.is_empty()
+                || !matches!(tasks, Ok(3))
+            {
+                breaches.push(format!(
+                    "{case}: after the task query the index is not as the volume has it: {after}"
+                ));
+            }
+        }
+
+        drop(session);
+        ran.push(variable);
+    }
+    assert!(
+        !ran.is_empty(),
+        "neither SLATE_WEAK_VOLUME_FAT32 nor SLATE_WEAK_VOLUME_EXFAT is set: a named run never passes without a volume"
+    );
+    assert!(
+        breaches.is_empty(),
+        "case-only renames that left the index and the volume apart:\n  {}",
+        breaches.join("\n  ")
+    );
+}
+
 /// A vault on a volume with no drive letter and no mount folder, reached
 /// only as `\\?\Volume{…}\…`: the held path's drive-letter form fails there,
 /// so the open, the scan, a save, a rename and the display path all go

@@ -272,7 +272,7 @@ internal sealed partial class FilesSidebarViewModel
             JournalStructuralFailed(journalEntry, exception);
             // F3: the field stays open with the reason inline — core's
             // message relayed, MutationName untouched.
-            ReportFailure($"Rename failed: {exception.Message}");
+            ReportFailure($"Rename failed: {SlateUniffiMethods.VaultErrorDetail(exception)}");
             return false;
         }
     }
