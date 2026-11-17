@@ -796,6 +796,74 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    private const string PanickedNote =
+        "# Diagram\n\n```mermaid\nflowchart LR\ncb27panic --> B\n```\n\n"
+        + "Between the diagrams.\n\n```mermaid\nflowchart LR\nC --> D\n```\n\n"
+        + "The last paragraph here.\n";
+
+    /// <summary>#1631: a diagram whose render panics fails alone. It says
+    /// core's sentence above its source, the next diagram in the note is
+    /// drawn, and the failure is landed, so a refresh does not retry it.
+    /// Core's test-fault seam names the first diagram by a word in its
+    /// source.</summary>
+    [Fact]
+    public void APanickedRenderFailsItsDiagramAloneAndTheNextIsDrawn()
+    {
+        const string Sentence = "Diagram not drawn: the renderer failed on this diagram. The source follows.";
+        RunSta(() =>
+        {
+            using (EnvFaultLock.Acquire())
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_DIAGRAM_PANIC", "cb27panic");
+                try
+                {
+                    using var harness = StageHarness.Open("reading-diagram-panicked", PanickedNote);
+                    harness.Land();
+
+                    // What a reader gets: the header, core's reason, then
+                    // the source, in that order.
+                    string text = harness.PatternText();
+                    int header = text.IndexOf("Diagram could not be rendered", StringComparison.Ordinal);
+                    int reason = text.IndexOf(Sentence, StringComparison.Ordinal);
+                    int source = text.IndexOf("cb27panic --> B", StringComparison.Ordinal);
+                    Assert.True(header >= 0, $"the failure header is not in the text: {text}");
+                    Assert.True(reason > header, $"core's sentence does not follow the header: {text}");
+                    Assert.True(source > reason, $"the source does not follow core's sentence: {text}");
+                    Assert.DoesNotContain("unavailable for the rest of this session", text, StringComparison.Ordinal);
+                    Assert.DoesNotContain("panicked", text, StringComparison.Ordinal);
+                    Assert.DoesNotContain("C --> D", text, StringComparison.Ordinal);
+
+                    // What core returned, and keeps for this note's text.
+                    DiagramBlock[] blocks = harness.Session.GetDiagramBlocks("note0.md");
+                    Assert.Equal(2, blocks.Length);
+                    Assert.Equal(
+                        Sentence,
+                        Assert.IsType<DiagramRenderStatus.RenderFailed>(blocks[0].RenderStatus).Message);
+                    Assert.IsType<DiagramRenderStatus.Ok>(blocks[1].RenderStatus);
+                    Assert.NotEmpty(blocks[1].Svg!);
+
+                    List<ReadingDiagramElement> elements = FindDiagramElements(harness.Surface.Document).ToList();
+                    Assert.Equal(2, elements.Count);
+                    Assert.Null(elements[0].Content);
+                    Assert.Equal("Flowchart with 1 step.", AutomationProperties.GetName(elements[0]));
+                    Assert.NotNull(elements[1].Content);
+
+                    // This diagram's failure is landed, where a busy refusal
+                    // is retried.
+                    int runs = harness.Model.DiagramStageRunsForTests;
+                    harness.Model.Refresh();
+                    PumpedDispatcher.Drain();
+                    Assert.Equal(runs, harness.Model.DiagramStageRunsForTests);
+                    Assert.False(harness.Model.DiagramsPendingForTests);
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_DIAGRAM_PANIC", null);
+                }
+            }
+        });
+    }
+
     /// <summary>Red-team round 1: a stage fault the degrade path does not
     /// catch — a core panic, a decoder failure — never strands a placeholder:
     /// every fence lands as its source, and the fault is recorded.</summary>
