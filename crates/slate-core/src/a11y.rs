@@ -3546,6 +3546,22 @@ fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
 /// speaks it through `vault_error_detail` with no corpus or event change.
 pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system gives Slate no file identity for it, so Slate cannot keep the vault anchored to it.";
 
+/// Why a rename that changes only the case of a name was not made (plan 47
+/// CB-13, #1727, owner decision CD7): the volume reported the rename as done
+/// and kept the old spelling, as FAT32 and exFAT have been seen to. `stored`
+/// is the name the volume holds, as read back, and `requested` is the name
+/// asked for. A folder's refusal uses the same sentence with the folder's
+/// names. Core's copy, carried in a `VaultError::InvalidArgument` whose
+/// message crosses the FFI verbatim, so the host speaks it through
+/// `vault_error_detail` with no corpus or event change, as
+/// [`VAULT_ROOT_IDENTITY_UNAVAILABLE`]'s is.
+pub fn case_only_rename_refused(stored: &str, requested: &str) -> String {
+    format!(
+        "This drive keeps the capitalization a file was created with, \
+         so {stored} was not renamed to {requested}."
+    )
+}
+
 /// Why hot exit keeps nothing for a vault, or failed this time (plan 44
 /// WB-29a §4): the `reason` of [`A11yEvent::UnsavedNotesNotKept`],
 /// completing "Your unsaved notes cannot be kept for next time: …".
@@ -6835,6 +6851,27 @@ mod tests {
         assert_eq!(
             witnessed, declared,
             "VaultError variants without a detail witness"
+        );
+    }
+
+    /// Plan 47 CB-13 (#1727, CD7): the refusal of a case-only rename the
+    /// volume did not make is the owner's sentence, for a file and for a
+    /// folder, and reaches the host unchanged through `vault_error_detail`.
+    #[test]
+    fn the_case_only_rename_refusal_is_cores_sentence() {
+        assert_eq!(
+            case_only_rename_refused("Note.md", "note.md"),
+            "This drive keeps the capitalization a file was created with, so Note.md was not renamed to note.md."
+        );
+        assert!(
+            case_only_rename_refused("Docs", "docs").ends_with("so Docs was not renamed to docs.")
+        );
+        let refusal = VaultError::InvalidArgument {
+            message: case_only_rename_refused("Note.md", "note.md"),
+        };
+        assert_eq!(
+            vault_error_detail(&refusal),
+            case_only_rename_refused("Note.md", "note.md")
         );
     }
 

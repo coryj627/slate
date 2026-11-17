@@ -648,33 +648,35 @@ jobs:
             "$($entry.Key) = $($entry.Value)"
           }
           "FAT32 $($fat32.Size) bytes, exFAT $($exfat.Size) bytes, letterless NTFS $($noLetter[0].Size) bytes, run as $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+          # The Windows build the facts' observations come from (#1727).
+          cmd /c ver
 
       - name: WB-27's gated no-replace facts on FAT32 and exFAT
         run: |
-          # The case-only rename keeps the old spelling on FAT32 and exFAT
-          # (#1727); it runs again here once that is fixed.
-          $skipped = 'weak_volume_case_only_rename_keeps_the_entry'
           $facts = @(
             'weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one'
             'weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one'
             'weak_volume_identity_rename_refuses_an_occupied_name_at_the_kernel'
+            'weak_volume_case_only_rename_keeps_the_entry'
             'weak_volume_stale_identity_refuses_where_ids_are_identities'
             'weak_volume_gate_names_the_file_system_it_ran_on'
           )
           $listed = cargo test -p slate-core --profile ci --locked --lib weak_volume -- --ignored --list
           if ($LASTEXITCODE -ne 0) { throw "listing the gated facts failed ($LASTEXITCODE)" }
-          foreach ($fact in $facts + $skipped) {
+          foreach ($fact in $facts) {
             if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
           }
           $count = @($listed | Select-String ': test$').Count
-          if ($count -ne $facts.Count + 1) { throw "the ignored listing has $count facts; expected $($facts.Count + 1)" }
-          cargo test -p slate-core --profile ci --locked --lib weak_volume -- --ignored --test-threads=1 --nocapture --skip $skipped
+          if ($count -ne $facts.Count) { throw "the ignored listing has $count facts; expected $($facts.Count)" }
+          cargo test -p slate-core --profile ci --locked --lib weak_volume -- --ignored --test-threads=1 --nocapture
           if ($LASTEXITCODE -ne 0) { throw "the gated facts failed ($LASTEXITCODE)" }
 
       - name: WB-28's session facts on FAT32, exFAT and the letterless volume
+        if: ${{ !cancelled() }}
         run: |
           $facts = @(
             'a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers'
+            'a_case_only_rename_on_a_fat32_or_exfat_vault_leaves_the_index_and_the_volume_agreeing'
             'a_vault_on_a_volume_without_a_drive_letter_opens_scans_saves_and_renames'
           )
           $listed = cargo test -p slate-core --profile ci --locked --lib held_root_windows -- --ignored --list
@@ -682,7 +684,7 @@ jobs:
           foreach ($fact in $facts) {
             if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the filter does not select $fact" }
           }
-          # Each fact runs whatever the other did, so one run reports both.
+          # Each fact runs whatever the others did, so one run reports them all.
           $failed = @()
           foreach ($fact in $facts) {
             cargo test -p slate-core --profile ci --locked --lib $fact -- --ignored --test-threads=1 --nocapture

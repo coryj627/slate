@@ -73,6 +73,96 @@ public sealed class FileManagementTests
             "Occupied\n", File.ReadAllText(Path.Combine(fixture.Root, "taken.md")));
     }
 
+    /// <summary>Plan 47 CB-13: a refused rename says core's detail for the
+    /// error (<c>vault_error_detail</c>), once, at High. The binding's own
+    /// rendering of the error's fields ("@path=taken.md") is never the
+    /// sentence (#1890's class, at this one site).</summary>
+    [Fact]
+    public async Task ARefusedRenameSaysCoresDetail()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-rename-refused-detail");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "taken.md"), "Occupied\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        rig.Sidebar.MutationName = "taken.md";
+        announced.Clear();
+
+        Assert.False(rig.Sidebar.TryRenameSelected());
+
+        const string sentence = "Rename failed: Something named taken.md already exists there.";
+        Assert.Equal(sentence, rig.Sidebar.Status);
+        A11yEvent.HostComposed spoken =
+            Assert.Single(announced.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(sentence, spoken.Text);
+        Assert.Equal(A11yPriority.High, spoken.Priority);
+    }
+
+    /// <summary>Plan 47 CB-13 (#1727, CD7), the Windows twin of core's
+    /// <c>a_case_only_rename_the_volume_ignored_is_refused_and_nothing_else_changes</c>:
+    /// a case-only rename the volume did not apply is refused in core's
+    /// sentence. The keys stay in the field with the typed name, nothing
+    /// says "Renamed", no tab is retargeted, and the folder and the tree
+    /// still hold the old spelling. Core's seam stands in for a volume that
+    /// reports the rename as done and keeps the old name.</summary>
+    [Fact]
+    public async Task ACaseOnlyRenameTheVolumeIgnoredIsRefusedInCoresSentence()
+    {
+        const string label = "cb13-case-only-ignored";
+        using FixtureVault fixture = FixtureVault.Create(0, label);
+        File.WriteAllText(Path.Combine(fixture.Root, "Note.md"), "# Note\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        var retargets = new List<(string Old, string New)>();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.RetargetRequested =
+            (oldPath, newPath) => retargets.Add((oldPath, newPath));
+
+        rig.Sidebar.SelectedNode = Node(rig, "Note.md");
+        rig.Sidebar.MutationName = "note.md";
+        announced.Clear();
+
+        bool renamed;
+        using (EnvFaultLock.Acquire())
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_CASE_ONLY_RENAME_IGNORED", label);
+            try
+            {
+                renamed = rig.Sidebar.TryRenameSelected();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_CASE_ONLY_RENAME_IGNORED", null);
+            }
+        }
+
+        const string sentence =
+            "Rename failed: This drive keeps the capitalization a file was created with, "
+            + "so Note.md was not renamed to note.md.";
+        Assert.False(renamed, rig.Sidebar.Status);
+        Assert.Equal("note.md", rig.Sidebar.MutationName);
+        Assert.Equal(sentence, rig.Sidebar.Status);
+        A11yEvent.HostComposed[] composed = [.. announced.OfType<A11yEvent.HostComposed>()];
+        A11yEvent.HostComposed spoken = Assert.Single(composed);
+        Assert.Equal(sentence, spoken.Text);
+        Assert.Equal(A11yPriority.High, spoken.Priority);
+        Assert.DoesNotContain(
+            composed, item => item.Text.StartsWith("Renamed", StringComparison.Ordinal));
+        Assert.Empty(retargets);
+
+        // The folder's own listing: an existence check is case-blind here.
+        string[] names =
+            [.. new DirectoryInfo(fixture.Root).EnumerateFiles().Select(file => file.Name)];
+        Assert.Contains("Note.md", names, StringComparer.Ordinal);
+        Assert.DoesNotContain("note.md", names, StringComparer.Ordinal);
+        Assert.Equal("Note.md", Node(rig, "Note.md").Name);
+        Assert.DoesNotContain(
+            rig.Sidebar.RootNodes, node => string.Equals(node.Path, "note.md", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void FolderRenamesRideTheCompoundFfiUnconditionally()
     {

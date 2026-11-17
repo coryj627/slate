@@ -51,7 +51,7 @@ fn a_panicking_holder_leaves_the_fault_mutex_usable() {
 fn the_fault_guard_clears_every_fault_variable_on_acquisition() {
     // Written out here, not read from the guard's own list, so a name
     // dropped from that list fails this fact.
-    const EVERY_FAULT_VARIABLE: [&str; 23] = [
+    const EVERY_FAULT_VARIABLE: [&str; 24] = [
         "SLATE_TEST_FAULT_AFTER_WRITE",
         "SLATE_TEST_FAULT_PRE_WRITE",
         "SLATE_TEST_FAULT_REINDEX",
@@ -75,6 +75,7 @@ fn the_fault_guard_clears_every_fault_variable_on_acquisition() {
         "SLATE_TEST_HOT_EXIT_REUSED_ID",
         "SLATE_TEST_HOT_EXIT_REMOTE",
         "SLATE_TEST_HOT_EXIT_EXCLUDED_VOLUME",
+        "SLATE_TEST_CASE_ONLY_RENAME_IGNORED",
     ];
     let lock = lock_fault_mutex_without_clearing();
     for name in EVERY_FAULT_VARIABLE {
