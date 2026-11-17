@@ -613,6 +613,8 @@ fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> 
         let _swap = HOOK_SWAP
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
+        hook_chain_pause(HookChainStep::Locked);
         let previous = std::panic::take_hook();
         #[cfg(test)]
         hook_chain_pause(HookChainStep::PreviousTaken);
@@ -632,32 +634,40 @@ fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> 
 /// the `Once` body of [`set_rules_dir_chaining_panic_hook`] one at a time.
 ///
 /// A fact that puts a hook over the current one makes two calls, `take_hook`
-/// and `set_hook`. The body makes four, two of them MathCAT's. With the
-/// fact's two between the body's, on another thread, the fact's hook was
-/// handed to MathCAT, which never calls it, or replaced by the chain. The
-/// body holds this from before its first hook call until after its last,
-/// and a fact holds it around its two (`tests::swap_in_a_recorder`). So
-/// either the fact goes first and the body's `previous` is the fact's hook,
-/// or the body goes first and the fact's hook wraps the finished chain.
+/// and `set_hook`. The body makes five: its own `take_hook`, MathCAT's
+/// `take_hook` and `set_hook` inside `init_panic_handler`, then its own
+/// `take_hook` and `set_hook`. With the fact's two among the body's, on
+/// another thread, the fact's hook could be handed to MathCAT, which never
+/// calls it, or replaced by MathCAT's hook or by the chain. The body holds
+/// this from before its first hook call until after its last, and a fact
+/// holds it around its two (`tests::swap_in_a_recorder`). So either the
+/// fact goes first and the body's `previous` is the fact's hook, or the body
+/// goes first and the fact's hook wraps the finished chain.
 ///
-/// A holder makes its hook calls and nothing else. A fact never renders or
-/// reaches [`set_rules_dir_chaining_panic_hook`] while it holds this: the
-/// body takes it too and would never get it. The body, while it holds it,
-/// calls the hook functions, [`hook_chain_pause`] (which waits only on the
-/// fact that armed it, never on this lock), and
-/// `libmathcat::init_panic_handler`, which makes the same two hook calls
-/// once and calls nothing of Slate's. Builds that are not tests have no
-/// lock: there, nothing but the body changes the hook.
+/// A fact holds this for its two hook calls and nothing else: it never
+/// renders or reaches [`set_rules_dir_chaining_panic_hook`] while it holds
+/// it, since the body takes it too and would never get it. The body, while
+/// it holds it, calls the hook functions, [`hook_chain_pause`] (which waits
+/// only on the fact that armed it, never on this lock), and
+/// `libmathcat::init_panic_handler`, which makes its two hook calls once
+/// and calls nothing of Slate's. Builds that are not tests have no lock:
+/// there, nothing but the body changes the hook.
 #[cfg(test)]
 static HOOK_SWAP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// #1979, test builds only: a place inside the `Once` body of
-/// [`set_rules_dir_chaining_panic_hook`] where the process panic hook is
-/// neither the one from before the first MathCAT init nor the finished
-/// chain.
+/// [`set_rules_dir_chaining_panic_hook`], after it takes [`HOOK_SWAP`] and
+/// before it installs the chain, where a fact's swap of the process panic
+/// hook must wait for the body.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HookChainStep {
+    /// The body has made no hook call, so the process hook is still the one
+    /// from before the first MathCAT init. A swap whose `take_hook` came
+    /// before the body's first and whose `set_hook` came after it would
+    /// leave the body's `previous` the default hook and put the swap's own
+    /// hook inside the body.
+    Locked,
     /// The previous hook is taken and MathCAT has not installed its own, so
     /// the process hook is the default one. MathCAT takes whatever is there
     /// next and never calls it.
@@ -1445,16 +1455,7 @@ mod tests {
         let _swap = HOOK_SWAP.lock().unwrap_or_else(PoisonError::into_inner);
         let current = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let payload = info.payload();
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_string())
-                })
-                .unwrap_or_default();
+            let message = panic_text(info.payload());
             recorder
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -1462,6 +1463,20 @@ mod tests {
             current(info);
         }));
         seen
+    }
+
+    /// A panic's message: its payload when that is a `String` or a `&str`,
+    /// and empty otherwise.
+    fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+            })
+            .unwrap_or_default()
     }
 
     /// The full name of [`a_hook_swap_inside_the_first_mathcat_init_child`],
@@ -1494,11 +1509,13 @@ mod tests {
     /// process, and the init is held at each [`HookChainStep`] in turn. At
     /// each, a thread is started to swap a recorder in. Before the init is
     /// let go, that thread finds [`HOOK_SWAP`] held by the init, so its swap
-    /// waits for the finished chain. A panic after the render must reach both
-    /// recorders. With the init not taking the lock, the thread finds it free
-    /// and the fact fails at the first step: a swap made there lands inside
-    /// the init, and its recorder is handed to MathCAT or replaced by the
-    /// chain and never sees the panic.
+    /// waits for the finished chain. A panic after the render must reach all
+    /// three recorders. With the init taking the lock late, or not at all,
+    /// the thread finds it free at a step and the fact fails there: a swap
+    /// made there lands inside the init, and its recorder is handed to
+    /// MathCAT or replaced and never sees the panic. A render that panics is
+    /// caught on its thread and reported, so the fact fails instead of
+    /// waiting for a pause that never comes.
     #[test]
     fn a_hook_swap_inside_the_first_mathcat_init_child() {
         use std::sync::{Mutex, PoisonError, TryLockError, mpsc};
@@ -1507,7 +1524,8 @@ mod tests {
         }
         enum Event {
             Held(HookChainStep),
-            Rendered,
+            Rendered(MathBlock),
+            RenderFailed(String),
         }
         let (events, reached) = mpsc::channel::<Event>();
         let (let_go, held) = mpsc::channel::<()>();
@@ -1519,24 +1537,41 @@ mod tests {
             let _ = held.lock().unwrap_or_else(PoisonError::into_inner).recv();
         }));
         assert!(armed.is_ok(), "one fact sets the pause, once per process");
+        // The pause keeps a sender of `events` and the receiver of `let_go`
+        // for the life of the process, so neither channel closes: a wait on
+        // `events` ends only with an event, and a send on `let_go` never
+        // fails. The render thread therefore sends an event whatever happens
+        // to it: the block, or the message of a panic it caught.
+        let next = || reached.recv().expect("the pause keeps a sender for good");
         let render = thread::spawn(move || {
-            let raw = RawMathBlock {
-                source: "x^2".to_string(),
-                display_style: MathDisplayStyle::Block,
-                line: 1,
-                byte_offset: 0,
-            };
-            let block = render_math(&raw, MathPrefs::default());
-            let _ = events.send(Event::Rendered);
-            block
+            let outcome = std::panic::catch_unwind(|| {
+                let raw = RawMathBlock {
+                    source: "x^2".to_string(),
+                    display_style: MathDisplayStyle::Block,
+                    line: 1,
+                    byte_offset: 0,
+                };
+                render_math(&raw, MathPrefs::default())
+            });
+            let _ = events.send(match outcome {
+                Ok(block) => Event::Rendered(block),
+                Err(payload) => Event::RenderFailed(panic_text(payload.as_ref())),
+            });
         });
         let mut swaps = Vec::new();
-        for step in [HookChainStep::PreviousTaken, HookChainStep::MathcatTaken] {
-            // The render answers only after the init, so `Rendered` first
+        for step in [
+            HookChainStep::Locked,
+            HookChainStep::PreviousTaken,
+            HookChainStep::MathcatTaken,
+        ] {
+            // The render answers only after the init, so an answer first
             // means the init never stopped here.
-            match reached.recv().expect("the render thread is alive") {
+            match next() {
                 Event::Held(at) => assert_eq!(at, step),
-                Event::Rendered => panic!("the first MathCAT init was not held at {step:?}"),
+                Event::Rendered(_) => panic!("the first MathCAT init was not held at {step:?}"),
+                Event::RenderFailed(message) => {
+                    panic!("the render panicked before the init was held at {step:?}: {message}")
+                }
             }
             // The init is let go only after the swap's thread has looked at
             // the lock, so what it finds is the lock as the held init has it.
@@ -1551,9 +1586,20 @@ mod tests {
                 lock_was_held.recv().expect("the swap's thread is alive"),
                 "a hook swap could land inside the first MathCAT init, held at {step:?}"
             );
-            let_go.send(()).expect("the init is held at the pause");
+            let_go
+                .send(())
+                .expect("the pause keeps the receiver for good");
         }
-        let block = render.join().expect("the render thread joined");
+        let block = match next() {
+            Event::Rendered(block) => block,
+            Event::RenderFailed(message) => {
+                panic!("the render panicked after the init was let go: {message}")
+            }
+            Event::Held(step) => panic!("the first MathCAT init was held again at {step:?}"),
+        };
+        render
+            .join()
+            .expect("the render thread catches its own panic");
         assert!(!block.mathml.is_empty(), "the render must reach MathCAT");
         let recorders: Vec<_> = swaps
             .into_iter()
