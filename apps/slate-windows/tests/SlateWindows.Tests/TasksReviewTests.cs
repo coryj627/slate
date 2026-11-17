@@ -64,9 +64,27 @@ public sealed class TasksReviewTests : IDisposable
             (announced ?? []).Add,
             activateRow ?? ((_, _, _) => ReviewOpenRoute.Opened),
             toggleViaTab ?? ((_, _, _) => ReviewToggleRoute.NoOpenTab),
+            new IdleChain(),
             clock ?? (() => Clock),
             repairs,
             synchronousForTests: true);
+    }
+
+    /// <summary>A note's save chain with nothing admitted: an operation runs
+    /// at once, and no worker is tracked. The review's own facts need no
+    /// more, nor does any other fact that only builds a review;
+    /// <c>SaveChainAdmissionTests</c> drives the real chain.</summary>
+    internal sealed class IdleChain : INoteSaveChain
+    {
+        public Task<bool> Admit(string path, Func<Task> operation)
+        {
+            _ = operation();
+            return Task.FromResult(true);
+        }
+
+        public void TrackWorker(Task worker)
+        {
+        }
     }
 
     [Fact]
@@ -417,6 +435,7 @@ public sealed class TasksReviewTests : IDisposable
                 _ => { },
                 (_, _, _) => ReviewOpenRoute.Opened,
                 (_, _, _) => ReviewToggleRoute.NoOpenTab,
+                new IdleChain(),
                 () => Clock);
             review.EnsureLoaded();
             Assert.True(PumpedDispatcher.PumpUntil(() => !review.IsLoading && review.Rows.Count > 0));

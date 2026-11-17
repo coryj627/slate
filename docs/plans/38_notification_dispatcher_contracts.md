@@ -811,6 +811,108 @@ Facts: `SaveChainAdmissionTests` (seventeen), `WorkspaceSaveCoordinatorTests`
 (three), `NotePropertiesTests.WhenPublished…` (four) and
 `HistoryPanelTests.BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash`.
 
+*Addendum 2026-11-16 (CB-9a, #1889, plan 47, CD5):* three more routes are
+admitted operations, through the same primitive. No sentence is added or
+reworded.
+
+- **A deleted file's recovery** joins the chain of the path it creates. It
+  re-checks nothing on the host at its turn. Core's exclusive create is the
+  check: a file a save ahead of it created answers `DestinationExists`, the
+  row opens Restore As, and nothing is spoken. `RestoredFile` is spoken from
+  `WorkspaceViewModel.FinishRecover`. A recover queued behind another
+  recover of the same path finds the deleted file's history gone, so core
+  answers `InvalidArgument` and the reader hears the existing "Can't
+  restore" alert. On success the recover reloads every clean Markdown tab
+  on the path inside its ticket, before it speaks, keeping a save queued
+  on it. The `Created`
+  event's re-seat now runs under the recover's ticket, so it keeps the
+  buffer and only marks the tab back on disk; without the reload a tab
+  that was missing would keep its old document and file identity over a
+  file created anew. A dirty tab is not reloaded.
+- **A Bases cell edit on a note with no tab** holds the note's property
+  lease from the request to the operation's end. At its turn the route is
+  decided again. A Markdown tab on the note by then takes the open-note
+  route's gates on that tab: the dirty-note line, `PropertyEditConflict`, or
+  a write on the tab's saved hash. With still no tab it writes with no
+  expected hash, which core applies as one read, edit and write under its
+  lock, so it lands on the bytes the save ahead of it published. Its
+  publication reconciles a tab that opened while the write ran: a clean one
+  is rebaselined, and a dirty one hears "Properties changed on disk, but the
+  editor no longer matches it. Save or reopen the note to reconcile.", an
+  existing sentence at a new occasion. The operation ends when
+  `CompleteBasesWrite` returns, never on the funnel refresh's publication:
+  a base document that shuts down drops that continuation unrun, and a
+  ticket waiting on it would hold the note's chain for good. So the outcome
+  sentence (`BasesCellSaved`, `BasesCellCleared`,
+  `BasesCellRowNoLongerMatches`) is spoken after the operation has ended,
+  as on the open-note route, and a save queued behind the write can speak
+  before it.
+- **A Tasks Review toggle on a note with no tab** is admitted through
+  `INoteSaveChain`, which only the workspace's coordinator implements. At
+  its turn the route is decided again: a tab that opened on the note takes
+  the toggle through its own admitted route, or refuses with that route's
+  sentence. One of those is heard later than before: "A task update is
+  already in progress.", after the wait and not at the press, when that
+  tab has a toggle of its own in flight at this turn. Otherwise core's
+  compare-and-swap on the row's snapshot hash is
+  the re-check, and a note that changed while the toggle waited is refused
+  with `TaskToggleConflict`. `DiskWriteLanded` runs inside the ticket, so a
+  save queued behind the toggle starts against a tab already reconciled.
+- **Each of the three ends.** A worker fault is the route's failed outcome
+  ("Can't restore", `BasesCellEditFailed`, `TaskToggleFailed`), given once. A
+  worker that ends without posting its publication still ends the
+  operation: each of the three routes has a backstop on its worker's task
+  for a fault its catch leaves alone (out of memory, stack overflow, access
+  violation), and the toggle's also covers a body its scheduler skipped.
+  The open-note Bases cell write has the same backstop now; its worker is
+  a tab's property write, and it had none (found and fixed here). The
+  properties header's own writes go through that worker with no backstop
+  yet, which is a deferred find. A backstop speaks the route's same
+  failure, in a `try`, and the recover's answers its row that nothing
+  happened. A publication that throws still ends the operation too, and a
+  sentence that throws in one skips no state step of it: the tabs' reload
+  or reconcile, the row's answer, the Deleted list's or the rows' reload
+  and the task index's repair are each attempted, and the operation ends
+  carrying the first fault. The open-note Bases cell write's completion is
+  held to the same.
+- **A failed recover ends its operation before its alert.** The "Can't
+  restore" alert is a modal box. A close that arrives inside its loop
+  settles the saves from a frame above the box, and that settle could not
+  return while the recover's ticket was open. Nothing was written on a
+  failed recover, so the operation ends first, then the alert is shown,
+  then the row is answered, once, even when the alert throws. A save
+  queued behind may start while the alert stands. Success and
+  `DestinationExists` publish inside the ticket. Each worker is tracked,
+  so teardown joins it before the session goes, and the save settle waits
+  for it. A route still queued when the coordinator closes never runs.
+- **The rescan's reload** of a changed note asks the chain
+  (`HasAdmittedSaveFor`) beside the property lease, the toggle flag and each
+  tab's own saves. Under any admitted operation a clean tab keeps its buffer
+  and its document and is marked stale against the index hash, and the next
+  rescan reloads it (contract 40 R-9's addendum).
+- **The exclusive creates stay outside the chain, as a class** (CD5(c)):
+  Restore As a version, Restore As a deleted file, the template and sidebar
+  creates, the import, and the Bases export's create arm. The create is its
+  own check. Core refuses an occupied path, and a tab that names the path
+  and holds no hash saves by create too, so whichever lands second is
+  refused and neither overwrites the other
+  (`AnExclusiveCreateAndAGhostTabsSaveNeverOverwriteEachOther`). Both
+  Restore As workers now answer their row on any fault.
+- **The census.** `SaveChainAdmissionCensus` binds the shell's sources and
+  holds every call to a session method that rewrites a note, and every
+  reload of a tab from outside the tab, to an admission. A route that still
+  stands outside is a dated row with what ends it: the bulk property rename
+  and its reconcile, the sidebar's tag edit and the saved-query export
+  (CB-9b); the link rewrites of a rename or a move (accepted, CD5(b)); and
+  the Bases view export onto an existing file (accepted until the owner
+  answers in CB-46's table).
+
+Facts: `SaveChainAdmissionTests` (the rescan fact; eighteen for the recover,
+the cell edit and the toggle; the create-class theory; seven for faults,
+teardown and the settle; four for a sentence that throws in a
+publication; the Restore As and repair-lease theories) and
+`SaveChainAdmissionCensus`.
+
 ## Hot-exit amendment, Mac (plan 43 PR 29, #1525, 2026-11-13)
 
 The seven hot-exit events (`UnsavedNotesRestored`, the four
@@ -873,7 +975,7 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `BasesBuilderSaved` | posted | `Bases/AppState+Bases.swift#basesBuilderSaveToView@1` | `Bases/BaseQueryBuilderViewModel.cs#BaseQueryBuilderViewModel.SaveToView@1`; `Bases/BaseQueryBuilderViewModel.cs#BaseQueryBuilderViewModel.SaveToView@2` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `BasesCellCleared` | posted | `Bases/AppState+Bases.swift#basesApplyProperty@1` | `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.AnnounceBasesCellOutcome@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `BasesCellEditCanceled` | posted | `Bases/BaseContainerView.swift#resultGrid@1` | `Bases/BaseSurfaceView.cs#BaseSurfaceView.CommitCellEdit@1`; `Bases/BaseSurfaceView.cs#BaseSurfaceView.RenderGrid@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `BasesCellEditFailed` | posted | `Bases/AppState+Bases.swift#basesApplyProperty@1` | `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesCellWriteAdmitted@1`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesCellWriteAdmitted@2`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesTablessWriteBody@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `BasesCellEditFailed` | posted | `Bases/AppState+Bases.swift#basesApplyProperty@1` | `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesCellWriteAdmitted@1`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesCellWriteAdmitted@2`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.BasesTablessWriteBody@1`; `WorkspaceViewModel.Bases.cs#WorkspaceViewModel.EndCellWriteIfTheWorkerFaults@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `BasesCellMustBeBoolean` | posted | `Bases/BaseCellEditPolicy.swift#propertyValue@1` | `Bases/BaseCellEditPolicy.cs#BaseCellEditPolicy.PropertyValueFor@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `BasesCellMustBeDate` | posted | `Bases/BaseCellEditPolicy.swift#propertyValue@1` | `Bases/BaseCellEditPolicy.cs#BaseCellEditPolicy.PropertyValueFor@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `BasesCellMustBeFiniteDecimal` | posted | `Bases/BaseCellEditPolicy.swift#propertyValue@1` | `Bases/BaseCellEditPolicy.cs#BaseCellEditPolicy.PropertyValueFor@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
@@ -1033,7 +1135,7 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `ReopenedFile` | posted | `AppState.swift#reopenClosedTab@1` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.ReopenFileAnnouncement@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `ReopenedGraph` | posted | `AppState.swift#reopenClosedTab@1` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.ReopenClosedTab@1`; `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.ReopenClosedTab@2` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `ReopenedNamed` | posted | `AppState.swift#reopenClosedTab@1`; `AppState.swift#reopenClosedTab@2` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.ReopenClosedTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `RestoredFile` | posted | `AppState+History.swift#requestRecoverDeleted@1` | `WorkspaceViewModel.History.cs#WorkspaceViewModel.RecoverDeletedFile@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `RestoredFile` | posted | `AppState+History.swift#requestRecoverDeleted@1` | `WorkspaceViewModel.History.cs#WorkspaceViewModel.FinishRecover@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `RestoredFileAs` | posted | `AppState+History.swift#commitRestoreAs@1` | `WorkspaceViewModel.History.cs#WorkspaceViewModel.CommitRestoreAsDeleted@1`; `WorkspaceViewModel.History.cs#WorkspaceViewModel.CommitRestoreAsVersion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `RestoredNoteChangedOnDisk` | posted | `AppState+HotExit.swift#restoreNotice@1` | `WorkspaceViewModel.HotExit.cs#WorkspaceViewModel.LandHotExitEntry@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `RestoredNoteExistsOnDisk` | posted | `AppState+HotExit.swift#restoreNotice@1` | `WorkspaceViewModel.HotExit.cs#WorkspaceViewModel.LandHotExitEntry@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
@@ -1066,10 +1168,10 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `SwitcherRecentCount` | posted | `QuickSwitcherModel.swift#publishAnnouncement@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: QuickSwitcherCount is the Windows canonical envelope for the same recent/no-match/match states; a11y.rs renders it through the same vocabulary templates. [w1_spec](../../docs/plans/18_windows_port/specs/w1_spec.md) |
 | `TabClosed` | posted | `AppState.swift#performCloseTab@1` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.CloseTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TabFocused` | posted | `AppState.swift#announceActiveTab@1` | `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.Activate@1`; `WorkspaceViewModel.Layout.cs#WorkspaceViewModel.AnnounceShellRegion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `TaskToggleConflict` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.StartAdmittedTaskToggle@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TogglePanelTask@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TryToggleTaskInOpenTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `TaskToggleFailed` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `TaskToggleConflict` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.StartAdmittedTaskToggle@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TogglePanelTask@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TryToggleTaskInOpenTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `TaskToggleFailed` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.DirectToggleAtItsTurn@1`; `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TaskToggleUnsaved` | posted | `AppState.swift#toggleCurrentTask@1`; `AppState.swift#toggleVaultTask@1` | `EditorInteractions.cs#EditorInteractionCoordinator.ActivateAt@1`; `EditorInteractions.cs#EditorInteractionCoordinator.TryToggleTaskAt@1`; `Reading/ReadingContentViewModel.cs#ReadingContentViewModel.ToggleTaskAt@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.StartAdmittedTaskToggle@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TogglePanelTask@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TryToggleTaskInOpenTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `TaskToggled` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `TaskToggled` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TasksFilterSet` | posted | `AppState.swift#applyTaskReviewFilter@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ApplyFilter@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TasksReviewShown` | posted | `AppState.swift#openTasksReview@1` | `WorkspaceViewModel.cs#WorkspaceViewModel.OpenTasksReview@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TemplateNoteCreated` | posted | `AppState.swift#performCreateNoteFromTemplate@1` | `WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
