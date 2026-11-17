@@ -9220,7 +9220,7 @@ impl VaultSession {
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
-        let mut converged_to_deletion = false;
+        let mut outcome = ReindexOutcome::Reindexed;
         // Plan 43 PR 21a (design §4.1): the repair is announced (the notify
         // below), so its rows are this session's own writes.
         let feed = self.change_feed.write_scope(&tx);
@@ -9239,20 +9239,41 @@ impl VaultSession {
         ) {
             Ok(()) => {}
             Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
-                converged_to_deletion = true;
                 // The path is GONE from disk: convergence means
-                // removing its index rows, not erroring forever
-                // (adversarial round 23) — a conflicted save against
+                // removing its index row, not erroring forever
+                // (adversarial round 23): a conflicted save against
                 // a deleted note left an intent whose repair would
-                // otherwise poison every vault-wide task query. The
-                // graph hears the removal like the delete path does.
-                graph_sink.stage_with(|| {
-                    Ok(crate::graph::GraphOp::FileRemoved {
-                        path: path.to_string(),
-                        inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
-                    })
-                })?;
-                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+                // otherwise poison every vault-wide task query.
+                //
+                // Only a row that stands is removed (#1683). After a
+                // move that landed, its old path names no file and,
+                // because the move's own commit moved the row, no row
+                // either: there is nothing to remove, so the arm asks
+                // first, as the bind step asks for the alias row.
+                // `index_file` writes no `files` row before its read,
+                // so the answer is the row as it stood before this
+                // repair. It may already have staged a new path's
+                // graph addition; with no row nothing more is staged,
+                // and the tail drops the sink.
+                let row_stands: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM files WHERE path = ?1)",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )?;
+                if row_stands {
+                    outcome = ReindexOutcome::RemovedRow;
+                    // The graph hears the removal like the delete
+                    // path does.
+                    graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::FileRemoved {
+                            path: path.to_string(),
+                            inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
+                        })
+                    })?;
+                    tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+                } else {
+                    outcome = ReindexOutcome::NothingStood;
+                }
             }
             Err(other) => return Err(other),
         }
@@ -9270,24 +9291,45 @@ impl VaultSession {
             )?;
         }
         tx.commit()?;
-        self.graph_apply(graph_sink);
-        self.bump_bases_generation();
         // The save path's #802 tail: listeners hear the repaired
         // truth (delivered with the session lock held, the
-        // documented contract — listeners marshal). The KIND matches
-        // the outcome (adversarial round 24): a convergence to
-        // deletion announced as Modified left hosts presenting the
-        // note as existing — open tab never marked missing, a ghost
-        // Quick Switcher entry — while only the task lists healed.
-        self.notify_file_change(
-            if converged_to_deletion {
-                FileChangeKind::Deleted
-            } else {
-                FileChangeKind::Modified
-            },
-            path,
-            None,
-        );
+        // documented contract: listeners marshal). Two rules decide
+        // what is heard:
+        //
+        // - The KIND matches the outcome (adversarial round 24): a
+        //   convergence to deletion announced as Modified left hosts
+        //   presenting the note as existing (an open tab never
+        //   marked missing, a ghost Quick Switcher entry) while only
+        //   the task lists healed.
+        // - An outcome that changed nothing is not announced (#1683,
+        //   CD6). With no file and no row the repair changed nothing
+        //   outside `text_write_intents`, so it applies no graph op,
+        //   moves no generation and sends no event. That is the old
+        //   path of every move that landed (other than a case-only
+        //   rename on a volume that answers both spellings, which the
+        //   bind step settles), repaired by the first task query that
+        //   covers it, in the session that made the move (whose
+        //   listeners heard its own Renamed) or in any other session
+        //   on the vault (whose hosts learn of it from their next
+        //   change-feed window, as a rename). Only that first sweep
+        //   repairs it: its commit clears the marker. A Deleted there
+        //   made the Windows host mark a tab still at the old path
+        //   missing and say so.
+        let kind = match outcome {
+            ReindexOutcome::Reindexed => FileChangeKind::Modified,
+            ReindexOutcome::RemovedRow => FileChangeKind::Deleted,
+            ReindexOutcome::NothingStood => {
+                // Dropped, not applied: `index_file` stages a new path's
+                // graph addition before it reads, and a file gone between
+                // the stat and the read leaves that addition staged for a
+                // row that was never inserted.
+                drop(graph_sink);
+                return Ok(());
+            }
+        };
+        self.graph_apply(graph_sink);
+        self.bump_bases_generation();
+        self.notify_file_change(kind, path, None);
         Ok(())
     }
 
@@ -13400,6 +13442,21 @@ enum MarkerBinding {
     /// under the sweep: nothing was done, and the marker stands as it was
     /// for the next sweep.
     Waits,
+}
+
+/// What `VaultSession::reindex_path_locked` changed in the index for one
+/// path (#1683). The repair's effects outside the index (a graph op, the
+/// generation, the event) follow from it, never from the arm the read took.
+enum ReindexOutcome {
+    /// The path was indexed again from disk: announced as `Modified`.
+    Reindexed,
+    /// The file is gone and a `files` row stood under the path: the row was
+    /// removed, and so was its graph node where this session's graph is live
+    /// and holds one; announced as `Deleted`.
+    RemovedRow,
+    /// The file is gone and no `files` row stood: only the selected marker
+    /// tokens were cleared, and nothing is applied, moved or announced.
+    NothingStood,
 }
 
 // --- Internal: save_text helpers ---
@@ -23468,6 +23525,7 @@ mod tests {
 
     mod fault_guard;
     mod rename_planning;
+    mod repair_announcement;
 
     mod two_sessions;
 }

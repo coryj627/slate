@@ -872,6 +872,8 @@ public sealed partial class RescanTests
     {
         using var h = new Harness("feed-rename-chain", ("first.md", "first\n"));
         WorkspaceTabViewModel tab = h.Open("first.md");
+        h.PumpUntil(() => InteractionLoadsIdle(tab), "the open tab's interaction loads");
+        long loadsBefore = tab.EditorInteractions!.ArtifactCacheLoadCountForTests;
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
         {
             _ = other.RenameFile("first.md", "second.md");
@@ -879,12 +881,14 @@ public sealed partial class RescanTests
 
         _ = h.Lifecycle.SessionForTests!.RenameFile("second.md", "third.md");
         h.Context.Drain();
-        // The rename's own aftermath, before any rescan and as on main
-        // (#1683): this session announces first.md, which another session
-        // moved, as deleted, and marks its tab missing.
+        // The rename's own aftermath, before any rescan (#1683): the tab
+        // still at first.md asks for its tasks again on a pool thread, and
+        // the repair of a path with no file and no index row says nothing.
+        // The tab is not marked missing.
+        h.PumpUntil(() => OldPathRequeried(tab, loadsBefore), "the old path's task re-query");
         h.Settle();
-        h.Settle();
-        h.Events.Clear();
+        Assert.Empty(h.Spoken);
+        Assert.False(tab.IsMissingFromDisk);
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
@@ -894,6 +898,115 @@ public sealed partial class RescanTests
         Assert.False(tab.IsMissingFromDisk);
         Assert.Equal(["third.md"], h.QuickOpen.RankedPathsForTests());
     });
+
+    /// <summary>#1683: another session renames the open note, and this
+    /// session then makes a change of its own elsewhere. The change makes the
+    /// tab still at the old path ask for its tasks again; nothing is said of
+    /// that path and the tab is not marked missing. The next rescan moves the
+    /// tab to the note's new path.</summary>
+    [Fact]
+    public void AForeignRenameThenAnUnrelatedOwnChangeSaysNothingOfTheOldPath() => RunSta(() =>
+    {
+        using var h = new Harness("feed-rename-unrelated", ("first.md", "first\n"));
+        WorkspaceTabViewModel tab = h.Open("first.md");
+        h.PumpUntil(() => InteractionLoadsIdle(tab), "the open tab's interaction loads");
+        long loadsBefore = tab.EditorInteractions!.ArtifactCacheLoadCountForTests;
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("first.md", "second.md");
+        }
+
+        h.CreateThroughSlate("unrelated.md", "unrelated\n");
+        h.PumpUntil(() => OldPathRequeried(tab, loadsBefore), "the old path's task re-query");
+        h.Settle();
+
+        Assert.Empty(h.Spoken);
+        Assert.Equal("first.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
+        Assert.Equal("second.md", tab.Path);
+        Assert.Equal("first\n", tab.Text);
+        Assert.False(tab.IsMissingFromDisk);
+    });
+
+    /// <summary>#1683: the stray deletion a repair used to announce for the
+    /// old path of another session's rename pruned the closed-tab history and
+    /// the Connections back stack of that path, so a note that only moved
+    /// could not be reopened. With a tab still at the old path, a closed tab
+    /// of the note and a back-stack entry for it, this session's own change
+    /// and the next rescan leave both entries, moved to the new
+    /// path.</summary>
+    [Fact]
+    public void AStrayEventNoLongerDropsAMovedNotesClosedTabAndConnectionsEntries() => RunSta(() =>
+    {
+        using var h = new Harness("feed-rename-followers", ("first.md", "first\n"), ("other.md", "other\n"));
+        WorkspaceTabViewModel kept = h.Open("first.md");
+        h.Workspace.DuplicateTabCommand.Execute(null);
+        h.Context.Drain();
+        WorkspaceTabViewModel closing = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(kept, closing);
+        _ = h.Open("other.md");
+        // Pinning first.md and then another note puts first.md on the back
+        // stack; pinned alone it would be the pin, which the prune keeps.
+        Assert.True(h.Workspace.Connections.PinTo("first.md"));
+        Assert.True(h.Workspace.Connections.PinTo("other.md"));
+        h.Workspace.CloseTabCommand.Execute(closing);
+        h.Context.Drain();
+        (string? Pin, string Effective)[] stackBefore = [(null, "other.md"), ("first.md", "first.md")];
+        Assert.Equal(stackBefore, h.Workspace.Connections.BackStack);
+        Assert.True(h.Workspace.ReopenClosedTabCommand.CanExecute(null));
+        h.PumpUntil(() => InteractionLoadsIdle(kept), "the kept tab's interaction loads");
+        long loadsBefore = kept.EditorInteractions!.ArtifactCacheLoadCountForTests;
+        h.Events.Clear();
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("first.md", "second.md");
+        }
+
+        h.CreateThroughSlate("unrelated.md", "unrelated\n");
+        // The kept tab asks for first.md's tasks again on a pool thread; what
+        // that query sends is handled before the rescan.
+        h.PumpUntil(() => OldPathRequeried(kept, loadsBefore), "the old path's task re-query");
+        h.Context.Drain();
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        // Both followers in one assertion, so a failure names each loss.
+        string followers =
+            "back stack: "
+            + string.Join(
+                ", ",
+                h.Workspace.Connections.BackStack.Select(entry => $"({entry.Pin ?? "following"}, {entry.Effective})"))
+            + $"; Reopen Closed Tab can run: {h.Workspace.ReopenClosedTabCommand.CanExecute(null)}";
+        string bothMoved = "back stack: (following, other.md), (second.md, second.md); Reopen Closed Tab can run: True";
+        Assert.True(followers == bothMoved, $"Expected [{bothMoved}], got [{followers}]");
+        Assert.Equal("second.md", kept.Path);
+        h.Workspace.ReopenClosedTabCommand.Execute(null);
+        h.Context.Drain();
+        WorkspaceTabViewModel reopened = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(kept, reopened);
+        Assert.Equal("second.md", reopened.Path);
+        Assert.Equal("first\n", reopened.Text);
+        Assert.False(reopened.IsMissingFromDisk);
+    });
+
+    /// <summary>#1683: whether a tab's interaction data has no load queued or
+    /// running. A Slate-owned file event makes each open tab ask core for its
+    /// tasks again, on a pool thread.</summary>
+    private static bool InteractionLoadsIdle(WorkspaceTabViewModel tab) =>
+        !tab.EditorInteractions!.ArtifactCacheLoadingForTests
+        && tab.EditorInteractions.LiveWorkersForTests == 0;
+
+    /// <summary>#1683: the tab's interaction data was loaded again since
+    /// <paramref name="loadsBefore"/> (its task query ran), and no load is
+    /// queued or running.</summary>
+    private static bool OldPathRequeried(WorkspaceTabViewModel tab, long loadsBefore) =>
+        tab.EditorInteractions!.ArtifactCacheLoadCountForTests > loadsBefore
+        && InteractionLoadsIdle(tab);
 
     /// <summary>Design §4.3's table (the <c>from_hash</c> guard): another
     /// session renames a note, and this session's user renames another note
