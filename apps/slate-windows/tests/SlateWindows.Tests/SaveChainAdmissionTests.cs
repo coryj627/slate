@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Windows.Threading;
 using SlateWindows.Bases;
+using SlateWindows.FileManagement;
 using SlateWindows.Panels;
 using SlateWindows.Templates;
 using uniffi.slate_uniffi;
@@ -3486,8 +3487,9 @@ public sealed class SaveChainAdmissionTests
     /// route's new text keeps). Today the whole-document replace stays on
     /// the source's undo stack and reaches the peer's through the mirroring,
     /// and an Undo then a save writes the old bytes back (M10, M11). The tag
-    /// edit's row (stage B, Design 4) is red today on its first assertion: no
-    /// tab follows a tag edit at all.</summary>
+    /// edit's row (stage B, Design 4) and the link rewrite's (Design 5) are
+    /// red today on their first assertion: no tab follows a tag edit or a
+    /// link rewrite at all.</summary>
     [Theory]
     [InlineData("property set from the header")]
     [InlineData("property delete")]
@@ -3496,9 +3498,14 @@ public sealed class SaveChainAdmissionTests
     [InlineData("tabless Bases cell write with tabs that raced open")]
     [InlineData("bulk rename")]
     [InlineData("tag edit")]
+    [InlineData("link rewrite (rename)")]
     public void AnUndoCannotRestoreBytesAnotherWriterReplaced(string route) => RunSta(() =>
     {
-        using var h = new Vault("undo-across-writer", ("a.md", TwoKeyNote), ("Notes.base", NotesBase));
+        // The link rewrite's row: a.md links to b.md, which the reader
+        // renames from the Files sidebar, so core rewrites a.md's link.
+        using var h = route == "link rewrite (rename)"
+            ? new Vault("undo-across-writer", ("a.md", TwoKeyNote + "See [[b]].\n"), ("b.md", "# B\n"))
+            : new Vault("undo-across-writer", ("a.md", TwoKeyNote), ("Notes.base", NotesBase));
         bool tabless = route == "tabless Bases cell write with tabs that raced open";
         WorkspaceTabViewModel? a = null;
         WorkspaceTabViewModel? b = null;
@@ -4845,6 +4852,207 @@ public sealed class SaveChainAdmissionTests
         return h.Session.IndexedContentHashes([path], cancel)[0] ?? "<none>";
     }
 
+    // ---- Clean tabs follow a link rewrite (plan 47 CB-9b, Design 5) -------------
+
+    /// <summary>Design 5 (CD5(b); M9, M16). A note links to an item that a
+    /// rename or a move from the Files sidebar renames or moves, and core
+    /// rewrites the note's links. The note's tab is open and clean (for an
+    /// undo or a redo, opened just before it, on the bytes it rewrites). The
+    /// tab then shows the rewritten bytes at the index's hash, under the
+    /// note's path after the change, is not stale, cannot undo back across
+    /// them, nothing is spoken for it, and a later save from it lands. Red
+    /// today: the tab keeps the bytes from before the rewrite, and the later
+    /// save is refused.</summary>
+    [Theory]
+    [InlineData("rename")]
+    [InlineData("folder-with-note rename")]
+    [InlineData("a note inside a renamed folder")]
+    [InlineData("move")]
+    [InlineData("batch move")]
+    [InlineData("undo of a rename")]
+    [InlineData("redo of a move")]
+    [InlineData("undo of a batch move")]
+    public void ACleanTabOnANoteWhoseLinksAStructuralChangeRewroteShowsTheRewrittenBytes(string change) => RunSta(() =>
+    {
+        (string Path, string Text)[] files;
+        string linking;
+        string after;
+        string expected;
+        switch (change)
+        {
+            case "rename":
+            case "undo of a rename":
+                files = [("note3.md", "# Note 3\n\nSee [[note4]].\n"), ("note4.md", "# Note 4\n")];
+                (linking, after) = ("note3.md", "note3.md");
+                expected = change == "rename" ? "See [[renamed4]]." : "See [[note4]].";
+                break;
+            case "folder-with-note rename":
+                // One note rewritten twice, chained (M16).
+                files = [("F/F.md", "# Folder note\n"), ("a.md", "See [[F/F]] and [[F/F.md]].\n")];
+                (linking, after, expected) = ("a.md", "a.md", "See [[G/G]] and [[G/G]].");
+                break;
+            case "a note inside a renamed folder":
+                // Named in the report under its new path (M16).
+                files = [("F/F.md", "# Folder note\n"), ("F/x.md", "Up [[F/F]].\n")];
+                (linking, after, expected) = ("F/x.md", "G/x.md", "Up [[G/G]].");
+                break;
+            default:
+                // A markdown link by its folder's path is rewritten when the
+                // folder moves; a link by name alone still resolves and is
+                // left as it is (core's no-churn rule).
+                files = [("notes/target.md", "# Target\n"), ("y/keep.md", "# Keep\n"), ("linker.md", "See [t](notes/target.md).\n")];
+                (linking, after) = ("linker.md", "linker.md");
+                expected = change == "undo of a batch move" ? "See [t](notes/target.md)." : "See [t](y/notes/target.md).";
+                break;
+        }
+        using var h = new Vault("link-rewrite", files);
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        WorkspaceTabViewModel? tab = change.StartsWith("undo", StringComparison.Ordinal)
+            || change.StartsWith("redo", StringComparison.Ordinal)
+                ? null
+                : h.OpenNow(linking);
+        switch (change)
+        {
+            case "rename":
+                RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+                break;
+            case "folder-with-note rename":
+            case "a note inside a renamed folder":
+                RenameInTheSidebar(h, sidebar, "F", "G");
+                break;
+            case "move":
+                MoveInTheSidebar(h, sidebar, "notes", "y");
+                break;
+            case "batch move":
+                BatchMoveInTheSidebar(h, sidebar, "notes", "y");
+                break;
+            case "undo of a rename":
+                RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+                tab = h.OpenNow(linking);
+                sidebar.UndoStructural();
+                break;
+            case "redo of a move":
+                MoveInTheSidebar(h, sidebar, "notes", "y");
+                sidebar.UndoStructural();
+                tab = h.OpenNow(linking);
+                sidebar.RedoStructural();
+                break;
+            default:
+                Assert.Equal("undo of a batch move", change);
+                BatchMoveInTheSidebar(h, sidebar, "notes", "y");
+                tab = h.OpenNow(linking);
+                sidebar.UndoStructural();
+                break;
+        }
+        try
+        {
+            string disk = h.Read(after);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            Assert.Equal(after, tab!.Path);
+            Assert.Equal(disk, tab.Text);
+            Assert.Equal(IndexedHash(h, after), tab.SavedContentHash);
+            Assert.False(tab.IsExternallyStale, "the tab on the rewritten note is stale");
+            Assert.False(tab.IsDirty, "the tab on the rewritten note is dirty");
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the tab can undo back across the rewritten links");
+            Assert.DoesNotContain(h.Events, e => IsThePropertySentence(e) || e is A11yEvent.NoteSaveConflict);
+
+            tab.Text = tab.Text + "A later edit.\n";
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a later save from the tab");
+            Assert.True(save.Result, "a later save from the tab on the rewritten note was refused");
+            Assert.Equal(tab.Text, h.Read(after));
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 5. A link rewrite leaves alone a dirty tab on the
+    /// rewritten note (no reload, no sentence: the change event marks it
+    /// stale), and a clean tab whose note has an operation admitted, which
+    /// publishes to it itself. Green today, where nothing follows a link
+    /// rewrite; red by mutation: drop the HasAdmittedSaveFor guard, and the
+    /// second row reloads under the operation.</summary>
+    [Theory]
+    [InlineData("a dirty tab")]
+    [InlineData("a clean tab under an admitted operation")]
+    public void ALinkRewriteLeavesADirtyTabAndATabUnderAnAdmittedOperationAsTheyAre(string which) => RunSta(() =>
+    {
+        const string Linking = "# Note 3\n\nSee [[note4]].\n";
+        const string Edited = Linking + "An unsaved edit.\n";
+        using var h = new Vault("link-rewrite-left-alone", ("note3.md", Linking), ("note4.md", "# Note 4\n"));
+        WorkspaceTabViewModel tab = h.OpenNow("note3.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        bool dirty = which == "a dirty tab";
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? held = null;
+        if (dirty)
+        {
+            tab.Text = Edited;
+        }
+        else
+        {
+            held = h.Workspace.SavesForTests.Admit("note3.md", _ => ahead.Task);
+            Assert.False(tab.HasPendingSaves, "premise: the tab has a save of its own pending");
+        }
+        string? saved = tab.SavedContentHash;
+        h.Events.Clear();
+        try
+        {
+            RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+            Assert.Contains("See [[renamed4]].", h.Read("note3.md"), StringComparison.Ordinal);
+            Assert.Equal(dirty ? Edited : Linking, tab.Text);
+            Assert.Equal(saved, tab.SavedContentHash);
+            Assert.Equal(dirty, tab.IsDirty);
+            Assert.DoesNotContain(h.Events, IsThePropertySentence);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+        Assert.True(held is null || held.Result);
+    });
+
+    /// <summary>Renames <paramref name="path"/>, a note or a folder listed at
+    /// the vault's root, to <paramref name="newName"/> from the sidebar, as
+    /// the rename box does.</summary>
+    private static void RenameInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string newName)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == path);
+        sidebar.MutationName = newName;
+        Assert.True(sidebar.TryRenameSelected(), $"premise: the rename of {path} was refused");
+    }
+
+    /// <summary>Moves <paramref name="path"/>, a note or a folder listed at
+    /// the vault's root, into <paramref name="destination"/> through the Move
+    /// To sheet: the single-item route.</summary>
+    private static void MoveInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string destination)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == path);
+        sidebar.MoveToCommand.Execute(null);
+        h.PumpUntil(
+            () => sidebar.MoveToSheet is { IsReady: true } sheet && sheet.Rows.Any(row => row.Destination == destination),
+            $"premise: the Move To sheet ready, listing {destination}");
+        MoveToPickerViewModel picker = sidebar.MoveToSheet!;
+        picker.ActivateCommand.Execute(picker.Rows.Single(row => row.Destination == destination));
+        Assert.Null(sidebar.MoveToSheet);
+    }
+
+    /// <summary>Moves the checked <paramref name="path"/>, a note or a folder
+    /// listed at the vault's root, into <paramref name="destination"/> as a
+    /// batch.</summary>
+    private static void BatchMoveInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string destination)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.RootNodes.Single(node => node.Path == path).IsBatchSelected = true;
+        sidebar.MoveDestination = destination;
+        sidebar.BatchMoveCommand.Execute(null);
+    }
+
     /// <summary>The workspace's bulk rename sheet, opened and armed by a
     /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
     /// with what the preview spoke dropped.</summary>
@@ -4902,6 +5110,11 @@ public sealed class SaveChainAdmissionTests
             CheckForATagEdit(h, tagging, "a.md");
             tagging.AddTagCommand.Execute(null);
             return ("probe", () => TagSummaries(h) > 0);
+        }
+        if (route == "link rewrite (rename)")
+        {
+            RenameInTheSidebar(h, h.Sidebar(), "b.md", "c.md");
+            return ("See [[c]].", () => true);
         }
         Assert.Equal("bulk rename", route);
         BulkRenameViewModel sheet = h.Workspace.CreateBulkRename();
