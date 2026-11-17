@@ -435,11 +435,27 @@ internal sealed partial class WorkspaceViewModel
         if (_summaryParked
             && ReferenceEquals(tab, ActiveGroup.ActiveTab)
             && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
-            && CoreDocumentClassification.IsMarkdown(destination))
+            && CoreDocumentClassification.IsMarkdown(destination)
+            && !AnotherNoteSharesThePathOf(tab))
         {
             _parkedSummaryPath = destination;
         }
     }
+
+    /// <summary>Plan 47 CB-11 (#1714): another Markdown tab names the same
+    /// path as <paramref name="tab"/> but holds a different saved baseline,
+    /// so the two can be different notes (another session moved one away
+    /// and this window renamed a second into the freed name, and the reader
+    /// may have activated either). The leaf follows the path, not the note,
+    /// so it cannot say which note the press was asked about; the press is
+    /// not moved, and the sync drops it. Tabs of one note share their
+    /// baseline, so a split pane on the note still moves it.</summary>
+    private bool AnotherNoteSharesThePathOf(WorkspaceTabViewModel tab) =>
+        Groups.SelectMany(group => group.Tabs).Any(other =>
+            !ReferenceEquals(other, tab)
+            && other.IsMarkdown
+            && string.Equals(other.Path, tab.Path, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(other.SavedContentHash, tab.SavedContentHash, StringComparison.Ordinal));
 
     /// <summary>The deferred Ctrl+Shift+J landing. Detaches on the
     /// first publish either way: an answer about a different note is
