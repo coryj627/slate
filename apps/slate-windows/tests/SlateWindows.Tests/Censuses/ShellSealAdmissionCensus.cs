@@ -1540,10 +1540,11 @@ public sealed class ShellSealAdmissionCensus
     /// <summary>Class handlers the shell registers today, none of which carry
     /// input. #1515's <c>RealizedRowHold</c> hears a virtualizing panel ask
     /// before it recycles a container, which only its own layout pass
-    /// raises.</summary>
+    /// raises. CB-19's <c>ComboBoxRowPlaces</c> hears a combo box and its
+    /// rows change size, a layout event that carries no input.</summary>
     private static bool IsKnownNonInput(string routed) =>
         routed is "FrameworkElement.LoadedEvent" or "TextBoxBase.TextChangedEvent"
-            or "VirtualizingStackPanel.CleanUpVirtualizedItemEvent";
+            or "VirtualizingStackPanel.CleanUpVirtualizedItemEvent" or "FrameworkElement.SizeChangedEvent";
 
     private static bool PastHandled(InvocationExpressionSyntax invocation)
     {

@@ -62,6 +62,9 @@ public partial class MainWindow : Window
         // R-5 (#1247, OD-11c): a click on a populated list's empty area lands
         // on a row.
         SelectorFocus.RegisterClickRule();
+        // #1783, #1836: every combo box's rows say their place in both places UI
+        // Automation publishes them, the open list's own window included.
+        ComboBoxRowPlaces.Register();
         // The Tags tree's selection ACTIVATES a tag filter (R-3): its
         // landing is its selected tag, else its first tag UNSELECTED —
         // never one it would apply.
