@@ -266,6 +266,74 @@ spelling.
 
 Facts: `session/tests/canonical_identity.rs`, the section headed #1975.
 
+## The not-found arm acts only on a row that stands (#1683, 2026-11-17)
+
+`reindex_path_locked` converges a path whose file is gone (INV3, round 23).
+Its not-found arm did four things without asking whether a `files` row stood
+at the path: it staged the graph's removal of the path, deleted the row,
+moved the session's generation and announced `Deleted`. After a move that
+landed (other than a case-only rename on a volume that answers both
+spellings, which the bind step handles), the sweep repairs both of the
+move's markers, and the old path then names nothing: no file, and no row,
+because the move's own commit moved the row. So the first task query that
+covered the old path after a rename, in the session that made it or in any
+other session on the vault, announced the old path as deleted, and a host
+could mark an open tab of the note missing (#1683). Where the session's
+graph held no node for the path, the staged removal met the graph's
+`debug_assert!` for a removed file with no node: a debug build panicked, and
+a release build dropped the whole graph index and rebuilt it on the next
+graph query.
+
+The arm now reads, in the same writer transaction and before it stages
+anything of its own, whether a `files` row stands at the path:
+
+- **A row stands.** As before: the graph's removal is staged, the row is
+  deleted, and after the commit the graph ops are applied, the generation
+  moves and `Deleted` is announced.
+- **No row stands.** The selected tokens, if any, are cleared in the same
+  commit, and nothing else is done: the graph sink is dropped without being
+  applied, the generation does not move, and no event is sent. The sink is
+  dropped because `index_file` stages a new path's graph addition before it
+  reads the file, so a file gone between the stat and the read leaves an
+  addition for a row that was never inserted. The path had already
+  converged, so the repair changed nothing outside `text_write_intents` and
+  says nothing. A host learns of another session's move from its next
+  change-feed window, which records it as a rename.
+
+Round 24's rule, recorded here for the first time: the event's kind follows
+the outcome. A repair that indexed the path again from disk announces
+`Modified`; a repair that removed a row announces `Deleted`, because a
+convergence to deletion announced as `Modified` left hosts showing the note
+as existing. A read that finds the content already indexed still announces
+`Modified`: the content hash cannot say "unchanged", because a quarantined
+row keeps its hash while its task rows are gone, and its heal must be
+announced.
+
+Checked against the invariants:
+
+- **INV2.** Unchanged. The marker is cleared by a repair that read the disk
+  under the writer lock (the read answered not found), and on both branches
+  only the tokens the sweep selected are cleared, in the repair's own commit
+  (round 22). The host routes (`reindex_path`, `repair_or_contain_path`)
+  select no tokens and clear none, as before.
+- **INV3.** Holds. Both branches end with the path converged and the
+  selected tokens cleared. "NotFound to deletion convergence" means that no
+  row stands at the path after the commit, whether the repair removed one or
+  none was there.
+- **Scanner semantics.** Holds more closely than before: a scan that meets a
+  path with no file and no row writes nothing and announces nothing, and now
+  the repair does the same.
+- **The bind step.** Its text above stays true. A path that names nothing
+  still converges to deletion, and the alias row it removes "as the
+  not-found arm removes one" is a row that stands.
+- **INV1, INV4 and the durability rule.** Not touched. The arm plants
+  nothing, contains nothing and precedes no filesystem mutation.
+
+Facts: `session/tests/repair_announcement.rs`, and the two facts that pin
+round 24 (`deleted_file_intents_converge_instead_of_poisoning_queries` in
+`session/tests/tasks.rs`, `a_marker_under_a_path_that_names_nothing_is_settled_as_before`
+in `session/tests/canonical_identity.rs`).
+
 ## Accepted-risk register (documented, not defects)
 
 1. `create_exclusive_binding` (new-file publish) can crash post-write with no
@@ -345,3 +413,7 @@ Facts: `session/tests/canonical_identity.rs`, the section headed #1975.
 - Test seams follow the `SLATE_TEST_*` env pattern, path-substring-triggered,
   serialized under `ENV_FAULT_GUARD`/`EnvFaultLock`; regressions must be
   bite-verified (temporarily disable the fix and watch the assert fail).
+- A repair's effects outside the index (an event, a graph operation, a
+  generation bump) follow from a row it wrote or removed, never from the arm
+  it took (#1683). A repair that finds no row and no file clears its
+  selected tokens, changes nothing else and announces nothing.
