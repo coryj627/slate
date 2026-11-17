@@ -78,7 +78,9 @@ public sealed class ComboBoxCensus
     [Fact]
     public void EveryComboBoxIsListedWithItsFamilyAndTheFactThatOpensIt()
     {
-        List<Site> xaml = [.. ShellXaml().SelectMany(document => XamlSites(document.File, document.Document))];
+        (string File, XDocument Document)[] documents = [.. ShellXaml()];
+        Dictionary<string, XElement> keyed = KeyedStyles(documents.Select(document => document.Document));
+        List<Site> xaml = [.. documents.SelectMany(document => XamlSites(document.File, document.Document, keyed))];
         CodeScan code = ScanShellCode();
         Assert.True(xaml.Count >= 7, $"only {xaml.Count} combo boxes were found in the shell's XAML; the scrape is broken.");
         Assert.True(code.Sites.Count >= 4, $"only {code.Sites.Count} combo boxes were found in the shell's code; the scrape is broken.");
@@ -98,20 +100,32 @@ public sealed class ComboBoxCensus
     [Fact]
     public void EachFamilyHasAGateJourneyThatChecksItsOpenList()
     {
-        var missing = new List<string>();
+        List<string> missing = [.. FamilyJourneyGaps(Table, GateMethod)];
+        Assert.True(missing.Count == 0, string.Join("\n", missing));
+    }
+
+    /// <summary>Rule 2: each known family has a gate journey that opens one of
+    /// its combo boxes, scans it with the list open and calls the helper on
+    /// it; and no table row is of no known family, which has no journey.</summary>
+    internal static IEnumerable<string> FamilyJourneyGaps(IReadOnlyList<Row> table, Func<string, MethodDeclarationSyntax?> gateMethod)
+    {
         foreach (Family family in new[] { Family.ComboRowBase, Family.Inline, Family.CodeBuilt })
         {
-            bool covered = Table.Any(row => row.Family == family
+            bool covered = table.Any(row => row.Family == family
                 && row.Journey is not null
-                && GateMethod(row.Journey) is { } method
-                && CallsTheHelperOn(method, row.JourneyFindsItBy!));
+                && gateMethod(row.Journey) is { } method
+                && ChecksTheOpenList(method, row.JourneyFindsItBy!));
             if (!covered)
             {
-                missing.Add($"no gate journey opens a {family} combo box's list and calls {GateHelper} on it");
+                yield return $"no gate journey opens a {family} combo box's list, scans it with AssertAxeClean while it is open "
+                    + $"and calls {GateHelper} on it";
             }
         }
 
-        Assert.True(missing.Count == 0, string.Join("\n", missing));
+        foreach (Row row in table.Where(row => row.Family == Family.Unknown))
+        {
+            yield return $"ComboBoxCensus.Table: the row '{row.Site}' is of no known family, which has no gate journey: {NoKnownFamily}";
+        }
     }
 
     // ---- Rule 3 ---------------------------------------------------------------
@@ -146,7 +160,92 @@ public sealed class ComboBoxCensus
         // A row whose combo box is gone is stale.
         Row gone = new("PlantedGone", Family.ComboRowBase, "PlantedGone");
         Assert.Contains("'PlantedGone' names no combo box", Assert.Single(Stale(sites, [gone])), StringComparison.Ordinal);
-        Assert.Empty(Stale(sites, [new Row("PlantedPicker", Family.Unknown, "PlantedPicker")]));
+        Assert.Empty(Stale(sites, [new Row("PlantedPicker", Family.ComboRowBase, "PlantedPicker")]));
+    }
+
+    /// <summary>Rules 1 and 2 hold every combo box to a family the tracker has
+    /// been shown to serve. A row style given in the attribute form is read as
+    /// well as the property element; a site whose rows are of no known family
+    /// is refused even when a table row agrees with it, and so is a table row
+    /// that says Unknown; and a code-built combo box is of the code-built
+    /// family only when its container style ends in ClassicRows.Apply.</summary>
+    [Fact]
+    public void AComboBoxOfNoKnownFamilyIsRefusedWithItsFileAndLine()
+    {
+        XDocument planted = Parse(
+            "<UserControl xmlns=\"" + Presentation + "\" xmlns:x=\"" + Xaml + "\">\n"
+            + "  <UserControl.Resources>\n"
+            + "    <Style x:Key=\"Planted.Rows\" TargetType=\"ComboBoxItem\" BasedOn=\"{StaticResource Slate.ComboRowBase}\" />\n"
+            + "    <Style x:Key=\"Planted.Plain\" TargetType=\"ComboBoxItem\" />\n"
+            + "  </UserControl.Resources>\n"
+            + "  <StackPanel>\n"
+            + "    <ComboBox AutomationProperties.AutomationId=\"PlantedByKey\" ItemContainerStyle=\"{StaticResource Planted.Rows}\" />\n"
+            + "    <ComboBox AutomationProperties.AutomationId=\"PlantedPlainKey\" ItemContainerStyle=\"{StaticResource Planted.Plain}\" />\n"
+            + "    <ComboBox AutomationProperties.AutomationId=\"PlantedNoStyle\" />\n"
+            + "  </StackPanel>\n"
+            + "</UserControl>\n");
+        List<Site> sites = [.. XamlSites("Planted.xaml", planted)];
+        Assert.Equal(
+            ["PlantedByKey ComboRowBase", "PlantedPlainKey Unknown", "PlantedNoStyle Unknown"],
+            sites.Select(site => $"{site.Key} {site.Family}"));
+
+        // Listed with the family it has, a site of no known family is still refused,
+        Row[] listed = [.. sites.Select(site => new Row(site.Key, site.Family, site.Key))];
+        string[] refused = [.. Unlisted(sites, listed)];
+        Assert.Equal(["Planted.xaml:8", "Planted.xaml:9"], refused.Select(LineOf));
+        Assert.All(refused, report => Assert.Contains("no known family", report, StringComparison.Ordinal));
+
+        // and so is the table row that says Unknown, by rule 1 and by rule 2.
+        Assert.Equal(
+            ["'PlantedPlainKey'", "'PlantedNoStyle'"],
+            Stale(sites, listed).Select(report => report.Split(' ')[3]));
+        Assert.Equal(
+            ["ComboBoxCensus.Table: the row 'PlantedNoStyle' is of no known family, which has no gate journey: " + NoKnownFamily],
+            FamilyJourneyGaps([.. Table, new Row("PlantedNoStyle", Family.Unknown, "PlantedNoStyle")], GateMethod));
+
+        // In code, the container style must end in ClassicRows.Apply.
+        CodeScan scan = ScanPlanted(
+            "using System.Windows;\n"
+            + "using System.Windows.Controls;\n"
+            + "namespace Planted;\n"
+            + "internal sealed class Builder\n"
+            + "{\n"
+            + "    private readonly ComboBox _classic = new ComboBox { ItemContainerStyle = Rows() };\n"
+            + "    private readonly ComboBox _plain = new ComboBox { ItemContainerStyle = new Style(typeof(ComboBoxItem)) };\n"
+            + "    private readonly ComboBox _bare = new ComboBox();\n"
+            + "    private static Style Rows() => SlateWindows.ClassicRows.Apply(new Style(typeof(ComboBoxItem)));\n"
+            + "}\n");
+        Assert.Equal(
+            ["Planted.cs:6 CodeBuilt", "Planted.cs:7 Unknown", "Planted.cs:8 Unknown"],
+            scan.Sites.Select(site => $"{site.File}:{site.Line} {site.Family}"));
+    }
+
+    /// <summary>Rule 2 holds each family's journey to scanning the list while
+    /// it is open, between the open and the helper's call: the real journeys
+    /// do, and each with its list-open scan deleted is refused although it
+    /// still calls the helper.</summary>
+    [Theory]
+    [InlineData("SettingsSheet_NamesFocusAndAxe_AreClean", "SettingsTheme", "settings-theme-list-open")]
+    [InlineData("BasesSurfaces_GridBuilderAndLeaves_AreClean", "BuilderCombinator", "bases-builder-combinator-list-open")]
+    [InlineData("GraphConnections_LeafWalkDepthAndReRoot_AreClean", "ConnectionsDepth", "connections-depth-list-open")]
+    public void AJourneyWithoutItsListOpenScanIsRefused(string journey, string automationId, string surface)
+    {
+        MethodDeclarationSyntax real = Assert.IsType<MethodDeclarationSyntax>(GateMethod(journey));
+        Assert.True(ChecksTheOpenList(real, automationId), $"{journey} does not scan {automationId}'s open list before checking its rows.");
+
+        ExpressionStatementSyntax scan = Assert.Single(
+            real.DescendantNodes().OfType<ExpressionStatementSyntax>(),
+            statement => statement.ToString().Contains("AssertAxeClean", StringComparison.Ordinal)
+                && statement.ToString().Contains($"\"{surface}\"", StringComparison.Ordinal));
+        MethodDeclarationSyntax withoutTheScan = real.RemoveNode(scan, SyntaxRemoveOptions.KeepNoTrivia)!;
+        Assert.True(CallsTheHelperOn(withoutTheScan, automationId));
+        Assert.False(
+            ChecksTheOpenList(withoutTheScan, automationId),
+            $"{journey} with its list-open scan deleted still passes rule 2.");
+        Family family = Table.Single(row => row.Journey == journey).Family;
+        Assert.Equal(
+            [$"no gate journey opens a {family} combo box's list, scans it with AssertAxeClean while it is open and calls {GateHelper} on it"],
+            FamilyJourneyGaps(Table, name => name == journey ? withoutTheScan : GateMethod(name)));
     }
 
     [Fact]
@@ -280,10 +379,31 @@ public sealed class ComboBoxCensus
 
     private static XDocument Parse(string text) => XDocument.Parse(text, LoadOptions.SetLineInfo);
 
-    internal static IEnumerable<Site> XamlSites(string file, XDocument document) =>
-        document.Descendants()
+    /// <summary>The combo boxes <paramref name="document"/> declares, each with
+    /// its family, read through the keyed styles of <paramref name="keyed"/>
+    /// (the document's own when none are given).</summary>
+    internal static IEnumerable<Site> XamlSites(string file, XDocument document, IReadOnlyDictionary<string, XElement>? keyed = null)
+    {
+        IReadOnlyDictionary<string, XElement> styles = keyed ?? KeyedStyles([document]);
+        return document.Descendants()
             .Where(element => element.Name.LocalName == "ComboBox")
-            .Select(combo => new Site(file, LineOf(combo), XamlKey(file, combo), XamlFamily(combo)));
+            .Select(combo => new Site(file, LineOf(combo), XamlKey(file, combo), XamlFamily(combo, styles)));
+    }
+
+    /// <summary>Every style with an x:Key in <paramref name="documents"/>, by its key.</summary>
+    internal static Dictionary<string, XElement> KeyedStyles(IEnumerable<XDocument> documents)
+    {
+        var keyed = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (XElement style in documents.SelectMany(document => document.Descendants()).Where(element => element.Name.LocalName == "Style"))
+        {
+            if (style.Attribute(XName.Get("Key", Xaml))?.Value is { Length: > 0 } key)
+            {
+                keyed[key] = style;
+            }
+        }
+
+        return keyed;
+    }
 
     /// <summary>The AutomationId, else the x:Name, else the file and the
     /// accessible name (a bound name by the literal its format starts with).</summary>
@@ -311,20 +431,34 @@ public sealed class ComboBoxCensus
         return $"{Path.GetFileName(file)}#{(spoken.Length > 0 ? spoken : "line " + LineOf(combo))}";
     }
 
-    private static Family XamlFamily(XElement combo)
+    private const string RowBase = "Slate.ComboRowBase";
+
+    /// <summary>The row family of a XAML combo box: rows on
+    /// <c>Slate.ComboRowBase</c> (a style in the property element, or one
+    /// named by the attribute, on the row base or based on it through any
+    /// chain of keyed styles), inline <c>ComboBoxItem</c>s, or neither.</summary>
+    private static Family XamlFamily(XElement combo, IReadOnlyDictionary<string, XElement> keyed)
     {
-        bool onTheRowBase = combo.Elements()
+        bool inThePropertyElement = combo.Elements()
             .Where(element => element.Name.LocalName == "ComboBox.ItemContainerStyle")
-            .Descendants()
-            .Any(element => element.Name.LocalName == "Style"
-                && (Attribute(element, "BasedOn") ?? string.Empty).Contains("Slate.ComboRowBase", StringComparison.Ordinal));
-        if (onTheRowBase)
+            .Elements()
+            .Where(element => element.Name.LocalName == "Style")
+            .Any(style => OnTheRowBase(style, keyed, 0));
+        bool byTheAttribute = ResourceKey(Attribute(combo, "ItemContainerStyle")) is { } key
+            && (key == RowBase || (keyed.TryGetValue(key, out XElement? named) && OnTheRowBase(named, keyed, 0)));
+        if (inThePropertyElement || byTheAttribute)
         {
             return Family.ComboRowBase;
         }
 
         return combo.Elements().Any(element => element.Name.LocalName == "ComboBoxItem") ? Family.Inline : Family.Unknown;
     }
+
+    private static bool OnTheRowBase(XElement style, IReadOnlyDictionary<string, XElement> keyed, int depth) =>
+        depth < 16
+        && (style.Attribute(XName.Get("Key", Xaml))?.Value == RowBase
+            || (ResourceKey(Attribute(style, "BasedOn")) is { } basedOn
+                && (basedOn == RowBase || (keyed.TryGetValue(basedOn, out XElement? parent) && OnTheRowBase(parent, keyed, depth + 1)))));
 
     /// <summary>Rule 3 in XAML: a combo box, a style it names (and every
     /// style that one is based on), and any style aimed at ComboBox, Selector
@@ -532,7 +666,8 @@ public sealed class ComboBoxCensus
                         if (IsComboBox(created))
                         {
                             int line = Line(creation);
-                            scan.Sites.Add(new Site(file, line, $"{file}#{NameGiven(creation, line)}", Family.CodeBuilt));
+                            string name = NameGiven(creation, line);
+                            scan.Sites.Add(new Site(file, line, $"{file}#{name}", CodeFamily(creation, name, model, compilation)));
                         }
                         else if (SymbolEqualityComparer.Default.Equals(created, style)
                             && creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression is TypeOfExpressionSyntax target
@@ -544,7 +679,8 @@ public sealed class ComboBoxCensus
 
                         break;
                     case TypeOfExpressionSyntax typeOf when !theTracker && IsComboBox(model.GetTypeInfo(typeOf.Type).Type):
-                        scan.Sites.Add(new Site(file, Line(typeOf), $"{file}#typeof({typeOf.Type})@{Line(typeOf)}", Family.CodeBuilt));
+                        // A template factory's combo box: its rows' style cannot be read here.
+                        scan.Sites.Add(new Site(file, Line(typeOf), $"{file}#typeof({typeOf.Type})@{Line(typeOf)}", Family.Unknown));
                         break;
                     case ClassDeclarationSyntax declaration when model.GetDeclaredSymbol(declaration)?.BaseType is { } baseType && IsComboBox(baseType):
                         scan.Derived.Add($"{file}:{Line(declaration)} {declaration.Identifier.Text} derives from ComboBox: a subclass is refused, because the XAML scan matches combo boxes by the element name ComboBox");
@@ -583,6 +719,60 @@ public sealed class ComboBoxCensus
         return scan;
     }
 
+    /// <summary>A code-built combo box is of the code-built family when the
+    /// style it is given as its ItemContainerStyle (in its initializer, or by
+    /// an assignment to the name it is given in the same type) is built by a
+    /// method that returns ClassicRows.Apply(...), directly or through other
+    /// such methods: the shell's row template by key, which the tracker's
+    /// facts run. Anything else is of no known family.</summary>
+    private static Family CodeFamily(BaseObjectCreationExpressionSyntax creation, string name, SemanticModel model, Compilation compilation)
+    {
+        ExpressionSyntax? style = creation.Initializer?.Expressions
+            .OfType<AssignmentExpressionSyntax>()
+            .FirstOrDefault(assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "ItemContainerStyle" })?
+            .Right;
+        if (style is null && creation.FirstAncestorOrSelf<TypeDeclarationSyntax>() is { } type)
+        {
+            style = type.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .FirstOrDefault(assignment => assignment.Left is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "ItemContainerStyle" } member
+                    && member.Expression is IdentifierNameSyntax or MemberAccessExpressionSyntax
+                    && member.Expression.ToString().Split('.')[^1] == name)?
+                .Right;
+        }
+
+        return style is not null && EndsInClassicRows(style, model, compilation, 0) ? Family.CodeBuilt : Family.Unknown;
+    }
+
+    private static bool EndsInClassicRows(ExpressionSyntax expression, SemanticModel model, Compilation compilation, int depth)
+    {
+        if (depth > 6 || expression is not InvocationExpressionSyntax call || model.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
+        {
+            return false;
+        }
+
+        if (method.Name == "Apply" && method.ContainingType.Name == "ClassicRows")
+        {
+            return true;
+        }
+
+        foreach (SyntaxReference reference in method.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is not MethodDeclarationSyntax declaration)
+            {
+                continue;
+            }
+
+            SemanticModel declared = compilation.GetSemanticModel(declaration.SyntaxTree);
+            ExpressionSyntax[] returned = declaration.ExpressionBody is { } arrow
+                ? [arrow.Expression]
+                : [.. declaration.Body?.DescendantNodes().OfType<ReturnStatementSyntax>().Select(statement => statement.Expression).OfType<ExpressionSyntax>() ?? []];
+            return returned.Length > 0 && returned.All(value => EndsInClassicRows(value, declared, compilation, depth + 1));
+        }
+
+        return false;
+    }
+
     private static IOperation Unconverted(IOperation operation) =>
         operation is IConversionOperation { IsImplicit: true } conversion ? conversion.Operand : operation;
 
@@ -609,12 +799,21 @@ public sealed class ComboBoxCensus
                 yield return $"{site.File}:{site.Line} a combo box ({site.Key}) has no row in ComboBoxCensus.Table: "
                     + $"add one with its family and a data row of {Fact1} that opens it";
             }
+            else if (site.Family == Family.Unknown)
+            {
+                yield return $"{site.File}:{site.Line} {site.Key}'s rows are of no known family: {NoKnownFamily}";
+            }
             else if (row.Family != site.Family)
             {
                 yield return $"{site.File}:{site.Line} {site.Key}'s rows are {site.Family}, and the table says {row.Family}";
             }
         }
     }
+
+    /// <summary>What a combo box of no known family is asked for.</summary>
+    private const string NoKnownFamily =
+        "give its rows Slate.ComboRowBase, inline ComboBoxItems or a code-built style that ends in ClassicRows.Apply, "
+        + "or add the family to the census with a fact 2 arm that runs its rows and a gate journey that scans its open list";
 
     internal static IEnumerable<string> Stale(IEnumerable<Site> sites, IReadOnlyList<Row> table)
     {
@@ -629,6 +828,11 @@ public sealed class ComboBoxCensus
             else if (found > 1)
             {
                 yield return $"ComboBoxCensus.Table: the row '{row.Site}' matches {found} sites; give each its own key";
+            }
+
+            if (row.Family == Family.Unknown)
+            {
+                yield return $"ComboBoxCensus.Table: the row '{row.Site}' says its family is Unknown: {NoKnownFamily}";
             }
         }
     }
@@ -726,7 +930,10 @@ public sealed class ComboBoxCensus
     /// combo box it found by <paramref name="automationId"/>: the helper's
     /// second argument holds the literal, or is a local that is declared or
     /// assigned from an expression that holds it.</summary>
-    internal static bool CallsTheHelperOn(MethodDeclarationSyntax method, string automationId)
+    internal static bool CallsTheHelperOn(MethodDeclarationSyntax method, string automationId) =>
+        HelperCallsOn(method, automationId).Any();
+
+    private static IEnumerable<InvocationExpressionSyntax> HelperCallsOn(MethodDeclarationSyntax method, string automationId)
     {
         bool Holds(SyntaxNode? node) =>
             node is not null && node.DescendantNodesAndSelf().OfType<LiteralExpressionSyntax>()
@@ -734,13 +941,7 @@ public sealed class ComboBoxCensus
 
         foreach (InvocationExpressionSyntax invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            string called = invocation.Expression switch
-            {
-                IdentifierNameSyntax name => name.Identifier.Text,
-                MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
-                _ => string.Empty,
-            };
-            if (called != GateHelper || invocation.ArgumentList.Arguments.Count < 2)
+            if (Called(invocation) != GateHelper || invocation.ArgumentList.Arguments.Count < 2)
             {
                 continue;
             }
@@ -748,7 +949,8 @@ public sealed class ComboBoxCensus
             ExpressionSyntax combo = invocation.ArgumentList.Arguments[1].Expression;
             if (Holds(combo))
             {
-                return true;
+                yield return invocation;
+                continue;
             }
 
             if (combo is IdentifierNameSyntax local)
@@ -760,8 +962,40 @@ public sealed class ComboBoxCensus
                     .Any(assignment => assignment.Left is IdentifierNameSyntax target && target.Identifier.Text == name && Holds(assignment.Right));
                 if (declared || assigned)
                 {
-                    return true;
+                    yield return invocation;
                 }
+            }
+        }
+    }
+
+    private static string Called(InvocationExpressionSyntax invocation) => invocation.Expression switch
+    {
+        IdentifierNameSyntax name => name.Identifier.Text,
+        MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+        _ => string.Empty,
+    };
+
+    /// <summary>Whether <paramref name="method"/> checks the open list of the
+    /// combo box it finds by <paramref name="automationId"/>: it calls the
+    /// gate's helper on that combo box, and between the last open before that
+    /// call (Alt+Down, or an Expand) and the call it scans with AssertAxeClean,
+    /// so the scan saw the list open.</summary>
+    internal static bool ChecksTheOpenList(MethodDeclarationSyntax method, string automationId)
+    {
+        InvocationExpressionSyntax[] calls = [.. method.DescendantNodes().OfType<InvocationExpressionSyntax>()];
+        foreach (InvocationExpressionSyntax helper in HelperCallsOn(method, automationId))
+        {
+            int at = helper.SpanStart;
+            int opened = calls
+                .Where(call => call.SpanStart < at
+                    && ((Called(call) == "PressChord" && call.ArgumentList.ToString().Contains("DOWN", StringComparison.Ordinal))
+                        || Called(call) == "Expand"))
+                .Select(call => call.SpanStart)
+                .DefaultIfEmpty(-1)
+                .Max();
+            if (opened >= 0 && calls.Any(call => Called(call) == "AssertAxeClean" && call.SpanStart > opened && call.SpanStart < at))
+            {
+                return true;
             }
         }
 
