@@ -2115,6 +2115,93 @@ public sealed class SaveChainAdmissionTests
         held.AssertHeldUntilReleased();
     });
 
+    /// <summary>A pin of the present behaviour, which is the spec's Design 6
+    /// and not a wanted order. A review toggle on a note with no tab waits
+    /// its turn. Meanwhile the note is opened in a tab, and a Bases cell
+    /// edit on it is asked, which queues behind the toggle. At its turn the
+    /// toggle finds the tab and hands itself to the tab's own admitted
+    /// route, which takes a new ticket behind the cell edit. So the later
+    /// request writes first, the tab's saved bytes move, and the toggle is
+    /// refused as stale at its own turn: the conflict is spoken once, the
+    /// task is not ticked, the rows reload and the chain is freed. Nothing
+    /// is lost in silence. A fix would run the tab's toggle inside the
+    /// review's ticket, so the earlier request kept its place.</summary>
+    [Fact]
+    public void ATablessReviewToggleReroutedThroughATabIsOvertakenByAWriteQueuedMeanwhileAndRefusesAloud() => RunSta(() =>
+    {
+        using var h = new Vault("toggle-rerouted-overtaken", ("a.md", TaskNote), ("Notes.base", NotesBase));
+        (TasksReviewViewModel review, ReviewTaskRowViewModel task) = ReviewRow(h);
+        int direct = 0;
+        review.DirectToggleBeforeWriteForTests = () => Interlocked.Increment(ref direct);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        string? onDiskAtTheRefusal = null;
+        int loadsAtTheRefusal = -1;
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.TaskToggleConflict)
+            {
+                onDiskAtTheRefusal = h.Read("a.md");
+                loadsAtTheRefusal = review.LoadRequestIdForTests;
+            }
+        };
+        try
+        {
+            review.ToggleTask(task);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            WorkspaceTabViewModel opened = h.OpenNow("a.md");
+            (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            Assert.Equal(3, h.Workspace.SavesForTests.AdmittedForTests);
+            int loads = review.LoadRequestIdForTests;
+            h.Events.Clear();
+
+            ahead.SetResult();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && !opened.IsTaskToggleInFlight
+                    && !h.Workspace.PropertyWriteInFlightFor("a.md")
+                    && h.Events.Any(e => e is A11yEvent.BasesCellSaved)
+                    && h.Events.Any(e => e is A11yEvent.TaskToggleConflict or A11yEvent.TaskToggled or A11yEvent.TaskToggleFailed),
+                "the cell edit and then the toggle's outcome");
+            Assert.True(held.Result);
+
+            // The later request wrote first, and whole.
+            string written = h.Read("a.md");
+            Assert.Contains("status: done", written, StringComparison.Ordinal);
+            Assert.NotNull(onDiskAtTheRefusal);
+            Assert.Contains("status: done", onDiskAtTheRefusal, StringComparison.Ordinal);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.BasesCellSaved);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+
+            // The earlier request, the toggle, wrote nothing and said so.
+            Assert.Contains("- [ ] the task", written, StringComparison.Ordinal);
+            Assert.DoesNotContain("- [x]", written, StringComparison.Ordinal);
+            Assert.Equal(written, onDiskAtTheRefusal);
+            Assert.Equal(0, Volatile.Read(ref direct));
+            _ = Assert.Single(h.Events, e => e is A11yEvent.TaskToggleConflict);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggled or A11yEvent.TaskToggleFailed);
+            // The rows' reload is asked when the cell write refreshes the tab,
+            // with the re-routed toggle's refresh armed: before the refusal,
+            // which only disarms it.
+            Assert.True(loadsAtTheRefusal > loads, "the rows' reload was not asked by the time the toggle was refused");
+
+            // The tab shows the written note, and the chain is free.
+            Assert.Equal(written, opened.Text);
+            Assert.False(opened.IsExternallyStale);
+            Assert.False(opened.IsDirty);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            _ = ahead.TrySetResult();
+            review.DirectToggleBeforeWriteForTests = null;
+            ReleaseAndDrainTheReview(h, review);
+        }
+    });
+
     /// <summary>The review's row for a.md's task, loaded, with no tab on the
     /// note.</summary>
     private static (TasksReviewViewModel Review, ReviewTaskRowViewModel Row) ReviewRow(Vault h)
