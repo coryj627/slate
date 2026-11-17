@@ -713,14 +713,43 @@ internal sealed partial class WorkspaceViewModel
     // to leave while it held the note, and speaks the summary. Every path
     // ends the operation.
 
+    // Plan 47 CB-9b (Design 3): the tokens of every admitted apply not yet
+    // ended, whichever sheet asked for it (a sheet the headless open replaced
+    // included), and how many of teardown's settles are pumping.
+    private readonly HashSet<CancelToken> _admittedApplies = new(ReferenceEqualityComparer.Instance);
+    private int _teardownSettles;
+
+    /// <summary>Plan 47 CB-9b (Design 3): cancel every admitted apply. Teardown
+    /// does it before its settle pumps and before it joins the workers.</summary>
+    private void CancelAdmittedApplies()
+    {
+        foreach (CancelToken token in _admittedApplies)
+        {
+            token.Cancel();
+        }
+    }
+
     /// <summary>The sheet's apply request: admitted over the armed
-    /// preview's notes. An apply that never runs, because the chain closed
-    /// first, ends on the sheet as one that did not run.</summary>
-    private void ApplyBulkRenameAdmitted(BulkRenameViewModel sheet, BulkRenameViewModel.BulkRenameApply apply) =>
+    /// preview's notes, its token kept until the apply ends, and cancelled
+    /// at once when teardown's settle is pumping. An apply that never runs,
+    /// because the chain closed first, ends on the sheet as one that did not
+    /// run.</summary>
+    private void ApplyBulkRenameAdmitted(BulkRenameViewModel sheet, BulkRenameViewModel.BulkRenameApply apply)
+    {
+        _ = _admittedApplies.Add(apply.Cancel);
+        if (_teardownSettles > 0)
+        {
+            apply.Cancel.Cancel();
+        }
         AdmitPropertyWrite(
             apply.Paths,
             () => BulkRenameApplyAtItsTurn(sheet, apply),
-            abandoned: () => sheet.EndApplyUnrun(apply));
+            abandoned: () =>
+            {
+                _ = _admittedApplies.Remove(apply.Cancel);
+                sheet.EndApplyUnrun(apply);
+            });
+    }
 
     /// <summary>The apply at its turn: a torn-down workspace or a closed
     /// chain ends it unrun; a dirty header draft refuses it with the press's
@@ -738,12 +767,12 @@ internal sealed partial class WorkspaceViewModel
             BulkRenameApplyTurnHookForTests?.Invoke();
             if (_workspaceDisposed || _saves.IsClosed)
             {
-                EndBulkRenameApply(() => sheet.EndApplyUnrun(apply), done);
+                EndBulkRenameApply(apply, () => sheet.EndApplyUnrun(apply), done);
                 return done.Task;
             }
             if (AnyOpenDraftDirty())
             {
-                EndBulkRenameApply(() => sheet.RefuseApplyForDirtyDrafts(apply), done);
+                EndBulkRenameApply(apply, () => sheet.RefuseApplyForDirtyDrafts(apply), done);
                 return done.Task;
             }
             BulkRenameViewModel.ApplyOutcome? outcome = null;
@@ -769,16 +798,18 @@ internal sealed partial class WorkspaceViewModel
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            EndBulkRenameApply(() => sheet.PublishApply(apply, null, exception.Message), done);
+            EndBulkRenameApply(apply, () => sheet.PublishApply(apply, null, exception.Message), done);
         }
         return done.Task;
     }
 
-    /// <summary>An apply that ends without its worker's publication: the
-    /// sheet's step, then the operation ends, carrying the step's fault if it
-    /// threw.</summary>
-    private static void EndBulkRenameApply(Action onTheSheet, TaskCompletionSource done)
+    /// <summary>An apply that ends without its worker's publication: its
+    /// token leaves the admitted set, the sheet's step runs, then the
+    /// operation ends, carrying the step's fault if it threw.</summary>
+    private void EndBulkRenameApply(
+        BulkRenameViewModel.BulkRenameApply apply, Action onTheSheet, TaskCompletionSource done)
     {
+        _ = _admittedApplies.Remove(apply.Cancel);
         try
         {
             onTheSheet();
@@ -808,6 +839,7 @@ internal sealed partial class WorkspaceViewModel
         BulkRenameViewModel.ApplyOutcome? outcome,
         TaskCompletionSource done)
     {
+        _ = _admittedApplies.Remove(apply.Cancel);
         try
         {
             if (outcome is null)
