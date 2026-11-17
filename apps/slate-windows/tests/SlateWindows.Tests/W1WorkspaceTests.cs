@@ -325,7 +325,14 @@ public sealed class W1SidebarAndRecentsTests
         FileTreeNodeViewModel note = sidebar.RootNodes.Single(node => node.Path == "note0.md");
         note.IsBatchSelected = true;
         sidebar.TagInput = "windows";
-        sidebar.AddTagCommand.Execute(null);
+        // Plan 47 CB-9b: the tag edit runs through the workspace, admitted
+        // into the checked notes' save chains as the vault lifecycle wires
+        // it; on an idle chain it runs in the turn of the press.
+        using (var workspace = new WorkspaceViewModel(session, fixture.Root, () => [], announcements.Add))
+        {
+            sidebar.TagEditRequested = workspace.EditTagAdmitted;
+            sidebar.AddTagCommand.Execute(null);
+        }
         Assert.Contains(session.TagsForFiles(["note0.md"]), tag => tag.Tag == "windows");
 
         sidebar.FilterText = "note0";

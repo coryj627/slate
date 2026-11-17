@@ -340,13 +340,6 @@ public sealed class SaveChainAdmissionCensus
     private static readonly Row[] OutsideTheChain =
     [
         new(
-            "FilesSidebarViewModel.cs",
-            "EditTag",
-            ["AddTagToFiles", "RemoveTagFromFiles"],
-            "a tag added to or removed from the checked files rewrites each of them on the sidebar's worker",
-            "2026-11-16",
-            "CB-9b"),
-        new(
             "WorkspaceViewModel.Bases.cs",
             "ExportSavedQueryAsBase",
             ["ExportSavedQueryAsBase"],
@@ -528,12 +521,18 @@ public sealed class SaveChainAdmissionCensus
             "WorkspaceViewModel.Properties.cs",
             "CatchUpCleanTabsAfterAdmittedWrite",
             "the catch-up of the clean tabs on the notes an admitted operation held: called only by "
-            + "FinishBulkRenameApply, inside the apply's ticket"),
+            + "FinishBulkRenameApply and EditTagAtItsTurn, inside the operation's ticket"),
         new(
             "WorkspaceViewModel.Properties.cs",
             "ReconcileTabsAfterPropertyWrite",
             "the property write's fan-out over a note's tabs (contract 8): called only by the two property "
-            + "completions, the read-back reconcile and the bulk rename's reconcile, each inside its ticket"),
+            + "completions, the read-back reconcile, the bulk rename's reconcile and the tag edit's turn, each "
+            + "inside its ticket"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "EditTagAtItsTurn",
+            "the tag edit at its turn (plan 47 CB-9b): run only by the lambda EditTagAdmitted hands to "
+            + "AdmitPropertyWrite over the checked notes"),
     ];
 
     private static string Label(NamedMember row) => $"{row.File} ({row.Member})";
@@ -2726,10 +2725,10 @@ public sealed class SaveChainAdmissionCensus
         "partial class WorkspaceViewModel { void PublishBasesExport(int planted) { _ = _session.SaveText(\"a.md\", \"text\", null); } }",
         "WorkspaceViewModel.Bases.cs (PublishBasesExport): SaveText is called at 2 site(s) and the row lists 1")]
     [InlineData(
-        "a second AddTagToFiles in another overload of EditTag",
+        "a second BatchMove in another overload of BatchMove",
         "FilesSidebarViewModel.cs",
-        "partial class FilesSidebarViewModel { void EditTag(int planted) { Delegate add = _session.AddTagToFiles; _ = add; } }",
-        "FilesSidebarViewModel.cs (EditTag): AddTagToFiles is called at 2 site(s) and the row lists 1")]
+        "partial class FilesSidebarViewModel { void BatchMove(int planted) { Delegate move = _session.BatchMove; _ = move; } }",
+        "FilesSidebarViewModel.cs (BatchMove): BatchMove is called at 2 site(s) and the row lists 1")]
     [InlineData(
         "a second RenameFile in another overload of TryRenameSelected",
         "FilesSidebarViewModel.FileManagement.cs",

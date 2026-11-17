@@ -445,7 +445,7 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "FilesSidebarViewModel.cs#FilesSidebarViewModel.EditTag@1": {
+      "FilesSidebarViewModel.cs#FilesSidebarViewModel.PublishTagEdit@1": {
         "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"

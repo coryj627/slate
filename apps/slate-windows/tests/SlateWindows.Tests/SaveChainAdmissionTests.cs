@@ -5061,6 +5061,7 @@ public sealed class SaveChainAdmissionTests
             var sidebar = new FilesSidebarViewModel(
                 _session, Announce, vaultRoot: Root, localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot());
             sidebar.RetargetRequested = (oldPath, newPath) => Workspace.RetargetPath(oldPath, newPath);
+            sidebar.TagEditRequested = Workspace.EditTagAdmitted;
             _sidebars.Add(sidebar);
             return sidebar;
         }

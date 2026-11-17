@@ -1674,6 +1674,9 @@ internal sealed partial class VaultLifecycleViewModel
         WorkspaceViewModel capturedWorkspace = workspace;
         sidebar.RetargetRequested = (oldPath, newPath) =>
             capturedWorkspace.RetargetPath(oldPath, newPath);
+        // Plan 47 CB-9b (#1889; CD5(a)): a tag edit waits its turn in the
+        // checked notes' save chains, through the workspace.
+        sidebar.TagEditRequested = capturedWorkspace.EditTagAdmitted;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         // §G2 TG2-6 (IG2-6): the sidebar is the canvas's note creator.
         workspace.CanvasNoteCreator = sidebar;

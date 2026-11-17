@@ -994,6 +994,146 @@ internal sealed partial class WorkspaceViewModel
         return indexed;
     }
 
+    // ---- Plan 47 CB-9b (#1889; CD5(a)): the tag edit in the notes' chains -------
+    //
+    // A tag added to or removed from the checked notes in the Files sidebar
+    // rewrites each of them, so it takes its turn in the chains of all of
+    // them: it waits for every save and operation admitted for any of them
+    // before it, and a save of one of them asked meanwhile waits for its
+    // publication. It runs on the dispatcher, as it always has, so on an idle
+    // chain it runs in the turn of the press. Core's report names no file it
+    // wrote, so the turn reads the index's hash of each checked note with an
+    // open Markdown tab before and after the core call (the index row commits
+    // with each write), and the notes whose hash moved are the ones it wrote.
+    // A rescan that re-indexes one of those notes between the two reads makes
+    // it look written: its clean tab is brought up to the disk, and a dirty
+    // one hears the property sentence.
+
+    /// <summary>The sidebar's tag edit: admitted over the checked notes, and
+    /// run at its turn. A torn-down workspace admits nothing.</summary>
+    internal void EditTagAdmitted(FilesSidebarViewModel.TagEditRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (_workspaceDisposed)
+        {
+            return;
+        }
+        AdmitPropertyWrite(request.Paths, () => EditTagAtItsTurn(request), abandoned: () => { });
+    }
+
+    /// <summary>
+    /// The tag edit at its turn, inline on the dispatcher. A torn-down
+    /// workspace or a closed chain ends it unrun and silent. Otherwise the
+    /// index is read for the checked notes with an open Markdown tab, the
+    /// core call is made, and the index is read again, each in its own
+    /// <c>try</c>: a core call that throws (a VaultException, or any fault but
+    /// the fatal three) is the failure the sidebar speaks, and a read that
+    /// fails sends the reconcile to a read of the disk. Then, as steps that
+    /// each run even when one before throws: each written note's tabs
+    /// reconciled by the property write's rule (a clean tab takes the bytes
+    /// with no undo step back, a dirty one hears the property sentence), its
+    /// headers refreshed and its panels told; the catch-up of the clean tabs a
+    /// rescan or a re-seat had to leave while the edit waited; and the
+    /// sidebar's publication of core's summary or the failure, whatever the
+    /// reads did. The operation ends when this returns.
+    /// </summary>
+    private Task EditTagAtItsTurn(FilesSidebarViewModel.TagEditRequest request)
+    {
+        if (_workspaceDisposed || _saves.IsClosed)
+        {
+            return Task.CompletedTask;
+        }
+        HashSet<string> named = new(request.Paths, StringComparer.Ordinal);
+        string[] open = [.. Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && named.Contains(tab.Path))
+            .Select(tab => tab.Path)
+            .Distinct(StringComparer.Ordinal)];
+        Dictionary<string, string?>? before = TagEditIndexRead(open, "before");
+        TagEditReport? report = null;
+        string? failure = null;
+        try
+        {
+            request.HookForTests();
+            report = request.Add
+                ? _session.AddTagToFiles([.. request.Paths], request.Tag)
+                : _session.RemoveTagFromFiles([.. request.Paths], request.Tag);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            failure = exception.Message;
+        }
+        Dictionary<string, string?>? after = TagEditIndexRead(open, "after");
+        List<Action> steps = [];
+        foreach (string path in open)
+        {
+            if (before is null || after is null)
+            {
+                // A read of the index failed: the note's tabs are reconciled
+                // from a read of the disk instead.
+                steps.Add(() =>
+                {
+                    IdentifiedText read;
+                    try
+                    {
+                        read = _session.ReadTextIdentified(path);
+                    }
+                    catch (VaultException)
+                    {
+                        return;
+                    }
+                    _ = ReconcileTabsAfterPropertyWrite(path, SlateUniffiMethods.EditorTextContentHash(read.Text));
+                });
+                steps.Add(() => RefreshPropertiesFor(path));
+                steps.Add(() => NotePersisted(path));
+            }
+            else if (after.GetValueOrDefault(path) is { Length: > 0 } written
+                && !string.Equals(before.GetValueOrDefault(path), written, StringComparison.Ordinal))
+            {
+                steps.Add(() => _ = ReconcileTabsAfterPropertyWrite(path, written));
+                steps.Add(() => RefreshPropertiesFor(path));
+                steps.Add(() => NotePersisted(path));
+            }
+        }
+        steps.Add(() => CatchUpCleanTabsAfterAdmittedWrite(open));
+        steps.Add(() => request.Publish(report, failure));
+        try
+        {
+            AdmittedPublication.RunEvery([.. steps]);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException(exception);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>A tag edit's read of the index for <paramref name="open"/>
+    /// (<see cref="IndexedHashesInSlices"/>: in slices of core's bound, with a
+    /// token of its own), or null when it failed. With no note to read, it
+    /// reads nothing.</summary>
+    private Dictionary<string, string?>? TagEditIndexRead(string[] open, string when)
+    {
+        if (open.Length == 0)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        try
+        {
+            TagEditIndexReadHookForTests?.Invoke(when);
+            return IndexedHashesInSlices(open);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Contract 8 fan-out: every open same-path tab either
     /// re-baselines its buffer to the just-written disk state (clean
     /// tabs) or takes the stale-flag honesty (dirty tabs). Returns
