@@ -196,6 +196,7 @@ public sealed class ComboBoxRowPlacesTests
         Assert.NotEmpty(realized);
         Assert.All(realized, row => Assert.Equal($"{row.Index + 1}/300", row.Item));
         List<string> failures = OpenLists.PopupRuleFailures(combo, OpenLists.PopupRows(combo, "recycling"));
+        Assert.All(failures, failure => Assert.Contains("the popup's copy says -1 of -1", failure, StringComparison.Ordinal));
         Assert.True(
             failures.Count == realized.Count,
             $"the recycling list's popup copies were expected to keep today's defect, every one: {failures.Count} of {realized.Count} do");
@@ -477,18 +478,31 @@ public sealed class ComboBoxRowPlacesTests
 
     /// <summary>Every realized row whose item peer says something other than
     /// WPF's own answer for it (read with the stamp cleared), or whose own
-    /// answer is not its item's place in the items.</summary>
+    /// answer is not its item's place in the items. The combo box's own peer
+    /// makes its item peers first, so every realized row has one to read; a
+    /// realized row with none, or a read of no rows, is a failure, never a
+    /// row skipped.</summary>
     private static List<string> ItemPeersThatDisagreeWithWpf(ComboBox combo)
     {
+        ItemAutomationPeer[] itemPeers = OpenLists.ItemPeersOf(combo);
         var wrong = new List<string>();
+        int realized = 0;
+        int read = 0;
         for (int index = 0; index < combo.Items.Count; index++)
         {
-            if (combo.ItemContainerGenerator.ContainerFromIndex(index) is not UIElement container
-                || UIElementAutomationPeer.CreatePeerForElement(container).EventsSource is not ItemAutomationPeer item)
+            if (combo.ItemContainerGenerator.ContainerFromIndex(index) is not UIElement container)
             {
                 continue;
             }
 
+            realized++;
+            if (OpenLists.PairedItemPeer(container, combo.Items[index], itemPeers) is not { } item)
+            {
+                wrong.Add($"'{combo.Items[index]}' (row {index + 1}) is realized and paired with no item peer");
+                continue;
+            }
+
+            read++;
             (int position, int size) = (item.GetPositionInSet(), item.GetSizeOfSet());
             (int wpfPosition, int wpfSize) = OpenLists.WpfsOwnAnswer(item, container);
             (int inItems, int count) = (combo.Items.IndexOf(item.Item) + 1, combo.Items.Count);
@@ -497,6 +511,11 @@ public sealed class ComboBoxRowPlacesTests
                 wrong.Add($"'{item.Item}': its item peer says {position} of {size}; WPF's own answer is {wpfPosition} of {wpfSize}; "
                     + $"its place in the items is {inItems} of {count}");
             }
+        }
+
+        if (read == 0 || read != realized)
+        {
+            wrong.Add($"{read} rows were read for {realized} realized rows: the read must reach every realized row, and at least one");
         }
 
         return wrong;
@@ -734,9 +753,7 @@ public sealed class ComboBoxRowPlacesTests
     {
         public static List<RowRead> All(ComboBox combo)
         {
-            AutomationPeer comboPeer = UIElementAutomationPeer.CreatePeerForElement(combo);
-            comboPeer.ResetChildrenCache();
-            ItemAutomationPeer[] itemPeers = [.. Flatten(comboPeer.GetChildren()).OfType<ItemAutomationPeer>()];
+            ItemAutomationPeer[] itemPeers = OpenLists.ItemPeersOf(combo);
             var rows = new List<RowRead>();
             for (int index = 0; index < combo.Items.Count; index++)
             {
@@ -747,12 +764,18 @@ public sealed class ComboBoxRowPlacesTests
                     Fruit fruit => fruit.Title,
                     _ => item?.ToString() ?? "(null)",
                 };
-                AutomationPeer? own = OpenLists.ContainerAt(combo, index) is UIElement container
-                    ? UIElementAutomationPeer.CreatePeerForElement(container)
-                    : null;
-                AutomationPeer? peer = own?.EventsSource as ItemAutomationPeer
-                    ?? own as ItemAutomationPeer
-                    ?? itemPeers.FirstOrDefault(candidate => Equals(candidate.Item, item));
+                UIElement? container = OpenLists.ContainerAt(combo, index) as UIElement;
+                AutomationPeer? own = container is null ? null : UIElementAutomationPeer.CreatePeerForElement(container);
+                AutomationPeer? peer = container is null
+                    ? itemPeers.FirstOrDefault(candidate => Equals(candidate.Item, item))
+                    : OpenLists.PairedItemPeer(container, item, itemPeers);
+                if (container is not null && peer is null)
+                {
+                    // A realized row with no item peer would read "none" in both runs of a
+                    // twin and pass unread.
+                    throw new Xunit.Sdk.XunitException($"row {index + 1} '{name}' is realized and paired with no item peer.");
+                }
+
                 rows.Add(new RowRead(index, name, Said(peer), own is null ? null : Said(own)));
             }
 
@@ -761,22 +784,6 @@ public sealed class ComboBoxRowPlacesTests
 
         private static string Said(AutomationPeer? peer) =>
             peer is null ? "none" : $"{peer.GetPositionInSet()}/{peer.GetSizeOfSet()}";
-
-        private static IEnumerable<AutomationPeer> Flatten(IEnumerable<AutomationPeer>? peers)
-        {
-            foreach (AutomationPeer peer in peers ?? [])
-            {
-                yield return peer;
-                if (peer is GroupItemAutomationPeer)
-                {
-                    peer.ResetChildrenCache();
-                    foreach (AutomationPeer nested in Flatten(peer.GetChildren()))
-                    {
-                        yield return nested;
-                    }
-                }
-            }
-        }
     }
 
     private sealed record Arm(Func<(ComboBox Combo, ObservableCollection<string> Rows)> Make, Action<TwinRun> Script);
@@ -1333,9 +1340,50 @@ internal static class OpenLists
             ? combo.ItemContainerGenerator.ContainerFromItem(combo.Items[index])
             : combo.ItemContainerGenerator.ContainerFromIndex(index);
 
-    /// <summary>Every ListItem peer under the open list's own window.</summary>
+    /// <summary>The combo box's item peers, made by asking its own peer for its
+    /// children (through any group peers), as a UI Automation client's walk
+    /// makes them. A row container's own peer is paired with its item peer
+    /// (its events source) only once the item peer exists.</summary>
+    internal static ItemAutomationPeer[] ItemPeersOf(ComboBox combo)
+    {
+        AutomationPeer comboPeer = UIElementAutomationPeer.CreatePeerForElement(combo);
+        comboPeer.ResetChildrenCache();
+        return [.. Flatten(comboPeer.GetChildren()).OfType<ItemAutomationPeer>()];
+
+        static IEnumerable<AutomationPeer> Flatten(IEnumerable<AutomationPeer>? peers)
+        {
+            foreach (AutomationPeer peer in peers ?? [])
+            {
+                yield return peer;
+                if (peer is GroupItemAutomationPeer)
+                {
+                    peer.ResetChildrenCache();
+                    foreach (AutomationPeer nested in Flatten(peer.GetChildren()))
+                    {
+                        yield return nested;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>A realized row's item peer: its container's own peer's events
+    /// source, the container's own peer when that is an item peer (a grouped
+    /// list), or the item peer made for its item; null when none exists.</summary>
+    internal static ItemAutomationPeer? PairedItemPeer(UIElement container, object? item, ItemAutomationPeer[] itemPeers)
+    {
+        AutomationPeer own = UIElementAutomationPeer.CreatePeerForElement(container);
+        return own.EventsSource as ItemAutomationPeer
+            ?? own as ItemAutomationPeer
+            ?? itemPeers.FirstOrDefault(candidate => Equals(candidate.Item, item));
+    }
+
+    /// <summary>Every ListItem peer under the open list's own window. The
+    /// combo box's item peers are made first, so each row there can be paired
+    /// with one.</summary>
     internal static List<AutomationPeer> PopupRows(ComboBox combo, string label)
     {
+        _ = ItemPeersOf(combo);
         Assert.True(combo.IsDropDownOpen, $"{label}: the list is not open.");
         Popup popup = Assert.IsType<Popup>(combo.Template?.FindName("PART_Popup", combo));
         Assert.True(popup.IsOpen, $"{label}: the list says it is open and its popup is not.");
