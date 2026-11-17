@@ -1803,6 +1803,74 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         _ = Assert.Single(said, item => item is A11yEvent.CitationSummaryShown);
     }
 
+    /// <summary>CB-11 (#1714), from Codex's seventh round, through the
+    /// lifecycle and its change feed: another session deletes the open note,
+    /// creates a different note at its path and renames that one. The
+    /// window's rename record carries the hash this window was shown, the
+    /// first note's, so the feed moves the open tab onto the second note's
+    /// file, as on main. The press does not go with it: the window's present
+    /// record for the destination holds the second note's hash, not the
+    /// tab's, so the sync drops the press, as on main.</summary>
+    [Fact]
+    public void ADeferredSummaryDoesNotFollowAFeedRenameOfAnotherNoteAtItsPath()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        WorkspaceViewModel workspace = host.Workspace;
+        _ = host.Lifecycle.SessionForTests!.CreateExclusive(
+            "cited.md", "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
+        host.Settle();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !workspace.Citations.IsLoading),
+            "the fixture's own citation loads never landed");
+
+        using var held = new HeldWork(
+            hook => workspace.Citations.InterleaveForTests = hook, TimeSpan.FromSeconds(60));
+        int refreshSaid;
+        WorkspaceTabViewModel cited;
+        try
+        {
+            workspace.OpenPath("cited.md", WorkspaceOpenTarget.NewTab);
+            cited = workspace.ActiveGroup.ActiveTab!;
+            held.WaitUntilEntered();
+            Assert.True(workspace.Citations.IsLoading);
+            workspace.OpenCitationSummary();
+            Assert.Null(workspace.CitationSummary);
+
+            using (VaultSession other = VaultSession.OpenFilesystem(host.Root))
+            {
+                StaThread.Run(() => other.DeleteFile("cited.md"));
+                _ = other.CreateExclusive("cited.md", "# Other\n\nOnly one citation [@filler7] here.\n");
+                _ = other.RenameFile("cited.md", "c.md");
+            }
+            refreshSaid = host.Announced.Count;
+            Task refresh = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => refresh.IsCompleted),
+                "the refresh never finished");
+
+            // The feed moved the open tab onto the other note's file.
+            Assert.Equal("c.md", cited.Path);
+            Assert.Same(cited, workspace.ActiveGroup.ActiveTab);
+            Assert.Equal("c.md", workspace.Citations.Path);
+            Assert.Equal(0, workspace.Citations.RowsPublishedSubscriberCountForTests);
+        }
+        finally
+        {
+            held.Release();
+        }
+        host.Settle();
+        PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+        held.AssertHeldUntilReleased();
+
+        Assert.True(host.Faults.Count == 0, string.Join("\n---\n", host.Faults));
+        Assert.True(
+            workspace.CitationSummary is null,
+            $"the sheet opened with {workspace.CitationSummary?.Total} citations, the other note's");
+        Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+        Assert.DoesNotContain(
+            host.Announced.Skip(refreshSaid), item => item.Event is A11yEvent.CitationSummaryShown);
+    }
+
     /// <summary>CB-11 (#1714): a press follows its note only while the note
     /// stays a note. A rename to a path that is not a note (cited.md to
     /// cited.txt) leaves the tab where the leaf follows it, and the index has
