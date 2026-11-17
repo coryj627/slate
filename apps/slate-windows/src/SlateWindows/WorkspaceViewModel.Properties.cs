@@ -169,6 +169,11 @@ internal sealed partial class WorkspaceViewModel
     /// report or its tab reconciliation).</summary>
     internal void CloseBulkRenameSheet() => BulkRenameSheet?.RequestClose();
 
+    /// <summary>Plan 47 CB-9b test seam: runs first in a bulk rename apply's
+    /// turn in the notes' chain, before its worker starts. A fact makes it
+    /// throw.</summary>
+    internal Action? BulkRenameApplyTurnHookForTests { get; set; }
+
     /// <summary>The ADD write (dispatched = true). Refusals announce
     /// their reason and return false — the sheet reports an
     /// undispatched add honestly (contract 6). The completion binds

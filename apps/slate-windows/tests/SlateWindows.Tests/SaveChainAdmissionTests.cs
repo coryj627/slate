@@ -3603,6 +3603,537 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    // ---- A bulk rename's apply in the notes' chain (plan 47 CB-9b, Design 2) ---
+
+    /// <summary>Design 2 (CD5(a); M1). A save of an open note is admitted and
+    /// held before its write; the reader applies a bulk rename whose preview
+    /// listed the note. The apply takes a ticket behind the save and writes
+    /// nothing while the save is held. After release the save publishes
+    /// first, and the apply renames the key on the saved bytes: no conflict,
+    /// and the tab ends clean and current.</summary>
+    [Fact]
+    public void ABulkRenameApplyWaitsForAnOpenNotesAdmittedSaveAndRenamesOnTheSavedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("apply-behind-save", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(Note, h.Read("a.md"));
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the save and then the apply");
+            Assert.True(save.Result, "the save admitted before the apply was refused");
+            int saved = h.Events.FindIndex(e => e is A11yEvent.NoteSaved);
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+            Assert.True(saved >= 0 && summary > saved, $"expected the save's sentence and then the summary; heard {Heard(h)}");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string written = h.Read("a.md");
+            Assert.Contains("state: draft", written, StringComparison.Ordinal);
+            Assert.Contains("An edit on its way to disk.", written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (CD5(a); M2). The apply is held on its worker
+    /// before its core call; the reader edits a note its preview listed and
+    /// saves. The save takes a ticket behind the apply and does not complete
+    /// while the apply is held; it ends after the apply's summary.</summary>
+    [Fact]
+    public void ASaveOfACandidateNoteAskedDuringAnApplyWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-apply", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the apply's publication");
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the apply and then the save");
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true });
+            int saveOutcome = h.Events.FindIndex(e => e is A11yEvent.NoteSaved or A11yEvent.NoteSaveConflict);
+            Assert.True(summary >= 0 && saveOutcome > summary, $"expected the summary and then the save's outcome; heard {Heard(h)}");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (Call 4). The apply holds only the notes its
+    /// preview listed: while it is held, a save of a note the preview did not
+    /// list completes.</summary>
+    [Fact]
+    public void ASaveOfANoteThePreviewDidNotListDoesNotWaitForAnApply() => RunSta(() =>
+    {
+        const string Edited = "# B\n\nEdited beside the apply.\n";
+        using var h = new Vault("unlisted-save-beside-apply", ("a.md", Note), ("b.md", "# B\n"));
+        WorkspaceTabViewModel other = h.OpenNow("b.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Assert.DoesNotContain(sheet.Rows, row => row.Path == "b.md");
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            other.Text = Edited;
+            Task<bool> save = other.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted, "the save of a note the preview did not list, while the apply is held");
+            Assert.True(save.Result);
+            Assert.Equal(Edited, h.Read("b.md"));
+            Assert.True(sheet.WorkInFlight, "premise: the apply was no longer held");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (Call 5, on WB-2's precedent). The apply is held;
+    /// the reader edits a note its preview listed and saves. The save waits;
+    /// the apply then renames the key under the dirty buffer, so the reader
+    /// hears the property sentence and the summary, and the save that runs
+    /// after them is refused: the renamed bytes stay on disk and the edit
+    /// stays in the editor.</summary>
+    [Fact]
+    public void ADirtySaveAskedDuringAnApplyThatRewritesItsNoteIsRefusedAndOverwritesNothing() => RunSta(() =>
+    {
+        using var h = new Vault("dirty-save-behind-apply", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the apply and then the save");
+            Assert.False(save.Result, "the dirty save over the renamed bytes was not refused");
+            int stale = h.Events.FindIndex(e => e is A11yEvent.HostComposed composed
+                && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal));
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+            int conflict = h.Events.FindIndex(e => e is A11yEvent.NoteSaveConflict);
+            Assert.True(
+                stale >= 0 && summary > stale && conflict > summary,
+                $"expected the property sentence, the summary and then the save's conflict; heard {Heard(h)}");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string disk = h.Read("a.md");
+            Assert.Contains("state: draft", disk, StringComparison.Ordinal);
+            Assert.DoesNotContain("An edit on its way to disk.", disk, StringComparison.Ordinal);
+            Assert.True(tab.IsDirty);
+            Assert.Equal(NoteEdited, tab.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2's catch-up. While the apply holds a note its preview
+    /// listed, the note is rewritten outside Slate without the key and a
+    /// rescan's re-sync runs: the re-sync, which asks the chain, marks the
+    /// clean tab stale and keeps its bytes. Core then skips the note, so no
+    /// reconcile touches it; the apply's catch-up brings the tab to the
+    /// outside bytes inside its ticket, with no second re-sync, and leaves no
+    /// undo step back. Red by mutation: drop the catch-up.</summary>
+    [Fact]
+    public void AnApplyCatchesUpATabARescanMarkedStaleWhileItHeldTheNote() => RunSta(() =>
+    {
+        const string Outside = "---\ntitle: written outside Slate\n---\n\nThe key is gone.\n";
+        using var h = new Vault("apply-catches-up-stale", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.ReSyncDocuments("a.md");
+            Assert.True(tab.IsExternallyStale, "premise: the re-sync reloaded the tab under the apply that holds its note");
+            Assert.Equal(Note, tab.Text);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Outside, h.Read("a.md"));
+            Assert.Equal(Outside, tab.Text);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the caught-up tab can undo back across the outside bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2's catch-up, M13's shape on a note the preview
+    /// listed. While the apply holds the note, its file goes missing and
+    /// comes back with other bytes and no key, and the index is rescanned:
+    /// the re-seat, which asks the chain, marks the tab back on disk with its
+    /// old bytes, old identity and old hash. Core skips the note; the
+    /// apply's catch-up brings the tab to the returned file. Red by
+    /// mutation: drop the catch-up.</summary>
+    [Fact]
+    public void AnApplyCatchesUpATabReseatedWhileItHeldTheNote() => RunSta(() =>
+    {
+        const string Returned = "---\ntitle: back\n---\n\nIt came back without the key.\n";
+        using var h = new Vault("apply-catches-up-reseat", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            string full = Path.Combine(h.Root, "a.md");
+            File.Delete(full);
+            h.Workspace.InvalidatePath("a.md");
+            Assert.True(tab.IsMissingFromDisk, "premise: the tab was not marked missing");
+            File.WriteAllText(full, Returned);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.Workspace.ReseatMissingTabs();
+            Assert.False(tab.IsMissingFromDisk, "premise: the re-seat did not mark the tab back on disk");
+            Assert.Equal(Note, tab.Text);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Returned, h.Read("a.md"));
+            Assert.Equal(Returned, tab.Text);
+            Assert.Equal(h.Session.ReadTextIdentified("a.md").FileIdentity, tab.FileIdentity);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the caught-up tab can undo back across the returned bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2. The preview writes nothing and is not admitted: it
+    /// publishes its rows while a save of the note it lists is held, and takes
+    /// no ticket. Red by mutation: route the preview through the
+    /// admission.</summary>
+    [Fact]
+    public void TheBulkRenamePreviewWaitsForNothing() => RunSta(() =>
+    {
+        using var h = new Vault("preview-waits-for-nothing", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            int admitted = h.Workspace.SavesForTests.AdmittedForTests;
+
+            h.Workspace.OpenBulkRenameSheet();
+            BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+            sheet.OldKey = "status";
+            sheet.NewKey = "state";
+            sheet.Preview();
+            h.PumpUntil(() => !sheet.WorkInFlight && sheet.Rows.Count > 0, "the preview publishing beside the held save");
+            Assert.Equal(admitted, h.Workspace.SavesForTests.AdmittedForTests);
+            Assert.Contains(sheet.Rows, row => row.Path == "a.md" && row.Status == "Will apply");
+            Assert.False(save.IsCompleted, "premise: the save was no longer held");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (the red team's finding 3a). The apply waits behind
+    /// an operation admitted for its note; the reader presses Escape. At its
+    /// turn the apply still runs, with its token cancelled: core answers at
+    /// once with the note cancelled, the reader hears what Escape gives today,
+    /// "0 renamed, 0 skipped, 1 failed.", once, the sheet settles its close
+    /// once, and nothing is written.</summary>
+    [Fact]
+    public void AnApplyCancelledWhileItWaitedSpeaksTodaysSummary() => RunSta(() =>
+    {
+        using var h = new Vault("apply-cancelled-while-waiting", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+            Assert.Equal(0, settled);
+
+            ahead.SetResult();
+            h.PumpUntil(() => settled > 0 && h.Workspace.SavesIdle, "the cancelled apply's publication");
+            A11yEvent.RenameSummary summary = Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1), summary);
+            Assert.Equal(1, settled);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (Call 2(d); the red team's finding 17). The apply
+    /// re-checks the header-draft gate at its turn: a header row's draft set
+    /// dirty while the apply waited refuses it with the draft sentence, once,
+    /// and nothing is written.</summary>
+    [Fact]
+    public void AnApplyWhoseDraftsWentDirtyWhileItWaitedRefusesWithTheDraftSentence() => RunSta(() =>
+    {
+        using var h = new Vault("apply-drafts-dirty-at-turn", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused at the press");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            header.Rows.Single(row => row.Key == "status").EditorText = "edited in the header";
+            Assert.True(header.AnyRowDirty, "premise: the header's draft is not dirty");
+
+            ahead.SetResult();
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's turn");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text == PropertyPhrase.BulkRenameDirtyDraftsReason);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (CB-9a Design 8). The apply's turn throws before its
+    /// worker starts: the reader hears the existing RenameFailed once, the
+    /// sheet is no longer in flight, a close asked meanwhile settles, and the
+    /// notes' chains are free. Red by mutation: drop the turn's catch.</summary>
+    [Fact]
+    public void AnApplyWhoseTurnThrowsBeforeItsWorkerStartsEndsAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("apply-turn-throws", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.Workspace.BulkRenameApplyTurnHookForTests = () => throw new InvalidOperationException("the apply's turn failed (test seam)");
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+
+            ahead.SetResult();
+            h.PumpUntil(() => settled > 0 && h.Workspace.SavesIdle, "the apply's end");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RenameFailed);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary);
+            Assert.Equal(1, settled);
+            Assert.False(sheet.WorkInFlight);
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.Workspace.BulkRenameApplyTurnHookForTests = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (CB-9a Design 8). The apply's worker faults outside
+    /// its catch, on one of the three faults the catch leaves alone, so its
+    /// body reports nothing. The apply still ends, silently, as one that did
+    /// not run: the sheet is no longer in flight and the notes' chains are
+    /// free. Red by mutation: remove the backstop.</summary>
+    [Fact]
+    public void AnApplyWhoseWorkerFaultsOutsideItsCatchStillEndsAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("apply-worker-faults", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        sheet.ApplyHookForTests = () => throw new OutOfMemoryException("the apply's worker faulted (test seam)");
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the faulted apply's end");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            sheet.ApplyHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2. The announcer throws at the apply's summary: the
+    /// reconcile before it still ran (the clean tab shows the renamed key),
+    /// the sheet's own publication after it still ran (no longer in flight),
+    /// and the notes' chains are free. Red by mutation: drop RunEvery.</summary>
+    [Fact]
+    public void AnApplyEndsEvenWhenItsPublicationThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-publication-throws", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.RenameSummary { Applied: true })
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's end");
+            Assert.Contains("state: draft", tab.Text, StringComparison.Ordinal);
+            Assert.False(tab.IsDirty);
+            Assert.Equal(h.Read("a.md"), tab.Text);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The lead's ruling 4 (2026-11-17). The leftover race of
+    /// admitting the preview's candidate notes: a note gains the key after the
+    /// preview, so the apply does not wait for it. A save of that note is held
+    /// before its write, on the hash of the bytes the apply then reads and
+    /// renames. The two meet on the note and end in one refused write: the
+    /// save is refused with its conflict sentence, the note holds exactly the
+    /// apply's bytes, and the edit stays in the editor. Nothing is silently
+    /// overwritten. Red by mutation: the save writes with no expected hash.
+    /// The mutation the ruling names, the apply skipping its own compare,
+    /// needs a core seam between the apply's read and its write, which no
+    /// headless fact has; in this order the save's compare is the one that
+    /// stands between the two writers.</summary>
+    [Fact]
+    public void TheLeftoverRaceEndsInOneRefusedWriteAndNoOverwrite() => RunSta(() =>
+    {
+        const string Gained = "---\nstatus: gained after the preview\n---\n\nC.\n";
+        const string Second = Gained + "A second edit, held before its write.\n";
+        using var h = new Vault("leftover-race", ("a.md", Note), ("c.md", "# C\n\nNo key yet.\n"));
+        WorkspaceTabViewModel c = h.OpenNow("c.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Assert.DoesNotContain(sheet.Rows, row => row.Path == "c.md");
+        c.Text = Gained;
+        SaveNow(h, c);
+        var held = new HeldWork(hook => c.SaveWriteHookForTests = hook);
+        try
+        {
+            c.Text = Second;
+            Task<bool> save = c.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the second save reaching its hold before its write");
+            h.Events.Clear();
+
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply, beside the held save of a note its preview did not list");
+            string renamed = h.Read("c.md");
+            Assert.Contains("state: gained after the preview", renamed, StringComparison.Ordinal);
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the held save");
+            Assert.False(save.Result, "the save over the bytes the apply wrote was not refused");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Equal(renamed, h.Read("c.md"));
+            Assert.True(c.IsDirty, "the refused edit left the editor");
+            Assert.Equal(Second, c.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>The workspace's bulk rename sheet, opened and armed by a
+    /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
+    /// with what the preview spoke dropped.</summary>
+    private static BulkRenameViewModel ArmedBulkRename(Vault h, string oldKey = "status", string newKey = "state")
+    {
+        h.Workspace.OpenBulkRenameSheet();
+        BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+        sheet.OldKey = oldKey;
+        sheet.NewKey = newKey;
+        sheet.Preview();
+        h.PumpUntil(() => sheet.CanApply, "premise: the preview arming the apply");
+        h.Events.Clear();
+        return sheet;
+    }
+
+    /// <summary>What was spoken, by event, for a failure message.</summary>
+    private static string Heard(Vault h) => string.Join(" | ", h.Events.Select(e => e.GetType().Name));
+
     /// <summary>Another writer's write to a.md, asked with its tabs open: what
     /// it writes, and when it has landed.</summary>
     private static (string Expected, Func<bool> Landed) WriteThroughAnOpenTab(Vault h, string route)

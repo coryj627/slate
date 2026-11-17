@@ -182,6 +182,10 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         return true;
     }
 
+    /// <summary>Plan 47 CB-9b test seam: runs on the apply's worker before
+    /// its core call. A fact holds the apply there, or throws.</summary>
+    internal Action? ApplyHookForTests { get; set; }
+
     /// <summary>Esc / sheet close: cancel in-flight core work.</summary>
     public void CancelInFlight() => _inFlightCancel?.Cancel();
 
@@ -239,6 +243,10 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             string? error = null;
             try
             {
+                if (!dryRun)
+                {
+                    ApplyHookForTests?.Invoke();
+                }
                 report = oldKeyType is { } kind
                     ? _session.RenamePropertyByIdentityAcrossVault(
                         SlateUniffiMethods.PropertyKeyIdentityForType(oldKey, kind), newKey, dryRun, cancel)
