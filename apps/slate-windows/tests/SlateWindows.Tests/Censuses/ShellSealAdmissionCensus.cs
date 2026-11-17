@@ -265,6 +265,11 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
     [InlineData("reviewed-bubble-past-handled", "class SelectorFocus { static void M() { EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(X), handledEventsToo: true); } }")]
     [InlineData("focus-allowance-other-input", "class RegionFocusGuard { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X), true); } }")]
+    // CB-19: SizeChangedEvent is admitted as a layout event, and that admits
+    // nothing else: the row tracker's own file, registering an input event the
+    // way it registers SizeChanged, is still refused.
+    [InlineData("row-tracker-input-key", "class ComboBoxRowPlaces { internal static void Register() { EventManager.RegisterClassHandler(typeof(ComboBox), UIElement.PreviewKeyDownEvent, new KeyEventHandler(X)); } }")]
+    [InlineData("row-tracker-input-pointer", "class ComboBoxRowPlaces { internal static void Register() { EventManager.RegisterClassHandler(typeof(ComboBox), Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(X)); } }")]
     [InlineData("transition-side-effect", "        Keyboard.ClearFocus();\n        if (Held is not { } held)")]
     [InlineData("transition-delegate-side-effect", "                    withdraw: () => { Keyboard.ClearFocus(); return surface.CancelFocusLanding(held); },")]
     [InlineData("transition-focus-api", "        held.Detach();\n        FocusManager.SetFocusedElement(held.Target()!, null);")]
@@ -351,6 +356,8 @@ public sealed class ShellSealAdmissionCensus
             "double-click-override" or "click-count-read" => DoubleClickOffenders([new Unit("Other.cs", Parse(source))]),
             "reviewed-bubble-past-handled" => PastHandledOffenders([new Unit("SelectorFocus.cs", Parse(source))]),
             "focus-allowance-other-input" => PastHandledOffenders([new Unit("RegionFocusGuard.cs", Parse(source))]),
+            "row-tracker-input-key" or "row-tracker-input-pointer" =>
+                PastHandledOffenders([new Unit("ComboBoxRowPlaces.cs", Parse(source))]),
             _ => PastHandledOffenders([new Unit("Other.cs", Parse(source))]),
         };
         Assert.True(found.Count > 0, $"the census missed a planted {bypass} bypass");
