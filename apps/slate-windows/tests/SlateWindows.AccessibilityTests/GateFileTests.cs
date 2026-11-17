@@ -58,7 +58,7 @@ public sealed class GateFileTests : IDisposable
     {
         string path = NewFile("old");
 
-        using (FileStream holder = GateFile.Open(path))
+        using (FileStream holder = GateFile.HoldForTheFact(path, FileAccess.Read))
         {
             Assert.Throws<UnauthorizedAccessException>(() => ReplaceOnce(path, "new"));
             Assert.Equal("old", GateFile.TryReadText(path));
@@ -75,7 +75,7 @@ public sealed class GateFileTests : IDisposable
     public void ADeleteSucceedsUnderAGateFileHolder()
     {
         string path = NewFile("held by the gate");
-        using (FileStream holder = GateFile.Open(path))
+        using (FileStream holder = GateFile.HoldForTheFact(path, FileAccess.Read))
         {
             File.Delete(path);
         }
@@ -117,6 +117,129 @@ public sealed class GateFileTests : IDisposable
 
         Assert.Equal("5", text);
         Assert.Equal(5, saved);
+    }
+
+    /// <summary>A pace fed by the fact: its clock moves only when the fact
+    /// or a pause moves it, a pause is written down and then taken off the
+    /// clock, and each turn given is written down. No fact here reads the
+    /// wall clock.</summary>
+    private sealed class FedPace
+    {
+        public FedPace() => Pace = new GateFile.ReadPace(
+            () => Now,
+            pause =>
+            {
+                Events.Add($"pause {pause.TotalMilliseconds:0}");
+                Now += pause;
+            },
+            _ => Events.Add("open"));
+
+        public TimeSpan Now { get; set; } = TimeSpan.FromHours(1);
+
+        public List<string> Events { get; } = [];
+
+        public GateFile.ReadPace Pace { get; }
+
+        public string Told => string.Join(", ", Events);
+    }
+
+    /// <summary>The reader keeps the pace itself: a second read of a path,
+    /// straight after the first, pauses a whole interval before it opens.
+    /// The path is the file, however it is written: another case is the same
+    /// path.</summary>
+    [Fact]
+    public void TwoReadsOfOnePathBackToBackTakeAPauseBeforeTheSecond()
+    {
+        string path = NewFile("paced");
+        var fed = new FedPace();
+
+        Assert.Equal("paced", GateFile.TryReadText(path, fed.Pace));
+        Assert.Equal("paced", GateFile.TryReadText(path, fed.Pace));
+        Assert.Equal("open, pause 100, open", fed.Told);
+
+        Assert.Equal("paced", GateFile.TryReadText(path.ToUpperInvariant(), fed.Pace));
+        Assert.Equal("open, pause 100, open, pause 100, open", fed.Told);
+    }
+
+    /// <summary>A read that comes part of the way through the interval waits
+    /// out what is left of it, and one that comes after it waits for
+    /// nothing.</summary>
+    [Fact]
+    public void AReadWaitsOutWhatIsLeftOfTheIntervalAndNothingOnceItHasPassed()
+    {
+        string path = NewFile("paced");
+        var fed = new FedPace();
+
+        _ = GateFile.TryReadText(path, fed.Pace);
+        fed.Now += TimeSpan.FromMilliseconds(40);
+        _ = GateFile.TryReadText(path, fed.Pace);
+        Assert.Equal("open, pause 60, open", fed.Told);
+
+        fed.Now += GateFile.PollInterval;
+        _ = GateFile.TryReadText(path, fed.Pace);
+        Assert.Equal("open, pause 60, open, open", fed.Told);
+    }
+
+    /// <summary>The pace is each path's own: reads of two files take no
+    /// pause.</summary>
+    [Fact]
+    public void ReadsOfTwoPathsTakeNoPause()
+    {
+        string one = NewFile("one");
+        string other = NewFile("other");
+        var fed = new FedPace();
+
+        Assert.Equal("one", GateFile.TryReadText(one, fed.Pace));
+        Assert.Equal("other", GateFile.TryReadText(other, fed.Pace));
+        Assert.Equal("open, open", fed.Told);
+    }
+
+    /// <summary>A caller that spins on a file cannot camp on it, whatever it
+    /// calls: twenty-four reads back to back, through every way in, open the
+    /// file twenty-four times with a pause before each but the first, and
+    /// never twice without one between.</summary>
+    [Fact]
+    public void ASpinningCallerOpensOncePerReadWithAPauseBetweenEveryTwo()
+    {
+        string path = NewFile("spun on");
+        var fed = new FedPace();
+
+        for (int read = 0; read < 8; read++)
+        {
+            Assert.Equal("spun on", GateFile.TryReadText(path, fed.Pace));
+            Assert.NotNull(GateFile.TryReadBytes(path, fed.Pace));
+            Assert.Equal("spun on", GateFile.ReadText(path, TimeSpan.Zero, refused: null, fed.Pace));
+        }
+
+        Assert.Equal(24, fed.Events.Count(step => step == "open"));
+        Assert.Equal(23, fed.Events.Count(step => step == "pause 100"));
+        Assert.Equal(47, fed.Events.Count);
+        for (int step = 1; step < fed.Events.Count; step++)
+        {
+            Assert.False(
+                fed.Events[step] == "open" && fed.Events[step - 1] == "open",
+                $"two opens with no pause between them at step {step}: {string.Join(", ", fed.Events)}");
+        }
+    }
+
+    /// <summary>Each attempt of a poll is a read at the pace, and so is each
+    /// attempt at a file that is not there: an attempt that opened nothing
+    /// still took its turn.</summary>
+    [Fact]
+    public void EveryAttemptOfAPollIsPacedAndSoIsAnAttemptAtAnAbsentFile()
+    {
+        string path = NewFile("polled");
+        var fed = new FedPace();
+        int asked = 0;
+
+        Assert.Equal("polled", GateFile.PollText(path, _ => ++asked == 3, TimeSpan.FromSeconds(30), pace: fed.Pace));
+        Assert.Equal("open, pause 100, open, pause 100, open", fed.Told);
+
+        var absent = new FedPace();
+        string nowhere = Path.Combine(_root, "absent.json");
+        Assert.Null(GateFile.TryReadText(nowhere, absent.Pace));
+        Assert.Null(GateFile.TryReadText(nowhere, absent.Pace));
+        Assert.Equal("open, pause 100, open", absent.Told);
     }
 
     /// <summary>A poll that never sees its text ends at its timeout with

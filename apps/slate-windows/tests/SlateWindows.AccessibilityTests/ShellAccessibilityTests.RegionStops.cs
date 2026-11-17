@@ -46,7 +46,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vault, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
-        File.Copy(CitationStyleFixture(), Path.Combine(vault, "ieee.csl"));
+        CopyCitationStyleFixture(Path.Combine(vault, "ieee.csl"));
         File.WriteAllText(
             Path.Combine(vault, "slate.json"),
             "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}");
@@ -407,7 +407,7 @@ public sealed partial class ShellAccessibilityTests
         string vault = Path.Combine(root, "Vault");
         string logs = Path.Combine(root, "logs");
         Directory.CreateDirectory(vault);
-        File.Copy(Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"), Path.Combine(vault, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vault, "sample.canvas"));
         // The review's filter is the right pane's first stop — the ring's
         // next region after the editor.
         File.WriteAllText(Path.Combine(vault, "tasks.md"), "# Tasks\n\n- [ ] one open task\n");
@@ -450,6 +450,11 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 WaitForElement(window, "PanelReviewFilterAll", TimeSpan.FromSeconds(10)),
                 "F6 from the canvas switcher did not land on the right pane's first stop.");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(RegionStops_CanvasSwitcherArrowChecksAndShowsTheProjection), logs);
+            throw;
         }
         finally
         {

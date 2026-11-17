@@ -2506,9 +2506,11 @@ public sealed partial class ShellAccessibilityTests
                 return "<absent>";
             }
 
-            using FileStream stream = GateFile.Open(path);
-            using var reader = new StreamReader(stream);
-            string content = reader.ReadToEnd();
+            if (GateFile.TryReadText(path) is not { } content)
+            {
+                return "<unreadable>";
+            }
+
             string head = content.Length > 120 ? content[..120] + "…" : content;
             return "\"" + head.Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
         }
@@ -2581,9 +2583,9 @@ public sealed partial class ShellAccessibilityTests
     /// </summary>
     /// <remarks>
     /// The app holds <c>slate-windows.log</c> open for writing, so each
-    /// file is read through a shared stream rather than
-    /// <see cref="File.Copy(string, string, bool)"/>, which would hit a
-    /// sharing violation.
+    /// file is read through <see cref="GateFile"/>, which shares the file
+    /// with its writer, and its bytes are written out: a plain copy would
+    /// hit a sharing violation. A file the reader cannot read is skipped.
     /// </remarks>
     private static void PreserveEvidence(string testName, string logDirectory)
     {
@@ -2602,10 +2604,10 @@ public sealed partial class ShellAccessibilityTests
             {
                 try
                 {
-                    using FileStream source = GateFile.Open(file);
-                    using FileStream copy = File.Create(
-                        Path.Combine(destination, Path.GetFileName(file)));
-                    source.CopyTo(copy);
+                    if (GateFile.TryReadBytes(file) is { } kept)
+                    {
+                        File.WriteAllBytes(Path.Combine(destination, Path.GetFileName(file)), kept);
+                    }
                 }
                 catch (Exception exception) when (
                     exception is IOException or UnauthorizedAccessException)
@@ -3378,7 +3380,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vaultRoot, "cited.md"),
             "# Cited\n\nA citation [@knuth1984] and a ghost [@ghostkey].\n");
-        File.Copy(CitationStyleFixture(), Path.Combine(vaultRoot, "ieee.csl"));
+        CopyCitationStyleFixture(Path.Combine(vaultRoot, "ieee.csl"));
         // A style is REQUIRED for rows to render; without one every row
         // is a placeholder and nothing is expandable (contract 2).
         File.WriteAllText(
@@ -3937,6 +3939,11 @@ public sealed partial class ShellAccessibilityTests
                     + "bibliography row that opened it; focus was on "
                     + $"\"{automation.FocusedElement().Properties.Name.ValueOrDefault}\"");
             sheetsOutcome = ListenerOutcome.Completed;
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CitationSurfaces_GridsSheetsAndChords_AreClean), logDirectory);
+            throw;
         }
         finally
         {
@@ -6916,8 +6923,7 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(Path.Combine(vaultRoot, "target.md"), "# Target\n");
         if (useCanvas)
         {
-            File.Copy(Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-                Path.Combine(vaultRoot, "sample.canvas"));
+            CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
         }
         Process? process = null;
         try
@@ -6939,7 +6945,8 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(item, "The file did not receive focus before Delete.");
             // The OS lock is a deterministic preparation barrier. Cancel must
             // drain the native worker while this independent holder still owns it.
-            using FileStream blocker = GateFile.Open(Path.Combine(vaultRoot, ".slate", "structural.lock"), FileAccess.ReadWrite);
+            using FileStream blocker = GateFile.HoldForTheFact(
+                Path.Combine(vaultRoot, ".slate", "structural.lock"), FileAccess.ReadWrite);
             blocker.Lock(0, long.MaxValue);
             PressKey(VirtualKeyShort.DELETE);
             AutomationElement cancel = WaitForElement(window, "CancelTrash", TimeSpan.FromSeconds(10));
@@ -8622,9 +8629,7 @@ public sealed partial class ShellAccessibilityTests
             "sample.canvas", "groups_nested.canvas", "malformed.canvas",
         })
         {
-            File.Copy(
-                Path.Combine(DemoVaultCanvasDirectory(), fixture),
-                Path.Combine(vaultRoot, fixture));
+            CopyCanvasFixture(fixture, Path.Combine(vaultRoot, fixture));
         }
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"), "# Note\n\nBody.\n");
@@ -8828,6 +8833,11 @@ public sealed partial class ShellAccessibilityTests
 
             AssertAxeClean(process, "canvas-degraded");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -8879,9 +8889,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9058,6 +9066,11 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "activating a table row never opened the editor's text");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -9147,9 +9160,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9281,6 +9292,11 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "Escape did not consume the surface rung and close the panel");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             if (process is not null && !process.HasExited)
@@ -9322,9 +9338,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9535,6 +9549,11 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.UP);
             AssertTheSeatIsOnTheBoard(board, "Core question", "UP from a dimmed card");
         }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasSurfaces_VisualBoardPeersAndZoom_AreClean), logDirectory);
+            throw;
+        }
         finally
         {
             process?.Kill(entireProcessTree: true);
@@ -9702,9 +9721,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
-        File.Copy(
-            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
-            Path.Combine(vaultRoot, "sample.canvas"));
+        CopyCanvasFixture("sample.canvas", Path.Combine(vaultRoot, "sample.canvas"));
 
         Process? process = null;
         try
@@ -9817,6 +9834,11 @@ public sealed partial class ShellAccessibilityTests
                     "Text card \"Unfiled thought\"",
                 ],
                 "Toggle Mark from the rows' and the seated cards' menus");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(Canvas_ContextMenus_OpenTheCardMenuByKeyboard), logDirectory);
+            throw;
         }
         finally
         {
@@ -12033,6 +12055,25 @@ public sealed partial class ShellAccessibilityTests
             + "Content items in SlateWindows.AccessibilityTests.csproj and "
             + "must be copied to the output directory.");
         return canvases;
+    }
+
+    /// <summary>Copies a canvas fixture into a vault a journey is about to
+    /// open, through the gate's reader (<see cref="GateFile.CopyFixture"/>);
+    /// <see cref="DemoVaultCanvasDirectory"/> says why when the fixtures
+    /// are not there.</summary>
+    private static void CopyCanvasFixture(string name, string destination)
+    {
+        _ = DemoVaultCanvasDirectory();
+        GateFile.CopyFixture(destination, "fixtures", "canvas", name);
+    }
+
+    /// <summary>Copies the CSL fixture into a vault a journey is about to
+    /// open, through the gate's reader; <see cref="CitationStyleFixture"/>
+    /// says why when it is not there.</summary>
+    private static void CopyCitationStyleFixture(string destination)
+    {
+        _ = CitationStyleFixture();
+        GateFile.CopyFixture(destination, "fixtures", "ieee.csl");
     }
 
     /// <summary><c>ERROR_HOTKEY_ALREADY_REGISTERED</c>.</summary>
