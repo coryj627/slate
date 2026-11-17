@@ -419,15 +419,36 @@ internal sealed partial class WorkspaceViewModel
             _parkedSummaryTab = null;
         }
         else if (_summaryParked
-            && !Groups.SelectMany(group => group.Tabs).Any(tab => ReferenceEquals(tab, _parkedSummaryTab)))
+            && _parkedSummaryTab is { } closed
+            && !Groups.SelectMany(group => group.Tabs).Any(tab => ReferenceEquals(tab, closed)))
         {
             // CB-11 (#1714): the tab the press was parked on has closed and
-            // the leaf stayed on the note (a split pane's close hands it to
+            // the leaf stayed on the path (a split pane's close hands it to
             // the pane on the same note). The tab the leaf now follows takes
-            // the press over, so a later rename moves the press with it.
-            _parkedSummaryTab = ActiveGroup.ActiveTab;
+            // the press over only when it holds the same note, so a later
+            // rename moves the press with it. Another note at that path
+            // does not: the press is left with no tab, and a rename drops it.
+            WorkspaceTabViewModel? successor = ActiveGroup.ActiveTab;
+            _parkedSummaryTab = successor is not null && HoldTheSameNote(successor, closed)
+                ? successor
+                : null;
         }
     }
+
+    /// <summary>Plan 47 CB-11 (#1714): two tabs at one path hold the same
+    /// note when they hold the same saved version: the same baseline hash
+    /// and, where core gives both an identity, the same file identity.
+    /// Tabs of one note are kept so by the workspace's mirroring
+    /// (<see cref="MirrorSamePathDocumentState"/>). Two different notes at
+    /// one path differ in their file, so in their identity, and almost
+    /// always in their bytes. A tab with no baseline holds no known
+    /// note.</summary>
+    private static bool HoldTheSameNote(WorkspaceTabViewModel tab, WorkspaceTabViewModel other) =>
+        tab.SavedContentHash is string hash
+        && string.Equals(hash, other.SavedContentHash, StringComparison.Ordinal)
+        && (tab.FileIdentity is null
+            || other.FileIdentity is null
+            || string.Equals(tab.FileIdentity, other.FileIdentity, StringComparison.Ordinal));
 
     /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
     /// <paramref name="tab"/> to <paramref name="destination"/> in place. A
