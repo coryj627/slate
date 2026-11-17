@@ -1116,6 +1116,68 @@ fn an_overflow_calls_back_once_and_skips_the_echo_filter() {
     );
 }
 
+/// Plan 47 CB-13 (#1727): a case-only rename the volume ignored is refused,
+/// and a refusal records no echo. An outside edit to the note whose event
+/// is still pending when the rename is refused therefore still calls back.
+/// An echo recorded at the refusal would hold the entry's current state,
+/// the outside edit included, and the burst would be dropped as Slate's own
+/// with nothing left to re-read the note. Core's seam stands in for the
+/// volume.
+#[cfg(windows)]
+#[test]
+fn an_outside_edit_pending_at_a_refused_case_only_rename_still_calls_back() {
+    let mut env = super::common::fault_guard();
+    let s = scripted(&[("Note.md", "# Note\n")]);
+    s.rescan();
+    // Past the spacing a callback keeps after a scan (§4.1).
+    assert_eq!(s.after(Duration::from_secs(60)), 0);
+    let vault_name = s
+        ._tmp
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    env.set("SLATE_TEST_CASE_ONLY_RENAME_IGNORED", &vault_name);
+
+    // Another program edits the note; its event has reached the coalescer
+    // and its burst is still open.
+    write(
+        s._tmp.path(),
+        "Note.md",
+        "# Note\n\nEdited outside Slate.\n",
+    );
+    s.provider.touched("Note.md");
+    assert_eq!(s.step(), 0, "inside the quiet window");
+
+    let error = s
+        .session
+        .rename_file("Note.md", "note.md")
+        .expect_err("the seam's volume ignores the rename, so it is refused");
+    assert!(
+        matches!(
+            &error,
+            VaultError::InvalidArgument { message }
+                if message == "This drive keeps the capitalization a file was created with, so Note.md was not renamed to note.md."
+        ),
+        "{error:?}"
+    );
+
+    assert_eq!(
+        s.after(WATCH_QUIET),
+        1,
+        "the outside edit calls back: {:?}",
+        s.session.watch_decisions_for_tests()
+    );
+    assert_eq!(
+        s.session.watch_decisions_for_tests(),
+        vec![WatchDecision::CalledBack {
+            paths: vec!["Note.md".into()],
+            overflowed: false
+        }]
+    );
+}
+
 /// §4.6: a backend error makes one catch-up callback, then the watch ends:
 /// later events call nothing and the session does not re-arm.
 #[test]
