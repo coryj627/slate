@@ -1241,6 +1241,78 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>CB-11 (#1714), from Codex's fourth round: two tabs name one
+    /// path and are different notes (another session moved other.md away,
+    /// this window renamed cited.md into the freed name), and the press is
+    /// parked on the cited note's tab after that rename. The reader closes
+    /// that tab, so the other note's tab, on the same path, takes the leaf
+    /// over. That tab is not the same note, so it does not take the press
+    /// over: when the feed then moves it, the press stays behind and the
+    /// sync drops it, as on main.</summary>
+    [Fact]
+    public void ADeferredSummaryIsNotTakenOverByAnotherNotesTabWhenItsOwnTabCloses()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            workspace.OpenPath("other.md");
+            WorkspaceTabViewModel first = workspace.ActiveGroup.ActiveTab!;
+            string firstBaseline = first.SavedContentHash!;
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                using (VaultSession other = VaultSession.OpenFilesystem(_fixture.Root))
+                {
+                    _ = other.RenameFile("other.md", "moved.md");
+                }
+                workspace.OpenPath("cited.md", WorkspaceOpenTarget.NewTab);
+                WorkspaceTabViewModel cited = workspace.ActiveGroup.ActiveTab!;
+                held.WaitUntilEntered();
+                _ = session.RenameFile("cited.md", "other.md");
+                workspace.RetargetPath("cited.md", "other.md");
+                Assert.Equal("other.md", first.Path);
+                Assert.Equal("other.md", cited.Path);
+                Assert.True(workspace.Citations.IsLoading);
+
+                // The press is parked on the cited note's tab, after the rename.
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                // That tab closes; the other note's tab takes the leaf over
+                // on the same path, and WB-23 keeps the press.
+                workspace.CloseActiveTabCommand.Execute(null);
+                Assert.Same(first, workspace.ActiveGroup.ActiveTab);
+                Assert.Equal("other.md", workspace.Citations.Path);
+
+                WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
+                    [new WorkspaceViewModel.FeedRename("other.md", "moved.md", firstBaseline, OldIsGone: true)]);
+                Assert.Equal([0], moved.MovedTabs);
+                Assert.Equal("moved.md", first.Path);
+                Assert.Equal("moved.md", workspace.Citations.Path);
+                Assert.Equal(0, workspace.Citations.RowsPublishedSubscriberCountForTests);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.Equal("moved.md", workspace.Citations.Path);
+            Assert.True(
+                workspace.CitationSummary is null,
+                $"the sheet opened with {workspace.CitationSummary?.Total} citations, the other note's");
+            Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>CB-11 (#1714): a re-seat can respell the leaf's tab without
     /// syncing the panels (a missing Ghost.md whose file is back as
     /// ghost.md), so the leaf still names the old spelling when the press is
