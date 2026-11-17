@@ -401,18 +401,142 @@ public sealed partial class ShellAccessibilityTests
                 return true;
             }
 
+            int[] found = focused.Properties.RuntimeId.ValueOrDefault ?? [];
             elsewhere?.Invoke(
                 $" The read that saw it gone found {focused.Properties.ControlType.ValueOrDefault} "
                 + $"'{focused.Properties.Name.ValueOrDefault}' #{focused.Properties.AutomationId.ValueOrDefault} "
-                + $"class {focused.Properties.ClassName.ValueOrDefault}, runtime id "
-                + $"[{string.Join(",", focused.Properties.RuntimeId.ValueOrDefault ?? [])}], where runtime id "
-                + $"[{string.Join(",", element.Properties.RuntimeId.ValueOrDefault ?? [])}] was expected.");
+                + $"class {focused.Properties.ClassName.ValueOrDefault}, runtime id [{string.Join(",", found)}], where runtime id "
+                + $"[{string.Join(",", element.Properties.RuntimeId.ValueOrDefault ?? [])}] was expected."
+                + WindowFacts(found, element));
             return false;
         }
         catch (Exception exception) when (IsTransientUiaFault(exception))
         {
             return null;
         }
+    }
+
+    /// <summary>For a focus answer that is a bare window (runtime id
+    /// <c>[42, hwnd]</c>): whose window it is and how it stands to the
+    /// app's own, read at once. Never throws.</summary>
+    private static string WindowFacts(int[] runtimeId, AutomationElement expected)
+    {
+        try
+        {
+            if (runtimeId is not [42, int handle])
+            {
+                return " The answer is not a bare window.";
+            }
+
+            var window = new IntPtr(handle);
+            int app = expected.Properties.ProcessId.ValueOrDefault;
+            IntPtr main = IntPtr.Zero;
+            try
+            {
+                using var process = Process.GetProcessById(app);
+                main = process.MainWindowHandle;
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+            }
+
+            IntPtr nearest = IntPtr.Zero;
+            for (AutomationElement? at = expected; at is not null && nearest == IntPtr.Zero; at = at.Parent)
+            {
+                nearest = at.Properties.NativeWindowHandle.ValueOrDefault;
+            }
+
+            uint thread = NativeWindowFacts.GetWindowThreadProcessId(window, out uint owner);
+            IntPtr root = NativeWindowFacts.GetAncestor(window, 2);
+            _ = NativeWindowFacts.GetWindowThreadProcessId(root, out uint rootOwner);
+            IntPtr foreground = NativeWindowFacts.GetForegroundWindow();
+            _ = NativeWindowFacts.GetWindowThreadProcessId(foreground, out uint foregroundOwner);
+            uint uiThread = NativeWindowFacts.GetWindowThreadProcessId(main, out _);
+            var gui = new NativeWindowFacts.GuiThreadInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeWindowFacts.GuiThreadInfo>() };
+            bool haveGui = uiThread != 0 && NativeWindowFacts.GetGUIThreadInfo(uiThread, ref gui);
+            return $" WINDOW RECORD: hwnd 0x{handle:X} alive={NativeWindowFacts.IsWindow(window)} class '{ClassOf(window)}' "
+                + $"title '{TitleOf(window)}' process {owner} ({NameOf(owner)}) thread {thread}; the app is process {app}, "
+                + $"same process={owner == (uint)app}; the app's main window 0x{main.ToInt64():X} (same={window == main}); the nearest "
+                + $"window above the expected element 0x{nearest.ToInt64():X} (same={window == nearest}); the answer's root window "
+                + $"0x{root.ToInt64():X} class '{ClassOf(root)}' process {rootOwner} (root is the main window={root == main}); "
+                + $"foreground 0x{foreground.ToInt64():X} class '{ClassOf(foreground)}' process {foregroundOwner} ({NameOf(foregroundOwner)}); "
+                + (haveGui
+                    ? $"the app's UI thread {uiThread}: active 0x{gui.Active.ToInt64():X}, focus 0x{gui.Focus.ToInt64():X} "
+                        + $"class '{ClassOf(gui.Focus)}', capture 0x{gui.Capture.ToInt64():X}, flags 0x{gui.Flags:X}."
+                    : $"the app's UI thread {uiThread}: no GUI thread info.");
+        }
+        catch (Exception exception)
+        {
+            return $" WINDOW RECORD unreadable: {exception.GetType().Name}: {exception.Message}";
+        }
+
+        static string ClassOf(IntPtr window)
+        {
+            var name = new System.Text.StringBuilder(256);
+            return NativeWindowFacts.GetClassName(window, name, name.Capacity) > 0 ? name.ToString() : string.Empty;
+        }
+
+        static string TitleOf(IntPtr window)
+        {
+            var title = new System.Text.StringBuilder(256);
+            return NativeWindowFacts.GetWindowText(window, title, title.Capacity) > 0 ? title.ToString() : string.Empty;
+        }
+
+        static string NameOf(uint process)
+        {
+            try
+            {
+                using var found = Process.GetProcessById((int)process);
+                return found.ProcessName;
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+                return "gone";
+            }
+        }
+    }
+
+    private static class NativeWindowFacts
+    {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        internal struct GuiThreadInfo
+        {
+            public int Size;
+            public uint Flags;
+            public IntPtr Active;
+            public IntPtr Focus;
+            public IntPtr Capture;
+            public IntPtr MenuOwner;
+            public IntPtr MoveSize;
+            public IntPtr Caret;
+            public int CaretLeft;
+            public int CaretTop;
+            public int CaretRight;
+            public int CaretBottom;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool IsWindow(IntPtr window);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        internal static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
     }
 
     /// <summary>Whether focus is on <paramref name="container"/> or inside
