@@ -23468,6 +23468,7 @@ mod tests {
 
     mod fault_guard;
     mod rename_planning;
+    mod repair_announcement;
 
     mod two_sessions;
 }

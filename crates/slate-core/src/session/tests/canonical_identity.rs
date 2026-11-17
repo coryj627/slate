@@ -730,11 +730,14 @@ fn plant_alias_row(session: &VaultSession, stored: &str, alias: &str) {
 /// A folder's case-only rename plants one marker pair for each file in it.
 /// After the next vault-wide task query each file keeps one row, each task
 /// is listed once, and no marker is left. A host hears each note read
-/// again, once, under the spelling the volume holds; on a volume that keeps
-/// case the old names are gone and are reported deleted first, as always.
+/// again, once, under the spelling the volume holds, and nothing for the
+/// old names, on every volume. Where the volume keeps case the rename was a
+/// plain one: the old names name no file and no row, and a repair that
+/// finds neither announces nothing (#1683; before it, they were reported
+/// deleted first).
 #[test]
 fn a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_query() {
-    let (tmp, session) = make_vault(|provider| {
+    let (_tmp, session) = make_vault(|provider| {
         provider.write_file("Docs/Note.md", b"- [ ] one\n").unwrap();
         provider
             .write_file("Docs/Sub/Inner.md", b"- [ ] two\n")
@@ -742,23 +745,13 @@ fn a_folders_case_only_rename_leaves_one_row_for_each_file_after_the_next_task_q
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     session.rename_folder("Docs", "docs").unwrap();
-    // The volume says which it is: the old spelling still opens the note
-    // only where spellings alias.
-    let aliasing = tmp.path().join("Docs").join("Note.md").is_file();
     let recorder = ChangeRecorder::on(&session);
 
     let mut tasks = vault_tasks(&session);
-    let expected: &[&str] = if aliasing {
-        &["Modified docs/Note.md", "Modified docs/Sub/Inner.md"]
-    } else {
-        &[
-            "Deleted Docs/Note.md",
-            "Deleted Docs/Sub/Inner.md",
-            "Modified docs/Note.md",
-            "Modified docs/Sub/Inner.md",
-        ]
-    };
-    assert_eq!(recorder.take(), strings(expected));
+    assert_eq!(
+        recorder.take(),
+        strings(&["Modified docs/Note.md", "Modified docs/Sub/Inner.md"])
+    );
     tasks.sort();
     assert_eq!(
         tasks,
@@ -893,29 +886,23 @@ fn a_notes_tasks_asked_for_under_its_old_spelling_add_no_row() {
 }
 
 /// The sweep after a case-only rename tells a host that the note changed,
-/// once, under the spelling the volume holds, and nothing else. On a volume
-/// that keeps case the rename was a plain one: the old name is gone, and the
-/// sweep reports it deleted first, as it always has.
+/// once, under the spelling the volume holds, and nothing else, on every
+/// volume. On a volume that keeps case the rename was a plain one: the old
+/// name names no file and no row, and a repair that finds neither announces
+/// nothing (#1683; before it, the sweep reported the old name deleted
+/// first).
 #[test]
 fn the_sweep_after_a_case_only_rename_reports_the_stored_spelling_once() {
-    let (tmp, session) = make_vault(|provider| {
+    let (_tmp, session) = make_vault(|provider| {
         provider.write_file("A.md", b"- [ ] one\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     session.rename_file("A.md", "a.md").unwrap();
-    // The volume says which it is: the old spelling still opens the note
-    // only where spellings alias.
-    let aliasing = tmp.path().join("A.md").is_file();
     let recorder = ChangeRecorder::on(&session);
 
     vault_tasks(&session);
 
-    let expected: &[&str] = if aliasing {
-        &["Modified a.md"]
-    } else {
-        &["Deleted A.md", "Modified a.md"]
-    };
-    assert_eq!(recorder.take(), strings(expected));
+    assert_eq!(recorder.take(), strings(&["Modified a.md"]));
 }
 
 /// A provider that stands in for an aliasing volume on any platform: one
