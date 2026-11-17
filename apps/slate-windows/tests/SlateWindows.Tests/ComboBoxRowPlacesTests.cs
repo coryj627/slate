@@ -28,14 +28,19 @@ namespace SlateWindows.Tests;
 /// hit-tests the popup, and axe-windows' <c>ControlShouldSupportSetInfoWPF</c>,
 /// read that second copy. Every combo box the census lists is opened here, in the
 /// shipped window, and every row under its popup must say what WPF's item peer
-/// for the same row says.
+/// says for the same row with no stamp on it. (With a stamp set, WPF's item peer
+/// answers with the stamp, so the facts read WPF's own answer with the stamp
+/// cleared for the read, and hold a list that is not grouped to the items too.)
 /// </summary>
 public sealed class ComboBoxRowPlacesTests
 {
     /// <summary>Fact 1: one data row for each combo box in
     /// <c>ComboBoxCensus</c>'s table (the census reads these rows). The
     /// combo boxes the census calls code-built are reached in their real
-    /// views inside the shell.</summary>
+    /// views inside the shell. Every row under the open list's window says its
+    /// item's place in the items, which is what WPF's item peer says for it
+    /// with no stamp: a stamp that merely exists, or says the wrong place, is
+    /// caught.</summary>
     [Theory]
     [InlineData("SettingsTheme")]
     [InlineData("SettingsAccent")]
@@ -181,7 +186,7 @@ public sealed class ComboBoxRowPlacesTests
         List<RowRead> realized = [.. RowRead.All(combo).Where(row => row.Own is not null)];
         Assert.NotEmpty(realized);
         Assert.All(realized, row => Assert.Equal($"{row.Index + 1}/300", row.Item));
-        List<string> failures = OpenLists.PopupRuleFailures(OpenLists.PopupRows(combo, "recycling"));
+        List<string> failures = OpenLists.PopupRuleFailures(combo, OpenLists.PopupRows(combo, "recycling"));
         Assert.True(
             failures.Count == realized.Count,
             $"the recycling list's popup copies were expected to keep today's defect, every one: {failures.Count} of {realized.Count} do");
@@ -876,7 +881,7 @@ internal static class OpenLists
             case "DashboardEditorQueryPicker":
                 SeedASavedQuery(host);
                 host.Workspace.OpenDashboardEditor(null);
-                return Shown(host, key, combo => combo.Items.Count > 0);
+                return Shown(host, key, combo => combo.Items.Count > 1);
             case "View override":
                 host.Workspace.OpenDashboardEditor(null);
                 Settle(host);
@@ -916,7 +921,7 @@ internal static class OpenLists
     internal static WorkspaceLeafOption Leaf(string id) =>
         WorkspaceViewModel.Leaves.Single(leaf => leaf.Id == id);
 
-    /// <summary>A saved query in the session's registry, and in the list the
+    /// <summary>Two saved queries in the session's registry, and in the list the
     /// dashboard editor's picker binds to (the workspace's own refresh publishes
     /// it from a pool thread).</summary>
     internal static void SeedASavedQuery(ShownShell host)
@@ -932,7 +937,9 @@ internal static class OpenLists
             host.Session.CloseBase(scratch);
         }
 
+        // Two, so a row's place is more than the first of one.
         _ = host.Session.SaveQuery("Open notes", null, queryJson, SavedQuerySourceSyntax.Builder);
+        _ = host.Session.SaveQuery("Recent notes", null, queryJson, SavedQuerySourceSyntax.Builder);
         foreach (SavedQuerySummary summary in host.Session.ListSavedQueries())
         {
             host.Workspace.SavedQueries.Add(summary);
@@ -1025,7 +1032,8 @@ internal static class OpenLists
     /// window reaches one ListItem for each realized row, and at least one;
     /// each is paired with its row's item peer through its events source, not
     /// by name; and each says a place from 1 to its set's size, the place WPF's
-    /// item peer says for the same row.</summary>
+    /// item peer says for the same row with no stamp on it (and, for a list
+    /// that is not grouped, the item's place in the items).</summary>
     internal static void AssertPopupRule(ComboBox combo, string label)
     {
         List<AutomationPeer> rows = PopupRows(combo, label);
@@ -1035,10 +1043,10 @@ internal static class OpenLists
             rows.Count >= 1 && rows.Count == realized && realized == combo.Items.Count,
             $"{label}: {rows.Count} ListItem peers under the open list's window, for {realized} realized rows of {combo.Items.Count}: {seen}");
 
-        List<string> wrong = PopupRuleFailures(rows);
+        List<string> wrong = PopupRuleFailures(combo, rows);
         Assert.True(
             wrong.Count == 0,
-            $"{label}: rows under the open list's window that do not say their place as WPF's item peer does:\n  "
+            $"{label}: rows under the open list's window that do not say their place as WPF says it with no stamp:\n  "
             + string.Join("\n  ", wrong));
     }
 
@@ -1065,8 +1073,15 @@ internal static class OpenLists
     }
 
     /// <summary>The rows of <paramref name="rows"/> that are paired with no
-    /// item peer, or say a place other than their item peer's, or none.</summary>
-    internal static List<string> PopupRuleFailures(List<AutomationPeer> rows)
+    /// item peer, or whose copy under the open list's window says no place or
+    /// a place other than WPF's own answer for the row. WPF's item peer
+    /// answers with the row container's stamp whenever one is set, so asking it
+    /// with the stamp in place would only read the stamp back: WPF's own answer
+    /// is read with the container's two values cleared for the read and put
+    /// back after it. For a list that is not grouped that answer is also held
+    /// to the items themselves (the item's first index plus one, of the
+    /// count).</summary>
+    internal static List<string> PopupRuleFailures(ComboBox combo, List<AutomationPeer> rows)
     {
         var paired = new HashSet<AutomationPeer>(ReferenceEqualityComparer.Instance);
         var wrong = new List<string>();
@@ -1085,15 +1100,54 @@ internal static class OpenLists
 
             int position = row.GetPositionInSet();
             int size = row.GetSizeOfSet();
-            int itemPosition = item.GetPositionInSet();
-            int itemSize = item.GetSizeOfSet();
-            if (position < 1 || position > size || position != itemPosition || size != itemSize)
+            DependencyObject? container = (row as UIElementAutomationPeer)?.Owner
+                ?? combo.ItemContainerGenerator.ContainerFromItem(item.Item);
+            (int wpfPosition, int wpfSize) = WpfsOwnAnswer(item, container);
+            if (!combo.IsGrouping
+                && (wpfPosition, wpfSize) != (combo.Items.IndexOf(item.Item) + 1, combo.Items.Count))
             {
-                wrong.Add($"'{row.GetName()}': the popup's copy says {position} of {size}; WPF's item peer says {itemPosition} of {itemSize}");
+                wrong.Add($"'{row.GetName()}': WPF's own answer {wpfPosition} of {wpfSize} is not the item's place in the items, "
+                    + $"{combo.Items.IndexOf(item.Item) + 1} of {combo.Items.Count}");
+            }
+
+            if (position < 1 || position > size || position != wpfPosition || size != wpfSize)
+            {
+                wrong.Add($"'{row.GetName()}': the popup's copy says {position} of {size}; WPF's own answer is {wpfPosition} of {wpfSize}");
             }
         }
 
         return wrong;
+    }
+
+    /// <summary>What WPF's item peer says for the row with no stamp on its
+    /// container: the stamp is cleared for the read and put back.</summary>
+    private static (int Position, int Size) WpfsOwnAnswer(ItemAutomationPeer item, DependencyObject? container)
+    {
+        if (container is null)
+        {
+            return (item.GetPositionInSet(), item.GetSizeOfSet());
+        }
+
+        object position = container.ReadLocalValue(AutomationProperties.PositionInSetProperty);
+        object size = container.ReadLocalValue(AutomationProperties.SizeOfSetProperty);
+        container.ClearValue(AutomationProperties.PositionInSetProperty);
+        container.ClearValue(AutomationProperties.SizeOfSetProperty);
+        try
+        {
+            return (item.GetPositionInSet(), item.GetSizeOfSet());
+        }
+        finally
+        {
+            if (position != DependencyProperty.UnsetValue)
+            {
+                container.SetValue(AutomationProperties.PositionInSetProperty, position);
+            }
+
+            if (size != DependencyProperty.UnsetValue)
+            {
+                container.SetValue(AutomationProperties.SizeOfSetProperty, size);
+            }
+        }
     }
 
     private static void CollectListItems(AutomationPeer peer, List<AutomationPeer> rows)
