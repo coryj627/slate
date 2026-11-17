@@ -21,7 +21,9 @@ namespace SlateWindows;
 /// <see cref="AutomationProperties.SizeOfSetProperty"/> on every realized row
 /// equal to what WPF's item peer says without them, so both copies say the
 /// same, and it keeps them only while the list is open, which is the only time
-/// the popup's copies exist. When the list closes it clears them, so a closed
+/// the popup's copies exist. When the list closes (DropDownClosed, which WPF
+/// raises after IsDropDownOpen has turned false; until then the stamps are kept
+/// current) it clears them, so a closed
 /// combo box reports exactly what it reported with no tracker, and a list
 /// whose source is refilled while closed costs no pass and no write. A stamp
 /// that went stale would make the item peer, which a screen reader reads and
@@ -49,8 +51,8 @@ internal sealed class ComboBoxRowPlaces
 
     /// <summary>It stamps when the list opens, and while it is open whenever the
     /// generator makes or drops rows (a first open, a new items host after a
-    /// theme change) and whenever the items change; it clears when the list
-    /// closes. A tracker that cannot attach (anything thrown while it
+    /// theme change) and whenever the items change, until DropDownClosed; it
+    /// clears at DropDownClosed. A tracker that cannot attach (anything thrown while it
     /// subscribes or runs its first pass) takes its subscriptions back and
     /// stands down for good: the combo box keeps WPF's own answers, as it did
     /// with no tracker, and the table holds the failed tracker, so it is not
@@ -161,8 +163,12 @@ internal sealed class ComboBoxRowPlaces
     }
 
     /// <summary>
-    /// One pass over the items, only while the list is open (closed, it does
-    /// nothing: no pass, no map). A container the generator no longer owns
+    /// One pass over the items, while the list is open and until DropDownClosed
+    /// has cleared the stamps. WPF turns IsDropDownOpen false before it raises
+    /// DropDownClosed, which comes later from the dispatcher, so in between the
+    /// rows still hold stamps and a change to the items must still restamp
+    /// them (Codex round 1). Once they are cleared and the list is closed, it
+    /// does nothing: no pass, no map. A container the generator no longer owns
     /// loses both values; under grouping or recycling every realized row loses
     /// them; otherwise every realized row gets its item's first index plus one
     /// (two equal items both get the first one's place, as WPF's IndexOf gives
@@ -177,7 +183,7 @@ internal sealed class ComboBoxRowPlaces
     /// </summary>
     internal void Restamp()
     {
-        if (StoodDown || !_combo.TryGetTarget(out ComboBox? combo) || !combo.IsDropDownOpen)
+        if (StoodDown || !_combo.TryGetTarget(out ComboBox? combo) || (!combo.IsDropDownOpen && _stamped.Count == 0))
         {
             return;
         }

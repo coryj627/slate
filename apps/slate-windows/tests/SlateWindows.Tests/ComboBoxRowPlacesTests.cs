@@ -435,6 +435,73 @@ public sealed class ComboBoxRowPlacesTests
         OpenLists.AssertPopupRule(combo, "refilled while open");
     });
 
+    /// <summary>Codex round 1: IsDropDownOpen turns false before WPF raises
+    /// DropDownClosed, which comes later from the dispatcher, so the rows still
+    /// hold their stamps in between. A change to the items in that interval
+    /// must restamp them, or the stale stamps override WPF's own answer. The
+    /// list closes; an operation queued at Normal priority, which runs before
+    /// the close is processed, inserts a row at the top and reads every
+    /// realized row's item peer at once: each says WPF's own answer for its
+    /// row (read with the stamp cleared) and the item's place in the items.
+    /// Once DropDownClosed has run, no row holds a stamp.</summary>
+    [Fact]
+    public void AChangeBeforeDropDownClosedLeavesNoStaleStamp() => OpenLists.RunSta(() =>
+    {
+        using var bench = new Bench();
+        var rows = new ObservableCollection<string> { "a", "b", "c" };
+        var combo = new ComboBox { ItemsSource = rows, ItemContainerStyle = RowStyle() };
+        bench.Panel.Children.Add(combo);
+        bench.Settle();
+        bench.Open(combo);
+        bool closedRaised = false;
+        combo.DropDownClosed += (_, _) => closedRaised = true;
+        bool? closedBeforeTheChange = null;
+        List<string>? wrong = null;
+
+        combo.IsDropDownOpen = false;
+        _ = combo.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+        {
+            closedBeforeTheChange = closedRaised;
+            rows.Insert(0, "x");
+            wrong = ItemPeersThatDisagreeWithWpf(combo);
+        }));
+        bench.Settle();
+
+        Assert.True(closedBeforeTheChange == false, "DropDownClosed ran before the queued change, so the fact proves nothing.");
+        Assert.True(closedRaised, "DropDownClosed was never raised.");
+        Assert.True(
+            wrong is { Count: 0 },
+            "between the close and DropDownClosed, item peers that do not say WPF's own answer:\n  " + string.Join("\n  ", wrong ?? ["(not read)"]));
+        AssertNoRowIsStamped(combo, "after DropDownClosed");
+    });
+
+    /// <summary>Every realized row whose item peer says something other than
+    /// WPF's own answer for it (read with the stamp cleared), or whose own
+    /// answer is not its item's place in the items.</summary>
+    private static List<string> ItemPeersThatDisagreeWithWpf(ComboBox combo)
+    {
+        var wrong = new List<string>();
+        for (int index = 0; index < combo.Items.Count; index++)
+        {
+            if (combo.ItemContainerGenerator.ContainerFromIndex(index) is not UIElement container
+                || UIElementAutomationPeer.CreatePeerForElement(container).EventsSource is not ItemAutomationPeer item)
+            {
+                continue;
+            }
+
+            (int position, int size) = (item.GetPositionInSet(), item.GetSizeOfSet());
+            (int wpfPosition, int wpfSize) = OpenLists.WpfsOwnAnswer(item, container);
+            (int inItems, int count) = (combo.Items.IndexOf(item.Item) + 1, combo.Items.Count);
+            if ((position, size) != (wpfPosition, wpfSize) || (wpfPosition, wpfSize) != (inItems, count))
+            {
+                wrong.Add($"'{item.Item}': its item peer says {position} of {size}; WPF's own answer is {wpfPosition} of {wpfSize}; "
+                    + $"its place in the items is {inItems} of {count}");
+            }
+        }
+
+        return wrong;
+    }
+
     /// <summary>The plan lead's condition for clearing stamps on close: a
     /// closed combo box reports to UI Automation exactly what it reports with
     /// no stamp at all, which is what main reports (main has no tracker). Its
@@ -1330,7 +1397,7 @@ internal static class OpenLists
 
     /// <summary>What WPF's item peer says for the row with no stamp on its
     /// container: the stamp is cleared for the read and put back.</summary>
-    private static (int Position, int Size) WpfsOwnAnswer(ItemAutomationPeer item, DependencyObject? container)
+    internal static (int Position, int Size) WpfsOwnAnswer(ItemAutomationPeer item, DependencyObject? container)
     {
         if (container is null)
         {
