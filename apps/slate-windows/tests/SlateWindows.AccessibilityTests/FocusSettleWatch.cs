@@ -69,25 +69,61 @@ internal static class FocusSettleWatch
         return null;
     }
 
+    /// <summary>How long a premise goes on asking while its read cannot be
+    /// read. A UI Automation fault, or a moment with no focused element, is
+    /// transient (#1611 counted single reads lost to one), and the watch
+    /// after the key already takes such a read for no observation: the
+    /// premise must not be stricter about the same fault, or a journey fails
+    /// with focus correct throughout. Three seconds is thirty reads at the
+    /// poll: long past a transient fault, short beside a journey. It bounds
+    /// only reads that cannot be read; a read that sees the state elsewhere
+    /// is never asked again.</summary>
+    internal static readonly TimeSpan PremisePatience = TimeSpan.FromSeconds(3);
+
     /// <summary>A key that must move nothing. The state is read in place
-    /// once before the key: that is the premise, and a read that sees the
-    /// state elsewhere, or cannot see it, fails there in its own words, with
-    /// the key not pressed. Then the key is pressed and <see cref="Watch"/>
-    /// runs from the press on, so the first read that sees the state gone
-    /// fails, whatever a later read would see. A check that first waited
-    /// after the key for a read in place would pass a key that moved focus
-    /// away and let it come back: it would prove recovery, not that nothing
-    /// moved.</summary>
+    /// before the key: that is the premise. A read that sees the state
+    /// elsewhere fails there at once, in the premise's own words, with the
+    /// key not pressed. A read that cannot be read is asked again every
+    /// poll for <see cref="PremisePatience"/>, and passes on the first read
+    /// in place; unreadable all that time fails as a premise that could not
+    /// be read, saying how many reads were tried. Then the key is pressed
+    /// and <see cref="Watch"/> runs from the press on, so the first read
+    /// that sees the state gone fails, whatever a later read would see. A
+    /// check that first waited after the key for a read in place would pass
+    /// a key that moved focus away and let it come back: it would prove
+    /// recovery, not that nothing moved.</summary>
     internal static string? WatchAcrossAKey(
-        Func<bool?> inPlace, Action press, TimeSpan window, TimeSpan? cap = null, TimeSpan? poll = null)
+        Func<bool?> inPlace,
+        Action press,
+        TimeSpan window,
+        TimeSpan? cap = null,
+        TimeSpan? poll = null,
+        TimeSpan? premisePatience = null)
     {
-        switch (inPlace())
+        TimeSpan patience = premisePatience ?? PremisePatience;
+        var clock = Stopwatch.StartNew();
+        int unreadable = 0;
+        while (true)
         {
-            case null:
-                return "Premise: the state could not be read before the key (UI Automation faulted or answered no element), "
-                    + "so the key was not pressed.";
-            case false:
+            bool? before = inPlace();
+            if (before is true)
+            {
+                break;
+            }
+
+            if (before is false)
+            {
                 return "Premise: the state was not in place before the key, so the key was not pressed.";
+            }
+
+            unreadable++;
+            if (clock.Elapsed >= patience)
+            {
+                return $"Premise: the state could not be read before the key: {unreadable} reads in {patience.TotalSeconds:0.#} s "
+                    + "all came back unreadable (UI Automation faulted or answered no element), so the key was not pressed.";
+            }
+
+            Thread.Sleep(poll ?? TimeSpan.FromMilliseconds(100));
         }
 
         press();

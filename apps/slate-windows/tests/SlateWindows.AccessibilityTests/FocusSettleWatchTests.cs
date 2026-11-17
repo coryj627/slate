@@ -124,9 +124,9 @@ public sealed class FocusSettleWatchTests
         Assert.Equal(2, after);
     }
 
-    /// <summary>The premise is read once, before the key. A state that is
-    /// not in place then fails in the premise's own words, and the key is
-    /// never pressed.</summary>
+    /// <summary>The premise is read before the key. A read that sees the
+    /// state elsewhere fails at once in the premise's own words: it is not
+    /// asked again, and the key is never pressed.</summary>
     [Fact]
     public void AStateNotInPlaceBeforeTheKeyFailsThePremiseAndPressesNothing()
     {
@@ -150,18 +150,77 @@ public sealed class FocusSettleWatchTests
         Assert.Equal(1, reads);
     }
 
-    /// <summary>A premise that cannot be read fails too, and says that it
-    /// could not be read, not that focus was elsewhere.</summary>
+    /// <summary>A premise whose first read cannot be read is asked again,
+    /// as the watch after the key treats the same fault as no observation:
+    /// unreadable once and then in place passes, and the key is pressed
+    /// once. Failing on that one read was a flake with focus correct
+    /// throughout.</summary>
     [Fact]
-    public void AStateThatCannotBeReadBeforeTheKeyFailsThePremiseInItsOwnWords()
+    public void APremiseThatCannotBeReadAtFirstIsAskedAgainAndTheKeyIsPressedOnce()
+    {
+        int presses = 0;
+        int before = 0;
+
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () => presses > 0 ? true : ++before == 1 ? (bool?)null : true,
+            () => presses++,
+            Short,
+            poll: TimeSpan.Zero,
+            premisePatience: TimeSpan.FromSeconds(5));
+
+        Assert.Null(why);
+        Assert.Equal(1, presses);
+        Assert.Equal(2, before);
+    }
+
+    /// <summary>A premise that can never be read fails at its cap, says that
+    /// it could not be read (not that focus was elsewhere) and how many
+    /// reads it tried, and the key is never pressed.</summary>
+    [Fact]
+    public void APremiseThatCanNeverBeReadFailsAtItsCapAndSaysHowManyReadsItTried()
     {
         bool pressed = false;
+        int reads = 0;
 
-        string? why = FocusSettleWatch.WatchAcrossAKey(() => null, () => pressed = true, Short, poll: TimeSpan.Zero);
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () =>
+            {
+                reads++;
+                return null;
+            },
+            () => pressed = true,
+            Short,
+            poll: TimeSpan.Zero,
+            premisePatience: Short);
 
         Assert.NotNull(why);
         Assert.StartsWith("Premise:", why, StringComparison.Ordinal);
         Assert.Contains("could not be read before the key", why, StringComparison.Ordinal);
+        Assert.Contains($"{reads} reads", why, StringComparison.Ordinal);
+        Assert.True(reads > 1, "the premise was read once only");
         Assert.False(pressed, "the key was pressed though the premise could not be read");
+    }
+
+    /// <summary>Asking again is for a read that cannot be read, never for
+    /// one that sees the state elsewhere: unreadable and then elsewhere
+    /// fails on the second read, with the key not pressed.</summary>
+    [Fact]
+    public void APremiseReadElsewhereAfterAnUnreadableReadFailsAtOnce()
+    {
+        bool pressed = false;
+        int reads = 0;
+
+        string? why = FocusSettleWatch.WatchAcrossAKey(
+            () => ++reads == 1 ? (bool?)null : false,
+            () => pressed = true,
+            Short,
+            poll: TimeSpan.Zero,
+            premisePatience: TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(why);
+        Assert.StartsWith("Premise:", why, StringComparison.Ordinal);
+        Assert.Contains("not in place before the key", why, StringComparison.Ordinal);
+        Assert.False(pressed, "the key was pressed though the premise failed");
+        Assert.Equal(2, reads);
     }
 }

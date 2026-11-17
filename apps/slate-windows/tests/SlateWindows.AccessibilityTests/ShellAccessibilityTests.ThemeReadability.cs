@@ -212,7 +212,7 @@ public sealed partial class ShellAccessibilityTests
             }
 
             Assert.True(
-                SpinWait.SpinUntil(() => SelectionText(editor).Length > 0, TimeSpan.FromSeconds(5)),
+                EventuallyByUia(() => SelectionText(editor).Length > 0, TimeSpan.FromSeconds(5)),
                 "Ctrl+A selected nothing in the editor.");
             WaitForSettledPixels(editor, "the editor's selection");
             (int selected, double ink) = Measure(editor, highlight);

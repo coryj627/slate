@@ -194,7 +194,8 @@ public sealed partial class ShellAccessibilityTests
             if (!HasInteractiveDesktop(process, "theme-preference")) { return; }
             // The first frame is read from the moment the window is visible, before UI
             // Automation finds it, which can be seconds later: a shorter flash would be gone.
-            AssertFirstFrameIsLight(WaitForVisibleMainWindowHandle(process), expectLight);
+            IntPtr handle = WaitForVisibleMainWindowHandle(process);
+            AssertFirstFrameIsLight(handle, expectLight);
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
@@ -206,10 +207,25 @@ public sealed partial class ShellAccessibilityTests
                 // the app shows what follows the save: the combo reads the choice and the
                 // window is drawn in it (DevicePreference.Choose saves, then applies).
                 AutomationElement combo = WaitForElement(window, "SettingsTheme", TimeSpan.FromSeconds(5));
-                Assert.True(
-                    SpinWait.SpinUntil(() => ComboValue(combo) == "Dark", TimeSpan.FromSeconds(10)),
-                    $"the key did not choose Dark; the theme reads '{ComboValue(combo)}'.");
-                WaitForAppliedTheme(window.Properties.NativeWindowHandle.Value, light: false);
+                // A UI Automation fault on the combo's read is "not yet", and the
+                // window's handle is the one the launch already gave: no one-shot
+                // read stands between the key and the file.
+                if (!EventuallyByUia(() => ComboValue(combo) == "Dark", TimeSpan.FromSeconds(10)))
+                {
+                    string shown;
+                    try
+                    {
+                        shown = ComboValue(combo) ?? "nothing";
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        shown = "<unreadable>";
+                    }
+
+                    Assert.Fail($"the key did not choose Dark; the theme reads '{shown}'.");
+                }
+
+                WaitForAppliedTheme(handle, light: false);
                 _ = ExpectFileText(
                     Path.Combine(device, "preferences.json"),
                     text => text.Contains("\"theme\": \"dark\"", StringComparison.Ordinal),
