@@ -89,11 +89,24 @@
 // ticket among the member's parameters, is read from the declared symbol: the
 // coordinator's own SaveTicket type, not a type of that name.
 //
-// The admitted set is the least set that holds every admission node and
-// every node that has a caller and whose callers are all in the set. A call
-// is admitted when either holds:
+// The admitted set. Rule (A) refuses by default. The set holds every
+// admission node, and a node besides only when all three hold: it is NAMED
+// in AdmittedByItsCallers; it has a caller, and every caller the graph holds
+// is in the set; and the open rule below does not exclude it. A row of the
+// table is the first line. It asserts, on a reader's check, that every way
+// to reach the member is inside a note's ticket. The graph and the open rule
+// are second lines behind it: they can refute a row and can never stand in
+// for one, so a gap in either admits nothing by itself. A fact holds the
+// table to the shell (EveryMemberAdmittedByItsCallersIsNamedAndEveryRowHolds).
+// A helper between an admission and a site that no row names fails. So does
+// a row whose member is gone, cannot be named, has a caller outside the
+// chain, leads to no site any more, or stands for another count of members
+// than it says. A row names a member by file and name, so overloads, and
+// members of one name in two types of one file, are told apart by that
+// count. A call is admitted when either holds:
 //   (A) its node is in the admitted set. Some nodes are never admitted this
-//       way, because the graph may not hold all of their callers:
+//       way, and cannot be named, because the graph may not hold all of
+//       their callers:
 //       - one that implements an interface member (implicitly or
 //         explicitly), that overrides, or that is virtual or abstract: a
 //         call through the interface or the base binds to another symbol;
@@ -109,15 +122,18 @@
 //         accessor (a binding reads and sets a property, generated code
 //         subscribes an event, and `foreach`, `await`, a range and a pattern
 //         read Current, IsCompleted, Length, Count and an indexer). By
-//         attribute: a module initialiser. By name and shape, where no kind
-//         exists: Dispose and DisposeAsync (`using`), GetEnumerator,
-//         GetAsyncEnumerator, MoveNext and MoveNextAsync (`foreach`),
-//         GetAwaiter, GetResult, OnCompleted and UnsafeOnCompleted
-//         (`await`), Deconstruct with only `out` parameters,
-//         GetPinnableReference (`fixed`), Slice(int, int) (a range), and Add
-//         on a type that is enumerable (a collection initialiser or
-//         expression). The edges above are drawn for these all the same;
-//         this is the floor under them; or
+//         attribute: a module initialiser. By name alone, whatever the
+//         parameters, where no kind exists (the language calls a pattern
+//         member with optional and params parameters unwritten): Dispose
+//         and DisposeAsync (`using`); GetEnumerator, GetAsyncEnumerator,
+//         MoveNext, MoveNextAsync and Current (`foreach`); GetAwaiter,
+//         GetResult, IsCompleted, OnCompleted and UnsafeOnCompleted
+//         (`await`); Deconstruct; GetPinnableReference (`fixed`); Slice,
+//         Length and Count (a range or an index); and Add (a collection
+//         initialiser or expression). The query pattern's names (Select,
+//         Where and the rest) stay closed: a query clause is an implicit
+//         invocation, so its edge is drawn. The edges above are drawn for
+//         the open members all the same; this is the floor under them; or
 //   (B) it stands in a lambda assigned to a local of a delegate type, through
 //       those same forms only, and every read of that local in the member
 //       is handed to an admission call as its operation
@@ -402,6 +418,111 @@ public sealed class SaveChainAdmissionCensus
             "2026-11-16",
             "standing"),
     ];
+
+    /// <summary>One member rule (A) may admit by its callers: a helper
+    /// between an admission and a call the rules weigh. The row asserts
+    /// that every way to reach the member is inside a note's ticket. The
+    /// graph and the open rule can only refute that, never show it, so the
+    /// member is named here by a reader who checked. <c>Overloads</c> is
+    /// how many members of that name in the file the row stands for:
+    /// overloads, and members of one name in two types of one file.</summary>
+    internal sealed record NamedMember(string File, string Member, string Reason, int Overloads = 1);
+
+    private static readonly NamedMember[] AdmittedByItsCallers =
+    [
+        new(
+            "WorkspaceViewModel.cs",
+            "StartSave",
+            "a tab's save at its turn: run only by the lambda SaveAsync hands to Enqueue"),
+        new(
+            "WorkspaceViewModel.cs",
+            "WriteForSave",
+            "a tab's save, its write on the worker: called only by StartSave"),
+        new(
+            "WorkspaceViewModel.cs",
+            "StartAdmittedTaskToggle",
+            "the tab toggle's admitted operation: run only by the lambda ToggleTask hands to Admit"),
+        new(
+            "WorkspaceViewModel.cs",
+            "PerformTaskToggle",
+            "the tab toggle's worker: started only by StartAdmittedTaskToggle, whose ticket ends when it has published"),
+        new(
+            "WorkspaceViewModel.History.cs",
+            "RestoreAdmitted",
+            "the restore's admitted operation: run only by the lambda PerformRestore hands to Admit"),
+        new(
+            "WorkspaceViewModel.History.cs",
+            "FinishRestore",
+            "the restore's publication: run only by RestoreAdmitted, inside its ticket"),
+        new(
+            "WorkspaceViewModel.History.cs",
+            "ReloadOpenTabFromDiskAdmitted",
+            "the restore's reload of its tab: called only by FinishRestore"),
+        new(
+            "WorkspaceViewModel.History.cs",
+            "RecoverAdmitted",
+            "the recover's admitted operation: run only by the lambda RecoverDeletedFile hands to AdmitPropertyWrite"),
+        new(
+            "WorkspaceViewModel.History.cs",
+            "FinishRecover",
+            "the recover's publication: run only by RecoverAdmitted, inside its ticket"),
+        new(
+            "WorkspaceViewModel.Bases.cs",
+            "BasesCellWriteAdmitted",
+            "the open-note cell write's admitted operation: run by the lambda BasesApplyPropertyEdit hands to "
+            + "AdmitPropertyWrite, and by BasesTablessWriteAdmitted when a tab opened while it waited"),
+        new(
+            "WorkspaceViewModel.Bases.cs",
+            "BasesTablessWriteAdmitted",
+            "the tabless cell write's admitted operation: run only by the lambda BasesApplyPropertyEdit hands to "
+            + "AdmitPropertyWrite"),
+        new(
+            "WorkspaceViewModel.Bases.cs",
+            "BasesTablessWriteBody",
+            "the tabless cell write's worker and publication: started only by BasesTablessWriteAdmitted, whose "
+            + "ticket ends when it has published"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "AddAdmitted",
+            "the property add's admitted operation: run only by the lambdas CommitAddProperty and "
+            + "RetryAddWithFreshHash hand to AdmitPropertyWrite"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "AddWriteCompletion",
+            "the property add's completion, which reconciles the note's tabs: built only by AddAdmitted and run "
+            + "before its operation ends"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "RowWriteAdmitted",
+            "the property row write's admitted operation: run only by the lambdas DispatchRowWrite and "
+            + "RetryPropertyEditWithFreshHash hand to AdmitPropertyWrite"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "RowWriteAfterHeaderWait",
+            "the row write once the header has re-read the saved bytes: called only by RowWriteAdmitted"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "StartRowWrite",
+            "the row write's worker start: called only by RowWriteAdmitted and RowWriteAfterHeaderWait"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "PropertyWriteCompletion",
+            "the row write's completion, which reconciles the note's tabs: built only by StartRowWrite and run "
+            + "before its operation ends"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "ReconcileAfterReadBack",
+            "a failed property write's reconcile after its read-back: called only by the two completions"),
+        new(
+            "Panels/TasksReviewViewModel.cs",
+            "DirectToggleAtItsTurn",
+            "the review's direct toggle, its admitted operation: run only by the lambda ToggleTask hands to "
+            + "INoteSaveChain.Admit"),
+    ];
+
+    private static string Label(NamedMember row) => $"{row.File} ({row.Member})";
+
+    private static HashSet<string> Labels(IEnumerable<NamedMember> rows) => new(rows.Select(Label), StringComparer.Ordinal);
 
     // ---- The reading ------------------------------------------------------
 
@@ -1096,6 +1217,9 @@ public sealed class SaveChainAdmissionCensus
         private Site SiteAt(SiteKind kind, SyntaxNode node, string name)
         {
             (string member, SyntaxNode? declaration) = MemberOf(node);
+            // The node that holds a site has a name even when it calls
+            // nothing the shell declares.
+            _ = reading.NodeNames.TryAdd(NodeOf(node), $"{file} ({member})");
             return new Site(
                 kind,
                 file,
@@ -1283,7 +1407,7 @@ public sealed class SaveChainAdmissionCensus
                     || method.IsOverride
                     || !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty
                     || IsShapedLikeAnEventHandler(method)
-                    || IsCalledWithNoOperation(method, type)
+                    || IsCalledWithNoOperation(method)
                     || type.AllInterfaces.Any(contract => contract.GetMembers(method.Name).OfType<IMethodSymbol>().Any(member =>
                         SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(member), method))))
                 {
@@ -1322,10 +1446,10 @@ public sealed class SaveChainAdmissionCensus
         /// sets a property, generated code subscribes an event, and
         /// `foreach`, `await`, ranges and patterns read `Current`,
         /// `IsCompleted`, `Length`, `Count` and an indexer). By attribute: a
-        /// module initialiser. By name and shape, where no kind exists: the
+        /// module initialiser. By name alone, where no kind exists: the
         /// methods `using`, `foreach`, `await`, a deconstruction, `fixed`, a
         /// range and a collection initialiser or expression call.</summary>
-        private static bool IsCalledWithNoOperation(IMethodSymbol method, INamedTypeSymbol type)
+        private static bool IsCalledWithNoOperation(IMethodSymbol method)
         {
             switch (method.MethodKind)
             {
@@ -1349,22 +1473,25 @@ public sealed class SaveChainAdmissionCensus
             {
                 return true;
             }
-            IParameterSymbol[] own = [.. method.Parameters.Skip(method.IsExtensionMethod ? 1 : 0)];
-            ITypeSymbol receiver = method.IsExtensionMethod ? method.Parameters[0].Type : type;
-            return method.Name switch
-            {
-                "Dispose" or "DisposeAsync" or "GetEnumerator" or "MoveNext" or "MoveNextAsync" or "GetAwaiter" or "GetResult"
-                    or "GetPinnableReference" => own.Length == 0,
-                "GetAsyncEnumerator" => own.Length <= 1,
-                "OnCompleted" or "UnsafeOnCompleted" => own.Length == 1,
-                "Deconstruct" => own.Length > 0 && own.All(parameter => parameter.RefKind == RefKind.Out),
-                "Slice" => own.Length == 2 && own.All(parameter => parameter.Type.SpecialType == SpecialType.System_Int32),
-                "Add" => own.Length > 0
-                    && (receiver.SpecialType == SpecialType.System_Collections_IEnumerable
-                        || receiver.AllInterfaces.Any(contract => contract.SpecialType == SpecialType.System_Collections_IEnumerable)),
-                _ => false,
-            };
+            // By the name alone, whatever the parameters and whether it is
+            // an instance or an extension method: the language calls a
+            // pattern member with optional and params parameters unwritten
+            // (codex round 6: Dispose(int optional = 0) on a ref struct).
+            return PatternMemberNames.Contains(method.Name);
         }
+
+        /// <summary>The names the language calls a method by with no
+        /// operation that names it: `using`, `foreach`, `await`, a
+        /// deconstruction, `fixed`, a range or an index, and a collection
+        /// initialiser or expression. The query pattern's names (Select,
+        /// Where and the rest) are not here: a query clause is an implicit
+        /// invocation, so the graph holds its edge.</summary>
+        private static readonly HashSet<string> PatternMemberNames = new(StringComparer.Ordinal)
+        {
+            "Dispose", "DisposeAsync", "GetEnumerator", "GetAsyncEnumerator", "MoveNext", "MoveNextAsync", "Current",
+            "GetAwaiter", "GetResult", "IsCompleted", "OnCompleted", "UnsafeOnCompleted", "Deconstruct",
+            "GetPinnableReference", "Add", "Slice", "Length", "Count",
+        };
 
         private static int LineOf(SyntaxNode node) => node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
     }
@@ -1408,29 +1535,42 @@ public sealed class SaveChainAdmissionCensus
         return original.GetDocumentationCommentId() ?? original.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
     }
 
-    /// <summary>The least set that holds every admission argument and every
-    /// node that has a caller, whose callers are all in the set, and that no
-    /// call can reach through another symbol (<see cref="Reading.Open"/>). A
-    /// call a member makes to itself is no caller.</summary>
-    internal static HashSet<string> AdmittedNodes(Reading reading)
+    /// <summary>The admitted set, refusing by default: every admission
+    /// node, and every node that is NAMED (<paramref name="named"/>, as
+    /// <c>File (Member)</c>) and for which the closure holds.</summary>
+    internal static HashSet<string> AdmittedNodes(Reading reading, IReadOnlySet<string> named) =>
+        Closure(reading, CallersByNode(reading), NodesNamed(reading, named));
+
+    /// <summary>The closure alone, whatever is named: the least set that
+    /// holds every admission node and every node that has a caller, whose
+    /// callers are all in the set, and that the open rule does not exclude
+    /// (<see cref="Reading.Open"/>). It admits nothing by itself. It says
+    /// which rows hold and which members a row could name.</summary>
+    internal static HashSet<string> ClosedUnderCallers(Reading reading) => Closure(reading, CallersByNode(reading), only: null);
+
+    /// <summary>Each node's callers. A call a member makes to itself is no
+    /// caller.</summary>
+    private static Dictionary<string, HashSet<string>> CallersByNode(Reading reading)
     {
         var direct = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        HashSet<string> CallersOf(string node)
-        {
-            if (!direct.TryGetValue(node, out HashSet<string>? callers))
-            {
-                callers = new HashSet<string>(StringComparer.Ordinal);
-                direct[node] = callers;
-            }
-            return callers;
-        }
         foreach ((string caller, string callee) in reading.Edges)
         {
-            if (caller != callee)
+            if (caller == callee)
             {
-                _ = CallersOf(callee).Add(caller);
+                continue;
             }
+            if (!direct.TryGetValue(callee, out HashSet<string>? callers))
+            {
+                callers = new HashSet<string>(StringComparer.Ordinal);
+                direct[callee] = callers;
+            }
+            _ = callers.Add(caller);
         }
+        return direct;
+    }
+
+    private static HashSet<string> Closure(Reading reading, Dictionary<string, HashSet<string>> direct, HashSet<string>? only)
+    {
         var admitted = new HashSet<string>(reading.AdmissionNodes, StringComparer.Ordinal);
         bool grew = true;
         while (grew)
@@ -1438,7 +1578,8 @@ public sealed class SaveChainAdmissionCensus
             grew = false;
             foreach ((string node, HashSet<string> callers) in direct)
             {
-                if (callers.Count > 0
+                if ((only is null || only.Contains(node))
+                    && callers.Count > 0
                     && !reading.Open.Contains(node)
                     && !admitted.Contains(node)
                     && callers.All(admitted.Contains))
@@ -1449,6 +1590,165 @@ public sealed class SaveChainAdmissionCensus
             }
         }
         return admitted;
+    }
+
+    /// <summary>The nodes a set of names stands for: every member of that
+    /// name in that file, never an admission node.</summary>
+    private static HashSet<string> NodesNamed(Reading reading, IReadOnlySet<string> named) =>
+        new(
+            reading.NodeNames.Where(pair => named.Contains(pair.Value) && !reading.AdmissionNodes.Contains(pair.Key)).Select(pair => pair.Key),
+            StringComparer.Ordinal);
+
+    /// <summary>The members the rules need rule (A) for: the helpers
+    /// between an admission and a site. Every node that holds a call the
+    /// rules weigh, or calls a node that holds one, and for which the
+    /// closure holds; and every caller of one of these for which it holds
+    /// too. The second kind of start is a helper that reaches, from inside
+    /// a ticket, a member an exception row answers for: the row excuses
+    /// only its callers outside the chain, so the ones inside are named
+    /// like any other.</summary>
+    internal static HashSet<string> BetweenAnAdmissionAndASite(
+        Reading reading, HashSet<string> closed, Dictionary<string, HashSet<string>> direct)
+    {
+        var between = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>();
+        foreach (string holder in reading.Sites
+            .Where(site => site.Kind == SiteKind.Reload || IsWeighed(site.Name))
+            .Select(site => site.Node)
+            .Distinct(StringComparer.Ordinal))
+        {
+            pending.Push(holder);
+            foreach (string caller in direct.GetValueOrDefault(holder) ?? [])
+            {
+                pending.Push(caller);
+            }
+        }
+        while (pending.Count > 0)
+        {
+            string node = pending.Pop();
+            if (reading.AdmissionNodes.Contains(node) || !closed.Contains(node) || !between.Add(node))
+            {
+                continue;
+            }
+            foreach (string caller in direct.GetValueOrDefault(node) ?? [])
+            {
+                pending.Push(caller);
+            }
+        }
+        return between;
+    }
+
+    /// <summary>For a site the rules refuse: the members that would have
+    /// to be named for rule (A) to admit it, when the closure holds for
+    /// its node; else nothing.</summary>
+    private static Func<Site, string> ToName(Reading reading, HashSet<string> admitted)
+    {
+        Dictionary<string, HashSet<string>> direct = CallersByNode(reading);
+        HashSet<string> closed = Closure(reading, direct, only: null);
+        return site =>
+        {
+            if (!closed.Contains(site.Node) || reading.AdmissionNodes.Contains(site.Node))
+            {
+                return string.Empty;
+            }
+            var unnamed = new SortedSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>([site.Node]);
+            while (pending.Count > 0)
+            {
+                string node = pending.Pop();
+                if (reading.AdmissionNodes.Contains(node) || !seen.Add(node))
+                {
+                    continue;
+                }
+                if (!admitted.Contains(node))
+                {
+                    _ = unnamed.Add(reading.NodeNames.GetValueOrDefault(node, node));
+                }
+                foreach (string caller in direct.GetValueOrDefault(node) ?? [])
+                {
+                    pending.Push(caller);
+                }
+            }
+            return unnamed.Count == 0
+                ? string.Empty
+                : $". Every caller the graph holds is admitted, but a member is admitted by its callers only when it is named: "
+                    + $"name {string.Join(", ", unnamed)} in {nameof(AdmittedByItsCallers)} if every way to reach it is inside a "
+                    + "note's ticket";
+        };
+    }
+
+    /// <summary>What is wrong with the table. A member the rules need
+    /// rule (A) for that no row names. A row with no reason. A member
+    /// named twice. A row that names no member the walk reads. A row for
+    /// a member rule (A) never admits (it cannot be named). A row whose
+    /// member the closure does not hold for: it has no caller, or a caller
+    /// outside the chain. A row whose member lies between no admission and
+    /// no site any more. A row that stands for another count of members
+    /// than it says.</summary>
+    internal static IReadOnlyList<string> TableProblems(Reading reading, IReadOnlyList<NamedMember> rows)
+    {
+        Dictionary<string, HashSet<string>> direct = CallersByNode(reading);
+        HashSet<string> closed = Closure(reading, direct, only: null);
+        HashSet<string> between = BetweenAnAdmissionAndASite(reading, closed, direct);
+        ILookup<string, string> nodes = reading.NodeNames
+            .Where(pair => !reading.AdmissionNodes.Contains(pair.Key))
+            .ToLookup(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
+        string Callers(string node) => string.Join(
+            "; ",
+            (direct.GetValueOrDefault(node) ?? []).Select(caller => reading.NodeNames.GetValueOrDefault(caller, caller))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+
+        List<string> problems = [.. rows.Where(row => string.IsNullOrWhiteSpace(row.Reason)).Select(row => $"{Label(row)}: a row with no reason.")];
+        problems.AddRange(rows.GroupBy(Label, StringComparer.Ordinal).Where(group => group.Count() > 1)
+            .Select(group => $"{group.Key}: named {group.Count()} times."));
+        HashSet<string> named = Labels(rows);
+        foreach (IGrouping<string, string> needed in between
+            .GroupBy(node => reading.NodeNames.GetValueOrDefault(node, node), StringComparer.Ordinal)
+            .Where(group => !named.Contains(group.Key))
+            .OrderBy(group => group.Key, StringComparer.Ordinal))
+        {
+            problems.Add($"{needed.Key}: is not named, and a call the rules weigh is reached through it ({needed.Count()} member(s) "
+                + $"of that name; called from [{string.Join(" | ", needed.Select(Callers))}]). Name it in "
+                + $"{nameof(AdmittedByItsCallers)} if every way to reach it is inside a note's ticket.");
+        }
+        foreach (NamedMember row in rows)
+        {
+            string[] members = [.. nodes[Label(row)]];
+            if (members.Length == 0)
+            {
+                problems.Add($"{Label(row)}: the row names no member the walk reads (delete it).");
+                continue;
+            }
+            if (members.Any(reading.Open.Contains))
+            {
+                problems.Add($"{Label(row)}: cannot be named. Rule (A) never admits it: it is virtual, an override or an "
+                    + "interface's, has an event handler's shape, or is a member the language calls by itself.");
+                continue;
+            }
+            int stands = members.Count(between.Contains);
+            if (stands == 0)
+            {
+                string[] unheld = [.. members.Where(member => !closed.Contains(member))];
+                problems.Add(unheld.Length == 0
+                    ? $"{Label(row)}: lies between no admission and no call the rules weigh (delete it)."
+                    : $"{Label(row)}: the row does not hold: " + string.Join(
+                        " ",
+                        unheld.Select(member => (direct.GetValueOrDefault(member) ?? []).Where(caller => !closed.Contains(caller))
+                            .Select(caller => reading.NodeNames.GetValueOrDefault(caller, caller))
+                            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())
+                            .Select(outside => outside.Length == 0
+                                ? "it has no caller the graph holds."
+                                : $"{string.Join("; ", outside)} calls it outside the chain.")));
+                continue;
+            }
+            if (stands != row.Overloads)
+            {
+                problems.Add($"{Label(row)}: the row stands for {stands} member(s) of that name between an admission and a site, "
+                    + $"and says {row.Overloads}. Check the new one, then correct Overloads.");
+            }
+        }
+        return problems;
     }
 
     private static bool IsAdmitted(Site site, HashSet<string> admitted) =>
@@ -1521,14 +1821,15 @@ public sealed class SaveChainAdmissionCensus
 
     /// <summary>Rule 2: every call to a note writer, or to an admitted
     /// creator, that is not admitted.</summary>
-    internal static IReadOnlyList<Violation> UnadmittedWriters(Reading reading, IReadOnlySet<string> writers)
+    internal static IReadOnlyList<Violation> UnadmittedWriters(Reading reading, IReadOnlySet<string> writers, IReadOnlySet<string> named)
     {
-        HashSet<string> admitted = AdmittedNodes(reading);
+        HashSet<string> admitted = AdmittedNodes(reading, named);
+        Func<Site, string> toName = ToName(reading, admitted);
         return [.. reading.Sites
             .Where(site => site.Kind == SiteKind.Session && writers.Contains(site.Name) && !IsAdmitted(site, admitted))
             .Select(site => new Violation(
                 site.File, site.Line, site.Member, site.Name,
-                $"VaultSession.{site.Name} writes outside the note's save chain")
+                $"VaultSession.{site.Name} writes outside the note's save chain" + toName(site))
             { Node = site.Node })];
     }
 
@@ -1539,7 +1840,7 @@ public sealed class SaveChainAdmissionCensus
     public void EveryNoteWriterCallIsAdmittedIntoItsNotesChain() =>
         AssertOnlyTheListed(
             Shell.Value.Reading,
-            UnadmittedWriters(Shell.Value.Reading, Writers()),
+            UnadmittedWriters(Shell.Value.Reading, Writers(), Labels(AdmittedByItsCallers)),
             [.. OutsideTheChain.Where(row => !IsAReloadRow(row))],
             "These write a note outside its save chain, so they can write beside a save admitted for the note and "
             + "not yet published. Admit the operation (WorkspaceSaveCoordinator.Admit, INoteSaveChain.Admit or "
@@ -1550,9 +1851,10 @@ public sealed class SaveChainAdmissionCensus
     /// <summary>Rule 3: every call from outside the tab to a method that
     /// replaces a tab's buffer from disk, unless it is admitted, its member
     /// holds a save ticket, or its member asks the chain before it.</summary>
-    internal static IReadOnlyList<Violation> UnguardedReloads(Reading reading)
+    internal static IReadOnlyList<Violation> UnguardedReloads(Reading reading, IReadOnlySet<string> named)
     {
-        HashSet<string> admitted = AdmittedNodes(reading);
+        HashSet<string> admitted = AdmittedNodes(reading, named);
+        Func<Site, string> toName = ToName(reading, admitted);
         return [.. reading.Sites
             .Where(site => site.Kind == SiteKind.Reload
                 && !IsAdmitted(site, admitted)
@@ -1561,7 +1863,7 @@ public sealed class SaveChainAdmissionCensus
             .Select(site => new Violation(
                 site.File, site.Line, site.Member, site.Name,
                 $"WorkspaceTabViewModel.{site.Name} reloads a tab from disk outside the note's save chain and "
-                + "without asking it")
+                + "without asking it" + toName(site))
             { Node = site.Node })];
     }
 
@@ -1569,7 +1871,7 @@ public sealed class SaveChainAdmissionCensus
     public void EveryReloadOfATabFromDiskIsAdmittedOrAsksTheChain() =>
         AssertOnlyTheListed(
             Shell.Value.Reading,
-            UnguardedReloads(Shell.Value.Reading),
+            UnguardedReloads(Shell.Value.Reading, Labels(AdmittedByItsCallers)),
             [.. OutsideTheChain.Where(IsAReloadRow), .. NotThisClass],
             "These replace a tab's buffer from disk under whatever is admitted for its note. Run the reload inside "
             + "the admitted operation, or ask HasAdmittedSaveFor (or KeepsBufferOnReseat) first and keep the tab "
@@ -1579,7 +1881,7 @@ public sealed class SaveChainAdmissionCensus
 
     private static void AssertOnlyTheListed(Reading reading, IReadOnlyList<Violation> found, IReadOnlyList<Row> rows, string remedy)
     {
-        IReadOnlyList<string> problems = Problems(reading, found, rows);
+        IReadOnlyList<string> problems = Problems(reading, found, rows, Labels(AdmittedByItsCallers));
         Assert.True(problems.Count == 0, remedy + "\n" + string.Join("\n", problems));
     }
 
@@ -1590,12 +1892,13 @@ public sealed class SaveChainAdmissionCensus
     /// excused callers, a direct caller outside the chain that the row does
     /// not excuse, and an excused caller that is no longer one. A row with
     /// no reason, date or end. A row that matches no violation.</summary>
-    internal static IReadOnlyList<string> Problems(Reading reading, IReadOnlyList<Violation> found, IReadOnlyList<Row> rows)
+    internal static IReadOnlyList<string> Problems(
+        Reading reading, IReadOnlyList<Violation> found, IReadOnlyList<Row> rows, IReadOnlySet<string> named)
     {
         List<string> problems = [.. rows
             .Where(row => string.IsNullOrWhiteSpace(row.Reason) || string.IsNullOrWhiteSpace(row.Dated) || string.IsNullOrWhiteSpace(row.Ends))
             .Select(row => $"{Named(row)}: a row with no reason, no date or nothing that ends it.")];
-        HashSet<string> admitted = AdmittedNodes(reading);
+        HashSet<string> admitted = AdmittedNodes(reading, named);
         foreach (IGrouping<(string File, string Member), Violation> member in found
             .GroupBy(violation => (violation.File, violation.Member)))
         {
@@ -1666,7 +1969,7 @@ public sealed class SaveChainAdmissionCensus
     public void EveryUnadmittedCreatorIsInTheCreateClassFact()
     {
         Reading reading = Shell.Value.Reading;
-        HashSet<string> admitted = AdmittedNodes(reading);
+        HashSet<string> admitted = AdmittedNodes(reading, Labels(AdmittedByItsCallers));
         string[] outside = [.. reading.Sites
             .Where(site => site.Kind == SiteKind.Session
                 && ExclusiveCreators.Contains(site.Name)
@@ -1738,6 +2041,18 @@ public sealed class SaveChainAdmissionCensus
     private static bool IsWeighed(string sessionMethod) =>
         NoteWriters.Any(writer => writer.Name == sessionMethod) || ExclusiveCreators.Contains(sessionMethod);
 
+    /// <summary>Rule (A) refuses by default. Every member the rules need it
+    /// for is named in <see cref="AdmittedByItsCallers"/>, and every row
+    /// holds: its member exists, can be named, has every caller the graph
+    /// holds admitted, still lies between an admission and a site, and
+    /// stands for as many members as it says.</summary>
+    [Fact]
+    public void EveryMemberAdmittedByItsCallersIsNamedAndEveryRowHolds()
+    {
+        IReadOnlyList<string> problems = TableProblems(Shell.Value.Reading, AdmittedByItsCallers);
+        Assert.True(problems.Count == 0, string.Join("\n", problems));
+    }
+
     /// <summary>The shell's calls are all read from bound operations. The
     /// syntax fallback reads a call only where no operation stands for it,
     /// which is source that does not compile. In the shell it reads
@@ -1755,11 +2070,11 @@ public sealed class SaveChainAdmissionCensus
     /// <summary>The walk as it stood on 2026-11-16, read from bound
     /// operations: 308 sources, 31 calls to a note writer, 6 to an exclusive
     /// creator, 11 reloads of a tab from outside it, 15 admission calls, and
-    /// 9,239 operation trees, 17,153 edges and 9,206 members no caller
-    /// admits. The walk from syntax
-    /// kinds, which this replaced, found the same sources, calls, reloads
-    /// and admission calls. Fewer means the walk missed files or calls, not
-    /// that the shell writes less.</summary>
+    /// 9,239 operation trees, 17,153 edges, 9,216 members no caller
+    /// admits and 20 named as admitted by their callers. The walk from
+    /// syntax kinds, which this replaced, found the same sources, calls,
+    /// reloads and admission calls. Fewer means the walk missed files or
+    /// calls, not that the shell writes less.</summary>
     [Fact]
     public void TheWalkReadsTheShell()
     {
@@ -1774,6 +2089,7 @@ public sealed class SaveChainAdmissionCensus
             ("operation trees walked", reading.TreesWalked, 9000),
             ("edges between members", reading.Edges.Count, 16500),
             ("members no caller admits", reading.Open.Count, 9000),
+            ("members named as admitted by their callers", AdmittedByItsCallers.Length, 19),
         ];
         string[] missing = [.. floors.Where(floor => floor.Found < floor.AtLeast)
             .Select(floor => $"{floor.What}: the walk found {floor.Found}; it held at least {floor.AtLeast} when the census was written")];
@@ -1805,6 +2121,8 @@ public sealed class SaveChainAdmissionCensus
     /// read it. The planted source must bind, or the case proves nothing.</summary>
     private static Reading Planted(string source, bool mustBind = true, string file = "Planted.cs")
     {
+        // A naming mark is a comment on the first line, so the source is
+        // read as it is.
         var options = (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, options, path: "Planted.cs");
         Assert.DoesNotContain(tree.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
@@ -1830,23 +2148,65 @@ public sealed class SaveChainAdmissionCensus
     {
         Reading read = Planted(planted);
         Reading all = Shell.Value.Reading.With(read);
+        HashSet<string> shell = Labels(AdmittedByItsCallers);
+
+        // As the route stands: with the members its row names.
+        HashSet<string> byTheRow = new(shell.Concat(PlantedNames(planted)), StringComparer.Ordinal);
+        string answer = Answer(read, all, byTheRow);
+        Assert.True(expected == answer, $"{form}: expected {expected}, the rules answered {answer}");
+
+        if (expected.Contains("unjoined", StringComparison.Ordinal) || expected.Contains("unguarded", StringComparison.Ordinal))
+        {
+            // The second lines alone: with every planted member named,
+            // the closure and the open rule still refuse it.
+            HashSet<string> every = new(shell.Concat(read.NodeNames.Values), StringComparer.Ordinal);
+            string named = Answer(read, all, every);
+            Assert.True(
+                expected == named,
+                $"{form}: with every planted member named, expected {expected}, the rules answered {named}");
+        }
+        else if (PlantedNames(planted).Length > 0)
+        {
+            // The first line alone: with nothing named, the same route
+            // is refused.
+            string unnamed = Answer(read, all, shell);
+            Assert.True(
+                unnamed is "unjoined" or "unguarded",
+                $"{form}: with no planted member named, expected a refusal, the rules answered {unnamed}");
+        }
+    }
+
+    private static string Answer(Reading read, Reading all, IReadOnlySet<string> named)
+    {
         HashSet<string> writers = Writers();
         var seen = new List<string>();
         if (read.Sites.Any(site => site.Kind == SiteKind.Session && writers.Contains(site.Name)))
         {
-            seen.Add(UnadmittedWriters(all, writers).Any(violation => violation.File == "Planted.cs") ? "unjoined" : "joined");
+            seen.Add(UnadmittedWriters(all, writers, named).Any(violation => violation.File == "Planted.cs") ? "unjoined" : "joined");
         }
         if (read.Sites.Any(site => site.Kind == SiteKind.Reload))
         {
-            seen.Add(UnguardedReloads(all).Any(violation => violation.File == "Planted.cs") ? "unguarded" : "guarded");
+            seen.Add(UnguardedReloads(all, named).Any(violation => violation.File == "Planted.cs") ? "unguarded" : "guarded");
         }
         if (read.ChainImplementers.Count > 0)
         {
             seen.Add("a second chain");
         }
-        string answer = seen.Count == 0 ? "clean" : string.Join(", ", seen);
-        Assert.True(expected == answer, $"{form}: expected {expected}, the rules answered {answer}");
+        return seen.Count == 0 ? "clean" : string.Join(", ", seen);
     }
+
+    private const string NamingMark = "// admitted by its callers: ";
+
+    /// <summary>A planted source whose listed members (of Planted.cs) are
+    /// named, as a row of <see cref="AdmittedByItsCallers"/> would name
+    /// them.</summary>
+    private static string Naming(string members, string source) => NamingMark + members + "\n" + source;
+
+    private static string[] PlantedNames(string planted) => planted.StartsWith(NamingMark, StringComparison.Ordinal)
+        ? [.. planted[NamingMark.Length..planted.IndexOf('\n', StringComparison.Ordinal)]
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(member => $"Planted.cs ({member})")]
+        : [];
 
     public static TheoryData<string, string, string> PlantedRoutes() => new()
     {
@@ -2114,9 +2474,11 @@ public sealed class SaveChainAdmissionCensus
         },
         {
             "a method handed to the chain as its operation through this",
-            InAClass(
-                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
-                + "void PlantedM() { _ = chain.Admit(\"a.md\", this.PlantedWrite); }"),
+            Naming(
+                "PlantedWrite",
+                InAClass(
+                    "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                    + "void PlantedM() { _ = chain.Admit(\"a.md\", this.PlantedWrite); }")),
             "joined"
         },
         {
@@ -2145,17 +2507,21 @@ public sealed class SaveChainAdmissionCensus
         },
         {
             "a method reached only through Task.Run inside an admission lambda",
-            InAClass(
-                "void PlantedWrite() { " + AWrite + " }\n"
-                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => Task.Run(() => PlantedWrite())); }"),
+            Naming(
+                "PlantedWrite",
+                InAClass(
+                    "void PlantedWrite() { " + AWrite + " }\n"
+                    + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => Task.Run(() => PlantedWrite())); }")),
             "joined"
         },
         {
             "two calls deep with every caller admitted",
-            InAClass(
-                "void PlantedWrite() { " + AWrite + " }\n"
-                + "void PlantedMiddle() { PlantedWrite(); }\n"
-                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedMiddle(); return Task.CompletedTask; }); }"),
+            Naming(
+                "PlantedWrite, PlantedMiddle",
+                InAClass(
+                    "void PlantedWrite() { " + AWrite + " }\n"
+                    + "void PlantedMiddle() { PlantedWrite(); }\n"
+                    + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedMiddle(); return Task.CompletedTask; }); }")),
             "joined"
         },
         {
@@ -2179,9 +2545,11 @@ public sealed class SaveChainAdmissionCensus
         },
         {
             "a method handed to the chain as its operation",
-            InAClass(
-                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
-                + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedWrite); }"),
+            Naming(
+                "PlantedWrite",
+                InAClass(
+                    "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                    + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedWrite); }")),
             "joined"
         },
 
@@ -2266,15 +2634,148 @@ public sealed class SaveChainAdmissionCensus
     public void ARowAnswersOnlyTheSitesAndTheCallersItLists(string form, string file, string members, string expected)
     {
         Reading all = Shell.Value.Reading.With(Planted(PlantedPrelude + members + "\n", file: file));
+        HashSet<string> named = Labels(AdmittedByItsCallers);
         string[] problems =
         [
-            .. Problems(all, UnadmittedWriters(all, Writers()), [.. OutsideTheChain.Where(row => !IsAReloadRow(row))]),
-            .. Problems(all, UnguardedReloads(all), [.. OutsideTheChain.Where(IsAReloadRow), .. NotThisClass]),
+            .. Problems(all, UnadmittedWriters(all, Writers(), named), [.. OutsideTheChain.Where(row => !IsAReloadRow(row))], named),
+            .. Problems(all, UnguardedReloads(all, named), [.. OutsideTheChain.Where(IsAReloadRow), .. NotThisClass], named),
         ];
         Assert.True(
             problems.Any(problem => problem.StartsWith(expected, StringComparison.Ordinal)),
             $"{form}: the rows answered it. Problems found:\n" + string.Join("\n", problems));
     }
+
+    // ---- Rule (A) refuses by default --------------------------------------
+
+    private static readonly string AHelperEveryCallerAdmits = InAClass(
+        "void PlantedWrite() { " + AWrite + " }\n"
+        + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedWrite(); return Task.CompletedTask; }); }");
+
+    /// <summary>The first line. A helper whose every caller is admitted is
+    /// refused all the same until it is named, and the refusal says what
+    /// to name. Named, it is joined and the table holds.</summary>
+    [Fact]
+    public void AHelperIsAdmittedByItsCallersOnlyWhenItIsNamed()
+    {
+        Reading all = Shell.Value.Reading.With(Planted(AHelperEveryCallerAdmits));
+        HashSet<string> writers = Writers();
+
+        Violation refused = Assert.Single(
+            UnadmittedWriters(all, writers, Labels(AdmittedByItsCallers)), violation => violation.File == "Planted.cs");
+        Assert.EndsWith(
+            "name Planted.cs (PlantedWrite) in AdmittedByItsCallers if every way to reach it is inside a note's ticket",
+            refused.Text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            TableProblems(all, AdmittedByItsCallers),
+            problem => problem.StartsWith("Planted.cs (PlantedWrite): is not named", StringComparison.Ordinal));
+
+        NamedMember[] named = [.. AdmittedByItsCallers, new("Planted.cs", "PlantedWrite", "planted")];
+        Assert.DoesNotContain(UnadmittedWriters(all, writers, Labels(named)), violation => violation.File == "Planted.cs");
+        Assert.Empty(TableProblems(all, named));
+    }
+
+    /// <summary>The second lines, and the table's upkeep. A row that should
+    /// not stand is reported, and it admits nothing the closure or the
+    /// open rule refuses.</summary>
+    [Theory]
+    [MemberData(nameof(RowsThatDoNotStand))]
+    public void ARowOfAdmittedByItsCallersThatDoesNotStandIsReported(
+        string form, string planted, string member, int overloads, string expected, string answer)
+    {
+        Reading read = Planted(planted);
+        Reading all = Shell.Value.Reading.With(read);
+        NamedMember[] named = [.. AdmittedByItsCallers, new("Planted.cs", member, "planted", overloads)];
+        IReadOnlyList<string> problems = TableProblems(all, named);
+        Assert.True(
+            problems.Any(problem => problem.StartsWith($"Planted.cs ({member}): {expected}", StringComparison.Ordinal)),
+            $"{form}: the table answered it. Problems found:\n" + string.Join("\n", problems));
+        string seen = Answer(read, all, Labels(named));
+        Assert.True(answer == seen, $"{form}: with the row, expected {answer}, the rules answered {seen}");
+    }
+
+    public static TheoryData<string, string, string, int, string, string> RowsThatDoNotStand() => new()
+    {
+        {
+            "a named helper with a caller outside the chain",
+            InAClass(
+                "void PlantedWrite() { " + AWrite + " }\n"
+                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedWrite(); return Task.CompletedTask; }); }\n"
+                + "void PlantedBeside() { PlantedWrite(); }"),
+            "PlantedWrite",
+            1,
+            "the row does not hold: Planted.cs (PlantedBeside) calls it outside the chain.",
+            "unjoined"
+        },
+        {
+            "a named helper with no caller",
+            InAClass("void PlantedWrite() { " + AWrite + " }"),
+            "PlantedWrite",
+            1,
+            "the row does not hold: it has no caller the graph holds.",
+            "unjoined"
+        },
+        {
+            "a named Dispose",
+            Reached(Scope, "using var scope = new PlantedScope(session);"),
+            "Dispose",
+            1,
+            "cannot be named.",
+            "unjoined"
+        },
+        {
+            "a named virtual method",
+            PlantedPrelude
+            + "internal class Planted(VaultSession session, WorkspaceSaveCoordinator saves)\n{\n"
+            + "public virtual void Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { Write(); return Task.CompletedTask; }); }\n}\n",
+            "Write",
+            1,
+            "cannot be named.",
+            "unjoined"
+        },
+        {
+            "a named method that implements an interface member",
+            PlantedPrelude
+            + "internal interface IPlantedWriter { void Write(); }\n"
+            + "internal sealed class Planted(VaultSession session, WorkspaceSaveCoordinator saves) : IPlantedWriter\n{\n"
+            + "public void Write() { " + AWrite + " }\n"
+            + "void PlantedAdmit() { _ = saves.Admit(\"a.md\", _ => { Write(); return Task.CompletedTask; }); }\n}\n",
+            "Write",
+            1,
+            "cannot be named.",
+            "unjoined"
+        },
+        {
+            "a named member that leads to no site",
+            InAClass(
+                "void PlantedOther() { }\nvoid PlantedIdle() { PlantedOther(); }\n"
+                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedIdle(); return Task.CompletedTask; }); }"),
+            "PlantedIdle",
+            1,
+            "lies between no admission and no call the rules weigh (delete it).",
+            "clean"
+        },
+        {
+            "a row for a member that is not there",
+            InAClass("void PlantedM() { _ = saves.Admit(\"a.md\", _ => Task.CompletedTask); }"),
+            "PlantedGone",
+            1,
+            "the row names no member the walk reads (delete it).",
+            "clean"
+        },
+        {
+            "a row that stands for two overloads and says one",
+            InAClass(
+                "void PlantedWrite() { " + AWrite + " }\n"
+                + "void PlantedWrite(int more) { " + AWrite + " _ = more; }\n"
+                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { PlantedWrite(); PlantedWrite(1); return Task.CompletedTask; }); }"),
+            "PlantedWrite",
+            1,
+            "the row stands for 2 member(s) of that name between an admission and a site, and says 1.",
+            "joined"
+        },
+    };
 
     // ---- What stands as the operation, by its bound value -----------------
 
@@ -2344,9 +2845,11 @@ public sealed class SaveChainAdmissionCensus
         },
         {
             "a method in a delegate creation passed as the operation",
-            InAClass(
-                "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
-                + "void PlantedM() { _ = chain.Admit(\"a.md\", new Func<Task>(PlantedWrite)); }"),
+            Naming(
+                "PlantedWrite",
+                InAClass(
+                    "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
+                    + "void PlantedM() { _ = chain.Admit(\"a.md\", new Func<Task>(PlantedWrite)); }")),
             "joined"
         },
         {
@@ -2652,16 +3155,69 @@ public sealed class SaveChainAdmissionCensus
             "unjoined"
         },
 
+        // Codex round 6: a pattern member is open by its name, whatever its
+        // parameters. The language calls each of these with none written.
+        {
+            "Dispose with an optional parameter, called by a using declaration outside the chain",
+            Reached(
+                "internal ref struct PlantedScope(VaultSession session)\n{\n"
+                + "public void Dispose(int optional = 0) { " + AWrite + " _ = optional; }\n}\n",
+                "var scope = new PlantedScope(session); scope.Dispose();",
+                "void PlantedOutside() { using var scope = new PlantedScope(session); }"),
+            "unjoined"
+        },
+        {
+            "DisposeAsync with an optional parameter, called by an await using outside the chain",
+            Reached(
+                "internal sealed class PlantedAsyncScope(VaultSession session)\n{\n"
+                + "public ValueTask DisposeAsync(int optional = 0) { " + AWrite + " _ = optional; return default; }\n}\n",
+                "_ = new PlantedAsyncScope(session).DisposeAsync();",
+                "async Task PlantedOutside() { await using var scope = new PlantedAsyncScope(session); }"),
+            "unjoined"
+        },
+        {
+            "an extension GetEnumerator with an optional parameter, called by a foreach outside the chain",
+            Reached(
+                "internal sealed class PlantedBag(VaultSession session)\n{\n"
+                + "public VaultSession Session => session;\npublic bool MoveNext() => false;\npublic int Current => 0;\n}\n"
+                + "internal static class PlantedBagExtensions\n{\n"
+                + "public static PlantedBag GetEnumerator(this PlantedBag bag, int optional = 0) "
+                + "{ _ = bag.Session.SaveText(\"a.md\", \"text\", null); _ = optional; return bag; }\n}\n",
+                "_ = new PlantedBag(session).GetEnumerator();",
+                ForeachOutside),
+            "unjoined"
+        },
+        {
+            // No deconstruction binds to it (CS8129), so the name is all
+            // that holds it open.
+            "Deconstruct with one more optional parameter, called inside an admission lambda only",
+            Reached(
+                "internal sealed class PlantedPair(VaultSession session)\n{\n"
+                + "public void Deconstruct(out int left, out int right, int extra = 0) { " + AWrite + " left = extra; right = 0; }\n}\n",
+                "new PlantedPair(session).Deconstruct(out _, out _);"),
+            "unjoined"
+        },
+        {
+            "a params Add, called by a collection initialiser outside the chain",
+            Reached(
+                "internal sealed class PlantedWriter(VaultSession session) : System.Collections.IEnumerable\n{\n"
+                + "public void Add(params int[] items) { " + AWrite + " _ = items; }\n"
+                + "public System.Collections.IEnumerator GetEnumerator() => throw new NotSupportedException();\n}\n",
+                "new PlantedWriter(session).Add(1);",
+                InitialiserOutside),
+            "unjoined"
+        },
+
         // Joined: the language's call stands inside the admission lambda
         // and nowhere else, and the graph holds its edge.
         {
             "Select, called by a query inside an admission lambda only",
-            Reached(Source, "_ = from x in new PlantedSource(session) select x + 1;"),
+            Naming("Select", Reached(Source, "_ = from x in new PlantedSource(session) select x + 1;")),
             "joined"
         },
         {
             "an interpolated string handler's AppendLiteral, called by an interpolated string inside an admission lambda only",
-            Reached(Handler, "PlantedLog.Write($\"a{1}\");"),
+            Naming("AppendLiteral", Reached(Handler, "PlantedLog.Write($\"a{1}\");")),
             "joined"
         },
 
@@ -2761,7 +3317,8 @@ public sealed class SaveChainAdmissionCensus
         Reading all = Shell.Value.Reading.With(Planted(PlantedWriter));
         Assert.Equal(
             ["Planted.cs:7 (PlantedWrite): VaultSession.SaveText writes outside the note's save chain"],
-            UnadmittedWriters(all, Writers()).Where(violation => violation.File == "Planted.cs").Select(violation => violation.ToString()));
+            UnadmittedWriters(all, Writers(), Labels(AdmittedByItsCallers))
+                .Where(violation => violation.File == "Planted.cs").Select(violation => violation.ToString()));
     }
 
     /// <summary>Rule 1 on a planted call: a name in no table, a name in two,
