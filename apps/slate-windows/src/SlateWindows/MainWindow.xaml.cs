@@ -1449,6 +1449,7 @@ public partial class MainWindow : Window
             && _viewModel.FileSidebar?.IsImporting == true
             && !ModalSurfaceOwnsEscape()
             && !MenuModeOwnsEscape(e)
+            && !OpenComboListOwnsKey(e)
             && !FilterFieldOwnsEscape()
             && !RenameBoxOwnsEscape())
         {
@@ -1903,6 +1904,26 @@ public partial class MainWindow : Window
         for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = ParentOf(node))
         {
             if (node is System.Windows.Controls.Primitives.MenuBase or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>CB-19: a combo box whose list is open owns Escape and Enter
+    /// (Escape closes the list, Enter chooses the highlighted row), so a
+    /// tunnelling handler above it stands down: the four sheets' handlers and
+    /// the window's import cancel see the key before the list does. A list's
+    /// keys come from its popup, and the walk climbs out of it through the
+    /// popup's logical parent; it climbs ancestors only, so a sibling's open
+    /// list is never met.</summary>
+    private static bool OpenComboListOwnsKey(KeyEventArgs e)
+    {
+        for (DependencyObject? node = e.OriginalSource as DependencyObject; node is not null; node = ParentOf(node))
+        {
+            if (node is ComboBox { IsDropDownOpen: true })
             {
                 return true;
             }
