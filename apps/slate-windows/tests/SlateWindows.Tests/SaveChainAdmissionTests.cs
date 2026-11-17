@@ -4116,6 +4116,202 @@ public sealed class SaveChainAdmissionTests
         held.AssertHeldUntilReleased();
     });
 
+    // ---- Teardown never waits for a whole apply (plan 47 CB-9b, Design 3) ----
+
+    /// <summary>Design 3 (Call 3; the red team's finding 11). Teardown's
+    /// settle cancels every admitted apply before it pumps: the sheet's own;
+    /// one of a sheet the headless open replaced; and one admitted inside the
+    /// settle's own frame, cancelled at admission. Each apply's core call
+    /// then runs with its token cancelled and stops before its first file,
+    /// so the reader hears "0 renamed, 0 skipped, 1 failed." before the
+    /// settle returns true, and nothing is written.</summary>
+    [Theory]
+    [InlineData("the sheet's own apply")]
+    [InlineData("an apply of a sheet the headless open replaced")]
+    [InlineData("an apply admitted inside the settle's frame")]
+    public void SettlingSavesCancelsEveryAdmittedApplyAndReturnsAfterItsPublication(string which) => RunSta(() =>
+    {
+        using var h = new Vault("settle-cancels-applies", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Dispatcher dispatcher = h.Workspace.SavesForTests.Dispatcher;
+        bool? cancelled = null;
+        HeldWork? held = null;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            if (which == "an apply admitted inside the settle's frame")
+            {
+                // Something for the settle to wait on, so it pumps; the apply
+                // is asked inside that frame.
+                _ = h.Workspace.SavesForTests.Admit("b.md", _ => ahead.Task);
+                _ = dispatcher.BeginInvoke(new Action(() =>
+                {
+                    Assert.True(sheet.Apply(), "premise: the apply was refused");
+                    cancelled = sheet.InFlightCancelForTests!.IsCancelled();
+                    ahead.SetResult();
+                }));
+            }
+            else
+            {
+                held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+                Assert.True(sheet.Apply(), "premise: the apply was refused");
+                h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+                CancelToken token = sheet.InFlightCancelForTests!;
+                if (which == "an apply of a sheet the headless open replaced")
+                {
+                    h.Workspace.OpenBulkRenameSheet();
+                    Assert.NotSame(sheet, h.Workspace.BulkRenameSheet);
+                }
+                HeldWork hold = held;
+                _ = dispatcher.BeginInvoke(new Action(() =>
+                {
+                    cancelled = token.IsCancelled();
+                    hold.Release();
+                }));
+            }
+
+            Assert.True(h.Workspace.SettleSaves(), "the settle did not finish");
+            Assert.True(cancelled == true, $"the apply's token was not cancelled before its core call ran (cancelled: {cancelled})");
+            A11yEvent.RenameSummary summary = Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1), summary);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(h.Workspace.SavesIdle);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain([.. held is null ? Array.Empty<HeldWork>() : [held]]);
+        }
+        held?.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (contract 35 A-1; M5). The workspace is disposed
+    /// with no settle while the apply is held on its worker: its token is
+    /// cancelled before the join, the join holds the worker
+    /// (<c>BeforeJoinForTests</c> sees one tracked worker), and the worker,
+    /// let go there, gets core's report for a cancelled run on a session
+    /// still open, which its publication speaks. Nothing is written.</summary>
+    [Fact]
+    public void TeardownCancelsARunningApplyBeforeItJoinsItsWorker() => RunSta(() =>
+    {
+        using var h = new Vault("teardown-cancels-apply", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        int tracked = -1;
+        bool cancelled = false;
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            CancelToken token = sheet.InFlightCancelForTests!;
+            h.Workspace.SavesForTests.BeforeJoinForTests = () =>
+            {
+                tracked = h.Workspace.SavesForTests.TrackedWorkersForTests;
+                cancelled = token.IsCancelled();
+                held.Release();
+            };
+
+            h.DisposeWorkspace();
+            Assert.Equal(1, tracked);
+            Assert.True(cancelled, "teardown joined the apply's worker before it cancelled the apply");
+            h.PumpUntil(() => h.Events.Any(e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed), "the apply's publication");
+            Assert.Equal(
+                new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1),
+                Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>()));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (the red team's finding 10). A preview over 300
+    /// notes is running on the sheet's worker when the workspace is disposed:
+    /// teardown drains it before it returns, so the session the lifecycle
+    /// disposes next is never under it. The preview is held on its worker and
+    /// let go as the join begins; Dispose returns only once the preview's
+    /// work has ended. Without the drain, Dispose returns while the preview
+    /// still reads the vault (a race the preview's length decides, so this
+    /// fact's red depends on it).</summary>
+    [Fact]
+    public void TeardownDrainsARunningPreviewBeforeTheSessionGoes() => RunSta(() =>
+    {
+        (string Path, string Text)[] notes = [.. Enumerable.Range(0, 300)
+            .Select(n => ($"n{n:D3}.md", $"---\nstatus: draft\n---\n\nNote {n}.\n"))];
+        using var h = new Vault("teardown-drains-preview", notes);
+        h.Workspace.OpenBulkRenameSheet();
+        BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        var held = new HeldWork(hook => sheet.PreviewHookForTests = hook);
+        try
+        {
+            sheet.Preview();
+            h.PumpUntil(() => held.Entered, "premise: the preview reaching its hold before its core call");
+            // Teardown cancels the sheet's run, which would stop the preview
+            // at its first note; the preview keeps its own token here, so it
+            // reads the whole vault after the join lets it go.
+            using var keep = new CancelToken();
+            sheet.SetInFlightCancelForTests(keep);
+            h.Workspace.SavesForTests.BeforeJoinForTests = held.Release;
+
+            h.DisposeWorkspace();
+            Assert.True(sheet.WhenWorkDrained().IsCompleted, "Dispose returned while the preview's worker still ran");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (Call 3; M6's shape). Close Vault while an apply
+    /// over 300 notes is inside core's loop, on the real lifecycle: the
+    /// close's settle cancels the apply, waits for at most one file's write
+    /// and the apply's publication, and the reader hears the apply's summary
+    /// before the close's sentence. The apply's worker has ended by the time
+    /// the close returns.</summary>
+    [Fact]
+    public void CloseVaultDuringAnApplySpeaksItsSummaryBeforeTheVaultClosedSentence()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        for (int n = 0; n < 300; n++)
+        {
+            File.WriteAllText(Path.Combine(host.Root, $"p{n:D3}.md"), $"---\nstatus: draft\n---\n\nNote {n}.\n");
+        }
+        Task rescan = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => rescan.IsCompleted, TimeSpan.FromSeconds(120)), "premise: the rescan never finished");
+        host.Workspace.OpenBulkRenameSheet(synchronousForTests: false);
+        BulkRenameViewModel sheet = Assert.IsType<BulkRenameViewModel>(host.Workspace.BulkRenameSheet);
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => sheet.CanApply, TimeSpan.FromSeconds(60)), "premise: the preview never armed the apply");
+        bool entered = false;
+        sheet.ApplyHookForTests = () => Volatile.Write(ref entered, true);
+        host.Announced.Clear();
+        Assert.True(sheet.Apply(), "premise: the apply was refused");
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Volatile.Read(ref entered), TimeSpan.FromSeconds(10)),
+            "premise: the apply's worker never started");
+
+        host.Lifecycle.CloseVault();
+        Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
+        Assert.True(sheet.WhenWorkDrained().IsCompleted, "the close returned while the apply's worker still ran");
+        A11yEvent.RenameSummary spoken = Assert.Single(host.Announced.Select(item => item.Event).OfType<A11yEvent.RenameSummary>());
+        Assert.True(
+            spoken.Failed > 0 && spoken.Renamed + spoken.Failed == 300,
+            $"the close waited for the whole apply instead of cancelling it: {spoken.Renamed} renamed, {spoken.Failed} failed");
+        string heard = string.Join(" | ", host.Announced.Select(item => item.Event.GetType().Name));
+        int summary = host.Announced.FindIndex(item => item.Event is A11yEvent.RenameSummary { Applied: true });
+        int closed = host.Announced.FindIndex(item => item.Event
+            is A11yEvent.VaultClosed or A11yEvent.VaultClosedAllSaved or A11yEvent.VaultClosedChangesDiscarded);
+        Assert.True(summary >= 0 && closed > summary, $"expected the apply's summary and then the close's sentence; heard {heard}");
+    }
+
     /// <summary>The workspace's bulk rename sheet, opened and armed by a
     /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
     /// with what the preview spoke dropped.</summary>
