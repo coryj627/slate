@@ -1690,6 +1690,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>Plan 47 CB-9b test seam: runs before a tag edit's core call,
+    /// inside the session lease. A fact makes it throw.</summary>
+    internal Action? TagEditHookForTests { get; set; }
+
     private void EditTag(bool add)
     {
         string[] paths = [.. _batchChecked
@@ -1704,9 +1708,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         try
         {
             if (!TryRunSessionWork(
-                () => add
-                    ? _session.AddTagToFiles(paths, TagInput)
-                    : _session.RemoveTagFromFiles(paths, TagInput),
+                () =>
+                {
+                    TagEditHookForTests?.Invoke();
+                    return add
+                        ? _session.AddTagToFiles(paths, TagInput)
+                        : _session.RemoveTagFromFiles(paths, TagInput);
+                },
                 out TagEditReport report))
             {
                 return;

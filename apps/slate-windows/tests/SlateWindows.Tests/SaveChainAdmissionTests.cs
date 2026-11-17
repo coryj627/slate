@@ -3485,7 +3485,9 @@ public sealed class SaveChainAdmissionTests
     /// line (line 5, the blank line under the frontmatter, which every
     /// route's new text keeps). Today the whole-document replace stays on
     /// the source's undo stack and reaches the peer's through the mirroring,
-    /// and an Undo then a save writes the old bytes back (M10, M11).</summary>
+    /// and an Undo then a save writes the old bytes back (M10, M11). The tag
+    /// edit's row (stage B, Design 4) is red today on its first assertion: no
+    /// tab follows a tag edit at all.</summary>
     [Theory]
     [InlineData("property set from the header")]
     [InlineData("property delete")]
@@ -3493,6 +3495,7 @@ public sealed class SaveChainAdmissionTests
     [InlineData("Bases cell edit through a tab")]
     [InlineData("tabless Bases cell write with tabs that raced open")]
     [InlineData("bulk rename")]
+    [InlineData("tag edit")]
     public void AnUndoCannotRestoreBytesAnotherWriterReplaced(string route) => RunSta(() =>
     {
         using var h = new Vault("undo-across-writer", ("a.md", TwoKeyNote), ("Notes.base", NotesBase));
@@ -4464,6 +4467,384 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    // ---- A tag edit in the notes' chains (plan 47 CB-9b, Design 4) ------------
+
+    /// <summary>Design 4 (CD5(a); M3). A save of an open note is admitted and
+    /// held before its write; the reader adds a tag to the note from the
+    /// Files sidebar. The tag edit takes a ticket behind the save and writes
+    /// nothing while the save is held. After release the save publishes
+    /// first, and the tag edit tags the saved bytes: no conflict, and the tab
+    /// ends clean and current. Red today: the tag edit runs at the press and
+    /// takes no ticket, and the save is refused.</summary>
+    [Fact]
+    public void ATagEditWaitsForAnOpenNotesAdmittedSaveAndTagsTheSavedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-behind-save", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(Note, h.Read("a.md"));
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Workspace.SavesIdle && TagSummaries(h) > 0,
+                "the save and then the tag edit");
+            Assert.True(save.Result, "the save admitted before the tag edit was refused");
+            int saved = h.Events.FindIndex(e => e is A11yEvent.NoteSaved);
+            int summary = h.Events.FindIndex(IsTagSummary);
+            Assert.True(saved >= 0 && summary > saved, $"expected the save's sentence and then the tag edit's; heard {Heard(h)}");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string written = h.Read("a.md");
+            Assert.Contains("probe", written, StringComparison.Ordinal);
+            Assert.Contains("An edit on its way to disk.", written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 4 (M4). Two checked notes with clean tabs and an
+    /// unchecked one with a clean tab. Each tagged tab is brought up to the
+    /// tagged bytes at the index's hash, with no undo step back across them;
+    /// the unchecked one is untouched; and a later save from a tagged tab
+    /// lands. Red today: the tagged tabs keep the bytes from before the tag
+    /// edit, and the later save is refused.</summary>
+    [Fact]
+    public void ATagEditBringsACleanTabOnEachTaggedNoteUpToTheTaggedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-clean-tabs", ("a.md", Note), ("b.md", "# B\n"), ("c.md", "# C\n"));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        WorkspaceTabViewModel c = h.OpenNow("c.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md", "b.md");
+        string? untouched = c.SavedContentHash;
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            foreach (WorkspaceTabViewModel tagged in new[] { a, b })
+            {
+                string disk = h.Read(tagged.Path);
+                Assert.Contains("probe", disk, StringComparison.Ordinal);
+                Assert.Equal(disk, tagged.Text);
+                Assert.Equal(IndexedHash(h, tagged.Path), tagged.SavedContentHash);
+                Assert.False(tagged.IsDirty, $"{tagged.Path} is dirty after the tag edit");
+                Assert.False(tagged.IsExternallyStale, $"{tagged.Path} is stale after the tag edit");
+                Assert.False(tagged.EditorDocument!.UndoStack.CanUndo, $"{tagged.Path} can undo back across the tag edit");
+            }
+            Assert.Equal("# C\n", c.Text);
+            Assert.Equal(untouched, c.SavedContentHash);
+
+            a.Text = a.Text + "A later edit.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a later save from a tagged tab");
+            Assert.True(save.Result, "a later save from a tagged tab was refused");
+            Assert.Equal(a.Text, h.Read("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (Call 2(a)). A dirty tab on a note the tag edit
+    /// rewrites is marked stale with the property sentence, once, before the
+    /// tag edit's summary, and keeps the reader's edit. Red today: it is told
+    /// nothing and is not stale.</summary>
+    [Fact]
+    public void ATagEditMarksADirtyTabOnATaggedNoteStaleAndSaysSo() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-dirty-tab", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        tab.Text = NoteEdited;
+        h.Events.Clear();
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            _ = Assert.Single(h.Events, IsThePropertySentence);
+            int stale = h.Events.FindIndex(IsThePropertySentence);
+            int summary = h.Events.FindIndex(IsTagSummary);
+            Assert.True(summary > stale, $"expected the property sentence and then the tag edit's summary; heard {Heard(h)}");
+            Assert.True(tab.IsExternallyStale, "the dirty tab on the tagged note is not stale");
+            Assert.True(tab.IsDirty);
+            Assert.Equal(NoteEdited, tab.Text);
+            string disk = h.Read("a.md");
+            Assert.Contains("probe", disk, StringComparison.Ordinal);
+            Assert.DoesNotContain("An edit on its way to disk.", disk, StringComparison.Ordinal);
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (M15). Core skips a checked note changed outside
+    /// Slate since it was indexed, so the index's hash of that note does not
+    /// move, and its clean tab is not reloaded: the before-and-after reads,
+    /// not a read of the disk, decide which tabs the edit wrote. The summary
+    /// counts only the files tagged. Green today, where no tab is reconciled
+    /// at all; red by mutation: reconcile every checked note's tabs from a
+    /// read of the disk.</summary>
+    [Fact]
+    public void ATagEditCoreSkippedLeavesItsCleanTabAlone() => RunSta(() =>
+    {
+        const string Outside = "---\nstatus: changed outside Slate\n---\n\nBody.\n";
+        using var h = new Vault("tag-edit-core-skipped", ("a.md", Note), ("b.md", "# B\n"));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md", "b.md");
+        File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+        string indexedBefore = IndexedHash(h, "a.md");
+        string? saved = a.SavedContentHash;
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            Assert.Equal(Outside, h.Read("a.md"));
+            Assert.Equal(indexedBefore, IndexedHash(h, "a.md"));
+            Assert.Equal(Note, a.Text);
+            Assert.Equal(saved, a.SavedContentHash);
+            Assert.False(a.IsExternallyStale);
+            A11yEvent.HostComposed summary = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(h.Events, IsTagSummary));
+            Assert.Equal("Tagged 1 file with #probe.", summary.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (M14). A tag edit over 1,025 checked notes, more than
+    /// one index lookup takes, three of them open in tabs: the two written
+    /// are brought up to the tagged bytes, the one changed outside Slate is
+    /// left alone, and the summary is spoken. The reads are made for the
+    /// notes with an open tab only, in slices of core's bound. Red by
+    /// mutation: one unsliced read over every checked note, which core
+    /// refuses, so the open tabs are reconciled from the disk instead and the
+    /// skipped note's tab is reloaded.</summary>
+    [Fact]
+    public void ATagEditOverMoreNotesThanOneIndexLookupTakesStillReconcilesAndSpeaks() => RunSta(() =>
+    {
+        const string Outside = "# Changed outside Slate\n";
+        const int Count = 1_025;
+        (string Path, string Text)[] files = [.. Enumerable.Range(0, Count).Select(n => ($"n{n:D4}.md", $"# Note {n}\n"))];
+        Assert.True(Count > SlateUniffiMethods.MaxIndexedHashPaths(), "premise: the notes fit one index lookup");
+        using var h = new Vault("tag-edit-past-one-lookup", files);
+        WorkspaceTabViewModel first = h.OpenNow("n0000.md");
+        WorkspaceTabViewModel last = h.OpenNow($"n{Count - 1:D4}.md");
+        WorkspaceTabViewModel skipped = h.OpenNow("n0500.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, [.. files.Select(file => file.Path)]);
+        File.WriteAllText(Path.Combine(h.Root, "n0500.md"), Outside);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit over every note");
+            foreach (WorkspaceTabViewModel tagged in new[] { first, last })
+            {
+                string disk = h.Read(tagged.Path);
+                Assert.Contains("probe", disk, StringComparison.Ordinal);
+                Assert.Equal(disk, tagged.Text);
+                Assert.False(tagged.IsDirty);
+            }
+            Assert.Equal("# Note 500\n", skipped.Text);
+            Assert.Equal(Outside, h.Read("n0500.md"));
+            A11yEvent.HostComposed summary = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(h.Events, IsTagSummary));
+            Assert.Equal("Tagged 1,024 files with #probe.", summary.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (the red team's finding 4). The index read after the
+    /// core call fails: the open tabs on the checked notes are reconciled
+    /// from a read of the disk instead, core's summary is still spoken, and
+    /// the note's chain is free. Red today: no tab is reconciled. Red by
+    /// mutation: let the failed read end the operation.</summary>
+    [Fact]
+    public void ATagEditWhoseIndexReadFailsStillReconcilesByReadAndSpeaks() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-index-read-fails", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        h.Workspace.TagEditIndexReadHookForTests = when =>
+        {
+            if (when == "after")
+            {
+                throw new InvalidOperationException("the index read failed (test seam)");
+            }
+        };
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            _ = Assert.Single(h.Events, IsTagSummary);
+            string disk = h.Read("a.md");
+            Assert.Contains("probe", disk, StringComparison.Ordinal);
+            Assert.Equal(disk, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the tab reconciled by a read can undo back across the tag edit");
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.Workspace.TagEditIndexReadHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (Call 2(c)). The tag edit's core call throws
+    /// something other than a VaultException: the reader hears "Tag edit
+    /// failed: " and the message, once, nothing is written, and the note's
+    /// chain is free. Red today: the exception escapes the command.</summary>
+    [Fact]
+    public void ATagEditWhoseCoreCallFaultsSaysTagEditFailedAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-core-faults", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        sidebar.TagEditHookForTests = () => throw new InvalidOperationException("the tag edit failed (test seam)");
+        try
+        {
+            Exception? escaped = Record.Exception(() => sidebar.AddTagCommand.Execute(null));
+            Assert.Null(escaped);
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the failed tag edit's end");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text == "Tag edit failed: the tag edit failed (test seam)");
+            Assert.Equal(0, TagSummaries(h));
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            sidebar.TagEditHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4, CB-9a's first teardown shape. Close Vault's first
+    /// step, settling the saves, waits for a tag edit queued behind an
+    /// operation admitted for its note, and returns once the tag edit has
+    /// written and spoken. The release is queued on the dispatcher, so it
+    /// can only run inside the settle's own pumping. Red today: nothing is
+    /// admitted.</summary>
+    [Fact]
+    public void SettlingSavesWaitsForAQueuedTagEditAndReturns() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-settle", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            Assert.Equal(Note, h.Read("a.md"));
+
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => ahead.SetResult()));
+            Assert.True(h.Workspace.SettleSaves(), "the settle did not return true");
+            Assert.Contains("probe", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.Equal(1, TagSummaries(h));
+            Assert.True(h.Workspace.SavesIdle);
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4, CB-9a's second teardown shape. A tag edit still
+    /// waiting its turn when the workspace is torn down never runs: nothing
+    /// is written or spoken. Red today: the tag edit wrote at the
+    /// press.</summary>
+    [Fact]
+    public void ATagEditStillQueuedAtTeardownEndsUnwritten() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-queued-at-teardown", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            h.DisposeWorkspace();
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesForTests.IsIdle, "the queued tag edit ending after teardown");
+            Assert.True(held.Result);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.Equal(0, TagSummaries(h));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text.StartsWith("Tag edit failed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Checks <paramref name="paths"/> in the sidebar's tree for a
+    /// tag edit of #probe, once each is listed, and drops what was
+    /// spoken.</summary>
+    private static void CheckForATagEdit(Vault h, FilesSidebarViewModel sidebar, params string[] paths)
+    {
+        HashSet<string> wanted = new(paths, StringComparer.Ordinal);
+        h.PumpUntil(
+            () => sidebar.RootNodes.Count(node => wanted.Contains(node.Path)) == wanted.Count,
+            "premise: the sidebar listing the notes to tag");
+        foreach (FileTreeNodeViewModel node in sidebar.RootNodes.Where(node => wanted.Contains(node.Path)))
+        {
+            node.IsBatchSelected = true;
+        }
+        sidebar.TagInput = "probe";
+        h.Events.Clear();
+    }
+
+    private static bool IsTagSummary(A11yEvent spoken) =>
+        spoken is A11yEvent.HostComposed composed && composed.Text.StartsWith("Tagged ", StringComparison.Ordinal);
+
+    private static int TagSummaries(Vault h) => h.Events.Count(IsTagSummary);
+
+    private static bool IsThePropertySentence(A11yEvent spoken) =>
+        spoken is A11yEvent.HostComposed composed
+        && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal);
+
+    private static string IndexedHash(Vault h, string path)
+    {
+        using var cancel = new CancelToken();
+        return h.Session.IndexedContentHashes([path], cancel)[0] ?? "<none>";
+    }
+
     /// <summary>The workspace's bulk rename sheet, opened and armed by a
     /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
     /// with what the preview spoke dropped.</summary>
@@ -4515,6 +4896,13 @@ public sealed class SaveChainAdmissionTests
             document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
             return ("status: done", () => h.Events.Any(e => e is A11yEvent.BasesCellSaved));
         }
+        if (route == "tag edit")
+        {
+            FilesSidebarViewModel tagging = h.Sidebar();
+            CheckForATagEdit(h, tagging, "a.md");
+            tagging.AddTagCommand.Execute(null);
+            return ("probe", () => TagSummaries(h) > 0);
+        }
         Assert.Equal("bulk rename", route);
         BulkRenameViewModel sheet = h.Workspace.CreateBulkRename();
         sheet.OldKey = "status";
@@ -4560,6 +4948,7 @@ public sealed class SaveChainAdmissionTests
     {
         private readonly FixtureVault _fixture;
         private readonly VaultSession _session;
+        private readonly List<FilesSidebarViewModel> _sidebars = [];
         private bool _workspaceDisposed;
 
         public Vault(string label, params (string Path, string Text)[] files)
@@ -4662,6 +5051,20 @@ public sealed class SaveChainAdmissionTests
 
         public string Read(string path) => File.ReadAllText(Path.Combine(Root, path));
 
+        /// <summary>A Files sidebar on this vault's session, wired to the
+        /// workspace as the vault lifecycle wires it
+        /// (<c>VaultLifecycleViewModel.InitializeWorkspace</c>), speaking
+        /// into <see cref="Events"/>. The vault shuts it down before the
+        /// workspace goes.</summary>
+        public FilesSidebarViewModel Sidebar()
+        {
+            var sidebar = new FilesSidebarViewModel(
+                _session, Announce, vaultRoot: Root, localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot());
+            sidebar.RetargetRequested = (oldPath, newPath) => Workspace.RetargetPath(oldPath, newPath);
+            _sidebars.Add(sidebar);
+            return sidebar;
+        }
+
         public void PumpUntil(Func<bool> condition, string what) =>
             Assert.True(PumpedDispatcher.PumpUntil(condition, TimeSpan.FromSeconds(30)), $"{what} never happened");
 
@@ -4733,6 +5136,14 @@ public sealed class SaveChainAdmissionTests
         {
             try
             {
+                foreach (FilesSidebarViewModel sidebar in _sidebars)
+                {
+                    SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
+                    _ = PumpedDispatcher.PumpUntil(
+                        () => shutdown.SessionWork.IsCompleted && shutdown.TreeRefresh.IsCompleted
+                            && shutdown.Filter.IsCompleted && shutdown.ChildExpansions.IsCompleted,
+                        TimeSpan.FromSeconds(30));
+                }
                 DisposeWorkspace();
                 _session.Dispose();
             }

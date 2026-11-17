@@ -174,6 +174,11 @@ internal sealed partial class WorkspaceViewModel
     /// throw.</summary>
     internal Action? BulkRenameApplyTurnHookForTests { get; set; }
 
+    /// <summary>Plan 47 CB-9b test seam: runs before each of a tag edit's
+    /// reads of the index at its turn, with "before" or "after" the core
+    /// call. A fact makes one throw.</summary>
+    internal Action<string>? TagEditIndexReadHookForTests { get; set; }
+
     /// <summary>The ADD write (dispatched = true). Refusals announce
     /// their reason and return false — the sheet reports an
     /// undispatched add honestly (contract 6). The completion binds
