@@ -1425,6 +1425,74 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>CB-11 (#1714), from Codex's sixth round: the change feed
+    /// moves a tab whose saved baseline is the record's hash, or whose stale
+    /// mark is. Here another session replaced the open note's file with a
+    /// different note at the same path, the tab was marked stale against
+    /// that note, and the other session then renamed it: the feed moves the
+    /// tab by its stale mark, as on main. The press does not go with it,
+    /// because the moved file is not the version the press's tab holds, and
+    /// the sync drops it, as on main.</summary>
+    [Fact]
+    public void ADeferredSummaryDoesNotFollowATabTheFeedMovesByItsStaleMark()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+                string baseline = tab.SavedContentHash!;
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                string replacement;
+                using (VaultSession other = VaultSession.OpenFilesystem(_fixture.Root))
+                {
+                    other.DeleteFile("cited.md");
+                    _ = other.CreateExclusive("cited.md", "# Other\n\nOnly one citation [@filler7] here.\n");
+                    using var cancel = new CancelToken();
+                    replacement = other.IndexedContentHashes(["cited.md"], cancel)[0]!;
+                    Assert.NotEqual(baseline, replacement);
+
+                    // This window learns the file changed and marks the tab
+                    // stale against it.
+                    tab.RefreshExternalStaleness();
+                    Assert.Equal(replacement, tab.StaleAgainstHash);
+
+                    _ = other.RenameFile("cited.md", "c.md");
+                }
+                WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
+                    [new WorkspaceViewModel.FeedRename("cited.md", "c.md", replacement, OldIsGone: true)]);
+                Assert.Equal([0], moved.MovedTabs);
+                Assert.Equal("c.md", tab.Path);
+                Assert.Equal("c.md", workspace.Citations.Path);
+                Assert.Equal(0, workspace.Citations.RowsPublishedSubscriberCountForTests);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.True(
+                workspace.CitationSummary is null,
+                $"the sheet opened with {workspace.CitationSummary?.Total} citations, the other note's");
+            Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>CB-11 (#1714): a re-seat can respell the leaf's tab without
     /// syncing the panels (a missing Ghost.md whose file is back as
     /// ghost.md), so the leaf still names the old spelling when the press is
@@ -1741,9 +1809,12 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// no note row there, so a load at the new path would answer the press
     /// with no citations for a file that holds two. The press is dropped
     /// instead, as it was before it could follow a rename, and nothing is
-    /// said for it.</summary>
-    [Fact]
-    public void ADeferredSummaryIsDroppedWhenItsNoteIsRenamedOutOfTheNoteKind()
+    /// said for it. The same through another session's rename, which the
+    /// feed applies.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ADeferredSummaryIsDroppedWhenItsNoteIsRenamedOutOfTheNoteKind(bool throughTheFeed)
     {
         StaThread.RunPumped(() =>
         {
@@ -1757,13 +1828,27 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             try
             {
                 workspace.OpenPath("cited.md");
+                string baseline = workspace.ActiveGroup.ActiveTab!.SavedContentHash!;
                 held.WaitUntilEntered();
                 Assert.True(workspace.Citations.IsLoading);
                 workspace.OpenCitationSummary();
                 Assert.Null(workspace.CitationSummary);
 
-                _ = session.RenameFile("cited.md", "cited.txt");
-                workspace.RetargetPath("cited.md", "cited.txt");
+                if (throughTheFeed)
+                {
+                    using (VaultSession other = VaultSession.OpenFilesystem(_fixture.Root))
+                    {
+                        _ = other.RenameFile("cited.md", "cited.txt");
+                    }
+                    WorkspaceViewModel.FeedRetarget moved = workspace.RetargetPathsForFeedRenames(
+                        [new WorkspaceViewModel.FeedRename("cited.md", "cited.txt", baseline, OldIsGone: true)]);
+                    Assert.Equal([0], moved.MovedTabs);
+                }
+                else
+                {
+                    _ = session.RenameFile("cited.md", "cited.txt");
+                    workspace.RetargetPath("cited.md", "cited.txt");
+                }
                 Assert.Equal("cited.txt", workspace.ActiveGroup.ActiveTab!.Path);
                 Assert.Null(workspace.CitationSummary);
             }
