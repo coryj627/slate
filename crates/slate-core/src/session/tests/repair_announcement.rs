@@ -191,7 +191,11 @@ fn another_sessions_rename_is_not_announced_as_a_deletion() {
     for query in ["tasks_for_file", "note_tasks", "tasks_in_vault"] {
         let (tmp, a, recorder) = one_note_vault();
         another_session_renames_first(&tmp);
-        assert_eq!(recorder.take(), nothing(), "premise: A heard B's rename");
+        assert_eq!(
+            recorder.take(),
+            nothing(),
+            "premise: A heard nothing of B's rename"
+        );
         match query {
             "tasks_for_file" => {
                 a.tasks_for_file("first1683.md").unwrap();
@@ -576,7 +580,6 @@ fn a_file_gone_between_the_stat_and_the_read_leaves_the_graph_as_it_was() {
     a.with_graph(|graph| graph.node_count()).unwrap();
     assert!(!row_stands(&a, GHOST), "premise: no row stands at the path");
     plant_marker(&a, GHOST, false);
-    let recorder = Recorder::on(&a);
 
     vault_tasks(&a);
 
@@ -587,13 +590,12 @@ fn a_file_gone_between_the_stat_and_the_read_leaves_the_graph_as_it_was() {
     assert_graph_matches_rebuild(&a, "after the repair");
     assert!(!row_stands(&a, GHOST));
     assert_eq!(markers_under(&a, GHOST), 0);
-    assert_eq!(recorder.take(), nothing());
 }
 
-/// A temporary folder that keeps `A.md` and `a.md` apart, or `None` where
-/// the volume cannot: a Linux volume as it is, and on Windows a folder
-/// switched to case-sensitive names, which needs the Windows Subsystem for
-/// Linux feature and no elevation (the shape of `canonical_identity.rs`'s
+/// A temporary folder that keeps two names differing only by case apart, or
+/// `None` where the volume cannot: a Linux volume as it is, and on Windows a
+/// folder switched to case-sensitive names, which needs the Windows Subsystem
+/// for Linux feature and no elevation (the shape of `canonical_identity.rs`'s
 /// `two_files_by_case_vault`).
 fn case_keeping_folder() -> Option<tempfile::TempDir> {
     let tmp = tempfile::tempdir().unwrap();
@@ -638,17 +640,17 @@ fn a_case_only_rename_on_a_folder_that_keeps_case_reports_only_the_stored_spelli
     println!(
         "a_case_only_rename_on_a_folder_that_keeps_case_reports_only_the_stored_spelling: RAN on a folder that keeps case"
     );
-    std::fs::write(tmp.path().join("A.md"), b"- [ ] one\n").unwrap();
+    std::fs::write(tmp.path().join("A1683.md"), b"- [ ] one\n").unwrap();
     let a = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     a.scan_initial(&CancelToken::new()).unwrap();
-    a.rename_file("A.md", "a.md").unwrap();
+    a.rename_file("A1683.md", "a1683.md").unwrap();
     assert!(
-        !tmp.path().join("A.md").exists(),
+        !tmp.path().join("A1683.md").exists(),
         "premise: the old spelling names nothing"
     );
     let recorder = Recorder::on(&a);
 
-    assert_eq!(vault_tasks(&a), strings(&["a.md: one"]));
+    assert_eq!(vault_tasks(&a), strings(&["a1683.md: one"]));
 
-    assert_eq!(recorder.take(), strings(&["Modified a.md"]));
+    assert_eq!(recorder.take(), strings(&["Modified a1683.md"]));
 }

@@ -872,6 +872,8 @@ public sealed partial class RescanTests
     {
         using var h = new Harness("feed-rename-chain", ("first.md", "first\n"));
         WorkspaceTabViewModel tab = h.Open("first.md");
+        h.PumpUntil(() => InteractionLoadsIdle(tab), "the open tab's interaction loads");
+        long loadsBefore = tab.EditorInteractions!.ArtifactCacheLoadCountForTests;
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
         {
             _ = other.RenameFile("first.md", "second.md");
@@ -880,10 +882,10 @@ public sealed partial class RescanTests
         _ = h.Lifecycle.SessionForTests!.RenameFile("second.md", "third.md");
         h.Context.Drain();
         // The rename's own aftermath, before any rescan (#1683): the tab
-        // still at first.md asks for its tasks again, and the repair of a
-        // path with no file and no index row says nothing. The tab is not
-        // marked missing.
-        h.Settle();
+        // still at first.md asks for its tasks again on a pool thread, and
+        // the repair of a path with no file and no index row says nothing.
+        // The tab is not marked missing.
+        h.PumpUntil(() => OldPathRequeried(tab, loadsBefore), "the old path's task re-query");
         h.Settle();
         Assert.Empty(h.Spoken);
         Assert.False(tab.IsMissingFromDisk);
@@ -907,13 +909,15 @@ public sealed partial class RescanTests
     {
         using var h = new Harness("feed-rename-unrelated", ("first.md", "first\n"));
         WorkspaceTabViewModel tab = h.Open("first.md");
+        h.PumpUntil(() => InteractionLoadsIdle(tab), "the open tab's interaction loads");
+        long loadsBefore = tab.EditorInteractions!.ArtifactCacheLoadCountForTests;
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
         {
             _ = other.RenameFile("first.md", "second.md");
         }
 
         h.CreateThroughSlate("unrelated.md", "unrelated\n");
-        h.Settle();
+        h.PumpUntil(() => OldPathRequeried(tab, loadsBefore), "the old path's task re-query");
         h.Settle();
 
         Assert.Empty(h.Spoken);
@@ -951,10 +955,11 @@ public sealed partial class RescanTests
         Assert.True(h.Workspace.Connections.PinTo("other.md"));
         h.Workspace.CloseTabCommand.Execute(closing);
         h.Context.Drain();
-        h.Settle();
         (string? Pin, string Effective)[] stackBefore = [(null, "other.md"), ("first.md", "first.md")];
         Assert.Equal(stackBefore, h.Workspace.Connections.BackStack);
         Assert.True(h.Workspace.ReopenClosedTabCommand.CanExecute(null));
+        h.PumpUntil(() => InteractionLoadsIdle(kept), "the kept tab's interaction loads");
+        long loadsBefore = kept.EditorInteractions!.ArtifactCacheLoadCountForTests;
         h.Events.Clear();
 
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
@@ -963,11 +968,12 @@ public sealed partial class RescanTests
         }
 
         h.CreateThroughSlate("unrelated.md", "unrelated\n");
-        h.Settle();
-        h.Settle();
+        // The kept tab asks for first.md's tasks again on a pool thread; what
+        // that query sends is handled before the rescan.
+        h.PumpUntil(() => OldPathRequeried(kept, loadsBefore), "the old path's task re-query");
+        h.Context.Drain();
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-        h.Settle();
 
         // Both followers in one assertion, so a failure names each loss.
         string followers =
@@ -981,13 +987,26 @@ public sealed partial class RescanTests
         Assert.Equal("second.md", kept.Path);
         h.Workspace.ReopenClosedTabCommand.Execute(null);
         h.Context.Drain();
-        h.Settle();
         WorkspaceTabViewModel reopened = h.Workspace.ActiveGroup.ActiveTab!;
         Assert.NotSame(kept, reopened);
         Assert.Equal("second.md", reopened.Path);
         Assert.Equal("first\n", reopened.Text);
         Assert.False(reopened.IsMissingFromDisk);
     });
+
+    /// <summary>#1683: whether a tab's interaction data has no load queued or
+    /// running. A Slate-owned file event makes each open tab ask core for its
+    /// tasks again, on a pool thread.</summary>
+    private static bool InteractionLoadsIdle(WorkspaceTabViewModel tab) =>
+        !tab.EditorInteractions!.ArtifactCacheLoadingForTests
+        && tab.EditorInteractions.LiveWorkersForTests == 0;
+
+    /// <summary>#1683: the tab's interaction data was loaded again since
+    /// <paramref name="loadsBefore"/> (its task query ran), and no load is
+    /// queued or running.</summary>
+    private static bool OldPathRequeried(WorkspaceTabViewModel tab, long loadsBefore) =>
+        tab.EditorInteractions!.ArtifactCacheLoadCountForTests > loadsBefore
+        && InteractionLoadsIdle(tab);
 
     /// <summary>Design §4.3's table (the <c>from_hash</c> guard): another
     /// session renames a note, and this session's user renames another note
