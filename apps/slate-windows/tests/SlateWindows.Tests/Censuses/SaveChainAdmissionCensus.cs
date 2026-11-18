@@ -207,7 +207,6 @@ public sealed class SaveChainAdmissionCensus
         ("RenamePropertyByIdentityAcrossVault", "a property's key in every note that has it"),
         ("AddTagToFiles", "a tag in each named note"),
         ("RemoveTagFromFiles", "a tag in each named note"),
-        ("ExportSavedQueryAsBase", "a whole file at a path the reader names"),
         ("RenameFile", "the links of every note that links to the file"),
         ("RenameFileIfIdentity", "the links of every note that links to the file"),
         ("RenameFolder", "the links of every note that links into the folder"),
@@ -286,10 +285,14 @@ public sealed class SaveChainAdmissionCensus
             ]),
         (
             "a base or a canvas through its handle, and a base saved from a query: neither kind has an editor save "
-            + "(a tab's save takes a path key for Markdown only), so no admitted save can stand beside the write",
+            + "(a tab's save takes a path key for Markdown only), so no admitted save can stand beside the write; "
+            + "and a saved query exported as a base: core refuses any path that does not end in .base (core fact "
+            + "export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base), so it never writes a note; it "
+            + "can still replace an existing .base, which no note save holds",
             [
                 "BaseApplyEdit", "BaseApplyEdits", "BaseSetTransientSort", "CanvasApply", "CloseBase", "CloseCanvas",
-                "OpenBaseCancellable", "OpenCanvas", "OpenDql", "OpenQuery", "OpenSavedQuery", "SaveQueryAsBase",
+                "ExportSavedQueryAsBase", "OpenBaseCancellable", "OpenCanvas", "OpenDql", "OpenQuery", "OpenSavedQuery",
+                "SaveQueryAsBase",
             ]),
         (
             "saved queries, dashboards, preferences and settings: the app's own stores",
@@ -342,14 +345,6 @@ public sealed class SaveChainAdmissionCensus
 
     private static readonly Row[] OutsideTheChain =
     [
-        new(
-            "WorkspaceViewModel.Bases.cs",
-            "ExportSavedQueryAsBase",
-            ["ExportSavedQueryAsBase"],
-            "a saved query exported as a base overwrites the file at the path the reader names, with no "
-            + "compare-and-swap",
-            "2026-11-16",
-            "CB-9b (plan 47 CD5(d))"),
         new(
             "FilesSidebarViewModel.FileManagement.cs",
             "TryRenameSelected",
@@ -2022,6 +2017,34 @@ public sealed class SaveChainAdmissionCensus
             + "first and the tab's save first), or admit it and flag its row in ExclusiveCreatorRows.");
     }
 
+    // ---- The reclassified export is tied to its twin fact -----------------
+
+    private const string ExportTwinFact = "TheSavedQueryExportCannotNameANote";
+
+    /// <summary>Plan 47 CB-9b (CD5(d)): ExportSavedQueryAsBase is read with
+    /// SaveQueryAsBase, as a base writer and no note writer, on the strength
+    /// of core's refusal of any path that does not end in .base (core fact
+    /// export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base)
+    /// and of its Windows twin, which hears the refusal and finds the note
+    /// unchanged. The twin must stand as a fact in
+    /// <see cref="BasesRedTeamRegressionTests"/>: renaming or deleting it, or
+    /// moving the export out of that group, fails here.</summary>
+    [Fact]
+    public void TheReclassifiedExportIsHeldByItsTwinFact()
+    {
+        Assert.Contains(
+            NotNoteBytes,
+            group => group.Names.Contains("ExportSavedQueryAsBase") && group.Names.Contains("SaveQueryAsBase"));
+        Assert.DoesNotContain(NoteWriters, writer => writer.Name == "ExportSavedQueryAsBase");
+        MethodInfo? fact = typeof(BasesRedTeamRegressionTests).GetMethod(ExportTwinFact);
+        Assert.True(
+            fact is not null && fact.GetCustomAttributes(typeof(FactAttribute), inherit: false).Length > 0,
+            $"BasesRedTeamRegressionTests.{ExportTwinFact} is not a fact. The save chain census reads "
+            + "ExportSavedQueryAsBase as a base writer only while core refuses a path that does not end in .base "
+            + "and this twin holds the refusal on Windows. Restore the twin, or put the export back among the note "
+            + "writers with a row.");
+    }
+
     // ---- Fail closed, and the floors --------------------------------------
 
     /// <summary>Sources the rules read whether or not they hold a site
@@ -2109,7 +2132,11 @@ public sealed class SaveChainAdmissionCensus
     /// (the preview's dry runs are no site), 6 to an exclusive creator, 12
     /// reloads, 18 admission calls, 9,265 operation trees, 17,238 edges,
     /// 9,259 members no caller admits and 26 named; each floor is pinned just
-    /// under.</summary>
+    /// under. Counted again for its stage B: 308 sources, 30 calls to a note
+    /// writer (the saved-query export is a base writer now), 6 to an
+    /// exclusive creator, 13 reloads, 19 admission calls, 9,274 operation
+    /// trees, 17,286 edges, 9,287 members no caller admits and 27
+    /// named.</summary>
     [Fact]
     public void TheWalkReadsTheShell()
     {
@@ -2117,14 +2144,14 @@ public sealed class SaveChainAdmissionCensus
         (string What, int Found, int AtLeast)[] floors =
         [
             ("sources", Shell.Value.Trees.Count, 300),
-            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 30),
+            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 29),
             ("calls to an exclusive creator", reading.Sites.Count(site => site.Kind == SiteKind.Session && ExclusiveCreators.Contains(site.Name)), 5),
-            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 11),
-            ("admission calls", reading.AdmissionCalls.Count, 17),
-            ("operation trees walked", reading.TreesWalked, 9200),
-            ("edges between members", reading.Edges.Count, 17000),
-            ("members no caller admits", reading.Open.Count, 9200),
-            ("members named as admitted by their callers", AdmittedByItsCallers.Length, 25),
+            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 12),
+            ("admission calls", reading.AdmissionCalls.Count, 18),
+            ("operation trees walked", reading.TreesWalked, 9250),
+            ("edges between members", reading.Edges.Count, 17250),
+            ("members no caller admits", reading.Open.Count, 9250),
+            ("members named as admitted by their callers", AdmittedByItsCallers.Length, 26),
         ];
         string[] missing = [.. floors.Where(floor => floor.Found < floor.AtLeast)
             .Select(floor => $"{floor.What}: the walk found {floor.Found}; it held at least {floor.AtLeast} when the census was written")];
