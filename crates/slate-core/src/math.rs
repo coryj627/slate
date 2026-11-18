@@ -3362,6 +3362,15 @@ mod tests {
             "\\liminf\\limits_{n}^\\max x % or y_\\max",
             r"\liminf\limits_{n}^{\max} x",
         ),
+        // A slot an authored space with the writer's bytes fills is a real
+        // child; the mark after the element still applies nothing.
+        (
+            r"\int_\hspace{0.1667em}^\max f",
+            r"\int_\hspace{0.1667em}^{\max} f",
+        ),
+        (r"\hspace{0.1667em}^\max x", r"\hspace{0.1667em}^{\max} x"),
+        (r"\hspace{0.1667em}_\sin x", r"\hspace{0.1667em}_{\sin} x"),
+        (r"\kern0.1667em_\sin x", r"\kern0.1667em_{\sin} x"),
     ];
 
     /// #1629, the plan lead's second ruling of 2026-11-18: a function as an
