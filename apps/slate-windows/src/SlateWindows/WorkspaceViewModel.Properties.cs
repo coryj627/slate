@@ -718,6 +718,27 @@ internal sealed partial class WorkspaceViewModel
             steps.Add(() => RefreshPropertiesFor(path));
             steps.Add(() => NotePersisted(path));
         }
+        // Codex round 3: a note core wrote and then failed to index is
+        // reported failed, and the index still holds its old hash, so the
+        // catch-up passes its tabs: they are reconciled from a read of the
+        // disk, with a header refresh that speaks nothing.
+        foreach (var failed in report.Failed)
+        {
+            if (!WriteMayHaveLanded(failed.Message))
+            {
+                continue;
+            }
+            string path = failed.Path;
+            steps.Add(() =>
+            {
+                if (!ReconcileTabsFromARead(path))
+                {
+                    anyReloadFailed = true;
+                }
+            });
+            steps.Add(() => RefreshPropertiesFor(path, ReloadAnnounce.None));
+            steps.Add(() => NotePersisted(path));
+        }
         steps.Add(() =>
         {
             if (anyReloadFailed)
@@ -1158,26 +1179,22 @@ internal sealed partial class WorkspaceViewModel
             failure = exception.Message;
         }
         Dictionary<string, string?>? after = TagEditIndexRead(open, "after");
+        // Codex round 3: a note core wrote and then failed to index is
+        // reported skipped, and its index hash did not move.
+        HashSet<string> landed = report is null
+            ? new(StringComparer.Ordinal)
+            : new(
+                report.Skipped.Where(skip => WriteMayHaveLanded(skip.Reason)).Select(skip => skip.Path),
+                StringComparer.Ordinal);
         List<Action> steps = [];
         foreach (string path in open)
         {
-            if (before is null || after is null)
+            if (before is null || after is null || landed.Contains(path))
             {
-                // A read of the index failed: the note's tabs are reconciled
-                // from a read of the disk instead.
-                steps.Add(() =>
-                {
-                    IdentifiedText read;
-                    try
-                    {
-                        read = _session.ReadTextIdentified(path);
-                    }
-                    catch (VaultException)
-                    {
-                        return;
-                    }
-                    _ = ReconcileTabsAfterPropertyWrite(path, SlateUniffiMethods.EditorTextContentHash(read.Text));
-                });
+                // A read of the index failed, or core wrote the note and then
+                // failed its index commit: the note's tabs are reconciled from
+                // a read of the disk instead.
+                steps.Add(() => _ = ReconcileTabsFromARead(path));
                 steps.Add(() => RefreshPropertiesFor(path, ReloadAnnounce.None));
                 steps.Add(() => NotePersisted(path));
             }
@@ -1292,6 +1309,43 @@ internal sealed partial class WorkspaceViewModel
                 HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
             }
         }
+    }
+
+    /// <summary>Plan 47 CB-9b (Codex round 3): whether a note core reported
+    /// skipped or failed may hold bytes core wrote. Core's SavedButUnindexed
+    /// error is the one failure it returns after a write is durable (the file
+    /// written, the index commit failed), and its text, "saved but not
+    /// indexed: ..." (crates/slate-core/src/lib.rs), is carried by the tag
+    /// edit's skip reason and the bulk rename's failure message. Any other
+    /// skip or failure wrote nothing, or met a note changed outside Slate,
+    /// which the change event reports.</summary>
+    private static bool WriteMayHaveLanded(string reason) =>
+        reason.Contains("saved but not indexed:", StringComparison.Ordinal);
+
+    /// <summary>Plan 47 CB-9b: a note's open Markdown tabs reconciled from a
+    /// read of the disk, by the property write's rule (a clean tab takes the
+    /// bytes with no undo step back, a dirty tab hears the property
+    /// sentence). Used where the index cannot say what was written: a failed
+    /// index read, and a write whose index commit failed. False when a tab's
+    /// reload failed; a note with no open Markdown tab, or a read that fails,
+    /// reconciles nothing.</summary>
+    private bool ReconcileTabsFromARead(string path)
+    {
+        if (!Groups.SelectMany(group => group.Tabs)
+            .Any(tab => tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+        IdentifiedText read;
+        try
+        {
+            read = _session.ReadTextIdentified(path);
+        }
+        catch (VaultException)
+        {
+            return true;
+        }
+        return ReconcileTabsAfterPropertyWrite(path, SlateUniffiMethods.EditorTextContentHash(read.Text));
     }
 
     /// <summary>Contract 8 fan-out: every open same-path tab either

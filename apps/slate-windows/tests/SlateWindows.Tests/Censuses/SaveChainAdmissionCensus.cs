@@ -524,8 +524,13 @@ public sealed class SaveChainAdmissionCensus
             "WorkspaceViewModel.Properties.cs",
             "ReconcileTabsAfterPropertyWrite",
             "the property write's fan-out over a note's tabs (contract 8): called only by the two property "
-            + "completions, the read-back reconcile, the bulk rename's reconcile and the tag edit's turn, each "
-            + "inside its ticket"),
+            + "completions, the read-back reconcile, the bulk rename's reconcile, the tag edit's turn and the "
+            + "reconcile from a read, each inside its ticket"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "ReconcileTabsFromARead",
+            "a note's tabs reconciled from a read of the disk (plan 47 CB-9b, Codex round 3): called only by "
+            + "EditTagAtItsTurn and ReconcileTabsAfterBulkRename, each inside its operation's ticket"),
         new(
             "WorkspaceViewModel.Properties.cs",
             "EditTagAtItsTurn",
