@@ -565,6 +565,14 @@ public sealed class SaveChainAdmissionTests
                 () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
                 "the throwing toggle's end");
             Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+            // Plan 47 CB-14: only a SavedButUnindexed is a landed write that
+            // says so and reconciles the note's tabs on this route; any other
+            // failure, after the write or before it, is still a failure.
+            _ = Assert.Single(events, e => e is A11yEvent.TaskToggleFailed);
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggledUnindexed);
+            Assert.DoesNotContain(events, e => e is A11yEvent.HostComposed);
+            Assert.False(peers.A.IsExternallyStale, "a failure that is not a landed write marked the tab stale");
+            Assert.False(peers.B.IsExternallyStale, "a failure that is not a landed write marked the peer stale");
 
             peers.A.TaskToggleFaultForTests = null;
             peers.A.TaskToggleBeforeWriteForTests = null;
@@ -714,6 +722,126 @@ public sealed class SaveChainAdmissionTests
             _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
             Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
         }
+    });
+
+    /// <summary>Plan 47 CB-14, CB-9a's rule on the new route: on the editor's
+    /// route the reconcile sentence is spoken by an announcer that throws (it
+    /// reaches UIA). The note's other tab is still marked stale and the
+    /// toggle still says it landed.</summary>
+    [Fact]
+    public void TheEditorsLandedToggleStillReconcilesThePeerAndSaysItLandedWhenTheReconcileSentenceThrows() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-throws.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-landed-throws", path);
+        using (h)
+        {
+            var spoken = new List<A11yEvent>();
+            bool thrown = false;
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-throws");
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(h.Session.TasksForFile(path)[0], line =>
+                {
+                    if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+                    {
+                        thrown = true;
+                        throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+                    }
+                    spoken.Add(line);
+                }));
+                h.PumpUntil(
+                    () => thrown && !a.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                    "the landed toggle's publication after its reconcile sentence threw");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+            AssertNoStepSkipped(
+                (a.IsExternallyStale, "the source tab's stale flag"),
+                (b.IsExternallyStale, "the peer's stale flag"),
+                (spoken.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the landed sentence"));
+            Assert.Empty(spoken.OfType<A11yEvent.TaskToggleFailed>());
+        }
+    });
+
+    /// <summary>Plan 47 CB-14, the same rule on the panel's route: the
+    /// completion's reconcile sentence is spoken by an announcer that throws.
+    /// The toggle still says it landed, after it.</summary>
+    [Fact]
+    public void ThePanelsLandedToggleStillSaysItLandedWhenTheReconcileSentenceThrows() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-panel-throws.md";
+        using var h = new Vault("cb14-panel-throws", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        bool thrown = false;
+        h.BeforeAnnounce = line =>
+        {
+            if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-panel-throws");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.PumpUntil(
+                () => thrown && !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                "the landed toggle's completion after its reconcile sentence threw");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            h.BeforeAnnounce = null;
+        }
+        h.Settle();
+        AssertNoStepSkipped(
+            (tab.IsExternallyStale, "the tab's stale flag"),
+            (h.Events.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the landed sentence"));
+        Assert.Empty(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+    });
+
+    /// <summary>Plan 47 CB-14: on the panel's route the read-back after the
+    /// failed index commit is unreadable. The error names the hash that landed,
+    /// so the completion still reconciles the note's tabs over it (the tab
+    /// route's own rule) and then says the toggle landed.</summary>
+    [Fact]
+    public void ALandedToggleWhoseReadBackFailsStillReconcilesTheTabOnThePanelRoute() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-panel-unread.md";
+        using var h = new Vault("cb14-panel-unread", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        tab.TaskToggleReadBackFaultForTests = () => throw new IOException("the read-back failed (test seam)");
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-panel-unread");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the landed toggle's completion");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            tab.TaskToggleReadBackFaultForTests = null;
+        }
+        h.Settle();
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed));
+        Assert.True(tab.IsExternallyStale, "the tab stayed clean over the landed write");
     });
 
     /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle
