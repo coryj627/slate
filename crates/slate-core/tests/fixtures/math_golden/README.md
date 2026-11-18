@@ -17,7 +17,9 @@ changes.
 Each entry lists:
 - its source;
 - its MathML, which depends on none of the settings;
-- its six speeches, which depend only on the speech style and verbosity;
+- its six speeches, which depend only on the speech style and verbosity
+  (a run of three or more primes after a function or other element is
+  spoken from a tree that folds the run, not from the MathML shown, #1628);
 - its two braille translations, which depend only on the braille code.
 
 The test renders every combination and fails if any of those assumptions

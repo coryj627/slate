@@ -132,7 +132,10 @@ pub struct RawMathBlock {
 
 /// One rendered math block. `mathml` always populates; `speech` and
 /// `braille` may be empty when MathCAT couldn't produce them (the
-/// MathML's still useful to render visually).
+/// MathML's still useful to render visually). `speech` is read from
+/// `mathml`, except for a run of three or more primes after a carrier,
+/// which is spoken from a folded tree while `braille` and `mathml` keep
+/// the run as parsed (#1628, CD21).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathBlock {
     pub source: String,
@@ -540,14 +543,25 @@ fn mathcat_worker_loop(rx: std::sync::mpsc::Receiver<RenderRequest>) {
 /// MathCAT worker thread — callers from other threads must go
 /// through `render_math`, which dispatches via the worker
 /// channel.
+///
+/// A formula with a run of three or more primes after a carrier is spoken
+/// from its folded tree and brailled from its loose one, whose MathML the
+/// block keeps (#1628, CD21; [`MathTrees`]).
 fn render_math_on_worker(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
-    let mathml = latex_to_mathml(&raw.source);
+    let MathTrees {
+        loose: mathml,
+        speech: speech_tree,
+    } = latex_to_mathml_trees(&raw.source);
     let (speech, braille) = if mathml.is_empty() {
         // pulldown-latex could not render the source faithfully; see
-        // `latex_to_mathml`.
+        // `latex_to_mathml_trees`.
         (unrendered_speech(&raw.source), Vec::new())
     } else {
-        match mathml_to_speech_and_braille(&mathml, prefs) {
+        let rendered = match &speech_tree {
+            Some(speech_tree) => speech_and_braille_from_two_trees(speech_tree, &mathml, prefs),
+            None => mathml_to_speech_and_braille(&mathml, prefs),
+        };
+        match rendered {
             Ok(pair) => pair,
             Err(MathCatError::MathmlTooLarge) => (
                 "Math expression too large to render to accessible speech.".to_string(),
@@ -757,10 +771,35 @@ fn unrendered_speech(source: &str) -> String {
     }
 }
 
-/// LaTeX → MathML using pulldown-latex.
+/// The loose tree of [`latex_to_mathml_trees`]: the MathML a block keeps.
+#[cfg(test)]
+fn latex_to_mathml(latex: &str) -> String {
+    latex_to_mathml_trees(latex).loose
+}
+
+/// The MathML of one formula: the tree every reader is given, and, for a
+/// formula with a run of three or more primes after a carrier, a second
+/// tree that only speech is read from (#1628, CD21).
+struct MathTrees {
+    /// The primes of a long run stay as parsed. `MathBlock.mathml` holds
+    /// this tree, Windows exposes it, and braille is read from it: MathCAT
+    /// 0.7.7's Nemeth cells for `‴` and `⁗` hold a stray full stop
+    /// (`Rules/Braille/Nemeth/unicode-full.yaml:686-687`), and the loose
+    /// run brailles right.
+    loose: String,
+    /// A long run folded into a superscript, as one or two primes are, so
+    /// MathCAT speaks a function's argument ("f triple prime, of x")
+    /// rather than a product ("times x"). `None` when the formula has no
+    /// long run after a carrier; the loose tree is then the only one.
+    speech: Option<String>,
+}
+
+/// LaTeX → MathML using pulldown-latex, with the speech tree of
+/// [`MathTrees`] when a long prime run asks for one.
 ///
-/// Returns an empty string when pulldown-latex cannot render the source
-/// faithfully, and `render_math` then speaks the source itself:
+/// The loose tree is an empty string, and there is no speech tree, when
+/// pulldown-latex cannot render the source faithfully, and `render_math`
+/// then speaks the source itself:
 /// - a parse error, which pulldown-latex would write into the MathML as
 ///   `<merror>` holding its diagnostic and an unescaped quote of the
 ///   source, for MathCAT to speak and braille (#1557, #1558);
@@ -771,19 +810,56 @@ fn unrendered_speech(source: &str) -> String {
 /// relation or operator such as `<` or `&`. The names are handed to it
 /// already escaped, and the lone characters are escaped in its output
 /// (#1557), so no source text becomes MathML structure.
-fn latex_to_mathml(latex: &str) -> String {
-    use pulldown_latex::event::{Content, Event};
-    use pulldown_latex::{RenderConfig, Storage, mathml::push_mathml};
+fn latex_to_mathml_trees(latex: &str) -> MathTrees {
+    use pulldown_latex::Storage;
+    use pulldown_latex::event::Event;
+    let none = || MathTrees {
+        loose: String::new(),
+        speech: None,
+    };
     if uses_unrenderable_command(latex) {
-        return String::new();
+        return none();
     }
     let storage = Storage::new();
     let Ok(events) =
         pulldown_latex::Parser::new(latex, &storage).collect::<Result<Vec<Event<'_>>, _>>()
     else {
-        return String::new();
+        return none();
     };
-    let events = fold_primes_into_superscripts(events);
+    let original = events
+        .iter()
+        .any(|event| primes_in(event).is_some())
+        .then(|| events.clone());
+    let (events, long_run) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
+    let loose = write_mathml(events);
+    let speech = match original {
+        Some(original) if long_run && !loose.is_empty() => {
+            let (folded, _) = fold_primes_into_superscripts(original, LongPrimeRuns::Folded);
+            Some(write_mathml(folded)).filter(|tree| !tree.is_empty())
+        }
+        _ => None,
+    };
+    MathTrees { loose, speech }
+}
+
+/// An event stream → MathML, as written by pulldown-latex and then made
+/// readable: the function names escaped before, the stray markup escaped
+/// after (#1557), and script elements given the children MathCAT takes
+/// (#1629, [`repair_script_children`]). Empty when the writer fails.
+fn write_mathml(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
+    let written = write_mathml_as_written(events);
+    if written.is_empty() {
+        written
+    } else {
+        repair_script_children(&written)
+    }
+}
+
+/// [`write_mathml`] without the script repair: what the writer gives, with
+/// only its markup characters escaped.
+fn write_mathml_as_written(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
+    use pulldown_latex::event::{Content, Event};
+    use pulldown_latex::{RenderConfig, mathml::push_mathml};
     let names: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
@@ -821,10 +897,17 @@ fn latex_to_mathml(latex: &str) -> String {
 /// and either gives MathCAT a superscript of three or four children, which
 /// it rejects.
 ///
-/// Three or more primes stay as parsed: no superscript MathCAT 0.7.7 reads
-/// gives correct Nemeth for them (`‴` brailles a stray `.`, and a run of `′`
-/// gains a level indicator), while the loose run keeps the braille right
-/// (#1628).
+/// Three or more primes are what `long_runs` says (#1628, CD21). No
+/// superscript MathCAT 0.7.7 reads gives correct Nemeth for them (`‴`
+/// brailles a stray `.`, `Rules/Braille/Nemeth/unicode-full.yaml:686-687`,
+/// and a run of `′` gains a level indicator), while the loose run keeps the
+/// braille right but is spoken as a product ("f prime prime, prime, times
+/// x"). So [`LongPrimeRuns::Loose`] keeps them as parsed, for braille and
+/// the exposed MathML, and [`LongPrimeRuns::Folded`] folds them as one and
+/// two are (`‴`, `⁗`, and an `mrow` of single primes past four), for
+/// speech. The second answer is whether a long run after a carrier was met,
+/// so a formula without one is written once. When a MathCAT release
+/// corrects the two cells, the folded tree serves both and the split goes.
 ///
 /// An element is free when it is not an argument a script or visual is
 /// still waiting for. A prime there is itself that argument, and stays. An
@@ -837,7 +920,8 @@ fn latex_to_mathml(latex: &str) -> String {
 /// too.
 fn fold_primes_into_superscripts(
     events: Vec<pulldown_latex::event::Event<'_>>,
-) -> Vec<pulldown_latex::event::Event<'_>> {
+    long_runs: LongPrimeRuns,
+) -> (Vec<pulldown_latex::event::Event<'_>>, bool) {
     use pulldown_latex::event::{Content, Event, Grouping, ScriptPosition, ScriptType, Visual};
 
     /// What an element still open at this point is waiting for.
@@ -855,19 +939,6 @@ fn fold_primes_into_superscripts(
     struct Carrier {
         start: usize,
         grouped: bool,
-    }
-
-    fn primes_in(event: &Event<'_>) -> Option<usize> {
-        match event {
-            Event::Content(Content::Ordinary { content, .. }) => match content {
-                '′' => Some(1),
-                '″' => Some(2),
-                '‴' => Some(3),
-                '⁗' => Some(4),
-                _ => None,
-            },
-            _ => None,
-        }
     }
 
     /// One element completed: count it against the construct waiting for
@@ -901,12 +972,13 @@ fn fold_primes_into_superscripts(
     }
 
     if !events.iter().any(|event| primes_in(event).is_some()) {
-        return events;
+        return (events, false);
     }
     let original = events.clone();
     let mut out: Vec<Event<'_>> = Vec::with_capacity(events.len() + 6);
     let mut stack: Vec<Open> = Vec::new();
     let mut previous: Option<Carrier> = None;
+    let mut long_run = false;
     let mut events = events.into_iter().peekable();
     while let Some(event) = events.next() {
         // A carrier is only ever free: `complete` answers one only when no
@@ -921,15 +993,23 @@ fn fold_primes_into_superscripts(
                 run.extend(events.next());
             }
             previous = None;
-            let glyph = match count {
-                1 => '′',
-                2 => '″',
-                _ => {
-                    // Three or more: kept loose (see above).
+            let glyphs = match (count, long_runs) {
+                (1, _) => vec!['′'],
+                (2, _) => vec!['″'],
+                (_, LongPrimeRuns::Loose) => {
+                    // Three or more, for braille and the exposed MathML:
+                    // kept as parsed (see above).
+                    long_run = true;
                     out.extend(run);
                     continue;
                 }
+                (3, LongPrimeRuns::Folded) => vec!['‴'],
+                (4, LongPrimeRuns::Folded) => vec!['⁗'],
+                // No single glyph holds five or more: a row of single
+                // primes, which MathCAT speaks one by one on the function.
+                (_, LongPrimeRuns::Folded) => vec!['′'; count],
             };
+            long_run |= count >= 3;
             out.insert(
                 carrier.start,
                 Event::Script {
@@ -942,9 +1022,11 @@ fn fold_primes_into_superscripts(
                 out.push(Event::End);
             }
             out.push(Event::Begin(Grouping::Normal));
-            out.push(Event::Content(Content::Ordinary {
-                content: glyph,
-                stretchy: false,
+            out.extend(glyphs.into_iter().map(|glyph| {
+                Event::Content(Content::Ordinary {
+                    content: glyph,
+                    stretchy: false,
+                })
             }));
             out.push(Event::End);
             continue;
@@ -981,8 +1063,8 @@ fn fold_primes_into_superscripts(
             Event::End => {
                 let Some(Open::Group(start)) = stack.pop() else {
                     // The walker's arity model disagrees with the stream:
-                    // leave it exactly as parsed.
-                    return original;
+                    // leave it exactly as parsed, in either mode.
+                    return (original, false);
                 };
                 // Only a plain `{...}` group carries: a `\left...\right` group
                 // or an environment is bracketed, and keeps its prime loose as
@@ -1018,6 +1100,371 @@ fn fold_primes_into_superscripts(
             }
         }
         out.push(event);
+    }
+    (out, long_run)
+}
+
+/// What [`fold_primes_into_superscripts`] makes of a run of three or more
+/// primes after a carrier (#1628).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LongPrimeRuns {
+    /// Kept as parsed: the tree braille and the exposed MathML come from.
+    Loose,
+    /// A superscript, as one or two primes are: the tree speech comes from.
+    Folded,
+}
+
+/// How many primes an event is: `′` one, `″` two, `‴` three, `⁗` four.
+fn primes_in(event: &pulldown_latex::event::Event<'_>) -> Option<usize> {
+    use pulldown_latex::event::{Content, Event};
+    match event {
+        Event::Content(Content::Ordinary { content, .. }) => match content {
+            '′' => Some(1),
+            '″' => Some(2),
+            '‴' => Some(3),
+            '⁗' => Some(4),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The thin space pulldown-latex 0.8 writes before a function name whose
+/// previous atom is ordinary, inner or closing (`mathml.rs:641-648` in the
+/// crate), byte for byte. An author's `\,` is written `0.16666667em`.
+const WRITER_THIN_SPACE: &str = "<mspace width=\"0.1667em\" />";
+
+/// The writer's application mark, byte for byte: after a function, and
+/// after a script or accent whose base is a function.
+const APPLICATION_MARK: &str = "<mo>\u{2061}</mo>";
+
+/// The number of children MathCAT takes for a script element, which it
+/// requires exactly (`canonicalize.rs:638-646` in mathcat 0.7.7), or
+/// `None` for any other element.
+fn script_arity(name: &str) -> Option<usize> {
+    match name {
+        "msup" | "msub" | "munder" | "mover" => Some(2),
+        "msubsup" | "munderover" => Some(3),
+        _ => None,
+    }
+}
+
+/// #1629: gives a script element the children MathCAT takes when the
+/// writer gave it more.
+///
+/// pulldown-latex opens a script element before it writes the base, and
+/// writes the thin space it puts before a function name after an ordinary,
+/// inner or closing atom (`2\sin^2 x`, `-\sin^2 x`, `(a+b)\sin^2 x`) or
+/// after a script's base (`x_\max`) as it reaches the name, so the space
+/// lands inside the element. An accent over a function (`\hat\sin`) is a
+/// script of its own, and the writer puts the application mark it writes
+/// when the accent closes (`<mo>⁡</mo>`, and a thin space) inside the
+/// element that holds the accent. MathCAT rejects a script element with
+/// the wrong number of children, so the whole formula fell back to its
+/// source, with no braille.
+///
+/// For a script element with more element children than its arity, the
+/// candidates are: a writer's thin space directly before an `<mi>` (the
+/// function it spaced); a thin space this repair moved out of the
+/// element's first child; an application mark; and a thin space directly
+/// after a candidate mark. Only when removing every candidate leaves
+/// exactly the arity is the element changed; otherwise it is left as
+/// written, and falls back as before. Then, with the base the first child
+/// that is no candidate:
+/// - a candidate before the base moves to just before the element (the
+///   function was the base, so `2\sin^2 x` reads as `2\sin x` does);
+/// - an application mark directly after the base, with its thin space,
+///   moves to just after the element (the accented function, with its
+///   script, applies to what follows);
+/// - any other candidate is dropped, and when it was a thin space before a
+///   function name, so the function was a script's argument, the
+///   application mark the writer put after the element goes too, with its
+///   thin space (`x_\max y` reads as `x_{\max} y`).
+///
+/// An element MathCAT accepts has its arity, so it is never touched, and
+/// neither is a thin space that fills a slot (`x^\hspace{0.1667em} 2`).
+/// The walk is one pass over the tags with an explicit stack and no
+/// recursion: a formula may nest thousands of groups, which MathCAT refuses
+/// past 512 levels and the formula then falls back, as it does today.
+fn repair_script_children(mathml: &str) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Kind {
+        Space,
+        Function,
+        Mark,
+        Other,
+    }
+
+    /// An element child: its tags and text, `pieces[start..end]`.
+    #[derive(Clone, Copy)]
+    struct Child {
+        start: usize,
+        end: usize,
+        kind: Kind,
+        /// Moved here by the repair, out of the element's first child.
+        hoisted: bool,
+    }
+
+    /// Whether the next children are the application mark the writer put
+    /// after a script element whose argument was a function, and its space.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Dropping {
+        Nothing,
+        Mark,
+        SpaceAfterMark,
+    }
+
+    struct Frame<'a> {
+        open: usize,
+        name: &'a str,
+        kind: Kind,
+        children: Vec<Child>,
+        dropping: Dropping,
+    }
+
+    /// Where each child the repair moved or dropped now goes. A moved
+    /// child is written at its anchor (an element's open or close tag,
+    /// which never moves) instead of where it was.
+    #[derive(Default)]
+    struct Edits {
+        gone: Vec<bool>,
+        before: std::collections::HashMap<usize, Vec<(usize, usize)>>,
+        after: std::collections::HashMap<usize, Vec<(usize, usize)>>,
+        placed: std::collections::HashMap<usize, (usize, bool)>,
+    }
+
+    impl Edits {
+        fn unplace(&mut self, child: Child) {
+            if let Some((anchor, after)) = self.placed.remove(&child.start) {
+                let list = if after {
+                    &mut self.after
+                } else {
+                    &mut self.before
+                };
+                if let Some(moved) = list.get_mut(&anchor) {
+                    moved.retain(|&(start, _)| start != child.start);
+                }
+            }
+        }
+
+        fn drop_child(&mut self, child: Child) {
+            self.unplace(child);
+            self.gone[child.start..child.end].fill(true);
+        }
+
+        fn place(&mut self, child: Child, anchor: usize, after: bool) {
+            self.unplace(child);
+            self.gone[child.start..child.end].fill(true);
+            let list = if after {
+                &mut self.after
+            } else {
+                &mut self.before
+            };
+            list.entry(anchor)
+                .or_default()
+                .push((child.start, child.end));
+            self.placed.insert(child.start, (anchor, after));
+        }
+    }
+
+    fn push_child(frame: &mut Frame<'_>, child: Child, edits: &mut Edits) {
+        match frame.dropping {
+            Dropping::Mark if child.kind == Kind::Mark => {
+                edits.drop_child(child);
+                frame.dropping = Dropping::SpaceAfterMark;
+                return;
+            }
+            Dropping::SpaceAfterMark if child.kind == Kind::Space && !child.hoisted => {
+                edits.drop_child(child);
+                frame.dropping = Dropping::Nothing;
+                return;
+            }
+            _ => frame.dropping = Dropping::Nothing,
+        }
+        frame.children.push(child);
+    }
+
+    if !mathml.contains(WRITER_THIN_SPACE) && !mathml.contains(APPLICATION_MARK) {
+        return mathml.to_string();
+    }
+    let mut pieces: Vec<&str> = Vec::new();
+    let mut rest = mathml;
+    while !rest.is_empty() {
+        let end = if rest.starts_with('<') {
+            match rest.find('>') {
+                Some(close) => close + 1,
+                None => return mathml.to_string(),
+            }
+        } else {
+            rest.find('<').unwrap_or(rest.len())
+        };
+        pieces.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+
+    let mut edits = Edits {
+        gone: vec![false; pieces.len()],
+        ..Edits::default()
+    };
+    let mut changed = false;
+    let mut stack = vec![Frame {
+        open: 0,
+        name: "",
+        kind: Kind::Other,
+        children: Vec::new(),
+        dropping: Dropping::Nothing,
+    }];
+    for (index, piece) in pieces.iter().enumerate() {
+        let Some(tag) = piece.strip_prefix('<') else {
+            continue;
+        };
+        if let Some(closing) = tag.strip_prefix('/') {
+            if stack.len() < 2 {
+                return mathml.to_string();
+            }
+            let frame = stack.pop().expect("an open element");
+            let name = closing.trim_end_matches('>').trim();
+            if name != frame.name {
+                return mathml.to_string();
+            }
+            let kind = if frame.name == "mo"
+                && index == frame.open + 2
+                && pieces[frame.open] == "<mo>"
+                && pieces[frame.open + 1] == "\u{2061}"
+            {
+                Kind::Mark
+            } else {
+                frame.kind
+            };
+            let element = Child {
+                start: frame.open,
+                end: index + 1,
+                kind,
+                hoisted: false,
+            };
+            let parent = stack.last_mut().expect("a parent");
+            let Some(arity) = script_arity(frame.name).filter(|&n| frame.children.len() > n) else {
+                push_child(parent, element, &mut edits);
+                continue;
+            };
+            let children = &frame.children;
+            let mut candidate: Vec<bool> = children
+                .iter()
+                .enumerate()
+                .map(|(i, child)| match child.kind {
+                    Kind::Space => {
+                        child.hoisted
+                            || children
+                                .get(i + 1)
+                                .is_some_and(|next| next.kind == Kind::Function)
+                    }
+                    Kind::Mark => true,
+                    _ => false,
+                })
+                .collect();
+            for i in 1..children.len() {
+                if candidate[i - 1]
+                    && children[i - 1].kind == Kind::Mark
+                    && children[i].kind == Kind::Space
+                {
+                    candidate[i] = true;
+                }
+            }
+            let kept = candidate.iter().filter(|&&is| !is).count();
+            let base = candidate.iter().position(|&is| !is);
+            let Some(base) = base.filter(|_| kept == arity) else {
+                push_child(parent, element, &mut edits);
+                continue;
+            };
+            changed = true;
+            let mut hoisted = Vec::new();
+            let mut trailing = Vec::new();
+            let mut argument_was_a_function = false;
+            for (i, &child) in children.iter().enumerate() {
+                if !candidate[i] {
+                    continue;
+                }
+                let follows_base_mark = i > base
+                    && (i == base + 1 && child.kind == Kind::Mark
+                        || i == base + 2
+                            && child.kind == Kind::Space
+                            && children[base + 1].kind == Kind::Mark
+                            && candidate[base + 1]);
+                if i < base {
+                    edits.place(child, frame.open, false);
+                    hoisted.push(Child {
+                        hoisted: true,
+                        ..child
+                    });
+                } else if follows_base_mark {
+                    edits.place(child, index, true);
+                    trailing.push(child);
+                } else {
+                    argument_was_a_function |= child.kind == Kind::Space && !child.hoisted;
+                    edits.drop_child(child);
+                }
+            }
+            for child in hoisted {
+                push_child(parent, child, &mut edits);
+            }
+            push_child(parent, element, &mut edits);
+            for child in trailing {
+                push_child(parent, child, &mut edits);
+            }
+            if argument_was_a_function {
+                parent.dropping = Dropping::Mark;
+            }
+        } else {
+            let self_closing = tag.ends_with("/>");
+            let name = tag
+                .trim_end_matches('>')
+                .trim_end_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            let kind = if *piece == WRITER_THIN_SPACE {
+                Kind::Space
+            } else if name == "mi" {
+                Kind::Function
+            } else {
+                Kind::Other
+            };
+            if self_closing {
+                let child = Child {
+                    start: index,
+                    end: index + 1,
+                    kind,
+                    hoisted: false,
+                };
+                push_child(stack.last_mut().expect("a parent"), child, &mut edits);
+            } else {
+                stack.push(Frame {
+                    open: index,
+                    name,
+                    kind,
+                    children: Vec::new(),
+                    dropping: Dropping::Nothing,
+                });
+            }
+        }
+    }
+    if !changed || stack.len() != 1 {
+        return mathml.to_string();
+    }
+    let mut out = String::with_capacity(mathml.len());
+    let write = |out: &mut String, list: Option<&Vec<(usize, usize)>>| {
+        for &(start, end) in list.into_iter().flatten() {
+            for piece in &pieces[start..end] {
+                out.push_str(piece);
+            }
+        }
+    };
+    for (index, piece) in pieces.iter().enumerate() {
+        write(&mut out, edits.before.get(&index));
+        if !edits.gone[index] {
+            out.push_str(piece);
+        }
+        write(&mut out, edits.after.get(&index));
     }
     out
 }
@@ -1130,6 +1577,40 @@ fn mathml_to_speech_and_braille(
     Ok((speech, braille))
 }
 
+/// #1628, CD21: speech from `speech_tree` (a long prime run folded) and
+/// braille from `braille_tree` (the run as parsed, the tree the block
+/// keeps). A speech tree MathCAT cannot take, for any reason, gives the
+/// formula today's reading: [`mathml_to_speech_and_braille`] on the braille
+/// tree. A braille tree it cannot take keeps the speech with no braille, as
+/// a braille failure does there (#1558).
+fn speech_and_braille_from_two_trees(
+    speech_tree: &str,
+    braille_tree: &str,
+    prefs: MathPrefs,
+) -> Result<(String, Vec<u8>), MathCatError> {
+    if speech_tree.len() > MATHCAT_MATHML_MAX_BYTES {
+        return mathml_to_speech_and_braille(braille_tree, prefs);
+    }
+    ensure_mathcat_initialized_on_this_thread()?;
+    apply_prefs(prefs)?;
+    let Ok(speech) =
+        libmathcat::set_mathml(speech_tree).and_then(|_| libmathcat::get_spoken_text())
+    else {
+        return mathml_to_speech_and_braille(braille_tree, prefs);
+    };
+    if braille_tree.len() > MATHCAT_MATHML_MAX_BYTES {
+        return Ok((speech, Vec::new()));
+    }
+    let braille = libmathcat::set_mathml(braille_tree)
+        .and_then(|_| libmathcat::get_braille(""))
+        .map(String::into_bytes)
+        .unwrap_or_else(|_| {
+            log::debug!("slate-mathcat: braille of the loose tree failed; the speech is kept");
+            Vec::new()
+        });
+    Ok((speech, braille))
+}
+
 fn apply_prefs(prefs: MathPrefs) -> Result<(), MathCatError> {
     let speech_style = match prefs.speech_style {
         MathSpeechStyle::ClearSpeak => "ClearSpeak",
@@ -1216,8 +1697,10 @@ mod tests {
     }
 
     /// Two primes fold into one `″` (MathCAT reads "double prime", and its
-    /// Nemeth keeps the two prime cells). Three or more stay as parsed: no
-    /// superscript MathCAT reads gives them correct Nemeth.
+    /// Nemeth keeps the two prime cells). Three or more stay as parsed in
+    /// the MathML a block keeps and brailles: no superscript MathCAT reads
+    /// gives them correct Nemeth. Their speech comes from a folded tree
+    /// (#1628, `three_or_more_primes_are_spoken_as_primes`).
     #[test]
     fn consecutive_primes_fold_into_one_superscript() {
         assert_eq!(
@@ -2624,5 +3107,142 @@ mod tests {
             "{}",
             &block.speech[..block.speech.len().min(80)]
         );
+    }
+
+    /// The writer's MathML before the script repair, for the loose tree;
+    /// empty for a source pulldown-latex cannot parse.
+    fn as_written(latex: &str) -> String {
+        use pulldown_latex::Storage;
+        use pulldown_latex::event::Event;
+        let storage = Storage::new();
+        let Ok(events) =
+            pulldown_latex::Parser::new(latex, &storage).collect::<Result<Vec<Event<'_>>, _>>()
+        else {
+            return String::new();
+        };
+        let (events, _) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
+        write_mathml_as_written(events)
+    }
+
+    /// #1629: the repair changes only a script element with more children
+    /// than MathCAT takes, and then only when the writer's spaces and marks
+    /// account for every extra one. A thin space that fills a slot, an extra
+    /// space that is not before a function, and every golden formula that
+    /// MathCAT accepts as written are left exactly as they are.
+    #[test]
+    fn a_script_whose_children_fit_is_left_as_written() {
+        let space = WRITER_THIN_SPACE;
+        for mathml in [
+            format!("<math><msup><mi>x</mi>{space}</msup><mn>2</mn></math>"),
+            format!("<math><msubsup><mi>x</mi>{space}<mn>2</mn></msubsup></math>"),
+            format!("<math><munder><mi>max</mi>{space}</munder></math>"),
+            format!("<math><msub>{space}<mi>x</mi></msub></math>"),
+        ] {
+            assert_eq!(repair_script_children(&mathml), mathml);
+        }
+        // An authored 0.1667em space after an accented function: the
+        // writer's mark and that space are not all the element's extra
+        // children it could lose, so the element is left as written.
+        let authored = as_written(r"\hat\sin^\hspace{0.1667em}(x)");
+        assert!(authored.contains("<msup><mover>"), "{authored}");
+        assert_eq!(repair_script_children(&authored), authored);
+        let written = as_written(r"x^\hspace{0.1667em} 2");
+        assert_eq!(repair_script_children(&written), written);
+
+        let sources = golden_sources();
+        let accepted = thread::spawn(move || {
+            let mut accepted = 0;
+            for source in sources {
+                let written = as_written(&source);
+                if written.is_empty()
+                    || mathml_to_speech_and_braille(&written, MathPrefs::default()).is_err()
+                {
+                    continue;
+                }
+                accepted += 1;
+                assert_eq!(repair_script_children(&written), written, "{source}");
+            }
+            accepted
+        })
+        .join()
+        .expect("the golden's sources were read");
+        assert!(
+            accepted >= 190,
+            "only {accepted} golden sources were checked"
+        );
+    }
+
+    /// #1628: a second tree is built only for a run of three or more primes
+    /// after a carrier; a run with no carrier folds in neither mode.
+    #[test]
+    fn a_formula_with_no_long_prime_run_has_one_tree() {
+        for source in [
+            r"f''(x)",
+            r"x^2",
+            r"2\sin^2 x",
+            r"y''^2",
+            r"\left(fg\right)'''(x)",
+            r"'''x",
+        ] {
+            assert!(latex_to_mathml_trees(source).speech.is_none(), "{source}");
+        }
+        let trees = latex_to_mathml_trees(r"f'''(x)");
+        let speech = trees.speech.expect("a speech tree for a long run");
+        assert!(speech.contains("<msup><mi>f</mi><mrow><mi>‴</mi></mrow></msup>"));
+        assert!(!trees.loose.contains("<msup>"), "{}", trees.loose);
+        let five = latex_to_mathml_trees(r"f'''''(x)")
+            .speech
+            .expect("a speech tree for five primes");
+        assert!(
+            five.contains(&format!(
+                "<msup><mi>f</mi><mrow>{}</mrow></msup>",
+                "<mi>′</mi>".repeat(5)
+            )),
+            "{five}"
+        );
+    }
+
+    /// #1628: when MathCAT cannot take the folded tree, at any size or for
+    /// any reason, the formula is spoken and brailled from the loose tree
+    /// as it is today.
+    #[test]
+    fn a_speech_tree_mathcat_rejects_is_spoken_from_the_loose_tree() {
+        let loose = latex_to_mathml(r"f'''(x)");
+        thread::spawn(move || {
+            let today = mathml_to_speech_and_braille(&loose, MathPrefs::default())
+                .expect("the loose tree renders");
+            let rejected = "<math><msup><mi>f</mi><mi>a</mi><mi>b</mi></msup></math>".to_string();
+            let huge = "<math>".to_string() + &"x".repeat(2 * 1024 * 1024) + "</math>";
+            for speech_tree in [rejected, huge] {
+                let pair =
+                    speech_and_braille_from_two_trees(&speech_tree, &loose, MathPrefs::default())
+                        .expect("the loose tree's reading");
+                assert_eq!(pair, today);
+            }
+        })
+        .join()
+        .expect("MathCAT thread joined");
+    }
+
+    /// #1628: when MathCAT cannot braille the loose tree, the folded tree's
+    /// speech is kept and the block has no braille, as a braille failure
+    /// does on one tree (#1558).
+    #[test]
+    fn a_loose_tree_whose_braille_fails_keeps_the_folded_speech() {
+        let speech_tree = latex_to_mathml_trees(r"f'''(x)")
+            .speech
+            .expect("a speech tree for a long run");
+        let (speech, braille) = thread::spawn(move || {
+            speech_and_braille_from_two_trees(
+                &speech_tree,
+                "<math><merror><mtext>x</mtext></merror></math>",
+                MathPrefs::default(),
+            )
+        })
+        .join()
+        .expect("MathCAT thread joined")
+        .expect("the speech survives a braille failure");
+        assert_eq!(speech, "f triple prime, of x");
+        assert!(braille.is_empty());
     }
 }

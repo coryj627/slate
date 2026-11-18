@@ -62,9 +62,9 @@ a_1 + a_2 + \cdots + a_n
 \frac{<}{
 \operatorname{<mi>x</mi>}
 
-# Primes (#1585): a prime after an element is its superscript; two fold
-# into one double prime; three stay as parsed (#1628); a primed function
-# or script is grouped first. The last five pin the edge carriers.
+# Primes (#1585): a prime after an element is its superscript; two fold into
+# one double prime; three keep their MathML and braille as parsed and are spoken
+# folded (#1628); a primed function or script is grouped first; the last five pin the edge carriers.
 f''(x)
 f'''(x)
 x_1'
@@ -75,3 +75,34 @@ x_1'
 \left(fg\right)'(x)
 \sum_{n}' a_n
 y''^2
+
+# Scripted functions after an atom (#1629): the writer's thin space before
+# the function leaves the script element, and a function as an ungrouped
+# script argument reads as its group. The last two are a slot filled by a
+# state change (falls back) and by a space (renders as TeX reads it), pinned
+# as they are and out of scope.
+2\sin^2 x
+x\sin^2 x
+-\sin^2 x
+\sin^2 x\cos^2 x
+(a+b)\sin^2 x
+\frac{1}{2}\sin^2 x
+n\log_2 n
+x\log_2^2 n
+2\max_i a_i
+2\max\limits_i a_i
+x_\max
+T_\min + 1
+x_\min^\max
+2\hat\sin^2 x
+x^\rm a
+x^\, 2
+
+# Three or more primes (#1628, CD21): spoken from the folded tree, brailled
+# and exposed from the loose one.
+f''''(x)
+f'''''(x)
+\sin'''(x)
+f\dprime'(x)
+f\trprime(x)
+2\sin^2 x + f'''(x)
