@@ -565,6 +565,31 @@ public sealed class SaveChainAdmissionTests
                 () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
                 "the throwing toggle's end");
             Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+            // Plan 47 CB-14: only a SavedButUnindexed says the toggle landed;
+            // any other failure, after the write or before it, still says it
+            // failed. A failure whose read-back shows the write landed anyway
+            // (the seam throws after the core's write) leaves the note's tabs
+            // over changed disk, so the tab reconciles them after the failure
+            // sentence, as the panel route's completion does; a failure before
+            // the write leaves them as they were.
+            _ = Assert.Single(events, e => e is A11yEvent.TaskToggleFailed);
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggledUnindexed);
+            if (afterTheWrite)
+            {
+                A11yEvent.HostComposed reconciled = Assert.Single(events.OfType<A11yEvent.HostComposed>());
+                Assert.Equal(ReconcileSentence, reconciled.Text);
+                Assert.True(
+                    events.FindIndex(e => e is A11yEvent.TaskToggleFailed) < events.IndexOf(reconciled),
+                    "the reconcile sentence came before the failure sentence");
+                Assert.True(peers.A.IsExternallyStale, "the tab stayed clean over a write that landed");
+                Assert.True(peers.B.IsExternallyStale, "the peer stayed clean over a write that landed");
+            }
+            else
+            {
+                Assert.DoesNotContain(events, e => e is A11yEvent.HostComposed);
+                Assert.False(peers.A.IsExternallyStale, "a failure before the write marked the tab stale");
+                Assert.False(peers.B.IsExternallyStale, "a failure before the write marked the peer stale");
+            }
 
             peers.A.TaskToggleFaultForTests = null;
             peers.A.TaskToggleBeforeWriteForTests = null;
@@ -639,6 +664,618 @@ public sealed class SaveChainAdmissionTests
     });
 
     private static TaskItem TheTask(Peers peers) => peers.H.Session.TasksForFile("a.md")[0];
+
+    // ---- A toggle that landed but was not indexed (plan 47 CB-14) -----------
+
+    private const string ReconcileSentence =
+        "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
+
+    /// <summary>Plan 47 CB-14 (#1660, the lead's ruling on CD8): the editor's
+    /// Ctrl+Enter toggles through the tab with no completion behind it (the
+    /// reading view does the same). When the write lands and the index commit
+    /// fails, the tab reconciles the note's tabs itself, as the panel's and the
+    /// review's completion does: both tabs are marked stale and guarded, the
+    /// reconcile sentence is spoken once (by the source tab; the other tab
+    /// mirrors it silently), and then the toggle says it landed. Nothing is
+    /// rebaselined and nothing enters the undo stack (the owner's ruling on
+    /// the undo of a toggle made through a tab).</summary>
+    [Fact]
+    public void TheEditorsLandedUnindexedToggleReconcilesTheNotesTabsThenSaysItLanded() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-editor.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-landed-editor", path);
+        using (h)
+        {
+            TaskItem task = h.Session.TasksForFile(path)[0];
+            string savedBefore = a.SavedContentHash!;
+            var spoken = new List<A11yEvent>();
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-editor");
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(task, spoken.Add));
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && spoken.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                    "the landed toggle's publication");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+            Assert.Empty(spoken.OfType<A11yEvent.TaskToggleFailed>());
+            A11yEvent.HostComposed reconciled = Assert.Single(spoken.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(ReconcileSentence, reconciled.Text);
+            Assert.Equal(A11yPriority.High, reconciled.Priority);
+            A11yEvent.TaskToggledUnindexed landed = Assert.Single(spoken.OfType<A11yEvent.TaskToggledUnindexed>());
+            Assert.True(landed.Completed);
+            Assert.Equal(
+                "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+                + "before index commit. It will appear after the next scan.",
+                SlateUniffiMethods.A11yRender(landed).Text);
+            Assert.True(
+                spoken.IndexOf(reconciled) < spoken.IndexOf(landed),
+                "the landed sentence came before the reconcile sentence that would cut it");
+            // Both tabs are stale and guarded; the second was told silently.
+            Assert.True(a.IsExternallyStale, "the source tab was not marked stale");
+            Assert.True(b.IsExternallyStale, "the note's other tab was not marked stale");
+            Assert.Equal(ReconcileSentence, a.Status);
+            Assert.Equal(ReconcileSentence, b.Status);
+            Assert.DoesNotContain(
+                h.Events, e => e is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence);
+            // No rebaseline and no undo step.
+            Assert.Equal(TaskNote, a.Text);
+            Assert.Equal(savedBefore, a.SavedContentHash);
+            Assert.False(a.EditorDocument!.UndoStack.CanUndo, "the landed toggle left an undo step");
+
+            // The next save is refused, and the landed toggle stays on disk.
+            a.Text = a.Text + "An edit.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the edit's save");
+            Assert.False(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+        }
+    });
+
+    /// <summary>Plan 47 CB-14, CB-9a's rule on the new route: on the editor's
+    /// route the reconcile sentence is spoken by an announcer that throws (it
+    /// reaches UIA). The note's other tab is still marked stale and the
+    /// toggle still says it landed.</summary>
+    [Fact]
+    public void TheEditorsLandedToggleStillReconcilesThePeerAndSaysItLandedWhenTheReconcileSentenceThrows() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-throws.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-landed-throws", path);
+        using (h)
+        {
+            var spoken = new List<A11yEvent>();
+            bool thrown = false;
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-throws");
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(h.Session.TasksForFile(path)[0], line =>
+                {
+                    if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+                    {
+                        thrown = true;
+                        throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+                    }
+                    spoken.Add(line);
+                }));
+                PumpPastTheAnnouncersFailure(
+                    h,
+                    () => thrown && !a.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                    "the landed toggle's publication after its reconcile sentence threw");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+            AssertNoStepSkipped(
+                (a.IsExternallyStale, "the source tab's stale flag"),
+                (b.IsExternallyStale, "the peer's stale flag"),
+                (spoken.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the landed sentence"));
+            Assert.Empty(spoken.OfType<A11yEvent.TaskToggleFailed>());
+        }
+    });
+
+    /// <summary>Plan 47 CB-14, the same rule on the panel's route: the
+    /// completion's reconcile sentence is spoken by an announcer that throws.
+    /// The toggle still says it landed, after it.</summary>
+    [Fact]
+    public void ThePanelsLandedToggleStillSaysItLandedWhenTheReconcileSentenceThrows() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-panel-throws.md";
+        using var h = new Vault("cb14-panel-throws", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        bool thrown = false;
+        h.BeforeAnnounce = line =>
+        {
+            if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-panel-throws");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            PumpPastTheAnnouncersFailure(
+                h,
+                () => thrown && !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                "the landed toggle's completion after its reconcile sentence threw");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            h.BeforeAnnounce = null;
+        }
+        h.Settle();
+        AssertNoStepSkipped(
+            (tab.IsExternallyStale, "the tab's stale flag"),
+            (h.Events.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the landed sentence"));
+        Assert.Empty(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+    });
+
+    /// <summary>Plan 47 CB-14: on the panel's route the read-back after the
+    /// failed index commit is unreadable. The error names the hash that landed,
+    /// so the completion still reconciles the note's tabs over it (the tab
+    /// route's own rule) and then says the toggle landed.</summary>
+    [Fact]
+    public void ALandedToggleWhoseReadBackFailsStillReconcilesTheTabOnThePanelRoute() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-panel-unread.md";
+        using var h = new Vault("cb14-panel-unread", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        tab.TaskToggleReadBackFaultForTests = () => throw new IOException("the read-back failed (test seam)");
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-panel-unread");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the landed toggle's completion");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            tab.TaskToggleReadBackFaultForTests = null;
+        }
+        h.Settle();
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed));
+        Assert.True(tab.IsExternallyStale, "the tab stayed clean over the landed write");
+    });
+
+    /// <summary>Plan 47 CB-14 (codex round 1): a panel toggle lands but is not
+    /// indexed, and the note is renamed before the toggle publishes. The
+    /// completion reconciles the path the toggle wrote, where no tab is left,
+    /// so the renamed tab reconciles itself: it is marked stale and says the
+    /// editor no longer matches, and then the toggle says it landed.</summary>
+    [Fact]
+    public void APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-renamed-midflight.md";
+        const string renamed = "cb14-renamed-after.md";
+        using var h = new Vault("cb14-renamed-midflight", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleReadBackFaultForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-renamed-midflight");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its read-back after the landed write");
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            Assert.Equal(renamed, tab.Path);
+            release.Set();
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the landed toggle's publication after the rename");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            release.Set();
+            tab.TaskToggleReadBackFaultForTests = null;
+        }
+        h.Settle();
+        Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed));
+        Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the landed write");
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's delta review): a panel toggle fails
+    /// after its write with an error that is not SavedButUnindexed, and the
+    /// note is renamed after the toggle read the disk back but before it
+    /// publishes. The completion reconciles the path the toggle wrote, where
+    /// no tab is left, so the renamed tab reconciles itself after the failure
+    /// sentence, as the landed arm does.</summary>
+    [Fact]
+    public void APanelToggleThatFailsAfterItsWriteStillReconcilesATabRenamedBeforeItPublishes() => RunSta(() =>
+    {
+        const string path = "cb14-failed-renamed.md";
+        const string renamed = "cb14-failed-renamed-after.md";
+        using var h = new Vault("cb14-failed-renamed", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleFaultForTests = () => throw new IOException("a panic surfacing through the binding (test seam)");
+        tab.TaskToggleBeforePublishForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its publication after the failed write");
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            Assert.Equal(renamed, tab.Path);
+            release.Set();
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggleFailed),
+                "the failed toggle's publication after the rename");
+        }
+        finally
+        {
+            release.Set();
+            tab.TaskToggleFaultForTests = null;
+            tab.TaskToggleBeforePublishForTests = null;
+        }
+        h.Settle();
+        Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+        A11yEvent.TaskToggleFailed failed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+        Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggledUnindexed);
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        Assert.True(
+            h.Events.IndexOf(failed) < h.Events.IndexOf(reconciled),
+            "the reconcile sentence came before the failure sentence");
+        Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the write that landed");
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's third review): a panel toggle
+    /// succeeds, and the note is renamed after the write but before the
+    /// toggle publishes. The completion reconciles the path the toggle wrote,
+    /// where no tab is left, so the renamed tab reconciles itself over the
+    /// toggle's hash (the stale mark and the reconcile sentence) and its split
+    /// peer mirrors the stale state; neither tab's text or undo stack
+    /// changes. Before, the tab said the editor changed and both tabs stayed
+    /// clean over the changed disk.</summary>
+    [Fact]
+    public void APanelToggleThatSucceedsStillReconcilesATabRenamedBeforeItPublishes() => RunSta(() =>
+    {
+        const string path = "cb14-toggled-renamed.md";
+        const string renamed = "cb14-toggled-renamed-after.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-toggled-renamed", path);
+        using (h)
+        {
+            h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+            h.Events.Clear();
+            string textBefore = a.Text;
+            bool couldUndo = a.EditorDocument!.UndoStack.CanUndo;
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            a.TaskToggleBeforePublishForTests = () =>
+            {
+                entered.Set();
+                _ = release.Wait(TimeSpan.FromSeconds(30));
+            };
+            try
+            {
+                h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+                h.Wait(entered, "premise: the toggle's worker never reached its publication after the write");
+                _ = h.Session.RenameFile(path, renamed);
+                h.Workspace.RetargetPath(path, renamed);
+                Assert.Equal(renamed, a.Path);
+                Assert.Equal(renamed, b.Path);
+                release.Set();
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && h.Events.Any(e => e is A11yEvent.HostComposed),
+                    "the toggle's publication after the rename");
+            }
+            finally
+            {
+                release.Set();
+                a.TaskToggleBeforePublishForTests = null;
+            }
+            h.Settle();
+            Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+            Assert.True(a.IsExternallyStale, "the renamed tab stayed clean over the toggle's write");
+            Assert.True(b.IsExternallyStale, "the renamed tab's peer stayed clean over the toggle's write");
+            A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(ReconcileSentence, reconciled.Text);
+            Assert.Equal(textBefore, a.Text);
+            Assert.Equal(textBefore, b.Text);
+            Assert.Equal(couldUndo, a.EditorDocument.UndoStack.CanUndo);
+        }
+    });
+
+    /// <summary>Plan 47 CB-14 (codex round 2): the renamed tab of
+    /// <c>APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab</c>
+    /// speaks its reconcile sentence through an announcer that throws.
+    /// The completion still runs after the tab's publication: the index is
+    /// repaired and the toggle says it landed.</summary>
+    [Fact]
+    public void ARenamedTabsThrowingReconcileSentenceStillLetsTheCompletionSayItLanded() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-renamed-throws.md";
+        const string renamed = "cb14-renamed-throws-after.md";
+        using var h = new Vault("cb14-renamed-throws", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        bool thrown = false;
+        h.BeforeAnnounce = line =>
+        {
+            if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleReadBackFaultForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-renamed-throws");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its read-back after the landed write");
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            release.Set();
+            PumpPastTheAnnouncersFailure(
+                h,
+                () => thrown && !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                "the landed toggle's completion after the renamed tab's sentence threw");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            release.Set();
+            tab.TaskToggleReadBackFaultForTests = null;
+            h.BeforeAnnounce = null;
+        }
+        h.Settle();
+        AssertNoStepSkipped(
+            (tab.IsExternallyStale, "the renamed tab's stale flag"),
+            (h.Events.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the completion's landed sentence"),
+            (!h.Workspace.TaskIndexRepairsForTests.HasPendingFor(path), "the index repair"));
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's review): the Tasks Review's tabless
+    /// toggle lands but is not indexed, and a tab opened on the note while
+    /// its write ran. The workspace reconciles that tab first (its sentence
+    /// at High) and only then does the review say the toggle landed (Medium),
+    /// so the reconcile line cannot cut it.</summary>
+    [Fact]
+    public void ATablessReviewToggleThatLandedReconcilesATabThatOpenedBeforeItSaysItLanded() =>
+        ATablessReviewToggleThatLandedReconcilesATabThatOpened("cb14-review-raced", unreadableReadBack: false);
+
+    /// <summary>Plan 47 CB-14 (the judge's review): the same, with the
+    /// read-back after the failed index commit unreadable. The error names the
+    /// hash that landed, so the tab that opened is still reconciled and
+    /// guarded (the tab routes' rule).</summary>
+    [Fact]
+    public void ATablessReviewToggleThatLandedReconcilesATabThatOpenedWhenItsReadBackFails() =>
+        ATablessReviewToggleThatLandedReconcilesATabThatOpened("cb14-review-unread", unreadableReadBack: true);
+
+    private static void ATablessReviewToggleThatLandedReconcilesATabThatOpened(string label, bool unreadableReadBack) => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        string path = label + ".md";
+        using var h = new Vault(label, (path, TaskNote));
+        TasksReviewViewModel review = h.Workspace.TasksReview;
+        review.EnsureLoaded();
+        h.PumpUntil(() => !review.IsLoading && review.Rows.Any(row => row.Path == path), "the review's rows");
+        ReviewTaskRowViewModel row = review.Rows.Single(candidate => candidate.Path == path);
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == path);
+        using var held = new HeldWork(hook => review.DirectToggleBeforeWriteForTests = hook);
+        if (unreadableReadBack)
+        {
+            review.DirectToggleReadBackFaultForTests = () => throw new IOException("the read-back failed (test seam)");
+        }
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", label);
+        try
+        {
+            review.ToggleTask(row);
+            h.PumpUntil(() => held.Entered, "premise: the toggle reaching its hold before its core call");
+            WorkspaceTabViewModel opened = h.OpenNow(path);
+            h.Events.Clear();
+            held.Release();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the tabless toggle's publication");
+            h.Settle();
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+            Assert.Empty(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+            A11yEvent.HostComposed reconciled = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(), line => line.Text == ReconcileSentence);
+            A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+            Assert.True(landed.Completed);
+            Assert.True(
+                h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed),
+                "the landed sentence came before the reconcile line that cuts it");
+            Assert.True(opened.IsExternallyStale, "the tab that opened stayed clean over the landed write");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            review.DirectToggleReadBackFaultForTests = null;
+            h.ReleaseAndDrain(held);
+            ReleaseAndDrainTheReview(h, review);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's review): an edit made and saved
+    /// before the toggle stays on the undo stack of the tab and of its mirrored
+    /// peer after a landed but unindexed toggle; nothing is reset, and one Undo
+    /// on either tab still takes the edit back in both (the peers mirror each
+    /// other's document changes).</summary>
+    [Theory]
+    [InlineData("source")]
+    [InlineData("peer")]
+    public void AnEditsUndoHistorySurvivesALandedUnindexedToggleOnTheTabAndItsPeer(string undoOn) => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        string label = "cb14-undo-history-" + undoOn;
+        string path = label + ".md";
+        const string edit = "An edit before the toggle.\n";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote(label, path);
+        using (h)
+        {
+            a.EditorDocument!.Insert(a.EditorDocument.TextLength, edit);
+            SaveNow(h, a);
+            h.Settle();
+            Assert.True(a.EditorDocument.UndoStack.CanUndo, "premise: the saved edit is on the tab's undo stack");
+            Assert.Contains(edit, b.Text, StringComparison.Ordinal);
+            bool peerCouldUndo = b.EditorDocument!.UndoStack.CanUndo;
+            string textBefore = a.Text;
+            var spoken = new List<A11yEvent>();
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", label);
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(h.Session.TasksForFile(path)[0], spoken.Add));
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && spoken.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                    "the landed toggle's publication");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+            _ = Assert.Single(spoken, e => e is A11yEvent.TaskToggledUnindexed);
+            Assert.True(a.IsExternallyStale && b.IsExternallyStale, "premise: both tabs were reconciled");
+            Assert.Equal(textBefore, a.Text);
+            Assert.Equal(textBefore, b.Text);
+            Assert.True(a.EditorDocument.UndoStack.CanUndo, "the landed toggle reset the tab's undo history");
+            Assert.True(peerCouldUndo, "premise: the peer's mirrored edit is on its undo stack");
+            Assert.True(b.EditorDocument.UndoStack.CanUndo, "the landed toggle reset the peer's undo history");
+            (undoOn == "source" ? a : b).EditorDocument!.UndoStack.Undo();
+            Assert.DoesNotContain(edit, a.EditorDocument.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(edit, b.EditorDocument.Text, StringComparison.Ordinal);
+        }
+    });
+
+    /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle
+    /// made through a tab is the reader's own edit and stays on the tab's undo
+    /// stack; one Undo takes it back in the buffer.</summary>
+    [Fact]
+    public void ASuccessfulToggleThroughATabStaysOnItsUndoStack() => RunSta(() =>
+    {
+        const string path = "cb14-undo-guard.md";
+        using var h = new Vault("cb14-undo-guard", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        var spoken = new List<A11yEvent>();
+        Assert.Equal(TabTaskToggle.Started, tab.ToggleTask(h.Session.TasksForFile(path)[0], spoken.Add));
+        h.PumpUntil(
+            () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle && spoken.Any(e => e is A11yEvent.TaskToggled),
+            "the toggle's publication");
+        Assert.Contains("- [x] the task", tab.Text, StringComparison.Ordinal);
+        Assert.True(tab.EditorDocument!.UndoStack.CanUndo, "the toggle left no undo step");
+        tab.EditorDocument.UndoStack.Undo();
+        Assert.Contains("- [ ] the task", tab.EditorDocument.Text, StringComparison.Ordinal);
+    });
+
+    /// <summary>Plan 47 CB-14: pumps until <paramref name="condition"/> holds,
+    /// through the announcer's injected failure. A toggle's publication runs
+    /// on the dispatcher and attempts every step before it rethrows the
+    /// first failure (<c>AdmittedPublication.RunEvery</c>), so the failure
+    /// surfaces through the pump once, after the steps ran; it must surface
+    /// exactly once.</summary>
+    private static void PumpPastTheAnnouncersFailure(Vault h, Func<bool> condition, string what)
+    {
+        int surfaced = 0;
+        while (true)
+        {
+            try
+            {
+                h.PumpUntil(condition, what);
+                break;
+            }
+            catch (System.Runtime.InteropServices.COMException exception)
+                when (exception.Message == "the announcer failed (test seam)" && surfaced == 0)
+            {
+                surfaced++;
+            }
+        }
+        Assert.Equal(1, surfaced);
+    }
+
+    /// <summary>Plan 47 CB-14: a vault whose one note holds a task, open in two
+    /// tabs side by side (a split), the first tab active. The note's name is
+    /// the fact's own, so the after-write seam trips no other fact's save
+    /// (the seam matches any path that contains its text).</summary>
+    private static (Vault H, WorkspaceTabViewModel A, WorkspaceTabViewModel B) TwoTabsOnATaskNote(string label, string path)
+    {
+        var h = new Vault(label, (path, TaskNote));
+        try
+        {
+            WorkspaceTabViewModel a = h.Open(path);
+            WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+            h.Workspace.OpenPath(path, WorkspaceOpenTarget.SplitRight);
+            h.Settle();
+            WorkspaceTabViewModel b = h.Workspace.ActiveGroup.ActiveTab!;
+            Assert.NotSame(a, b);
+            Assert.Equal(path, b.Path);
+            h.Workspace.Activate(groupA, a);
+            h.Settle();
+            h.Events.Clear();
+            return (h, a, b);
+        }
+        catch
+        {
+            h.Dispose();
+            throw;
+        }
+    }
 
     // ---- Bases cell writes (#1657) -------------------------------------------
 

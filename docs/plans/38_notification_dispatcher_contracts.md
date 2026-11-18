@@ -1071,6 +1071,118 @@ host's rules, from `43_mac_backlog_delivery/specs/pr29_hot_exit_mac_half.md`
   (`AppState.announceVaultOpened`), which both opening sites call, so the
   `VaultOpened` Mac site moves there.
 
+## Landed-unindexed toggle amendment (plan 47 CB-14, #1660, #1395, CD8, 2026-11-18)
+
+A task toggle whose bytes landed but whose index commit failed
+(`VaultError::SavedButUnindexed`) is a commit, and says so. Core's
+`TaskToggledUnindexed { completed, detail }` (Medium) renders the toggle's
+own sentence, then the save twin's clause: "Task completed. Saved, but not
+indexed yet: database is locked. It will appear after the next scan." The
+reason is the innermost error's own message: the sentence drops the Display
+wrappers core puts in front of an inner error ("database error: ",
+"sqlite error: ", "io error: "). Every other reader of the detail keeps it
+verbatim, `vault_error_detail` included. That clause, there and in
+`CreatePublishedUnindexed`, closes a reason that has no terminal
+punctuation once before "It will appear …" (#1395). Every other toggle
+failure still speaks `TaskToggleFailed`.
+
+The Windows host speaks it on every route that publishes, after the
+reconcile sentence, not before it:
+
+- **The Tasks panel, and the Tasks Review through an open tab.** The tab
+  sets its status to the new sentence and says nothing. The completion
+  repairs the index, reconciles every tab on the note ("Task toggled on
+  disk, but the editor no longer matches it. Reopen the note before
+  editing.", High, one line per tab, unchanged), and then speaks the new
+  sentence. A tab renamed or moved while the write ran is no longer at the
+  path the completion reconciles, so it reconciles itself first.
+- **The editor's Activate at Cursor and the reading view.** No completion
+  follows. The tab reconciles itself through the same
+  `ReconcileAfterExternalTaskWrite`, and other tabs on the note mirror its
+  stale state silently. Then it speaks the new sentence. This route had no
+  reconcile before.
+- **A tab closed while the write ran.** The completion reconciles the
+  note's other tabs and then speaks the new sentence.
+- **The Tasks Review with no tab.** `PublishDirectToggle` runs, in order:
+  - the failure sentence (`TaskToggleFailed`, for every other failure);
+  - the index repair, when the disk moved or its hash is unknown;
+  - when the disk moved, the reconcile through `DiskWriteLanded` of a tab
+    that opened on the note while the write ran (High, one line per tab);
+  - the new sentence (this failure only);
+  - the rows' reload, only when the repair succeeded.
+
+  When the read-back cannot be read, the hash the landed write names
+  stands in, so the disk counts as moved and that tab is still marked.
+  With no such tab the new sentence is spoken alone.
+
+A failure that is not `SavedButUnindexed`, but whose read-back shows the
+write landed anyway, now reconciles on every route. On the editor's
+Activate at Cursor and the reading view, and for a tab renamed or moved
+while the write of a Tasks panel toggle ran (or of a Tasks Review toggle
+made through an open tab), the tab says the toggle failed
+(`TaskToggleFailed`, High), then reconciles itself, and its peers mirror
+its stale state. That is the rule the completion follows for the tabs at
+the path it wrote. Before this, those tabs stayed clean over the changed
+disk. Under NVDA the reconcile line (High) cuts the failure sentence
+(High), as it does on `main`'s Tasks panel route, and the reader hears
+that the toggle is on disk and to reopen the note. That is accepted: only
+a failure raised after core's write reaches it.
+
+A toggle that succeeds, whose tab was renamed or moved before it
+published, reconciles the same way, without the failure sentence. Before
+this, it said the editor changed and left its tabs clean over the changed
+disk.
+
+Two residuals are accepted:
+
+- On the Tasks Review with no tab, a tab that opens on the note while the
+  write runs and is then renamed before the toggle publishes is reconciled
+  by the old path and missed. It takes two races at once.
+- A rename between core's write and the read-back leaves the read-back
+  unreadable. For a failure that is not `SavedButUnindexed` the outcome is
+  then unknown, as on `main`: no tab is reconciled, and the routes that
+  repair the index still do.
+
+**The order departs from CD8's wording.** CD8 says the reconcile sentence
+"still follows". Under NVDA a High notification cancels speech raised just
+before it. Measured on `main` and on prototypes (NVDA 2026.3.1, the
+playback levels of the output device):
+
+- The new sentence followed by the High reconcile is silent on the panel
+  route, as `main`'s failure sentence is today.
+- The reconcile first (High), then the new sentence (Medium), plays both in
+  full on the editor, panel and review routes. With the note in two split
+  tabs, one reconcile line is heard, then the new sentence.
+
+The lead ruled for that order (2026-11-18): it gives CD8's intent, both
+sentences heard, without editing the reconcile code CD8 left alone. Facts:
+
+- `TasksPanelTests`: `ATabToggleSpeaksCoresEvents`,
+  `TheNotesTabsAreReconciledBeforeTheLandedSentenceOnThePanelRoute` and
+  `AClosedTabsLandedUnindexedToggleSaysItLandedAfterThePeersReconcile`.
+- `SaveChainAdmissionTests`:
+  `TheEditorsLandedUnindexedToggleReconcilesTheNotesTabsThenSaysItLanded`,
+  `APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab`,
+  `ATablessReviewToggleThatLandedReconcilesATabThatOpenedBeforeItSaysItLanded`
+  and
+  `ATablessReviewToggleThatLandedReconcilesATabThatOpenedWhenItsReadBackFails`.
+- `ReadingViewTests.ATaskCheckboxThatLandedUnindexedSaysItLanded`.
+- `TasksReviewTests.AReviewToggleSpeaksCoresEvents`.
+- For a failure that is not `SavedButUnindexed` but landed:
+  `SaveChainAdmissionTests.ATaskToggleWhoseWorkerThrowsEndsAndFreesTheNotesChain`
+  (`afterTheWrite: true`) and
+  `SaveChainAdmissionTests.APanelToggleThatFailsAfterItsWriteStillReconcilesATabRenamedBeforeItPublishes`.
+- For a toggle that succeeds:
+  `SaveChainAdmissionTests.APanelToggleThatSucceedsStillReconcilesATabRenamedBeforeItPublishes`.
+
+No toggle clears the undo stack or rebaselines a tab (the owner's ruling
+of 2026-11-18 on a toggle made through a tab;
+`ASuccessfulToggleThroughATabStaysOnItsUndoStack`). An edit made before a
+landed toggle still undoes, on the tab and on its mirrored peer
+(`AnEditsUndoHistorySurvivesALandedUnindexedToggleOnTheTabAndItsPeer`).
+The Mac posts `taskToggleFailed` on this error until it adopts the event
+(#1954; the ledger's designation below).
+
 <!-- a11y-trigger-ledger:start -->
 
 ## Whole-corpus trigger ledger (D-7)
@@ -1302,6 +1414,7 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `TaskToggleFailed` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.DirectToggleAtItsTurn@1`; `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TaskToggleUnsaved` | posted | `AppState.swift#toggleCurrentTask@1`; `AppState.swift#toggleVaultTask@1` | `EditorInteractions.cs#EditorInteractionCoordinator.ActivateAt@1`; `EditorInteractions.cs#EditorInteractionCoordinator.TryToggleTaskAt@1`; `Reading/ReadingContentViewModel.cs#ReadingContentViewModel.ToggleTaskAt@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.StartAdmittedTaskToggle@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TogglePanelTask@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TryToggleTaskInOpenTab@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TaskToggled` | posted | `AppState.swift#performToggleCurrentTask@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `TaskToggledUnindexed` | posted | — | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.PublishDirectToggle@1`; `WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1`; `WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: Plan 47 CB-14 (#1660, CD8): the Mac's adoption is owed on #1954; until then performToggleCurrentTask posts taskToggleFailed on this error with its own copy of the save sentence. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
 | `TasksFilterSet` | posted | `AppState.swift#applyTaskReviewFilter@1` | `Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ApplyFilter@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TasksReviewShown` | posted | `AppState.swift#openTasksReview@1` | `WorkspaceViewModel.cs#WorkspaceViewModel.OpenTasksReview@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `TemplateNoteCreated` | posted | `AppState.swift#performCreateNoteFromTemplate@1` | `WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |

@@ -53,9 +53,13 @@ public sealed class CreateOutcomeTests
             }
         }
 
-        Assert.NotNull(caveat);
-        Assert.StartsWith("landed-outcome.md was written but not indexed:", caveat);
-        Assert.Contains("do not recreate it", caveat);
+        // Plan 47 CB-14 (#1395): core's caveat closes the post-publish reason
+        // before its next sentence.
+        Assert.Equal(
+            "landed-outcome.md was written but not indexed: invalid argument: test fault: injected "
+            + "failure after write, before index commit. It will appear in listings after the next "
+            + "scan; do not recreate it.",
+            caveat);
         Assert.Equal("landed\n", File.ReadAllText(Path.Combine(fixture.Root, "landed-outcome.md")));
         Assert.Equal("landed\n", session.ReadText("landed-outcome.md"));
         Assert.Throws<VaultException.DestinationExists>(
@@ -63,9 +67,9 @@ public sealed class CreateOutcomeTests
     }
 
     /// <summary>#1140 (owner decision D9): the caveat is core's
-    /// <c>CreatePublishedUnindexed</c> event, rendered: the same bytes the
-    /// shell composed before (so the facts above did not move), core's
-    /// medium priority, and no shell source spells the sentence any more.
+    /// <c>CreatePublishedUnindexed</c> event, rendered (its reason closed
+    /// once since plan 47 CB-14, #1395), core's medium priority, and no
+    /// shell source spells the sentence any more.
     /// The mac twin is <c>A11yCorpusCensusTests
     /// .testTheUnindexedCreateCaveatRowIsConsumedByMacAndWindows</c>.</summary>
     [Fact]
