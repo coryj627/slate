@@ -4632,6 +4632,66 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>The red team's m3 (#1955's CB-9a item 3, the read-back arm).
+    /// A property set from A's header lands and then faults, with B, A's
+    /// split peer, dirty, so the failure's read-back reconcile marks the
+    /// dirty tabs stale, and the announcer throws at the property sentence
+    /// each is told. The read-back still refreshes the header to the bytes
+    /// the failed write left on disk. Red today: ReconcileAfterReadBack runs
+    /// its reconcile, the header refresh and NotePersisted as plain
+    /// statements, so the throw skips the refresh.</summary>
+    [Fact]
+    public void AFailedPropertyWritesReadBackStillRefreshesTheHeaderWhenADirtyTabsSentenceThrows() => RunSta(() =>
+    {
+        using var peers = new Peers("read-back-refresh");
+        var held = new HeldWork(hook =>
+        {
+            peers.A.PropertyWriteHookForTests = hook;
+            peers.B.PropertyWriteHookForTests = hook;
+        });
+        peers.A.PropertyWriteFaultForTests = () => throw new InvalidOperationException("the write landed and then failed (test seam)");
+        peers.B.PropertyWriteFaultForTests = peers.A.PropertyWriteFaultForTests;
+        int thrown = 0;
+        peers.H.BeforeAnnounce = spoken =>
+        {
+            if (IsThePropertySentence(spoken))
+            {
+                thrown++;
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            PropertyRowViewModel status = peers.Row("status");
+            status.EditorText = "done";
+            Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            peers.H.PumpUntil(() => held.Entered, "premise: the write reaching its hold before its core call");
+            peers.B.Text = NoteEdited;
+            Assert.True(peers.A.IsDirty && peers.B.IsDirty, "premise: the peers are not both dirty");
+            held.Release();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the write's completion");
+            Assert.Contains("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
+            Assert.True(peers.A.IsExternallyStale && peers.B.IsExternallyStale, "premise: the dirty peers were not marked stale");
+            Assert.True(thrown > 0, "premise: no property sentence was told");
+            string hash = peers.H.Session.ReadNoteParts("a.md").ContentHash;
+            peers.H.PumpUntil(
+                () => !peers.Properties.IsLoading && peers.Properties.ContentHash == hash,
+                "the header refreshing to the bytes the failed write left");
+        }
+        finally
+        {
+            peers.H.BeforeAnnounce = null;
+            peers.A.PropertyWriteFaultForTests = null;
+            peers.B.PropertyWriteFaultForTests = null;
+            peers.A.PropertyWriteHookForTests = null;
+            peers.B.PropertyWriteHookForTests = null;
+            peers.H.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
     // ---- A tag edit in the notes' chains (plan 47 CB-9b, Design 4) ------------
 
     /// <summary>Design 4 (CD5(a); M3). A save of an open note is admitted and
