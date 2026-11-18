@@ -750,7 +750,8 @@ public sealed class SaveChainAdmissionTests
                     }
                     spoken.Add(line);
                 }));
-                h.PumpUntil(
+                PumpPastTheAnnouncersFailure(
+                    h,
                     () => thrown && !a.IsTaskToggleInFlight && h.Workspace.SavesIdle,
                     "the landed toggle's publication after its reconcile sentence threw");
             }
@@ -792,7 +793,8 @@ public sealed class SaveChainAdmissionTests
         try
         {
             h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
-            h.PumpUntil(
+            PumpPastTheAnnouncersFailure(
+                h,
                 () => thrown && !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle,
                 "the landed toggle's completion after its reconcile sentence threw");
         }
@@ -915,6 +917,31 @@ public sealed class SaveChainAdmissionTests
         tab.EditorDocument.UndoStack.Undo();
         Assert.Contains("- [ ] the task", tab.EditorDocument.Text, StringComparison.Ordinal);
     });
+
+    /// <summary>Plan 47 CB-14: pumps until <paramref name="condition"/> holds,
+    /// through the announcer's injected failure. A toggle's publication runs
+    /// on the dispatcher and attempts every step before it rethrows the
+    /// first failure (<c>AdmittedPublication.RunEvery</c>), so the failure
+    /// surfaces through the pump once, after the steps ran; it must surface
+    /// exactly once.</summary>
+    private static void PumpPastTheAnnouncersFailure(Vault h, Func<bool> condition, string what)
+    {
+        int surfaced = 0;
+        while (true)
+        {
+            try
+            {
+                h.PumpUntil(condition, what);
+                break;
+            }
+            catch (System.Runtime.InteropServices.COMException exception)
+                when (exception.Message == "the announcer failed (test seam)" && surfaced == 0)
+            {
+                surfaced++;
+            }
+        }
+        Assert.Equal(1, surfaced);
+    }
 
     /// <summary>Plan 47 CB-14: a vault whose one note holds a task, open in two
     /// tabs side by side (a split), the first tab active. The note's name is
