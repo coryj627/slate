@@ -4537,6 +4537,74 @@ public sealed class SaveChainAdmissionTests
         Assert.True(summary >= 0 && closed > summary, $"expected the apply's summary and then the close's sentence; heard {heard}");
     }
 
+    /// <summary>Design 3 on the application close's path (the plan lead's
+    /// word of 2026-11-17): MainWindow.Window_Closing calls
+    /// VaultLifecycleViewModel.PrepareForApplicationClose, whose teardown
+    /// (TryCloseWorkspace with the ApplicationClose route) runs the same
+    /// SettleSaves as Close Vault. On the real lifecycle, an apply over three
+    /// notes is held on its worker before its core call when the application
+    /// closes. The settle cancels the apply's token before it pumps: the
+    /// hold, let go from inside the settle's frame, finds it cancelled, so
+    /// core renames nothing. The apply's worker has ended by the time the
+    /// close path returns, and the notes' bytes do not change after it
+    /// returns, through the lifecycle's own teardown. Red by mutation: the
+    /// settle not cancelling the admitted applies.</summary>
+    [Fact]
+    public void TheApplicationCloseDuringAnApplyCancelsItInItsSettleAndEndsItsWorkerBeforeItReturns()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host(VaultCloseDecision.Discard);
+        string[] notes = ["p0.md", "p1.md", "p2.md"];
+        foreach (string note in notes)
+        {
+            File.WriteAllText(Path.Combine(host.Root, note), $"---\nstatus: draft\n---\n\n{note}.\n");
+        }
+        Task rescan = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => rescan.IsCompleted, TimeSpan.FromSeconds(60)), "premise: the rescan never finished");
+        host.Workspace.OpenBulkRenameSheet(synchronousForTests: false);
+        BulkRenameViewModel sheet = Assert.IsType<BulkRenameViewModel>(host.Workspace.BulkRenameSheet);
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => sheet.CanApply, TimeSpan.FromSeconds(60)), "premise: the preview never armed the apply");
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        bool? cancelledInTheSettle = null;
+        try
+        {
+            host.Announced.Clear();
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => held.Entered, TimeSpan.FromSeconds(10)),
+                "premise: the apply's worker never reached its hold");
+            CancelToken token = sheet.InFlightCancelForTests!;
+            Assert.False(token.IsCancelled(), "premise: the apply's token was cancelled before the close");
+            // Queued now, so it runs only inside the close's own pumping.
+            _ = host.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                cancelledInTheSettle = token.IsCancelled();
+                held.Release();
+            }));
+
+            Assert.True(host.Lifecycle.PrepareForApplicationClose(), $"the application close was refused: {host.Lifecycle.StatusText}");
+            Assert.True(
+                cancelledInTheSettle == true,
+                $"the apply's token was not cancelled before the settle let its worker go (cancelled: {cancelledInTheSettle})");
+            Assert.True(sheet.WhenWorkDrained().IsCompleted, "the application close returned while the apply's worker still ran");
+            A11yEvent.RenameSummary spoken = Assert.Single(host.Announced.Select(item => item.Event).OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(0u, spoken.Renamed);
+            string[] atReturn = [.. notes.Select(note => File.ReadAllText(Path.Combine(host.Root, note)))];
+            Assert.All(atReturn, text => Assert.Contains("status: draft", text, StringComparison.Ordinal));
+
+            host.DisposeLifecycle();
+            string[] afterTeardown = [.. notes.Select(note => File.ReadAllText(Path.Combine(host.Root, note)))];
+            Assert.Equal(atReturn, afterTeardown);
+        }
+        finally
+        {
+            held.Release();
+        }
+        held.AssertHeldUntilReleased();
+    }
+
     // ---- #1955's CB-9a items 1 and 3 (plan 47 CB-9b, Design 8) ----------------
 
     /// <summary>Design 8, #1955's CB-9a item 3 (all three parts). A property
