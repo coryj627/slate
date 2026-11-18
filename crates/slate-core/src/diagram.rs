@@ -256,9 +256,11 @@ impl Default for DiagramBudgets {
 /// (#1580): `what` is `"diagram"` (this render ran past its budget),
 /// `"note"` (the note's diagrams used theirs), `"busy"` (earlier renders
 /// are still running past theirs, so this one was not started),
-/// `"image"` (an SVG preview's decode ran past its budget, #1581) or
+/// `"image"` (an SVG preview's decode ran past its budget, #1581),
 /// `"image-busy"` (earlier decodes are still running past theirs, so this
-/// one was not started). Both hosts show it verbatim as the failed state's
+/// one was not started) or `"note-images"` (the SVG decodes of one view of
+/// a note used their shared deadline, so this one was cut short or never
+/// started, #1635). Both hosts show it verbatim as the failed state's
 /// reason. An unknown `what` reads as `"diagram"`.
 pub fn render_time_exceeded_message(what: &str, seconds: u64) -> String {
     let unit = if seconds == 1 { "second" } else { "seconds" };
@@ -275,6 +277,9 @@ pub fn render_time_exceeded_message(what: &str, seconds: u64) -> String {
         "image-busy" => format!(
             "Image not shown: earlier images are still decoding past their \
              {seconds}-second budget."
+        ),
+        "note-images" => format!(
+            "Image not shown: this note's images used their {seconds}-second decoding budget."
         ),
         _ => format!(
             "Diagram not drawn: rendering took longer than {seconds} {unit}. The source follows."

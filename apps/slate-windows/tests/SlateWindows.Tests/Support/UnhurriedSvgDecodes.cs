@@ -17,6 +17,12 @@ namespace SlateWindows.Tests;
 /// neither. The facts about the budget set their own per thread
 /// (<see cref="EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests"/>)
 /// or stub the wait.
+/// For the same reason (#1635) the process's own decoder slots remember no
+/// timeout, so one slow decode of the 8x8 test SVG several files share does
+/// not refuse it in every later fact, and a projection's decode deadline is
+/// open, so two slow real decodes in one fact do not cut the second. The
+/// facts about them set their own slots or seams, and two put the app's own
+/// configuration back for one fact each (<c>UnhurriedSvgDecodesTests</c>).
 /// </summary>
 internal static class UnhurriedSvgDecodes
 {
@@ -30,9 +36,14 @@ internal static class UnhurriedSvgDecodes
         TimeSpan.FromMilliseconds((long)Milliseconds * decodes) + TimeSpan.FromSeconds(10);
 
     /// <summary>Runs once, as the test assembly loads, before xUnit runs any
-    /// fact.</summary>
+    /// fact. A fact that changes one of these process-wide seams calls it
+    /// again in a <c>finally</c> to put them back.</summary>
     [ModuleInitializer]
     [SuppressMessage("Usage", "CA2255", Justification = "The default must precede every decode the suite makes.")]
-    internal static void LetEveryRealDecodeFinish() =>
+    internal static void LetEveryRealDecodeFinish()
+    {
         EditorInteractionCoordinator.SvgDecodeBudgetDefaultMillisecondsForTests = Milliseconds;
+        EditorInteractionCoordinator.SvgDecodeProcessMemoryOffForTests = true;
+        EditorInteractionCoordinator.SvgProjectionDecodeDeadlineDefaultMillisecondsForTests = int.MaxValue;
+    }
 }

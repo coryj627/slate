@@ -1725,13 +1725,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     {
         // The popover gets its own per-card decoded budget (round 5):
         // a single card of many tiny nested images must not allocate
-        // unbounded bitmaps here either.
+        // unbounded bitmaps here either. Its SVG decodes share one deadline
+        // (#1635), as a card's nested images decode one after another.
         long spent = 0;
         EditorEmbedPreviewNode root = BuildEmbedNode(
             resolution,
             depth: 0,
             cost => TryReserveDecodedBytes(
-                ref spent, cost, MaxDecodedImageBytesPerCard));
+                ref spent, cost, MaxDecodedImageBytesPerCard),
+            SvgDecodeDeadline.ForProjection());
         string body = string.Empty;
         if (truncated)
         {
@@ -3187,19 +3189,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         string? mime,
         Func<long, bool>? reserveDecodedBytes,
         out bool budgetSpent,
-        out string? failureReason)
-    {
-        budgetSpent = false;
-        failureReason = null;
-        if (bytes.Length == 0 || bytes.Length > MaxPreviewImageBytes)
-        {
-            return null;
-        }
-
-        return IsSvgImage(bytes, mime)
-            ? DecodeSvgImage(bytes, reserveDecodedBytes, ref budgetSpent, out failureReason)
-            : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
-    }
+        out string? failureReason) =>
+        DecodeImage(bytes, mime, reserveDecodedBytes, deadline: null, out budgetSpent, out failureReason);
 
     /// <summary>The budgeted decode as one image of a projection (#1635):
     /// an SVG waits no longer than what is left of
@@ -3211,8 +3202,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         Func<long, bool>? reserveDecodedBytes,
         SvgDecodeDeadline? deadline,
         out bool budgetSpent,
-        out string? failureReason) =>
-        DecodeImage(bytes, mime, reserveDecodedBytes, out budgetSpent, out failureReason);
+        out string? failureReason)
+    {
+        budgetSpent = false;
+        failureReason = null;
+        if (bytes.Length == 0 || bytes.Length > MaxPreviewImageBytes)
+        {
+            return null;
+        }
+
+        return IsSvgImage(bytes, mime)
+            ? DecodeSvgImage(bytes, reserveDecodedBytes, deadline, ref budgetSpent, out failureReason)
+            : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
+    }
 
     /// <summary>Whether <see cref="DecodeImage(byte[], string?, Func{long, bool}?, out bool, out string?)"/>
     /// takes these bytes down its SVG path: the only decode that can wait
@@ -3252,9 +3254,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     {
         public int Abandoned;
         public int Live;
+
+        /// <summary>The decodes these slots saw run out their whole budget
+        /// (#1635): the process's own memory lives as long as the
+        /// process.</summary>
+        public readonly SvgDecodeTimeoutMemory TimeoutMemory = new();
     }
 
     private static readonly SvgDecodeSlots s_svgDecodeSlots = new();
+
+    /// <summary>#1635 test seam: the process's own decoder slots, whose
+    /// counts a fact that decodes on them waits back to.</summary>
+    internal static SvgDecodeSlots ProcessSvgDecodeSlotsForTests => s_svgDecodeSlots;
 
     private static string? s_svgDecodeTimeExceededMessage;
 
@@ -3361,6 +3372,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         internal SvgDecodeDeadline(int milliseconds) =>
             _left = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
+
+        /// <summary>A new projection's deadline: the app's 20 seconds, or a
+        /// test's, read on the thread that makes it.</summary>
+        internal static SvgDecodeDeadline ForProjection() => new(
+            SvgProjectionDecodeDeadlineMillisecondsForTests
+            ?? SvgProjectionDecodeDeadlineDefaultMillisecondsForTests
+            ?? (SvgProjectionDecodeDeadlineSeconds * 1000));
 
         internal TimeSpan Left => _left;
 
@@ -3472,11 +3490,33 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private static ImageSource? DecodeSvgImage(
         byte[] bytes,
         Func<long, bool>? reserveDecodedBytes,
+        SvgDecodeDeadline? deadline,
         ref bool budgetSpent,
         out string? failureReason)
     {
         failureReason = null;
         SvgDecodeSlots slots = SvgDecodeSlotsForTests ?? s_svgDecodeSlots;
+        // #1635 (CD19): the memory first, so a remembered image says what it
+        // said the first time whatever was decoded before it. It takes no
+        // slot, starts no thread and charges no deadline.
+        SvgDecodeTimeoutMemory? memory =
+            SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
+                ? null
+                : slots.TimeoutMemory;
+        string? key = memory is null ? null : SvgDecodeTimeoutMemory.KeyOf(bytes);
+        if (key is not null && memory!.Contains(key))
+        {
+            HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedRemembered, $"bytes={bytes.Length}");
+            failureReason = SvgDecodeTimeExceededMessage;
+            return null;
+        }
+        // Then the projection's deadline, then the cap: core's order.
+        if (deadline is { IsSpent: true })
+        {
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
+            failureReason = SvgProjectionDecodeDeadlineMessage;
+            return null;
+        }
         if (Volatile.Read(ref slots.Abandoned) >= MaxAbandonedSvgDecodes
             || !TryTakeLiveSlot(slots))
         {
@@ -3545,6 +3585,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             IsBackground = true,
             Name = "Slate SVG decode",
         };
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             decoder.Start();
@@ -3555,50 +3596,81 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             finished.Dispose();
             throw;
         }
-        // A plain Win32 wait: Thread.Join and WaitHandle.WaitOne pump COM
-        // and SendMessage on an STA caller, and the reading view decodes on
-        // the dispatcher, where a pumped UI Automation request could re-enter
-        // a half-built document. The decode was synchronous before; it stays
-        // synchronous, for at most its budget. Past it the caller stops
-        // waiting (#1581). Any other result is a failed wait, logged, and
-        // Join still keeps the results from being read before the decode
-        // ends.
-        uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests
-            ?? SvgDecodeBudgetDefaultMillisecondsForTests
-            ?? (SvgDecodeBudgetSeconds * 1000));
-        uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
-            ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, budget);
-        if (waited == NativeMethods.WaitTimeout)
+        // What the decode costs its projection's deadline, set once the wait
+        // returns and charged in the finally, so a decode that throws is
+        // charged too.
+        TimeSpan? charge = null;
+        try
         {
-            // Counted before the decode is marked abandoned, so the
-            // decoder's release can only follow the count.
-            Interlocked.Increment(ref slots.Abandoned);
-            if (TryAbandon(ref state))
+            // A plain Win32 wait: Thread.Join and WaitHandle.WaitOne pump COM
+            // and SendMessage on an STA caller. No production caller waits on
+            // the dispatcher since #1634, but a caller may still be an STA,
+            // where a pumped UI Automation request could re-enter what it is
+            // building. The decode was synchronous before; it stays
+            // synchronous, for at most its budget, or what is left of its
+            // projection's deadline when that is shorter (#1635). Past it the
+            // caller stops waiting (#1581). Any other result is a failed
+            // wait, logged, and Join still keeps the results from being read
+            // before the decode ends.
+            uint budget = (uint)(SvgDecodeBudgetMillisecondsForTests
+                ?? SvgDecodeBudgetDefaultMillisecondsForTests
+                ?? (SvgDecodeBudgetSeconds * 1000));
+            uint wait = deadline?.WaitFor(budget) ?? budget;
+            bool cut = wait < budget;
+            uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
+                ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, wait);
+            charge = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            if (waited == NativeMethods.WaitTimeout)
             {
-                HostLog.WriteDetail(
-                    HostDiagnosticEvent.SvgDecodeAbandoned,
-                    $"bytes={bytes.Length}, budgetMs={budget}");
-                failureReason = SvgDecodeTimeExceededMessage;
+                // Counted before the decode is marked abandoned, so the
+                // decoder's release can only follow the count.
+                Interlocked.Increment(ref slots.Abandoned);
+                if (TryAbandon(ref state))
+                {
+                    // A timed-out wait costs what it was given.
+                    charge = TimeSpan.FromMilliseconds(wait);
+                    HostLog.WriteDetail(
+                        HostDiagnosticEvent.SvgDecodeAbandoned,
+                        cut
+                            ? $"bytes={bytes.Length}, budgetMs={wait}, cutByDeadline"
+                            : $"bytes={bytes.Length}, budgetMs={wait}");
+                    if (cut)
+                    {
+                        // It never had its own budget, so it is not
+                        // remembered and is not told it took too long; the
+                        // deadline is spent.
+                        deadline!.Spend();
+                        failureReason = SvgProjectionDecodeDeadlineMessage;
+                        return null;
+                    }
+                    // Only the caller writes the memory, and only here.
+                    memory?.Remember(key!);
+                    failureReason = SvgDecodeTimeExceededMessage;
+                    return null;
+                }
+                // It finished first, after its event was set: read it as an
+                // ordinary end.
+                Interlocked.Decrement(ref slots.Abandoned);
+            }
+            else if (waited != NativeMethods.WaitObject0)
+            {
+                HostLog.Write(HostDiagnosticEvent.SvgDecodeWaitFailed);
+                decoder.Join();
+            }
+            finished.Dispose();
+            failure?.Throw();
+            budgetSpent = spent;
+            if (png is null)
+            {
                 return null;
             }
-            // It finished first, after its event was set: read it as an
-            // ordinary end.
-            Interlocked.Decrement(ref slots.Abandoned);
+            bool alreadyReserved = false;
+            return DecodeRasterImage(png, reserveDecodedBytes: null, ref alreadyReserved);
         }
-        else if (waited != NativeMethods.WaitObject0)
+        finally
         {
-            HostLog.Write(HostDiagnosticEvent.SvgDecodeWaitFailed);
-            decoder.Join();
+            deadline?.Charge(charge ?? System.Diagnostics.Stopwatch.GetElapsedTime(started));
         }
-        finished.Dispose();
-        failure?.Throw();
-        budgetSpent = spent;
-        if (png is null)
-        {
-            return null;
-        }
-        bool alreadyReserved = false;
-        return DecodeRasterImage(png, reserveDecodedBytes: null, ref alreadyReserved);
     }
 
     /// <summary>Takes one of the process's decoder slots, or refuses at the

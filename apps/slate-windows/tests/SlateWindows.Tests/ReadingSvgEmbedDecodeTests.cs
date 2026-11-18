@@ -158,6 +158,98 @@ public sealed class ReadingSvgEmbedDecodeTests
         });
     }
 
+    /// <summary>What #1908's fact pinned that still holds: a decode refused
+    /// as busy never started, so the next refresh decodes it, and the
+    /// decode's outcome is part of the projection's identity, so that refresh
+    /// rebuilds the card with the image where an unchanged note alone would
+    /// keep the busy sentence.</summary>
+    [Fact]
+    public void ARefreshAfterABusyRefusalShowsTheImage()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-busy-retry");
+        File.WriteAllText(Path.Combine(fixture.Root, "pic.svg"), Svg);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
+        StaThread.Run(() =>
+        {
+            using VaultSession session = Scanned(fixture.Root);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots
+            {
+                Abandoned = EditorInteractionCoordinator.MaxAbandonedSvgDecodes,
+            };
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                FlowDocument opened = reading.Document!;
+                Assert.Equal(new[] { Busy }, CardSentences(opened, "pic.svg"));
+
+                // The body reserves nothing, so the two projections differ in
+                // the decode's outcome alone.
+                Volatile.Write(ref slots.Abandoned, 0);
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = (_, _) => TinyPng;
+                reading.Refresh();
+
+                FlowDocument document = reading.Document!;
+                Assert.NotSame(opened, document);
+                Assert.Equal(new[] { string.Empty }, CardSentences(document, "pic.svg"));
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+            }
+        });
+    }
+
+    /// <summary>#1635: a projection whose refresh runs on a worker reads the
+    /// process's own deadline there, where no fact's per-thread seam
+    /// reaches: with it spent, the card says the projection's sentence and
+    /// the SVG never enters the decoder.</summary>
+    [Fact]
+    public void ABackgroundRefreshReadsTheProcessDeadline()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-process-deadline");
+        File.WriteAllText(Path.Combine(fixture.Root, "pic.svg"), Svg);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
+        EditorInteractionCoordinator.SvgProjectionDecodeDeadlineDefaultMillisecondsForTests = 0;
+        try
+        {
+            StaThread.RunPumped(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: true);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(
+                        () => !reading.IsLoading && reading.Document is not null,
+                        UnhurriedSvgDecodes.LandingWait()),
+                    "the projection never landed");
+
+                Assert.Equal(new[] { ProjectionSpent }, CardSentences(reading.Document!, "pic.svg"));
+            });
+        }
+        finally
+        {
+            UnhurriedSvgDecodes.LetEveryRealDecodeFinish();
+        }
+    }
+
     /// <summary>#1635 (CD19): a reading projection's SVG decodes share a
     /// deadline. Each waits for its own budget or what is left of the
     /// deadline, whichever is shorter; once the deadline is spent the rest

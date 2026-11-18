@@ -590,6 +590,62 @@ public sealed class W2EditorInteractionRedTeamTests
         WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
     }
 
+    /// <summary>#1635: a decode refused while two abandoned ones run never
+    /// started, so it is not remembered; once they end, the same bytes
+    /// decode.</summary>
+    [Fact]
+    public void SvgPreview_ABusyRefusalIsNotRemembered()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots
+        {
+            Abandoned = EditorInteractionCoordinator.MaxAbandonedSvgDecodes,
+        };
+        byte[] svg = Encoding.UTF8.GetBytes(FilledSvg("olive"));
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: null,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? refused));
+                Assert.Equal(EditorInteractionCoordinator.SvgDecodeBusyMessage, refused);
+
+                Volatile.Write(ref slots.Abandoned, 0);
+                Assert.NotNull(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                Assert.Null(reason);
+            });
+    }
+
+    /// <summary>#1635 (CD19): the memory keeps the newest 256 timeouts. The
+    /// 257th drops the oldest, and remembering one already held drops
+    /// nothing. Its key is the bytes' SHA-256 in upper-case hex, so two
+    /// copies of the same bytes are one key.</summary>
+    [Fact]
+    public void SvgPreview_TheTimeoutMemoryKeepsTheNewest256()
+    {
+        Assert.Equal(256, EditorInteractionCoordinator.MaxRememberedSvgDecodeTimeouts);
+        var memory = new EditorInteractionCoordinator.SvgDecodeTimeoutMemory();
+        static string Key(int index) =>
+            EditorInteractionCoordinator.SvgDecodeTimeoutMemory.KeyOf(Encoding.UTF8.GetBytes(FilledSvg($"#{index:x6}")));
+        for (int index = 1; index <= 257; index++)
+        {
+            memory.Remember(Key(index));
+        }
+        Assert.Equal(256, memory.Count);
+        Assert.False(memory.Contains(Key(1)));
+        Assert.True(memory.Contains(Key(2)));
+        Assert.True(memory.Contains(Key(257)));
+
+        memory.Remember(Key(2));
+        Assert.Equal(256, memory.Count);
+        Assert.True(memory.Contains(Key(2)));
+        Assert.True(memory.Contains(Key(3)));
+
+        string key = Key(7);
+        Assert.Matches("^[0-9A-F]{64}$", key);
+        Assert.Equal(key, Key(7));
+    }
+
     /// <summary>#1635: only a decode abandoned at its own whole budget is
     /// remembered. An ordinary failure, a wait that fails, a decode that
     /// finishes as its budget ends and a wait the projection's deadline cut

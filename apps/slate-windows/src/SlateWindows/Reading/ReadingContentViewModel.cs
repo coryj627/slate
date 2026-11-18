@@ -1040,6 +1040,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         long imagePool = FetchedEmbedImageByteBudget;
         long svgPixels = ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
             ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
+        // #1635 (CD19): the projection's SVG decodes share one deadline, so a
+        // note of slow images costs a refresh at most its 20 seconds of
+        // waiting; past it the rest say so without entering the decoder.
+        EditorInteractionCoordinator.SvgDecodeDeadline svgDeadline =
+            EditorInteractionCoordinator.SvgDecodeDeadline.ForProjection();
         foreach (string key in keys)
         {
             ThrowIfCancelled(cancel);
@@ -1138,6 +1143,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                             reserved += pixels;
                             return true;
                         },
+                        svgDeadline,
                         out bool budgetSpent,
                         out string? decodeFailure);
                     imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent, reserved);
