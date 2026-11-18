@@ -1322,6 +1322,11 @@ internal sealed partial class WorkspaceViewModel
     private static bool WriteMayHaveLanded(string reason) =>
         reason.Contains("saved but not indexed:", StringComparison.Ordinal);
 
+    /// <summary>Plan 47 CB-9b test seam (Codex round 4): runs just before a
+    /// reconcile from a read reads the note at the path it is given. A fact
+    /// holds the file there so the read fails.</summary>
+    internal Action<string>? ReadBackHookForTests { get; set; }
+
     /// <summary>Plan 47 CB-9b: a note's open Markdown tabs reconciled from a
     /// read of the disk, by the property write's rule (a clean tab takes the
     /// bytes with no undo step back, a dirty tab hears the property
@@ -1339,6 +1344,7 @@ internal sealed partial class WorkspaceViewModel
         IdentifiedText read;
         try
         {
+            ReadBackHookForTests?.Invoke(path);
             read = _session.ReadTextIdentified(path);
         }
         catch (VaultException)

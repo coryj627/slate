@@ -5172,6 +5172,102 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 4. As above, core writes the note and fails its
+    /// index commit, and now the read that would bring the note's tabs up to
+    /// the landed bytes fails too: the file is held open with no sharing just
+    /// before it. The tabs cannot take the bytes, so each is marked stale and
+    /// the reader hears "Properties changed on disk, but the editor no longer
+    /// matches it. Save or reopen the note to reconcile." once for the note
+    /// (Call 2(b)'s occasion: a re-read that fails); the summary is still
+    /// spoken, and the tab's next save is refused, so nothing the write left
+    /// is overwritten. Red today: the failed read leaves both tabs clean on
+    /// their old bytes, silently.</summary>
+    [Theory]
+    [InlineData("tag edit")]
+    [InlineData("bulk rename")]
+    public void AWriteWhoseIndexCommitAndReadBackBothFailMarksTheNotesTabsStaleAndSaysSo(string route) => RunSta(() =>
+    {
+        const string Faulted = "faulted-readback.md";
+        using var h = new Vault("write-landed-unread", (Faulted, Note));
+        WorkspaceTabViewModel a = h.OpenNow(Faulted);
+        WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+        WorkspaceTabViewModel b = OpenSplitPeer(h, Faulted);
+        h.Workspace.Activate(groupA, a);
+        FilesSidebarViewModel? sidebar = null;
+        BulkRenameViewModel? sheet = null;
+        if (route == "tag edit")
+        {
+            sidebar = h.Sidebar();
+            CheckForATagEdit(h, sidebar, Faulted);
+        }
+        else
+        {
+            sheet = ArmedBulkRename(h);
+        }
+        string expected = route == "tag edit" ? "probe" : "state: draft";
+        FileStream? hold = null;
+        h.Workspace.ReadBackHookForTests = path =>
+            hold ??= new FileStream(Path.Combine(h.Root, path), FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            using (EnvFaultLock.Acquire())
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-readback");
+                try
+                {
+                    if (sidebar is not null)
+                    {
+                        sidebar.AddTagCommand.Execute(null);
+                        h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+                    }
+                    else
+                    {
+                        Assert.True(sheet!.Apply(), "premise: the apply was refused");
+                        h.PumpUntil(
+                            () => !sheet.WorkInFlight && h.Workspace.SavesIdle
+                                && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }),
+                            "the apply");
+                    }
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+                }
+            }
+            Assert.True(hold is not null, "premise: the read back never ran");
+            hold.Dispose();
+            hold = null;
+            string disk = h.Read(Faulted);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+            {
+                Assert.True(tab.IsExternallyStale, $"{name} was left clean on its old bytes after the read back failed");
+                Assert.Equal(Note, tab.Text);
+            }
+            _ = Assert.Single(h.Events, IsThePropertySentence);
+            if (route == "tag edit")
+            {
+                Assert.Equal(1, TagSummaries(h));
+            }
+            else
+            {
+                _ = Assert.Single(h.Events, e => e is A11yEvent.RenameSummary { Applied: true });
+            }
+
+            a.Text = Note + "An edit after the read back failed.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the tab's next save");
+            Assert.False(save.Result, "the next save of a tab whose read back failed was not refused");
+            Assert.Equal(disk, h.Read(Faulted));
+        }
+        finally
+        {
+            hold?.Dispose();
+            h.Workspace.ReadBackHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 4 (the red team's finding 4). The index read after the
     /// core call fails: the open tabs on the checked notes are reconciled
     /// from a read of the disk instead, core's summary is still spoken, and
