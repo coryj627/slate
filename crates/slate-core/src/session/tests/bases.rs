@@ -2407,6 +2407,58 @@ fn save_query_as_base_requires_base_extension_but_accepts_case_insensitively() {
 }
 
 #[test]
+fn export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base() {
+    // Plan 47 CB-9b (#1889; CD5(d)): the export writes the file at the path
+    // the reader names with no compare-and-swap, so a path naming a note
+    // would replace the note's text. It refuses any path that does not end
+    // in `.base`, as `save_query_as_base` does, and accepts the extension in
+    // any case.
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Notes/a.md", b"# A\n\nThe note's own text.\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let id = session
+        .save_query(
+            "Reading",
+            None,
+            &notes_query_json(),
+            SavedQuerySourceSyntax::Builder,
+        )
+        .unwrap();
+
+    let refused = session.export_saved_query_as_base(&id, "Notes/a.md");
+    assert!(
+        matches!(
+            &refused,
+            Err(VaultError::InvalidArgument { message }) if message == "Base paths must end in .base"
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        session.read_text("Notes/a.md").unwrap(),
+        "# A\n\nThe note's own text.\n"
+    );
+
+    assert!(matches!(
+        session.export_saved_query_as_base(&id, "c"),
+        Err(VaultError::InvalidArgument { .. })
+    ));
+    assert!(session.read_text("c").is_err());
+
+    session
+        .export_saved_query_as_base(&id, "Queries/Upper.BASE")
+        .unwrap();
+    assert!(
+        session
+            .read_text("Queries/Upper.BASE")
+            .unwrap()
+            .contains("views:\n")
+    );
+}
+
+#[test]
 fn save_query_as_base_refuses_existing_target_and_preserves_bytes() {
     let (tmp, session) = make_vault(|provider| {
         provider
