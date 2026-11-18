@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -285,19 +286,22 @@ internal sealed class LayoutItemsControl : ItemsControl
         FocusableProperty.OverrideMetadata(
             typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
 
-    /// <summary>#1677, #1678: the host's peer (once a client made one) reads its items
-    /// again each time its containers are generated, so a list rebuilt while the host was
-    /// collapsed (the recent vaults, republished while a vault opens) publishes its new
-    /// buttons, not the old ones' stops. After layout: a container is generated before its
-    /// template makes the stop it wraps, and an item peer read then has no children.</summary>
+    /// <summary>#1677, #1678: the host's peer reads its items again after each generation of
+    /// its containers, so a list rebuilt while the host was collapsed (the recent vaults,
+    /// republished while a vault opens) publishes its new buttons, not the old ones' stops.
+    /// A generation queues that reset whether or not a client has made the peer yet, and the
+    /// reset finds the peer when it runs: a peer made after a generation and read before its
+    /// layout reads the new containers before their templates, and only this reset reads them
+    /// again. Containers are generated for an Add and for every Reset (a Clear, a refill, a
+    /// swapped source) on every host whose panel does not virtualize, which is every site
+    /// today (the default StackPanel or the WeightedSplitPanel). A removal, a replace and a
+    /// move generate none: <see cref="OnItemsChanged"/> queues their reset (#1860).</summary>
     public LayoutItemsControl() =>
         ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             if (ItemContainerGenerator.Status == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
             {
-                _ = Dispatcher.InvokeAsync(
-                    () => UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache(),
-                    System.Windows.Threading.DispatcherPriority.Loaded);
+                QueuePeerReset(onlyWithAPeer: false);
             }
         };
 
@@ -305,6 +309,63 @@ internal sealed class LayoutItemsControl : ItemsControl
     {
         get => (bool)GetValue(IsStructuralProperty);
         set => SetValue(IsStructuralProperty, value);
+    }
+
+    /// <summary>Whether a reset of the host peer's children is queued and has not run.</summary>
+    private bool _peerResetQueued;
+
+    /// <summary>#1860: a removal, a replace and a move generate no containers (the panel
+    /// drops or moves the container at once, and a replace relinks the old container to
+    /// the new item), so the reset on ContainersGenerated never ran for them, and nothing
+    /// else rebuilt the host peer's children until a client had connected the window: a host
+    /// read in process kept a removed item's peer, an empty element where the item was, and
+    /// a replace's old item or a move's old order. The panel has applied the change by the
+    /// time this runs. Queued, not done here: done here, a burst of removals would rebuild
+    /// the children once per change, where one queued reset serves the whole burst and the
+    /// ContainersGenerated resets beside it; the item peers' re-reads (queued at Send) would
+    /// also run before a pending layout gives a new container its template. Only for a host
+    /// whose peer exists: a host no client has read has nothing cached, and a peer made later
+    /// reads containers this change did not create (one a pending generation created has that
+    /// generation's reset).</summary>
+    protected override void OnItemsChanged(NotifyCollectionChangedEventArgs e)
+    {
+        base.OnItemsChanged(e);
+        // Not Reset: on every host whose panel does not virtualize (every site today: the
+        // default StackPanel or the WeightedSplitPanel) a Reset regenerates its containers
+        // and so resets through ContainersGenerated, collapsed or not, and a host with no
+        // panel lists no item peers. Not Add: it generates containers too.
+        if (e.Action is NotifyCollectionChangedAction.Remove
+            or NotifyCollectionChangedAction.Replace
+            or NotifyCollectionChangedAction.Move)
+        {
+            QueuePeerReset(onlyWithAPeer: true);
+        }
+    }
+
+    /// <summary>Queues one reset of the host peer's children at Loaded priority, so it runs
+    /// after layout: a container is generated before its template makes the stop it wraps,
+    /// and an item peer read then has no children. One reset serves every change made before
+    /// it runs (a burst of removals, a Clear and its refill); it looks the peer up when it
+    /// runs, so a peer made after the change is reset too. <paramref name="onlyWithAPeer"/>
+    /// skips the post for a host whose peer no client has made (a removal, a replace or a
+    /// move; a generation posts either way, see the constructor). The flag clears before the
+    /// reset: a change made while the reset runs then queues a reset of its own, which a flag
+    /// cleared after the reset would drop.</summary>
+    private void QueuePeerReset(bool onlyWithAPeer)
+    {
+        if (_peerResetQueued || (onlyWithAPeer && UIElementAutomationPeer.FromElement(this) is null))
+        {
+            return;
+        }
+
+        _peerResetQueued = true;
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                _peerResetQueued = false;
+                UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
+            },
+            System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
@@ -409,8 +470,12 @@ internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
         && ReferenceEquals(readFrom, Container);
 
     /// <summary>Remembers the container only when it was laid out: a container generated
-    /// moments ago has no template yet, so a read then finds no children, and the next
-    /// rebuild of the host's children (the Loaded-priority reset queues one) reads again.</summary>
+    /// moments ago has no template yet, so a read then finds no children, and the reset that
+    /// container's generation queued (at Loaded priority, whether or not the host's peer
+    /// existed then; <see cref="LayoutItemsControl"/>'s constructor) rebuilds the host's
+    /// children after layout and reads it again. Laid out is read as arrange-valid: a new
+    /// container in a window is arrange-invalid until its first layout, while outside a
+    /// window a container never arranged reads arrange-valid, which no app host meets.</summary>
     protected override List<AutomationPeer>? GetChildrenCore()
     {
         _readFrom = Container is UIElement { IsArrangeValid: true } container
