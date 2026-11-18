@@ -3914,6 +3914,74 @@ public sealed class SaveChainAdmissionTests
         held.AssertHeldUntilReleased();
     });
 
+    /// <summary>Design 2's catch-up when its read fails (the lead's ruling on
+    /// stage A's departure (c), 2026-11-17). M13's shape: while the apply
+    /// holds the note, its file goes missing and comes back with other bytes,
+    /// and the re-seat marks the tab back on disk with its old bytes and old
+    /// hash. The file is then held open with no sharing, so the catch-up's
+    /// read of it fails, and RebaselineToRead never runs: the tab is left
+    /// clean on its old bytes, unmarked and silent. Its next save is refused
+    /// by the compare against that old hash, so nothing the file came back
+    /// with is overwritten and the edit stays in the editor. Red by mutation:
+    /// a save written with no expected hash overwrites the file.</summary>
+    [Fact]
+    public void ATabTheCatchUpCouldNotReadKeepsItsOldHashAndItsNextSaveIsRefused() => RunSta(() =>
+    {
+        const string Returned = "---\ntitle: back\n---\n\nIt came back without the key.\n";
+        const string Edited = Note + "An edit after the catch-up could not read.\n";
+        using var h = new Vault("catch-up-read-fails", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        string? oldHash = tab.SavedContentHash;
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        string full = Path.Combine(h.Root, "a.md");
+        FileStream? holdTheFile = null;
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            File.Delete(full);
+            h.Workspace.InvalidatePath("a.md");
+            File.WriteAllText(full, Returned);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.Workspace.ReseatMissingTabs();
+            Assert.False(tab.IsMissingFromDisk, "premise: the re-seat did not mark the tab back on disk");
+            Assert.Equal(Note, tab.Text);
+            holdTheFile = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Note, tab.Text);
+            Assert.Equal(oldHash, tab.SavedContentHash);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+            Assert.DoesNotContain(h.Events, IsThePropertySentence);
+            holdTheFile.Dispose();
+            holdTheFile = null;
+
+            h.Events.Clear();
+            tab.Text = Edited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the tab's next save");
+            Assert.False(save.Result, "the next save of a tab the catch-up could not read was not refused");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Equal(Returned, h.Read("a.md"));
+            Assert.True(tab.IsDirty);
+            Assert.Equal(Edited, tab.Text);
+        }
+        finally
+        {
+            holdTheFile?.Dispose();
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
     /// <summary>Design 2. The preview writes nothing and is not admitted: it
     /// publishes its rows while a save of the note it lists is held, and takes
     /// no ticket. Red by mutation: route the preview through the
