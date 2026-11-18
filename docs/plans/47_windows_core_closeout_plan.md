@@ -398,12 +398,13 @@ leaves it no second step (§3.1).
 
 Recorded 2026-11-16. An answer here supersedes the recommendation in
 the table above. No row remains pending, apart from the second steps of
-CD12(b), CD20, CD25, CD27 and CD29. The owner gave the answers in an
-interview on 2026-11-15 and 2026-11-16, and every decision row is dated
-2026-11-16. The Run process row is dated 2026-11-15, the day of the
-delivery instruction. The #1991 row is a later call, dated 2026-11-18,
-on an issue that CB-9b's spec work filed. CD1 is overtaken and has no
-answer.
+CD12(b), CD20, CD25, CD27 and CD29, and CD8's order, which CB-14
+changed and which waits for the owner (§12, Wave C6). The owner gave
+the answers in an interview on 2026-11-15 and 2026-11-16, and every
+decision row is dated 2026-11-16. The Run process row is dated
+2026-11-15, the day of the delivery instruction. The #1991 row is a
+later call, dated 2026-11-18, on an issue that CB-9b's spec work filed.
+CD1 is overtaken and has no answer.
 
 Some rows also carry a call the owner did not make. It is marked "the
 plan lead's call, 2026-11-16": how the answered work is cut into chunks
@@ -1269,14 +1270,18 @@ Codoki's place, and the lead recorded each verdict on its PR as the
 bypass §2.6 allows. Every verdict was Merge, with no blocker and no
 major. CB-25 had one judge, CB-30 two and CB-14 four, and each later
 judge read the delta the one before it caused. On CB-30 the lead took
-both of the first judge's minors, red first. On CB-14 the lead took
-findings of the first three judges, each red first, and the fourth
-said Merge
+both of the first judge's minors: the three finds, red first, and a new
+deep-nesting fact, red under mutation J. On CB-14 the lead took
+findings of the first three judges, each behaviour change red first
+(the undo-history fact is a guard, red under mutations MJ4 and MJ5, and
+two items were contract 38 wording), and the fourth said Merge
 ([#2008, comment 6991456136](https://github.com/coryj627/slate/pull/2008#issuecomment-6991456136)).
-That fourth judge named a third accepted residual that the contract
-did not list (a split tab at the renamed path, missed when the tab that
-sent the toggle was closed or left the note); this PR adds it to
-contract 38's landed-unindexed toggle amendment. Until Codoki's limit
+That fourth judge pointed out that contract 38 listed two accepted
+residuals where there are three. The third (a split tab at the renamed
+path, missed when the tab that sent the toggle was closed or left the
+note) had been named by Codex's round 2 and is among the accepted risks
+in #2008's body; this PR adds it to contract 38's landed-unindexed
+toggle amendment. Until Codoki's limit
 resets on 2026-12-01, a docs PR's fresh Opus red team at effort xhigh
 on the diff stands as its independent review in Codoki's place, by the
 lead's call, recorded on the PR.
@@ -1292,35 +1297,45 @@ CB-14's order departs from CD8's literal text, by which the tab's
 follows the new sentence. Under NVDA a High line raised after a
 sentence cancels that sentence's speech, and in CD8's order the new
 sentence was measured silent on the Tasks panel route, as `main`'s
-failure sentence is today. The lead's ruling on CB-14's Call 2 puts the
-reconcile sentence (High, unchanged) first and the new event (Medium)
-after it, and leaves the splice code CD8 left alone untouched. NVDA
+failure sentence was before CB-14. The lead's ruling on CB-14's Call 2
+puts the reconcile sentence (High, unchanged) first and the new event
+(Medium) after it. It changes neither the splice nor the reconcile
+routines CD8 left alone (`ReconcileAfterExternalTaskWrite`,
+`ReconcileTabsAfterDirectTaskWrite`) beyond their doc comments; a tab
+renamed before a successful toggle publishes now takes a reconcile
+branch ahead of the splice (the third judge's find, a defect `main` had
+before CB-14). NVDA
 played both in full on the Tasks panel, editor and reading-view routes,
 and with two tabs on the Tasks panel route. Tasks Review through an
 open tab was not heard; its facts pin the order. NVDA ran on bea36aa3,
 before the judges' findings. Contract 38's new section records the
 order, and whether it stands is a question for the owner (below).
 
-The lead's first rulings on CB-30's spec deferred two finds to #1955,
-as Calls 4 and 5 recommended: `\frac x\sin` (a function as a
-fraction's argument) and MathCAT's stray full stop in the Nemeth of an
-authored `\trprime` or `\qprime`. The first merge judge pointed out
-that `AGENTS.md` sizes a find whose fix stays in files the PR already
-changes as small, to be fixed in the PR, and named three such finds in
-`math.rs`: those two, and an ungrouped operator argument that overwrote
-its base's script position (`\liminf\limits_{n}^\max x`), which the
-pulldown-latex draft had only named. The lead's second ruling reversed
-that sizing and took all three. They are cases of the scripted function
-and of the primes that #1629 and #1628 ask for, so they are the PR's
-own feature, not finds, and `AGENTS.md`'s rule that a defect in the
-PR's own feature is fixed on its branch governs them. §4 rule 5, which
-defers a found core change a Mac user hears, does not apply to them;
-#2006, outside the feature, stays filed under it. (#2007's body lists
-the three under "Found and fixed here", and its count includes them.)
-CB-30 fixed them red first, with a fourth case in its own feature
-(`\int_0^\max f` kept the writer's application mark after the element),
-and #1954 carries their VoiceOver lines. The judge also noted that the deep-nesting fact could
-not catch a recursive walk; a new fact does. #1955 keeps `x^\rm a`,
+The lead's first rulings on CB-30's spec left two finds on #1955:
+`\frac x\sin`, a function as a fraction's argument (Call 5 recommended
+deferring it; the ruling took that call's other half, `2\hat\sin^2 x`,
+into the chunk), and MathCAT's stray full stop in the Nemeth of an
+authored `\trprime` or `\qprime` (Call 4 recommended naming it in the
+PR and the upstream draft; the ruling added the #1955 line). The first
+merge judge pointed out that `AGENTS.md` sizes a find whose fix stays
+in files the PR already changes as small, to be fixed in the PR, and
+named three such finds in `math.rs`: those two, and an ungrouped
+operator argument that overwrote its base's script position
+(`\liminf\limits_{n}^\max x`), which the pulldown-latex draft had only
+named. The lead's second ruling took all three into the PR on that
+sizing, as CB-30's spec, #2007's body and the lead's comment on #2007
+record. The lead's ruling on this record goes further: they are cases
+of the scripted function and of the primes that #1629 and #1628 ask
+for, so they are the PR's own feature, not finds, and `AGENTS.md`'s
+rule that a defect in the PR's own feature is fixed on its branch
+governs them. §4 rule 5, which defers a found core change a Mac user
+hears, does not apply to them; #2006, outside the feature, stays filed
+under it. CB-30 fixed them red first, with a fourth case in its own
+feature (`\int_0^\max f` kept the writer's application mark after the
+element), and #1954 carries their VoiceOver lines. (#2007's body lists
+all four under "Found and fixed here", and its count includes them.)
+The judge also noted that the deep-nesting fact could not catch a
+recursive walk; a new fact does. #1955 keeps `x^\rm a`,
 which §9 names. An authored glyph in a superscript or after no carrier
 keeps the stray full stop: #1955's comment of 2026-11-18 took that line
 off its list, and it waits on MathCAT's cell, under §8's watch row for
@@ -1328,6 +1343,16 @@ off its list, and it waits on MathCAT's cell, under §8's watch row for
 
 Where the specs were wrong, each spec's closing section says so:
 
+- CB-14: Design 6 left the Tasks Review with no tab in `main`'s order,
+  so a tab that opened on the note during the write heard its reconcile
+  line after the new sentence and cut it, and Codex's round 1 accepted
+  no reconcile there when the read-back was unreadable; the first judge
+  showed both, and the review now reconciles first and uses the landed
+  write's hash. Design 8 reconciled the editor and reading-view routes
+  on `SavedButUnindexed` only; any failure whose write landed now
+  reconciles there too. The spec missed a tab renamed before a
+  successful toggle published, which stayed clean over the changed disk
+  on `main` too (the third judge's find).
 - CB-25: Design 2's "no post without a peer" dropped a reset `main` ran,
   for a peer made after an Add and read before the next layout. The
   existing trigger now posts as on `main`, and only the new one checks
