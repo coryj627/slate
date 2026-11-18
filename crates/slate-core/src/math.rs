@@ -1637,7 +1637,9 @@ fn fixed_arity(name: &str) -> Option<(usize, bool)> {
 /// A script element with a function name written directly as an argument,
 /// on a base that is not one, gets the writer's application mark after it
 /// (`mathml.rs:947-956`), with or without a space before the name
-/// (`x_\max y`, `\int_0^\max f`). That mark applies nothing, so it goes,
+/// (`x_\max y`, `\int_0^\max f`), and whatever fills its other slots (an
+/// element with exactly its count has no candidates, so an authored space
+/// in a slot stays: `\int_\hspace{0.1667em}^\max f`). That mark applies nothing, so it goes,
 /// with its thin space, and the formula reads as its grouped form does
 /// (`x_{\max} y`); a function base keeps it (`\operatorname{foo}_{2}^\max x`).
 /// An accented function base is not a function name, so after its mark
@@ -1813,10 +1815,15 @@ fn repair_script_children(mathml: &str, functions: &[bool]) -> String {
                 continue;
             };
             let children = &frame.children;
+            // An element with exactly its count, none of them moved here, has
+            // no extra child to lose: each one, a space the author put in a
+            // slot too, is real.
+            let exact = children.len() == arity && !children.iter().any(|child| child.hoisted);
             let mut candidate: Vec<bool> = children
                 .iter()
                 .enumerate()
                 .map(|(i, child)| match child.kind {
+                    _ if exact => false,
                     Kind::Space => {
                         child.hoisted
                             || children
