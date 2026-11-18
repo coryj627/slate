@@ -5177,6 +5177,68 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 2 (a wrong-target write the deferral brought). A
+    /// tag edit over x.md and a.md waits behind an operation admitted for
+    /// x.md. While it waits, the note the reader checked at a.md leaves that
+    /// path through Slate's own routes, and another note takes it: renamed
+    /// to b.md from the Files tree, with c.md renamed to a.md; or deleted,
+    /// with a new a.md created in its place. At its turn the tag edit tags
+    /// the note the reader checked, wherever it went, and never the note now
+    /// at a.md: that note's bytes and index hash are unchanged. Red today:
+    /// the queued request keeps its paths, so it tags the note now at
+    /// a.md.</summary>
+    [Theory]
+    [InlineData("renamed away, another note renamed in")]
+    [InlineData("deleted, another note created in its place")]
+    public void AQueuedTagEditFollowsItsNoteAndNeverTagsTheNoteThatTookItsPath(string how) => RunSta(() =>
+    {
+        const string Replacement = "# The note now at a.md\n";
+        bool renamed = how == "renamed away, another note renamed in";
+        using var h = new Vault(
+            "queued-tag-edit-follows",
+            ("x.md", "# X\n"),
+            ("a.md", "# The note the reader checked\n"),
+            ("c.md", Replacement));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "x.md", "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("x.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            if (renamed)
+            {
+                RenameInTheSidebar(h, sidebar, "a.md", "b.md");
+                RenameInTheSidebar(h, sidebar, "c.md", "a.md");
+            }
+            else
+            {
+                File.Delete(Path.Combine(h.Root, "a.md"));
+                h.Workspace.InvalidatePath("a.md");
+                _ = h.Session.SaveText("a.md", Replacement, expectedContentHash: null);
+            }
+            Assert.Equal(Replacement, h.Read("a.md"));
+            string replacementHash = IndexedHash(h, "a.md");
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the queued tag edit");
+            Assert.True(held.Result);
+            Assert.Equal(Replacement, h.Read("a.md"));
+            Assert.Equal(replacementHash, IndexedHash(h, "a.md"));
+            Assert.Contains("probe", h.Read("x.md"), StringComparison.Ordinal);
+            if (renamed)
+            {
+                Assert.Contains("probe", h.Read("b.md"), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 4, CB-9a's second teardown shape. A tag edit still
     /// waiting its turn when the workspace is torn down never runs: nothing
     /// is written or spoken. Red today: the tag edit wrote at the
