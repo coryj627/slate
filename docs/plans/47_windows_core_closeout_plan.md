@@ -4,10 +4,9 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0 to C4 are delivered (CB-0 to CB-8, CB-9a,
-CB-10, CB-13 and CB-27, merged on 2026-11-16 and 17), and wave C5
-(CB-9b, CB-11, CB-12 and CB-19) is under way. §12 keeps the delivery
-record. Written from the
+recommendation. Waves C0 to C5 are delivered (CB-0 to CB-13, CB-19
+and CB-27, merged from 2026-11-16 to 18), and wave C6 (CB-14, CB-25
+and CB-30) is next. §12 keeps the delivery record. Written from the
 requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -901,6 +900,7 @@ started:
 | CB-10 | `specs/cb10_a_failed_vault_switch_returns_to_the_welcome_view_once.md` |
 | CB-13 | `specs/cb13_a_case_only_rename_on_fat_is_refused_and_says_so.md` |
 | CB-27 | `specs/cb27_one_panicking_diagram_does_not_disable_diagrams.md` |
+| CB-9b | `specs/cb09b_bulk_and_compound_routes_join_the_note_save_chain.md` |
 | CB-11 | `specs/cb11_a_parked_citation_summary_press_follows_its_notes_rename.md` |
 | CB-12 | `specs/cb12_a_repair_announces_only_what_it_changed.md` |
 | CB-19 | `specs/cb19_every_open_combo_boxs_rows_report_their_place.md` |
@@ -1035,6 +1035,7 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-12 | #1996 | 2026-11-17 (6b098c1e) | #1683 (CD6) | 8 / 1 / 6 / 1 | Six lines on #1955: the Modified sibling, the launcher's second instance, the generation across sessions, the destination's re-read under a stale graph at `graph.rs:841`, the release DLL's reproducibility, and `delete_file`'s staging. Filed #1995 (a field pass started by the launcher without `-Root` runs with no hot-exit store). The Mac's line on #1954. NVDA two-session phrases for base and head are in the PR body. Not delivered: a VoiceOver or Mac run |
 | CB-11 | #1997 | 2026-11-17 (6351c82b) | #1714 | 15 / 9 / 1 / 5 | Filed #1988, #1989, #1990, #1993 and #1994 (more shapes added as comments on #1990, #1993 and #1994). A line on #1955: NVDA cuts off the leaf's count under the sheet's sentence when both arrive in one turn. Not delivered: another session's rename read before this window's rescan (#1990); a rename made outside Slate. The read-window exposure (another session replacing the file between the check and the load's read) was declined on the lead's call and recorded on #1990. NVDA ran on 2d45fbea, before the review fixes. No Mac work owed |
 | CB-19 | #1998 | 2026-11-18 (69380c4e) | #1783, #1836 | 5 / 2 / 3 / 0 | Three lines on #1955: the stale `ChordTable.cs` sort-combo comment, a possible `OpenRailPanel` flake, and key lag under NVDA during an import on `main`. NVDA phrases for base and head are in the PR body. NVDA speaks no position on the popup copy on either build, so the gate scans and UIA reads are the evidence. Not delivered: a fact for the tracker's attach guard, and a red run for the stricter still-open check |
+| CB-9b | #2001 | 2026-11-18 (eeb99032) | #1889 | 21 / 12 / 5 / 4 | Filed #1991 and #1992 (from the spec), #1999 (the reading view's notice, ruled in at three new occasions) and #2000 (a throwing announcement in a posted publication ends the app). Lines on #1955: NVDA's #748 cancel in phrase 4, and a structured per-file failure kind to replace the `SavedButUnindexed` text match; the CB-9a items 1 and 3 clearing comment. Comments on #1866 (Apply moves the keys out of the sheet) and #1995. The undo defect (data loss on `main`) is fixed for every property write, the bulk rename, both Bases cell routes, the tag edit and the link rewrite. Census: four rows ended; five accepted rows (four link-rewrite members and `PublishBasesExport`) and one standing row left for CB-46. Not delivered: a VoiceOver pass (a #1954 line, owed the Mac fix); the apply's summary on the application close (NVDA drops it at exit, as on `main`); a fact that drives a vault switch. NVDA ran on ba0c1b64, before the Codex-round fixes, which add no sentence |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1167,7 +1168,9 @@ from the saved specs and worktrees, until the limit resets on
 2026-11-21. Each spec had a step 0 measurement and an Opus red team
 before code, and each diff a fresh Opus red team. Codex ran at effort
 high to an approve: CB-12 two rounds, CB-19 four, CB-9b five and CB-11
-eight. Codoki reported Safe to merge at 5/5 on every PR.
+eight. Codoki reported Safe to merge on every PR: at 5/5 on CB-11's,
+CB-12's and CB-19's, and at 3/5 on CB-9b's, whose points were answered
+on the PR by reading.
 
 CB-11's rounds 1 to 7 each found a schedule in which the parked press
 answered for another note where `main` drops it, and each was fixed red
