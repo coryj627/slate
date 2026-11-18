@@ -1102,7 +1102,8 @@ reconcile sentence, not before it:
   stale state silently. Then it speaks the new sentence. This route had no
   reconcile before.
 - **A tab closed while the write ran.** The completion reconciles the
-  note's other tabs and then speaks the new sentence.
+  note's other tabs at the note's path when the write lands, and then
+  speaks the new sentence.
 - **The Tasks Review with no tab.** `PublishDirectToggle` runs, in order:
   - the failure sentence (`TaskToggleFailed`, for every other failure);
   - the index repair, when the disk moved or its hash is unknown;
@@ -1133,7 +1134,7 @@ published, reconciles the same way, without the failure sentence. Before
 this, it said the editor changed and left its tabs clean over the changed
 disk.
 
-Two residuals are accepted:
+Three residuals are accepted:
 
 - On the Tasks Review with no tab, a tab that opens on the note while the
   write runs and is then renamed before the toggle publishes is reconciled
@@ -1142,6 +1143,13 @@ Two residuals are accepted:
   unreadable. For a failure that is not `SavedButUnindexed` the outcome is
   then unknown, as on `main`: no tab is reconciled, and the routes that
   repair the index still do.
+- On a tab route, the tab that sent the toggle is closed, or navigates to
+  another note, while the write runs, and the note is renamed before the
+  publication. A split tab now at the new path is missed: the completion
+  reconciles by the old path only, so that tab stays clean over the
+  changed disk and hears no sentence. Its save and its next toggle are
+  still refused, because core's compare-and-swap check fails. The gap is
+  in what the reader is told only, and `main` has the same behaviour.
 
 **The order departs from CD8's wording.** CD8 says the reconcile sentence
 "still follows". Under NVDA a High notification cancels speech raised just
