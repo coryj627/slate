@@ -1952,6 +1952,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             announce(new A11yEvent.TaskToggleConflict(System.IO.Path.GetFileName(path)));
             return;
         }
+        // Plan 47 CB-14: the completion reconciles the tabs at the path the
+        // toggle wrote. A tab renamed or moved while the write ran is no longer
+        // there, so it reconciles itself, as a tab with no completion does.
+        bool completionReconcilesThisTab = completionFollows
+            && string.Equals(Path, path, StringComparison.Ordinal);
         if (outcome.Error is VaultException.SavedButUnindexed unindexed)
         {
             // Plan 47 CB-14 (#1660; CD8 as the lead ruled): the write LANDED
@@ -1973,8 +1978,6 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // completion still speaks after it.
             var landed = new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail);
             Status = SlateUniffiMethods.A11yRender(landed).Text;
-            bool completionReconcilesThisTab = completionFollows
-                && string.Equals(Path, path, StringComparison.Ordinal);
             if (!completionReconcilesThisTab)
             {
                 AdmittedPublication.RunEvery(
@@ -2001,13 +2004,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // Plan 47 CB-14 (the judge's review): a failure whose read-back
             // shows the write landed anyway leaves this tab over changed
             // disk. With no completion behind it (the editor's activate-at-
-            // cursor, the reading view) the tab reconciles itself and its
-            // peers by the completion's own rule (a moved read-back), after
-            // the failure sentence as on the panel route; with one, the
-            // completion does.
+            // cursor, the reading view), or with one that reconciles another
+            // path (this tab was renamed or moved while the write ran), the
+            // tab reconciles itself and its peers by the completion's own
+            // rule (a moved read-back), after the failure sentence as on the
+            // panel route; otherwise the completion does.
             bool landedAnyway = outcome.PostFailureDiskHash is { } readBack
                 && !string.Equals(readBack, _contentHash, StringComparison.Ordinal);
-            if (!completionFollows && landedAnyway)
+            if (!completionReconcilesThisTab && landedAnyway)
             {
                 AdmittedPublication.RunEvery(
                     () => announce(failed),

@@ -1094,7 +1094,8 @@ reconcile sentence, not before it:
   repairs the index, reconciles every tab on the note ("Task toggled on
   disk, but the editor no longer matches it. Reopen the note before
   editing.", High, one line per tab, unchanged), and then speaks the new
-  sentence.
+  sentence. A tab renamed or moved while the write ran is no longer at the
+  path the completion reconciles, so it reconciles itself first.
 - **The editor's Activate at Cursor and the reading view.** No completion
   follows. The tab reconciles itself through the same
   `ReconcileAfterExternalTaskWrite`, and other tabs on the note mirror its
@@ -1102,9 +1103,25 @@ reconcile sentence, not before it:
   reconcile before.
 - **A tab closed while the write ran.** The completion reconciles the
   note's other tabs and then speaks the new sentence.
-- **The Tasks Review with no tab.** The new sentence alone. A tab that
-  opened on the note while the write ran is reconciled after it at High,
-  which cuts the new sentence. That race is accepted.
+- **The Tasks Review with no tab.** `PublishDirectToggle` runs, in order:
+  the failure sentence (`TaskToggleFailed`, for every other failure), the
+  index repair, the reconcile through `DiskWriteLanded` of a tab that
+  opened on the note while the write ran (High, one line per tab), the new
+  sentence (this failure only), and the rows' reload. When the read-back
+  cannot be read, the hash the landed write names stands in, so that tab
+  is still marked. With no such tab the new sentence is spoken alone.
+
+A failure that is not `SavedButUnindexed`, but whose read-back shows the
+write landed anyway, now reconciles on every route. On the editor's
+Activate at Cursor and the reading view, and for a tab renamed or moved
+while a Tasks panel or Tasks Review write ran, the tab says the toggle
+failed (`TaskToggleFailed`, High), then reconciles itself, and its peers
+mirror its stale state. That is the rule the completion follows for the
+tabs at the path it wrote. Before this, those tabs stayed clean over the
+changed disk. Under NVDA the reconcile line (High) cuts the failure
+sentence (High), as it does on `main`'s Tasks panel route, and the reader
+hears that the toggle is on disk and to reopen the note. That is
+accepted: only a failure raised after core's write reaches it.
 
 **The order departs from CD8's wording.** CD8 says the reconcile sentence
 "still follows". Under NVDA a High notification cancels speech raised just
@@ -1123,15 +1140,26 @@ sentences heard, without editing the reconcile code CD8 left alone. Facts:
 - `TasksPanelTests`: `ATabToggleSpeaksCoresEvents`,
   `TheNotesTabsAreReconciledBeforeTheLandedSentenceOnThePanelRoute` and
   `AClosedTabsLandedUnindexedToggleSaysItLandedAfterThePeersReconcile`.
-- `SaveChainAdmissionTests.TheEditorsLandedUnindexedToggleReconcilesTheNotesTabsThenSaysItLanded`.
+- `SaveChainAdmissionTests`:
+  `TheEditorsLandedUnindexedToggleReconcilesTheNotesTabsThenSaysItLanded`,
+  `APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab`,
+  `ATablessReviewToggleThatLandedReconcilesATabThatOpenedBeforeItSaysItLanded`
+  and
+  `ATablessReviewToggleThatLandedReconcilesATabThatOpenedWhenItsReadBackFails`.
 - `ReadingViewTests.ATaskCheckboxThatLandedUnindexedSaysItLanded`.
 - `TasksReviewTests.AReviewToggleSpeaksCoresEvents`.
+- For a failure that is not `SavedButUnindexed` but landed:
+  `SaveChainAdmissionTests.ATaskToggleWhoseWorkerThrowsEndsAndFreesTheNotesChain`
+  (`afterTheWrite: true`) and
+  `SaveChainAdmissionTests.APanelToggleThatFailsAfterItsWriteStillReconcilesATabRenamedBeforeItPublishes`.
 
 No toggle clears the undo stack or rebaselines a tab (the owner's ruling
 of 2026-11-18 on a toggle made through a tab;
-`ASuccessfulToggleThroughATabStaysOnItsUndoStack`). The Mac posts
-`taskToggleFailed` on this error until it adopts the event (#1954; the
-ledger's designation below).
+`ASuccessfulToggleThroughATabStaysOnItsUndoStack`). An edit made before a
+landed toggle still undoes, on the tab and on its mirrored peer
+(`AnEditsUndoHistorySurvivesALandedUnindexedToggleOnTheTabAndItsPeer`).
+The Mac posts `taskToggleFailed` on this error until it adopts the event
+(#1954; the ledger's designation below).
 
 <!-- a11y-trigger-ledger:start -->
 
