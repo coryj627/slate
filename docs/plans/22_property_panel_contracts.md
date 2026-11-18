@@ -76,6 +76,34 @@ them.
     invented), and list/tag_list typing survives the tagged-element
     encoding (`\u{f8ff}slate.property-kind`) both directions.
 
+*Addendum 2026-11-17 (plan 47 CB-9b, #1889, CD5) to 7 and 8.*
+
+- **7.** The apply is an operation admitted into the save chains of the
+  notes the armed preview listed (its affected, skipped and failed rows): it
+  waits for every save and operation admitted for any of them before it, and
+  a save of one of them asked while it runs waits for its publication. At its
+  turn it re-checks the header-draft gate and refuses with the sentence the
+  press gives. Close Vault cancels it before the saves settle, so the reader
+  hears its summary, which counts the files the cancel stopped as failed
+  (#1992), before the close's sentence. The preview is not admitted: it
+  writes nothing.
+- **8.** A clean tab rebaselined to another writer's bytes, and each of its
+  same-path peers, keeps no undo step that reaches the bytes from before the
+  write, and its caret keeps its line and column where the new text allows,
+  as the rescan's reload keeps it; a line past the new end clamps to the
+  last line (the plan lead's ruling 8). The reader's earlier undo steps in
+  that tab go with it; those edits were already saved. The Files sidebar's
+  tag edit reconciles its notes' tabs by the same rule, clean and dirty: a
+  clean tab takes the tagged bytes, a dirty tab hears "Properties changed on
+  disk, but the editor no longer matches it. Save or reopen the note to
+  reconcile.", and a clean tab whose re-read fails hears the same sentence.
+  The tag edit never speaks `RenameReloadFailed`. It finds the notes it
+  wrote by reading the index's hash of each checked note with an open tab
+  before and after core's call (ruling 7), so a rescan that re-indexes one of
+  those notes between the two reads makes it look written: its clean tab is
+  brought up to the disk, which is the disk's truth, and a dirty one hears
+  the property sentence.
+
 ## Accepted risks / recorded divergences (do not re-litigate)
 
 - **Dirty-tab refusal** (vs mac body-only buffers that never

@@ -913,6 +913,118 @@ teardown and the settle; four for a sentence that throws in a
 publication; the Restore As and repair-lease theories) and
 `SaveChainAdmissionCensus`.
 
+*Addendum 2026-11-17 (CB-9b, #1889, plan 47, CD5):* the bulk property
+rename's apply and the Files sidebar's tag edit are admitted operations too,
+over every note each may write. A link rewrite brings clean tabs up to the
+rewritten bytes, outside the chain. No clean tab keeps an undo step back
+across another writer's bytes. No sentence is added or reworded; existing
+sentences are heard at new occasions, as the plan lead ruled (rulings 2, 3
+and 5).
+
+- **One admission over several notes.**
+  `WorkspaceSaveCoordinator.Admit(paths, operation)` takes one ticket under
+  the chain of each distinct folded path. The operation runs once every save
+  and operation admitted for any of them before it has completed, and each
+  chain is held until the operation's Task ends. An empty set holds no chain
+  and still counts for the settle.
+- **The bulk rename's apply** is admitted over the armed preview's candidate
+  paths: its affected, skipped and failed rows (ruling 4). Core picks the
+  files at the apply's turn, from the index, so a note that gained the key
+  after the preview is not held; that leftover race ends in one refused
+  write and no overwrite. The preview is not admitted: its `dryRun` is the
+  constant true, and core writes nothing. At its turn the apply ends unrun on
+  a torn-down workspace or a closed chain, refuses with "Apply or discard
+  uncommitted property changes before renaming properties." when a header
+  draft went dirty while it waited (ruling 2(d)), and otherwise starts its
+  worker through `StartTrackedWork` and hands it to `TrackWorker`. A token
+  cancelled while it waited still runs: core answers at once with every
+  candidate cancelled, as Escape did before. Its publication runs inside the
+  ticket as steps that each run even when one before throws: the reconcile
+  of the renamed notes' tabs, the catch-up, `RenameSummary`, then the sheet's
+  own publication. A worker that ends without reporting ends the apply as one
+  that did not run, silently. A dirty save asked during an apply that
+  rewrites its note waits, and is refused after it: the property sentence,
+  the summary, then "Save blocked. … was modified externally. Your edits
+  remain in the editor." (ruling 5, on WB-2's precedent).
+- **The catch-up.** While an admitted operation holds a note, the rescan's
+  reload marks a clean tab on it stale and keeps its bytes, and a re-seat
+  marks a returning tab back on disk with its old bytes; nothing reloads
+  either afterwards. So the apply's and the tag edit's publications bring
+  every clean Markdown tab with no save pending on a note they held, whose
+  saved hash is not the index's, up to the disk from a read made then. The
+  catch-up speaks nothing.
+- **The tag edit** is admitted over the checked notes and runs at its turn
+  on the dispatcher, as it did, so on an idle chain it runs in the turn of
+  the press. Core's report names no file it wrote, so the turn reads the
+  index's hash of each checked note with an open Markdown tab before and
+  after the core call, in slices of core's bound, each read with a token of
+  its own, and reconciles the tabs of the notes whose hash moved by the
+  property write's rule. A read that fails reconciles those notes' tabs from
+  a read of the disk instead. A core call that throws anything but the three
+  fatal faults is the existing "Tag edit failed: " sentence with the fault's
+  message (ruling 2(c)). Core's summary is spoken whatever the reads did. A
+  dirty tab on a tagged note now hears "Properties changed on disk, but the
+  editor no longer matches it. Save or reopen the note to reconcile." before
+  the summary (ruling 2(a)). A rescan that re-indexes a checked note between
+  the two reads makes it look written: its clean tab is brought up to the
+  disk, and a dirty one hears the property sentence. A tag edit still queued
+  at teardown never runs.
+- **Teardown.** `SettleSaves` cancels every admitted apply before it pumps,
+  and an apply admitted inside its frame is cancelled at admission, so the
+  settle waits for at most one file's write of each and its publication. The
+  reader hears the apply's summary, which counts the files the cancel
+  stopped as failed (#1992), before the close's own sentence (ruling 3).
+  `Dispose` cancels every admitted apply and the sheet's run above the join,
+  so the join waits for at most one file's write, and a running preview
+  joins the bounded drain before the session goes.
+- **A link rewrite** made by a rename, a move, a batch move, or the undo or
+  redo of one stays outside the chain (CD5(b)): core rewrites and reports
+  each note in the same dispatcher turn. The sidebar hands the report's
+  rewrites to `WorkspaceViewModel.RebaselineCleanTabsAfterLinkRewrite` after
+  the moved pairs are retargeted, so a tab on a note inside a moved folder
+  already carries its new path. Per note, from the first outcome's hash
+  before to the last outcome's hash after (one note can be rewritten twice,
+  chained), each clean tab with no save pending that holds the bytes from
+  before the rewrite takes a read made then, when the read holds the bytes
+  after it. A note with a save or an operation admitted is left to it: the
+  rebaseline asks `HasAdmittedSaveFor` first. A dirty tab and a tab on other
+  bytes are left to the change event, which marks them stale. Nothing is
+  spoken: the change's own sentence already counts the notes whose links it
+  updated.
+- **No undo step back across another writer's bytes** (the plan lead's word
+  of 2026-11-17; ruling 8). A property write, a bulk rename, a Bases cell
+  write, a tag edit, a link rewrite and the catch-up put the new bytes into
+  a clean tab, and into each same-path peer, as one replace that empties the
+  tab's undo history and makes the bytes its saved baseline
+  (`AvalonDocumentBufferSession.ReplaceAsSavedBaseline`). The caret keeps its
+  line and column where the new text allows, as the rescan's reload keeps
+  it; a line past the new end clamps to the last line. Before this, an Undo
+  and then a save wrote the replaced bytes back. The reader's own edits keep
+  the peers' undo doctrine. The task toggle's splice is the one route of the
+  class left, for the owner (#1991).
+- **The saved-query export** cannot write a note. Core refuses a path that
+  does not end in `.base`, case-insensitively, with `InvalidArgument` "Base
+  paths must end in .base", as Save As base does, and Windows hears "Saved
+  query could not be exported: Base paths must end in .base". An existing
+  `.base` is still replaced, which no note save holds.
+- **The census** reads the apply, the tag edit and their publications as
+  admitted, the preview's dry run as no write, the link rewrite's rebaseline
+  as a reload that asks the chain first, and the export as a base writer held
+  by its core and Windows facts. Five rows stand outside the chain, each with
+  a reason, a date and what ends it: the link rewrites in four sidebar
+  members (accepted, CD5(b)), and the Bases view export onto an existing
+  file (accepted until the owner answers in CB-46's table). The navigation
+  re-point stays in its own class.
+
+Facts: `SaveChainAdmissionTests` (thirty-two: the undo and caret theories;
+thirteen for the apply; four for teardown; nine for the tag edit; two
+theories for the link rewrite; two for #1955's items 1 and 3),
+`WorkspaceSaveCoordinatorTests` (the admission over several notes),
+`BulkRenameTests`,
+`BasesRedTeamRegressionTests.TheSavedQueryExportCannotNameANote`, core's
+`export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base`, and
+`SaveChainAdmissionCensus`.
+
 ## Hot-exit amendment, Mac (plan 43 PR 29, #1525, 2026-11-13)
 
 The seven hot-exit events (`UnsavedNotesRestored`, the four

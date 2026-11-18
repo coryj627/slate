@@ -202,6 +202,16 @@ consumes its report at the call site:
   never re-told).
 - `OpId`/`UndoOpIds` → the undo stack entry (F10).
 
+*Addendum 2026-11-17 (plan 47 CB-9b, #1889, CD5(b)):* a consumed report's
+`Rewritten[]`, a batch move's, and those of the undo or redo of either, also
+bring each clean open tab on a rewritten note up to the rewritten bytes,
+after the `Moved[]` retarget, with no undo step back across them and the
+caret kept on its line. A tab is taken only when it holds the bytes from
+before the rewrite and a read made then holds the bytes after it. A dirty
+tab, a tab on other bytes, and a note with a save or an operation admitted
+are left as they were, for the change event. The rewrite stays outside the
+save chain, and nothing more is spoken: the suffix already counts the notes.
+
 **F10 — Structural undo (the Windows first).** Scope: mac's #871
 model, minus nothing the FFI supports:
 - A host-side LIFO stack of inverse operations per vault (rename ↔
