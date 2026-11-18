@@ -686,28 +686,42 @@ internal sealed partial class WorkspaceViewModel
     /// failures aggregate into ONE RenameReloadFailed (adversarial
     /// round 1 — the old try/catch could never fire because the
     /// callees report, not throw); header refresh failures speak
-    /// their own canonical PropertiesReloadFailed at publish.</summary>
+    /// their own canonical PropertiesReloadFailed at publish.
+    /// Plan 47 CB-9b (the red team's m2; #1955's CB-9a item 3): each
+    /// renamed note's reconcile, header refresh and panels are steps of
+    /// their own, so a dirty tab whose sentence throws skips no note after
+    /// it; the one RenameReloadFailed is the last step, and the first fault
+    /// is rethrown once every step has run.</summary>
     internal void ReconcileTabsAfterBulkRename(RenameReport report)
     {
         bool anyReloadFailed = false;
+        List<Action> steps = [];
         foreach (var affected in report.Affected)
         {
-            if (!affected.Applied || affected.NewContentHash is null)
+            if (!affected.Applied || affected.NewContentHash is not { } newContentHash)
             {
                 continue;
             }
-            if (!ReconcileTabsAfterPropertyWrite(affected.Path, affected.NewContentHash))
+            string path = affected.Path;
+            steps.Add(() =>
             {
-                anyReloadFailed = true;
-            }
-            RefreshPropertiesFor(affected.Path);
-            NotePersisted(affected.Path);
+                if (!ReconcileTabsAfterPropertyWrite(path, newContentHash))
+                {
+                    anyReloadFailed = true;
+                }
+            });
+            steps.Add(() => RefreshPropertiesFor(path));
+            steps.Add(() => NotePersisted(path));
         }
-        if (anyReloadFailed)
+        steps.Add(() =>
         {
-            _announce(new A11yEvent.RenameReloadFailed(
-                "Some open notes could not be reloaded."));
-        }
+            if (anyReloadFailed)
+            {
+                _announce(new A11yEvent.RenameReloadFailed(
+                    "Some open notes could not be reloaded."));
+            }
+        });
+        AdmittedPublication.RunEvery([.. steps]);
     }
 
     /// <summary>Whether any open tab's header holds a draft not yet
