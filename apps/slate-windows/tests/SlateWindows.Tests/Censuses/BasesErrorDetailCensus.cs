@@ -4,9 +4,12 @@
 // #1697: a Bases failure is spoken in core's words. A VaultException's
 // Message, and its ToString(), are the binding's field rendering
 // ("@message=..."), not the error's text; every sentence the Bases sources
-// build from a caught failure goes through BasePhrase.ErrorDetail, which is
-// core's VaultErrorDetail for a vault error and the exception's own message
-// otherwise.
+// build from a caught failure goes through FailureDetail.Of (#1890; Bases
+// calls it through BasePhrase.ErrorDetail, which forwards), which is core's
+// VaultErrorDetail for a vault error and the exception's own message
+// otherwise. The helper is identified by its symbol,
+// SlateWindows.FailureDetail.Of(System.Exception), never by its name or
+// its class's name.
 //
 // The census BINDS (ShellCompilation) rather than reading spellings. Codex
 // rounds 1 to 5 each found a syntax shape a scrape could not type: a stored
@@ -14,12 +17,15 @@
 // interpolation, a lambda parameter whose type is inferred, an untyped
 // pattern variable. With types, two rules cover every shape:
 //
-// - No Bases member outside BasePhrase.ErrorDetail reads Exception.Message
+// - No Bases member outside FailureDetail.Of reads Exception.Message
 //   (member access, conditional access, property or extended pattern).
+//   ShellFailureDetailCensus applies this rule, through MessageReads, to
+//   every shell source.
 // - An expression whose type is an exception only flows on as an exception
 //   (a local, return or parameter of an exception type; never a field or
 //   property, where code the census does not read could reach it), into core's
-//   renderer, a censused Bases method that takes an exception (whose own
+//   renderer, FailureDetail.Of (trusted by its symbol; no other member of its
+//   file is), a censused Bases method that takes an exception (whose own
 //   body this census checks), a TaskCompletionSource, an exception's
 //   constructor, a throw, or a type, pattern or null test. Anything else
 //   (ToString, interpolation, concatenation, string.Format, an object slot)
@@ -146,6 +152,8 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; foreach (var failure in failures) { detail = BasePhrase.ErrorDetail(failure); }", "")]
     [InlineData("List<Exception> failures = new() { thrown }; detail = failures.Count.ToString();", "")]
     [InlineData("detail = BasePhrase.ErrorDetail(thrown);", "")]
+    [InlineData("detail = FailureDetail.Of(thrown);", "")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(FailureDetail.Of));", "")]
     [InlineData("if (thrown is VaultException vault) { detail = SlateUniffiMethods.VaultErrorDetail(vault); }", "")]
     [InlineData("var error = work.Exception?.GetBaseException(); if (error is not null) { detail = BasePhrase.ErrorDetail(error); }", "")]
     [InlineData("if (thrown == null) { return \"\"; } Exception? kept = thrown; kept ??= thrown; _ = kept; throw kept;", "")]
@@ -231,8 +239,10 @@ public sealed class BasesErrorDetailCensus
         }
     }
 
-    /// <summary>BasePhrase.ErrorDetail's own read is exempt; the same read in
-    /// an ErrorDetail outside BasePhrase is not.</summary>
+    /// <summary>#1890: the helper is FailureDetail.Of(Exception), bound by
+    /// its symbol. Its own read is exempt. The same read in a method named
+    /// BasePhrase.ErrorDetail, in a class named FailureDetail in another
+    /// namespace, or in an overload of Of beside the real one, is not.</summary>
     [Fact]
     public void OnlyTheHelperReadsAnExceptionsMessage()
     {
@@ -247,16 +257,68 @@ public sealed class BasesErrorDetailCensus
                         failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
                 }
 
-                internal static class Elsewhere
+                internal static class FailureDetail
                 {
-                    internal static string ErrorDetail(Exception failure) =>
+                    internal static string Of(Exception failure) =>
                         failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
                 }
             }
-            """);
-        Assert.Contains(failures, failure => failure.Contains("line 14", StringComparison.Ordinal));
-        Assert.DoesNotContain(failures, failure => failure.Contains("line 8", StringComparison.Ordinal));
+
+            namespace SlateWindows
+            {
+                internal static partial class FailureDetail
+                {
+                    internal static string Of(Exception failure, string lead) => lead + failure.Message;
+                }
+            }
+            """,
+            failureDetail: PartialHelper);
+        Assert.Contains(failures, failure => failure.StartsWith("Planted.cs line 8: `failure.Message`", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.StartsWith("Planted.cs line 14: `failure.Message`", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.StartsWith("Planted.cs line 22: `failure.Message`", StringComparison.Ordinal));
+        Assert.DoesNotContain(failures, failure => failure.StartsWith("FailureDetail.cs", StringComparison.Ordinal));
     }
+
+    /// <summary>#1890: FailureDetail.Of is trusted by its symbol, and no other
+    /// member of its file is: a stringifying member planted beside it is
+    /// named where a Bases source hands it a failure.</summary>
+    [Fact]
+    public void AMemberBesideTheHelperIsNeverTrusted()
+    {
+        string[] failures = PlantedViolations("""
+            namespace SlateWindows.Bases.Planted
+            {
+                internal static class Planted
+                {
+                    internal static string Spoken(Exception thrown) => FailureDetail.Of(thrown);
+
+                    internal static string Described(Exception thrown) => FailureDetail.Describe(thrown);
+                }
+            }
+            """,
+            failureDetail: PartialHelper.Replace(
+                "    internal static string Of(",
+                "    internal static string Describe(Exception failure) => failure.ToString();\n\n    internal static string Of(",
+                StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.StartsWith("Planted.cs", StringComparison.Ordinal)
+            && failure.Contains("FailureDetail.Describe(thrown)", StringComparison.Ordinal));
+        Assert.DoesNotContain(failures, failure => failure.Contains("FailureDetail.Of(thrown)", StringComparison.Ordinal));
+    }
+
+    /// <summary>The real helper's body, declared partial so a planted source
+    /// can add an overload to the same class: the text a case binds in place
+    /// of <c>FailureDetail.cs</c>.</summary>
+    internal const string PartialHelper = """
+        namespace SlateWindows;
+
+        using uniffi.slate_uniffi;
+
+        internal static partial class FailureDetail
+        {
+            internal static string Of(Exception failure) =>
+                failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
+        }
+        """;
 
     /// <summary>Codex round 10: a generic helper is never a trusted consumer,
     /// and a body over a type parameter constrained to an exception is held
@@ -578,8 +640,10 @@ public sealed class BasesErrorDetailCensus
 
     /// <summary>Binds <paramref name="source"/> as one more Bases tree beside
     /// the shell's, and returns its violations; the planted source must bind
-    /// cleanly or the case proves nothing.</summary>
-    private static string[] PlantedViolations(string source, string? outsideBases = null)
+    /// cleanly or the case proves nothing. With <paramref name="failureDetail"/>,
+    /// that text stands in for <c>FailureDetail.cs</c> (never censused, as
+    /// the real file is not), and its own violations are returned too.</summary>
+    private static string[] PlantedViolations(string source, string? outsideBases = null, string? failureDetail = null)
     {
         var options = (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, options, path: "Planted.cs");
@@ -590,48 +654,128 @@ public sealed class BasesErrorDetailCensus
             // in the shell.
             compilation = compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(outsideBases, options, path: "Elsewhere.cs"));
         }
+        SyntaxTree? helper = null;
+        if (failureDetail is not null)
+        {
+            helper = CSharpSyntaxTree.ParseText(failureDetail, options, path: "FailureDetail.cs");
+            compilation = compilation.ReplaceSyntaxTree(FailureDetailTree(), helper);
+        }
         SemanticModel model = compilation.GetSemanticModel(tree);
-        Diagnostic[] errors = [.. model.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)];
+        Diagnostic[] errors = [.. model.GetDiagnostics()
+            .Concat(helper is null ? [] : compilation.GetSemanticModel(helper).GetDiagnostics())
+            .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)];
         Assert.True(errors.Length == 0, "premise: the planted source binds. " + string.Join("\n", errors));
         HashSet<SyntaxTree> censused = [.. BasesTrees().Select(bases => bases.Tree), tree];
-        return [.. Violations(model, "Planted.cs", censused)];
+        return
+        [
+            .. Violations(model, "Planted.cs", censused),
+            .. helper is null ? [] : Violations(compilation.GetSemanticModel(helper), "FailureDetail.cs", censused),
+        ];
     }
+
+    /// <summary>The shell's <c>FailureDetail.cs</c>, as the shell compilation
+    /// holds it.</summary>
+    internal static SyntaxTree FailureDetailTree() =>
+        ShellCompilation.Sources.Single(source => source.Relative == "FailureDetail.cs").Source.Root.SyntaxTree;
 
     /// <summary>Both rules over one bound tree.</summary>
     internal static IEnumerable<string> Violations(SemanticModel model, string file, IReadOnlySet<SyntaxTree> censused)
     {
         INamedTypeSymbol exception = model.Compilation.GetTypeByMetadataName("System.Exception")
             ?? throw new InvalidOperationException("System.Exception does not bind.");
+        var trust = new Trust(censused, TheHelper(model.Compilation));
+        Func<SyntaxNode, bool> inTheHelper = InTheHelper(model, trust.Helper);
+        foreach (MessageRead read in MessageReads(model, file, inTheHelper))
+        {
+            yield return read.ToString();
+        }
         foreach (SyntaxNode node in model.SyntaxTree.GetRoot().DescendantNodes())
         {
-            if (InTheHelper(node))
-            {
-                continue;
-            }
-            if (node is SimpleNameSyntax { Identifier.ValueText: "Message" } name
-                && model.GetSymbolInfo(name).Symbol is IPropertySymbol property
-                && DerivesFrom(property.ContainingType, exception))
-            {
-                yield return $"{file} line {Line(node)}: `{MessageContext(name)}` reads an exception's Message; "
-                    + "use BasePhrase.ErrorDetail.";
-            }
             if (node is ExpressionSyntax expression
+                && !inTheHelper(node)
                 && IsExceptionValue(model, expression, exception)
                 && !CarriedOn(model, expression, exception)
-                && !AllowedUse(model, expression, exception, censused))
+                && !AllowedUse(model, expression, exception, trust))
             {
                 yield return $"{file} line {Line(node)}: {expression} reaches text through `{Snippet(expression)}`; "
-                    + "use BasePhrase.ErrorDetail.";
+                    + "use FailureDetail.Of.";
             }
         }
     }
 
-    private static bool InTheHelper(SyntaxNode node) =>
-        node.FirstAncestorOrSelf<MethodDeclarationSyntax>() is
+    /// <summary>One read of an exception's <c>Message</c>: where it is, and
+    /// the access, pattern, arm or case it is part of.</summary>
+    internal sealed record MessageRead(string File, int Line, string Context, SimpleNameSyntax Name)
+    {
+        public override string ToString() =>
+            $"{File} line {Line}: `{Context}` reads an exception's Message; use FailureDetail.Of.";
+    }
+
+    /// <summary>Rule 1, which this census and ShellFailureDetailCensus share:
+    /// every read of <c>Message</c> on a type deriving from
+    /// <c>System.Exception</c> (member access, conditional access, property
+    /// or extended pattern) that <paramref name="isHelper"/> does not exempt.</summary>
+    internal static IEnumerable<MessageRead> MessageReads(SemanticModel model, string file, Func<SyntaxNode, bool> isHelper)
+    {
+        INamedTypeSymbol exception = model.Compilation.GetTypeByMetadataName("System.Exception")
+            ?? throw new InvalidOperationException("System.Exception does not bind.");
+        foreach (SimpleNameSyntax name in model.SyntaxTree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
         {
-            Identifier.ValueText: "ErrorDetail",
-            Parent: ClassDeclarationSyntax { Identifier.ValueText: "BasePhrase" },
+            if (name.Identifier.ValueText == "Message"
+                && model.GetSymbolInfo(name).Symbol is IPropertySymbol property
+                && DerivesFrom(property.ContainingType, exception)
+                && !isHelper(name))
+            {
+                yield return new MessageRead(file, Line(name), MessageContext(name), name);
+            }
+        }
+    }
+
+    /// <summary>The one reader of an exception's Message the censuses allow:
+    /// <c>SlateWindows.FailureDetail.Of(System.Exception)</c> as the
+    /// compilation binds it, the one static, non-generic method of that name
+    /// taking a single <c>Exception</c> by value. Fail closed: without it,
+    /// nothing is exempt and the census says why.</summary>
+    internal static IMethodSymbol TheHelper(Compilation compilation)
+    {
+        INamedTypeSymbol exception = compilation.GetTypeByMetadataName("System.Exception")
+            ?? throw new InvalidOperationException("System.Exception does not bind.");
+        INamedTypeSymbol type = compilation.GetTypeByMetadataName("SlateWindows.FailureDetail")
+            ?? throw new InvalidOperationException("SlateWindows.FailureDetail does not bind, so the census has no helper to exempt.");
+        IMethodSymbol[] helpers = [.. type.GetMembers("Of").OfType<IMethodSymbol>().Where(method => method.IsStatic
+            && method.TypeParameters.IsEmpty
+            && method.Parameters.Length == 1
+            && method.Parameters[0].RefKind == RefKind.None
+            && SymbolEqualityComparer.Default.Equals(method.Parameters[0].Type, exception))];
+        return helpers.Length == 1
+            ? helpers[0]
+            : throw new InvalidOperationException($"SlateWindows.FailureDetail declares {helpers.Length} methods Of(Exception); the census needs exactly one.");
+    }
+
+    /// <summary>Whether a node sits in the helper's body, by the symbol its
+    /// method declaration binds to: no name, class name or namespace makes a
+    /// method the helper.</summary>
+    internal static Func<SyntaxNode, bool> InTheHelper(SemanticModel model, IMethodSymbol helper)
+    {
+        var verdicts = new Dictionary<SyntaxNode, bool>();
+        return node =>
+        {
+            if (node.FirstAncestorOrSelf<MethodDeclarationSyntax>() is not { } method)
+            {
+                return false;
+            }
+            if (!verdicts.TryGetValue(method, out bool verdict))
+            {
+                verdict = SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(method), helper);
+                verdicts[method] = verdict;
+            }
+            return verdict;
         };
+    }
+
+    /// <summary>What rule 2 may trust: the censused sources, whose bodies it
+    /// reads, and the helper, by its symbol.</summary>
+    private sealed record Trust(IReadOnlySet<SyntaxTree> Censused, IMethodSymbol Helper);
 
     /// <summary>An expression whose value is an exception, or a collection
     /// of them; a type name (the <c>VaultException</c> in a catch or pattern)
@@ -733,14 +877,14 @@ public sealed class BasesErrorDetailCensus
 
     /// <summary>The uses that never make an exception text.</summary>
     private static bool AllowedUse(
-        SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused)
+        SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception, Trust trust)
     {
         bool staysAnException = model.GetTypeInfo(expression).ConvertedType is { } converted
             && CarriesExceptions(converted, exception);
         bool isACollection = model.GetTypeInfo(expression).Type is { } type && !DerivesFrom(type, exception);
         return expression.Parent switch
         {
-            ArgumentSyntax argument => AllowedArgument(model, argument, exception, censused),
+            ArgumentSyntax argument => AllowedArgument(model, argument, exception, trust),
             // get(): a failure-returning delegate invoked directly.
             InvocationExpressionSyntax invocation when invocation.Expression == expression =>
                 model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { MethodKind: MethodKind.DelegateInvoke },
@@ -773,7 +917,7 @@ public sealed class BasesErrorDetailCensus
             InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax creation } =>
                 model.GetTypeInfo(creation).Type is { } created && CarriesExceptions(created, exception),
             MemberAccessExpressionSyntax access when access.Expression == expression =>
-                AllowedMember(model, access.Name, exception, isACollection, censused),
+                AllowedMember(model, access.Name, exception, isACollection, trust),
             ElementAccessExpressionSyntax element when element.Expression == expression =>
                 model.GetSymbolInfo(element).Symbol switch
                 {
@@ -785,7 +929,7 @@ public sealed class BasesErrorDetailCensus
                 },
             ConditionalAccessExpressionSyntax conditional when conditional.Expression == expression
                 && conditional.WhenNotNull.DescendantNodesAndSelf().OfType<MemberBindingExpressionSyntax>().FirstOrDefault() is { } binding =>
-                AllowedMember(model, binding.Name, exception, isACollection, censused),
+                AllowedMember(model, binding.Name, exception, isACollection, trust),
             _ => false,
         };
     }
@@ -815,22 +959,22 @@ public sealed class BasesErrorDetailCensus
     /// the exception's own members pass (an extension on <c>object</c> widens
     /// the receiver), or a censused method that still binds an exception.</remarks>
     private static bool AllowedMember(
-        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection, IReadOnlySet<SyntaxTree> censused)
+        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection, Trust trust)
     {
         ISymbol? symbol = model.GetSymbolInfo(name).Symbol;
         if (!onACollection)
         {
             return symbol switch
             {
-                IMethodSymbol method when KeepsItsElements(method, exception) && IsConsumer(method, exception, censused)
-                    && CallbacksAreRead(model, name, exception, censused) => true,
+                IMethodSymbol method when KeepsItsElements(method, exception) && IsConsumer(method, exception, trust)
+                    && CallbacksAreRead(model, name, exception, trust) => true,
                 IMethodSymbol { Name: "GetType", MethodKind: MethodKind.Ordinary } => true,
                 // Codex round 12: an exception's own method with a callback
                 // (AggregateException.Handle) hands the failures to it, so
                 // the callback is read here too.
                 IMethodSymbol { MethodKind: MethodKind.Ordinary } method => DerivesFrom(method.ContainingType, exception)
                     && HoldsNoText(method.ReturnType, exception)
-                    && CallbacksAreRead(model, name, exception, censused),
+                    && CallbacksAreRead(model, name, exception, trust),
                 IPropertySymbol property => DerivesFrom(property.ContainingType, exception) && HoldsNoText(property.Type, exception),
                 _ => false,
             };
@@ -840,11 +984,11 @@ public sealed class BasesErrorDetailCensus
             IPropertySymbol property => HoldsNoText(property.Type, exception),
             // Invoking a failure-returning delegate yields the failure,
             // typed, and the census follows it from there.
-            IMethodSymbol { MethodKind: MethodKind.DelegateInvoke } => CallbacksAreRead(model, name, exception, censused),
+            IMethodSymbol { MethodKind: MethodKind.DelegateInvoke } => CallbacksAreRead(model, name, exception, trust),
             IMethodSymbol method => KeepsItsElements(method, exception)
-                && (IsConsumer(method, exception, censused)
+                && (IsConsumer(method, exception, trust)
                     || (IsCollectionLibrary(method) && (HoldsNoText(method.ReturnType, exception) || HasACallback(model, name))))
-                && CallbacksAreRead(model, name, exception, censused),
+                && CallbacksAreRead(model, name, exception, trust),
             _ => false,
         };
     }
@@ -870,14 +1014,14 @@ public sealed class BasesErrorDetailCensus
     /// takes exceptions. A method group or delegate variable the census
     /// cannot read is not.</summary>
     private static bool CallbacksAreRead(
-        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused) =>
+        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, Trust trust) =>
         name.Parent?.Parent is InvocationExpressionSyntax invocation
         && invocation.ArgumentList.Arguments.All(argument =>
             model.GetTypeInfo(argument.Expression).ConvertedType is not { TypeKind: TypeKind.Delegate }
             || argument.Expression is AnonymousFunctionExpressionSyntax
             || (model.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol group
                 && group.Parameters.Any(parameter => CarriesExceptions(parameter.Type, exception))
-                && IsConsumer(group, exception, censused)));
+                && IsConsumer(group, exception, trust)));
 
     /// <summary>Codex round 8: a call whose receiver is converted before
     /// the call (<c>failures.Select&lt;object, string&gt;(…)</c> widens
@@ -891,7 +1035,7 @@ public sealed class BasesErrorDetailCensus
     /// exception and the callee is core's renderer, a TaskCompletionSource,
     /// an exception's constructor, or a method the census reads.</summary>
     private static bool AllowedArgument(
-        SemanticModel model, ArgumentSyntax argument, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused)
+        SemanticModel model, ArgumentSyntax argument, INamedTypeSymbol exception, Trust trust)
     {
         // A ref or out argument hands the callee storage to write: it must be
         // a plain local, or the callee could park the exception in a field.
@@ -921,15 +1065,18 @@ public sealed class BasesErrorDetailCensus
         {
             return true;
         }
-        return IsConsumer(method, exception, censused);
+        return IsConsumer(method, exception, trust);
     }
 
-    /// <summary>A method an exception may be handed to: core's renderer, a
-    /// TaskCompletionSource, an exception's constructor, or a method the
-    /// census reads (BasePhrase.ErrorDetail among them).</summary>
-    private static bool IsConsumer(IMethodSymbol method, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused) =>
+    /// <summary>A method an exception may be handed to: the helper,
+    /// <c>FailureDetail.Of</c>, by its symbol; core's renderer; a
+    /// TaskCompletionSource; an exception's constructor; or a method the
+    /// census reads (BasePhrase.ErrorDetail among them). The helper's file is
+    /// not censused, so no other member a change puts there is trusted.</summary>
+    private static bool IsConsumer(IMethodSymbol method, INamedTypeSymbol exception, Trust trust) =>
         (method.ReducedFrom ?? method) switch
         {
+            var helper when SymbolEqualityComparer.Default.Equals(helper.OriginalDefinition, trust.Helper) => true,
             { Name: "VaultErrorDetail", ContainingType.Name: "SlateUniffiMethods" } => true,
             { Name: "SetException" or "TrySetException", ContainingType.Name: "TaskCompletionSource" } => true,
             // Codex round 18: a constructor runs a body like any other call
@@ -938,14 +1085,14 @@ public sealed class BasesErrorDetailCensus
             // (AggregateException's does). A constructor is trusted only on
             // the same terms as a method: a censused body.
             { MethodKind: MethodKind.Constructor } => DerivesFrom(method.ContainingType, exception)
-                && HasACensusedBody(method, censused)
+                && HasACensusedBody(method, trust.Censused)
                 && method.ContainingType is not { IsGenericType: true },
             // Codex round 10: a generic method is checked against its
             // declared T, not the call's Exception, so its body can stringify
             // unseen (Render<T>(T failure) => failure.ToString()). Only a
             // non-generic censused method, whose body sees the types its
             // callers pass, is trusted.
-            var declared => HasACensusedBody(declared, censused)
+            var declared => HasACensusedBody(declared, trust.Censused)
                 && declared.OriginalDefinition.TypeParameters.IsEmpty
                 && declared.ContainingType is not { IsGenericType: true }
                 && DispatchesOnlyToThisBody(declared),

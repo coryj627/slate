@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests;
@@ -70,6 +71,41 @@ public class ShellCompilationTests
             candidate => candidate.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IEnumerable<T>");
         Assert.Equal(row, enumerable.TypeArguments[0].ToDisplayString());
     }
+
+    /// <summary>Plan 47 CB-15a (#1890): the compilation binds with the shell's
+    /// own generated global usings and no others. A census tree of its own
+    /// once added <c>System.IO</c> and <c>System.Net.Http</c>, which the app
+    /// does not have, and made <c>Path</c> ambiguous with WPF's
+    /// <c>System.Windows.Shapes.Path</c> in three shell sources. Every tree
+    /// is a shell source or a file the build generated under its obj
+    /// folder.</summary>
+    [Fact]
+    public void ItsGlobalUsingsAreExactlyTheShellsGeneratedOnes()
+    {
+        string shellRoot = Path.GetFullPath(SourceText.ShellSourceRoot());
+        string generated = Directory.EnumerateFiles(Path.Combine(shellRoot, "obj"), "SlateWindows.GlobalUsings.g.cs", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .First();
+        string[] expected = GlobalUsings(CSharpSyntaxTree.ParseText(File.ReadAllText(generated)));
+        string[] actual = [.. ShellCompilation.Compilation.SyntaxTrees
+            .SelectMany(GlobalUsings)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+
+        Assert.NotEmpty(expected);
+        Assert.Equal(expected, actual);
+        Assert.All(ShellCompilation.Compilation.SyntaxTrees, tree => Assert.StartsWith(
+            shellRoot + Path.DirectorySeparatorChar, Path.GetFullPath(tree.FilePath), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string[] GlobalUsings(SyntaxTree tree) =>
+    [
+        .. ((CompilationUnitSyntax)tree.GetRoot()).Usings
+            .Where(directive => directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
+            .Select(directive => directive.NamespaceOrType.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal),
+    ];
 
     [Fact]
     public void TheShellsOwnAssemblyIsLeftOutAndMustBeRecordedExactlyOnce()
