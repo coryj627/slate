@@ -981,7 +981,11 @@ and 5).
   stopped as failed (#1992), before the close's own sentence (ruling 3).
   `Dispose` cancels every admitted apply and the sheet's run above the join,
   so the join waits for at most one file's write, and a running preview
-  joins the bounded drain before the session goes.
+  joins the workspace's bounded pre-session drain. The drain is bounded
+  (five seconds, the INV-2 and INV-6 policy that forfeits the ordering
+  rather than the UI), so a preview blocked in a read past the bound can
+  still be running when the session is disposed; that is memory-safe, and
+  the preview is a dry run that writes nothing.
 - **A link rewrite** made by a rename, a move, a batch move, or the undo or
   redo of one stays outside the chain (CD5(b)): core rewrites and reports
   each note in the same dispatcher turn. The sidebar hands the report's
