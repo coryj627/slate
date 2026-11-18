@@ -1104,24 +1104,44 @@ reconcile sentence, not before it:
 - **A tab closed while the write ran.** The completion reconciles the
   note's other tabs and then speaks the new sentence.
 - **The Tasks Review with no tab.** `PublishDirectToggle` runs, in order:
-  the failure sentence (`TaskToggleFailed`, for every other failure), the
-  index repair, the reconcile through `DiskWriteLanded` of a tab that
-  opened on the note while the write ran (High, one line per tab), the new
-  sentence (this failure only), and the rows' reload. When the read-back
-  cannot be read, the hash the landed write names stands in, so that tab
-  is still marked. With no such tab the new sentence is spoken alone.
+  - the failure sentence (`TaskToggleFailed`, for every other failure);
+  - the index repair, when the disk moved or its hash is unknown;
+  - when the disk moved, the reconcile through `DiskWriteLanded` of a tab
+    that opened on the note while the write ran (High, one line per tab);
+  - the new sentence (this failure only);
+  - the rows' reload, only when the repair succeeded.
+
+  When the read-back cannot be read, the hash the landed write names
+  stands in, so the disk counts as moved and that tab is still marked.
+  With no such tab the new sentence is spoken alone.
 
 A failure that is not `SavedButUnindexed`, but whose read-back shows the
 write landed anyway, now reconciles on every route. On the editor's
 Activate at Cursor and the reading view, and for a tab renamed or moved
-while a Tasks panel or Tasks Review write ran, the tab says the toggle
-failed (`TaskToggleFailed`, High), then reconciles itself, and its peers
-mirror its stale state. That is the rule the completion follows for the
-tabs at the path it wrote. Before this, those tabs stayed clean over the
-changed disk. Under NVDA the reconcile line (High) cuts the failure
-sentence (High), as it does on `main`'s Tasks panel route, and the reader
-hears that the toggle is on disk and to reopen the note. That is
-accepted: only a failure raised after core's write reaches it.
+while the write of a Tasks panel toggle ran (or of a Tasks Review toggle
+made through an open tab), the tab says the toggle failed
+(`TaskToggleFailed`, High), then reconciles itself, and its peers mirror
+its stale state. That is the rule the completion follows for the tabs at
+the path it wrote. Before this, those tabs stayed clean over the changed
+disk. Under NVDA the reconcile line (High) cuts the failure sentence
+(High), as it does on `main`'s Tasks panel route, and the reader hears
+that the toggle is on disk and to reopen the note. That is accepted: only
+a failure raised after core's write reaches it.
+
+A toggle that succeeds, whose tab was renamed or moved before it
+published, reconciles the same way, without the failure sentence. Before
+this, it said the editor changed and left its tabs clean over the changed
+disk.
+
+Two residuals are accepted:
+
+- On the Tasks Review with no tab, a tab that opens on the note while the
+  write runs and is then renamed before the toggle publishes is reconciled
+  by the old path and missed. It takes two races at once.
+- A rename between core's write and the read-back leaves the read-back
+  unreadable. For a failure that is not `SavedButUnindexed` the outcome is
+  then unknown, as on `main`: no tab is reconciled, and the routes that
+  repair the index still do.
 
 **The order departs from CD8's wording.** CD8 says the reconcile sentence
 "still follows". Under NVDA a High notification cancels speech raised just
@@ -1152,6 +1172,8 @@ sentences heard, without editing the reconcile code CD8 left alone. Facts:
   `SaveChainAdmissionTests.ATaskToggleWhoseWorkerThrowsEndsAndFreesTheNotesChain`
   (`afterTheWrite: true`) and
   `SaveChainAdmissionTests.APanelToggleThatFailsAfterItsWriteStillReconcilesATabRenamedBeforeItPublishes`.
+- For a toggle that succeeds:
+  `SaveChainAdmissionTests.APanelToggleThatSucceedsStillReconcilesATabRenamedBeforeItPublishes`.
 
 No toggle clears the undo stack or rebaselines a tab (the owner's ruling
 of 2026-11-18 on a toggle made through a tab;

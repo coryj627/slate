@@ -2027,8 +2027,21 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         SaveReport report = outcome.Report!;
         string updatedText = outcome.UpdatedText!;
-        if (!string.Equals(Path, path, StringComparison.Ordinal)
-            || !string.Equals(_contentHash, expectedHash, StringComparison.Ordinal)
+        if (!string.Equals(Path, path, StringComparison.Ordinal))
+        {
+            // Plan 47 CB-14 (the judge's third review): the note was renamed
+            // or moved while the write ran. The completion reconciles the
+            // tabs at the path the toggle wrote, which no longer holds this
+            // tab, so this tab reconciles itself over the hash the toggle
+            // wrote (the stale mark and its sentence) and its peers mirror
+            // the stale state, as the failure arms do. Nothing touches the
+            // text, the saved hash or the undo stack.
+            AdmittedPublication.RunEvery(
+                () => ReconcileAfterExternalTaskWrite(report.NewContentHash, announce),
+                () => _documentChanged?.Invoke(this, null));
+            return;
+        }
+        if (!string.Equals(_contentHash, expectedHash, StringComparison.Ordinal)
             || _editorSession is null
             || _editorSession.Revision != revision
             || IsDirty)
