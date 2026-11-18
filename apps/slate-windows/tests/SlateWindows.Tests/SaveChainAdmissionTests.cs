@@ -640,6 +640,130 @@ public sealed class SaveChainAdmissionTests
 
     private static TaskItem TheTask(Peers peers) => peers.H.Session.TasksForFile("a.md")[0];
 
+    // ---- A toggle that landed but was not indexed (plan 47 CB-14) -----------
+
+    private const string ReconcileSentence =
+        "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
+
+    /// <summary>Plan 47 CB-14 (#1660, the lead's ruling on CD8): the editor's
+    /// Ctrl+Enter toggles through the tab with no completion behind it (the
+    /// reading view does the same). When the write lands and the index commit
+    /// fails, the tab reconciles the note's tabs itself, as the panel's and the
+    /// review's completion does: both tabs are marked stale and guarded, the
+    /// reconcile sentence is spoken once (by the source tab; the other tab
+    /// mirrors it silently), and then the toggle says it landed. Nothing is
+    /// rebaselined and nothing enters the undo stack (the owner's ruling on
+    /// the undo of a toggle made through a tab).</summary>
+    [Fact]
+    public void TheEditorsLandedUnindexedToggleReconcilesTheNotesTabsThenSaysItLanded() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-editor.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-landed-editor", path);
+        using (h)
+        {
+            TaskItem task = h.Session.TasksForFile(path)[0];
+            string savedBefore = a.SavedContentHash!;
+            var spoken = new List<A11yEvent>();
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-editor");
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(task, spoken.Add));
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && spoken.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                    "the landed toggle's publication");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+            Assert.Empty(spoken.OfType<A11yEvent.TaskToggleFailed>());
+            A11yEvent.HostComposed reconciled = Assert.Single(spoken.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(ReconcileSentence, reconciled.Text);
+            Assert.Equal(A11yPriority.High, reconciled.Priority);
+            A11yEvent.TaskToggledUnindexed landed = Assert.Single(spoken.OfType<A11yEvent.TaskToggledUnindexed>());
+            Assert.True(landed.Completed);
+            Assert.Equal(
+                "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+                + "before index commit. It will appear after the next scan.",
+                SlateUniffiMethods.A11yRender(landed).Text);
+            Assert.True(
+                spoken.IndexOf(reconciled) < spoken.IndexOf(landed),
+                "the landed sentence came before the reconcile sentence that would cut it");
+            // Both tabs are stale and guarded; the second was told silently.
+            Assert.True(a.IsExternallyStale, "the source tab was not marked stale");
+            Assert.True(b.IsExternallyStale, "the note's other tab was not marked stale");
+            Assert.Equal(ReconcileSentence, a.Status);
+            Assert.Equal(ReconcileSentence, b.Status);
+            Assert.DoesNotContain(
+                h.Events, e => e is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence);
+            // No rebaseline and no undo step.
+            Assert.Equal(TaskNote, a.Text);
+            Assert.Equal(savedBefore, a.SavedContentHash);
+            Assert.False(a.EditorDocument!.UndoStack.CanUndo, "the landed toggle left an undo step");
+
+            // The next save is refused, and the landed toggle stays on disk.
+            a.Text = a.Text + "An edit.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the edit's save");
+            Assert.False(save.Result);
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+        }
+    });
+
+    /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle
+    /// made through a tab is the reader's own edit and stays on the tab's undo
+    /// stack; one Undo takes it back in the buffer.</summary>
+    [Fact]
+    public void ASuccessfulToggleThroughATabStaysOnItsUndoStack() => RunSta(() =>
+    {
+        const string path = "cb14-undo-guard.md";
+        using var h = new Vault("cb14-undo-guard", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        var spoken = new List<A11yEvent>();
+        Assert.Equal(TabTaskToggle.Started, tab.ToggleTask(h.Session.TasksForFile(path)[0], spoken.Add));
+        h.PumpUntil(
+            () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle && spoken.Any(e => e is A11yEvent.TaskToggled),
+            "the toggle's publication");
+        Assert.Contains("- [x] the task", tab.Text, StringComparison.Ordinal);
+        Assert.True(tab.EditorDocument!.UndoStack.CanUndo, "the toggle left no undo step");
+        tab.EditorDocument.UndoStack.Undo();
+        Assert.Contains("- [ ] the task", tab.EditorDocument.Text, StringComparison.Ordinal);
+    });
+
+    /// <summary>Plan 47 CB-14: a vault whose one note holds a task, open in two
+    /// tabs side by side (a split), the first tab active. The note's name is
+    /// the fact's own, so the after-write seam trips no other fact's save
+    /// (the seam matches any path that contains its text).</summary>
+    private static (Vault H, WorkspaceTabViewModel A, WorkspaceTabViewModel B) TwoTabsOnATaskNote(string label, string path)
+    {
+        var h = new Vault(label, (path, TaskNote));
+        try
+        {
+            WorkspaceTabViewModel a = h.Open(path);
+            WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+            h.Workspace.OpenPath(path, WorkspaceOpenTarget.SplitRight);
+            h.Settle();
+            WorkspaceTabViewModel b = h.Workspace.ActiveGroup.ActiveTab!;
+            Assert.NotSame(a, b);
+            Assert.Equal(path, b.Path);
+            h.Workspace.Activate(groupA, a);
+            h.Settle();
+            h.Events.Clear();
+            return (h, a, b);
+        }
+        catch
+        {
+            h.Dispose();
+            throw;
+        }
+    }
+
     // ---- Bases cell writes (#1657) -------------------------------------------
 
     /// <summary>B's save parks; the reader takes the edit back (both tabs
