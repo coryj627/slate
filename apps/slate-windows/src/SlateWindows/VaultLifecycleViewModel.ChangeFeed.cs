@@ -458,6 +458,9 @@ internal sealed partial class VaultLifecycleViewModel
         var renames = new List<ChangeRecord>();
         var removed = new HashSet<string>(StringComparer.Ordinal);
         var present = new HashSet<string>(StringComparer.Ordinal);
+        // Plan 47 CB-11 (#1714): each present file's hash at the window's
+        // target, so a planned move says which file is at its destination.
+        var presentHashes = new Dictionary<string, string?>(StringComparer.Ordinal);
         var touched = new HashSet<string>(StringComparer.Ordinal);
         bool anyRecord = window.RecordCount > 0;
         if (anyRecord)
@@ -523,6 +526,7 @@ internal sealed partial class VaultLifecycleViewModel
                             break;
                         case ChangeEffect.Present:
                             _ = present.Add(record.Path);
+                            presentHashes[record.Path] = record.ContentHash;
                             break;
                     }
                 }
@@ -558,7 +562,7 @@ internal sealed partial class VaultLifecycleViewModel
 
         if (Workspace is WorkspaceViewModel workspace)
         {
-            FeedRenamePlan plan = PlanFeedRenames(renames, removed, present, fromCursor);
+            FeedRenamePlan plan = PlanFeedRenames(renames, removed, present, presentHashes, fromCursor);
             WorkspaceViewModel.FeedRetarget moved = WorkspaceViewModel.FeedRetarget.None;
             if (plan.Moves.Count > 0)
             {
@@ -628,6 +632,7 @@ internal sealed partial class VaultLifecycleViewModel
         IReadOnlyList<ChangeRecord> renames,
         IReadOnlySet<string> removed,
         IReadOnlySet<string> present,
+        IReadOnlyDictionary<string, string?> presentHashes,
         bool fromCursor)
     {
         var moves = new List<WorkspaceViewModel.FeedRename>();
@@ -660,7 +665,12 @@ internal sealed partial class VaultLifecycleViewModel
                     owners[moves.Count] = from;
                 }
 
-                moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
+                moves.Add(new(
+                    from,
+                    rename.Path,
+                    rename.FromHash,
+                    removed.Contains(from),
+                    ToHash: presentHashes.GetValueOrDefault(rename.Path)));
             }
 
             return new FeedRenamePlan(moves, retarget =>
@@ -710,7 +720,13 @@ internal sealed partial class VaultLifecycleViewModel
 
                 owners[moves.Count] = from;
                 moves.Add(entry.Tabs
-                    ? new(entry.At, rename.Path, rename.FromHash, !present.Contains(entry.At), Provenance: true)
+                    ? new(
+                        entry.At,
+                        rename.Path,
+                        rename.FromHash,
+                        !present.Contains(entry.At),
+                        Provenance: true,
+                        ToHash: presentHashes.GetValueOrDefault(rename.Path))
                     : new(entry.At, rename.Path, rename.FromHash, OldIsGone: true, FollowersOnly: true));
             }
             else if (!held.Contains(from))
@@ -721,7 +737,8 @@ internal sealed partial class VaultLifecycleViewModel
                     rename.Path,
                     rename.FromHash,
                     removed.Contains(from),
-                    KeepFollowers: followersHeld.Contains(from)));
+                    KeepFollowers: followersHeld.Contains(from),
+                    ToHash: presentHashes.GetValueOrDefault(rename.Path)));
             }
         }
 

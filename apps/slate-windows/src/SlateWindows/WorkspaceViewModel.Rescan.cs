@@ -171,7 +171,13 @@ internal sealed partial class WorkspaceViewModel
     /// <paramref name="From"/> go, which an unacknowledged run moved there;
     /// no tab is touched. <paramref name="KeepFollowers"/> (codex round 6) —
     /// the pin and the closed tabs at <paramref name="From"/> are another
-    /// file's, put there by an unacknowledged run, so only tabs move.</summary>
+    /// file's, put there by an unacknowledged run, so only tabs move.
+    /// <paramref name="ToHash"/> (plan 47 CB-11): the content hash the
+    /// window's present record gives the file at <paramref name="To"/>,
+    /// or null when the window has none. <paramref name="FromHash"/> is
+    /// the hash this window was shown at the origin, which a coalesced
+    /// window keeps across another session's deletion and re-creation of
+    /// that path, so it alone does not say which file moved.</summary>
     internal readonly record struct FeedRename(
         string From,
         string To,
@@ -179,7 +185,8 @@ internal sealed partial class WorkspaceViewModel
         bool OldIsGone,
         bool Provenance = false,
         bool FollowersOnly = false,
-        bool KeepFollowers = false);
+        bool KeepFollowers = false,
+        string? ToHash = null);
 
     /// <summary>What <see cref="RetargetPathsForFeedRenames"/> moved, by the
     /// renames' indexes: the renames that moved a tab, and those that moved
@@ -211,7 +218,7 @@ internal sealed partial class WorkspaceViewModel
     {
         WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)];
         var claimed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
-        var moves = new List<(WorkspaceTabViewModel Tab, string Destination)>();
+        var moves = new List<(WorkspaceTabViewModel Tab, string Destination, FeedRename Rename)>();
         var follows = new List<(int Index, string Source, string Destination, bool FollowersOnly)>();
         var moved = new HashSet<int>();
         for (int index = 0; index < renames.Count; index++)
@@ -243,7 +250,7 @@ internal sealed partial class WorkspaceViewModel
                 if (FollowsFeedRename(tab, rename))
                 {
                     _ = claimed.Add(tab);
-                    moves.Add((tab, destination));
+                    moves.Add((tab, destination, rename));
                     _ = moved.Add(index);
                 }
                 else
@@ -258,9 +265,10 @@ internal sealed partial class WorkspaceViewModel
             }
         }
 
-        foreach ((WorkspaceTabViewModel tab, string destination) in moves)
+        foreach ((WorkspaceTabViewModel tab, string destination, FeedRename rename) in moves)
         {
             _saves.ContinueChain(tab.Path, destination);
+            FollowParkedSummaryThroughFeed(tab, destination, rename);
             tab.RetargetPath(destination);
         }
 

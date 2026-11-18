@@ -279,6 +279,7 @@ internal sealed partial class WorkspaceViewModel
             // so the -= dedupe would silently stop matching and repeat
             // presses would stack handlers.
             _parkedSummaryPath = Citations.Path;
+            _parkedSummaryTab = ActiveGroup.ActiveTab;
             if (!_summaryParked)
             {
                 _summaryParked = true;
@@ -386,6 +387,11 @@ internal sealed partial class WorkspaceViewModel
     private string? _parkedSummaryPath;
     private bool _summaryParked;
 
+    /// <summary>Plan 47 CB-11 (#1714): the tab the citations leaf followed
+    /// when the press was parked. A rename moves the press only with this
+    /// tab (<see cref="ParkedSummaryCanFollow"/>).</summary>
+    private WorkspaceTabViewModel? _parkedSummaryTab;
+
     /// <summary>WB-23 (#1314): how often the parked press's handler ran.</summary>
     internal int OpenSummaryWhenPublishedInvokedForTests { get; private set; }
 
@@ -410,6 +416,134 @@ internal sealed partial class WorkspaceViewModel
             Citations.RowsPublished -= OpenSummaryWhenPublished;
             _summaryParked = false;
             _parkedSummaryPath = null;
+            _parkedSummaryTab = null;
+        }
+        else if (_summaryParked
+            && _parkedSummaryTab is { } closed
+            && !Groups.SelectMany(group => group.Tabs).Any(tab => ReferenceEquals(tab, closed)))
+        {
+            // CB-11 (#1714): the tab the press was parked on has closed and
+            // the leaf stayed on the path (a split pane's close hands it to
+            // the pane on the same note). The tab the leaf now follows takes
+            // the press over only when it holds the same note, so a later
+            // rename moves the press with it. Another note at that path
+            // does not: the press is left with no tab, and a rename drops it.
+            WorkspaceTabViewModel? successor = ActiveGroup.ActiveTab;
+            _parkedSummaryTab = successor is not null && HoldTheSameNote(successor, closed)
+                ? successor
+                : null;
+        }
+    }
+
+    /// <summary>Plan 47 CB-11 (#1714): two tabs at one path are proved to
+    /// hold the same note when they hold the same saved version: the same
+    /// baseline hash and the same file identity, both known. Tabs of one
+    /// note are kept so by the workspace's mirroring
+    /// (<see cref="MirrorSamePathDocumentState"/>). Two different notes at
+    /// one path are different files, so their identities differ even when
+    /// their bytes match. Without a hash or an identity nothing is proved,
+    /// and the press falls back to main's drop.</summary>
+    private static bool HoldTheSameNote(WorkspaceTabViewModel tab, WorkspaceTabViewModel other) =>
+        tab.SavedContentHash is string hash
+        && string.Equals(hash, other.SavedContentHash, StringComparison.Ordinal)
+        && tab.FileIdentity is string identity
+        && string.Equals(identity, other.FileIdentity, StringComparison.Ordinal);
+
+    /// <summary>Plan 47 CB-11 (#1714): a rename is about to move
+    /// <paramref name="tab"/> to <paramref name="destination"/> in place. A
+    /// press goes with the tab it was parked on, the tab the citations leaf
+    /// followed when the reader pressed, so the sync that follows the rename
+    /// finds the leaf still on the note the press asked about. The leaf
+    /// loads the note again at its new path, and that load's publish
+    /// answers the press. Called before the tab moves, by Slate's own
+    /// rename and by another session's (the change feed's), each of which
+    /// syncs the panels once its tabs have moved.
+    ///
+    /// The tab is the press's owner, not the path and not whichever tab is
+    /// active: two tabs at one path can be different notes for a while
+    /// (another session moved one away and this window renamed a second
+    /// into the freed name), the reader can activate either, and a feed can
+    /// move one tab onto another's path before it moves the other. Any other
+    /// tab moves nothing here; if the leaf then shows another path, the
+    /// sync drops the press, as it drops it when the reader leaves the note.
+    /// When the press's tab closes and the leaf stays on the note (a split
+    /// pane's close), the tab the leaf then follows takes the press over
+    /// (<see cref="DropParkedSummaryIfNoteChanged"/>).
+    /// The leaf's path is compared, not the tab's: a re-seat can respell the
+    /// tab without syncing the panels, and the press was parked under the
+    /// leaf's spelling. A destination that is not a note moves nothing
+    /// either: the index has no note row there, so a load at that path
+    /// would answer the press with no citations. And the file the rename
+    /// moved must be the version the tab holds, or the press stays behind
+    /// and the sync drops it, as on main: each caller proves that its own
+    /// way.</summary>
+    private bool ParkedSummaryCanFollow(WorkspaceTabViewModel tab, string destination) =>
+        _summaryParked
+        && ReferenceEquals(tab, _parkedSummaryTab)
+        && string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal)
+        && CoreDocumentClassification.IsMarkdown(destination);
+
+    /// <summary>Plan 47 CB-11 (#1714): Slate's own rename, move, undo or
+    /// redo. It moves whatever file is at the path, and another session
+    /// can have put a different note there before this window's rescan,
+    /// so the moved file is proved the tab's version by the index, which
+    /// the rename has already moved (<see cref="IndexHoldsTheTabsVersion"/>).</summary>
+    private void FollowParkedSummaryThroughOwnRename(WorkspaceTabViewModel tab, string destination)
+    {
+        if (ParkedSummaryCanFollow(tab, destination) && IndexHoldsTheTabsVersion(tab, destination))
+        {
+            _parkedSummaryPath = destination;
+        }
+    }
+
+    /// <summary>Plan 47 CB-11 (#1714): another session's rename, applied
+    /// from the change feed. The feed's plan moves a tab when its saved
+    /// baseline or its stale mark is the record's hash, which is the hash
+    /// this window was shown at the origin; a window that coalesces another
+    /// session's deletion, re-creation and rename of the path keeps it, so
+    /// the tab can be moved onto a different note's file. The press goes
+    /// only when the moved file is proved the tab's version: the record's
+    /// hash and the window's present hash for the destination are both
+    /// the tab's saved baseline. No core call runs here: the feed is
+    /// applied inside a rescan's re-sync.</summary>
+    private void FollowParkedSummaryThroughFeed(
+        WorkspaceTabViewModel tab, string destination, FeedRename rename)
+    {
+        if (ParkedSummaryCanFollow(tab, destination)
+            && tab.SavedContentHash is string baseline
+            && string.Equals(baseline, rename.FromHash, StringComparison.Ordinal)
+            && string.Equals(baseline, rename.ToHash, StringComparison.Ordinal))
+        {
+            _parkedSummaryPath = destination;
+        }
+    }
+
+    /// <summary>Plan 47 CB-11 (#1714): the file a rename this window made
+    /// moved to <paramref name="path"/> is the version <paramref name="tab"/>
+    /// holds: the index, which the rename has already moved, has the tab's
+    /// saved baseline at the new path. A rename moves whatever file is at
+    /// the path, and another session can have put a different note there
+    /// before this window's rescan; the tab is then moved onto that note's
+    /// file (as on main), but the press does not go with it. A tab with no
+    /// baseline, or an index that cannot be read, proves nothing, and the
+    /// press falls back to main's drop. The read runs on the dispatcher,
+    /// once per rename, only while a press is parked and its own tab
+    /// moves.</summary>
+    private bool IndexHoldsTheTabsVersion(WorkspaceTabViewModel tab, string path)
+    {
+        if (tab.SavedContentHash is not string baseline)
+        {
+            return false;
+        }
+        try
+        {
+            using var cancel = new CancelToken();
+            return string.Equals(
+                _session.IndexedContentHashes([path], cancel)[0], baseline, StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return false;
         }
     }
 
@@ -424,6 +558,7 @@ internal sealed partial class WorkspaceViewModel
         _summaryParked = false;
         string? asked = _parkedSummaryPath;
         _parkedSummaryPath = null;
+        _parkedSummaryTab = null;
         if (string.Equals(Citations.Path, asked, StringComparison.Ordinal))
         {
             OpenCitationSummary();
