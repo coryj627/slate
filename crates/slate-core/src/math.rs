@@ -935,8 +935,10 @@ const SCRIPT_POSITION_SETTERS: &[&str] = &[
 /// set what, so the source is parsed again with each such argument in
 /// braces ([`brace_position_setting_arguments`]), and each script takes
 /// the position it has there. The braced parse must match this one event
-/// for event but for those braces and the positions; otherwise the events
-/// are kept as parsed.
+/// for event but for those braces and the positions, and each brace must
+/// hold an argument of a script in this parse, never its base (a `^` or
+/// `_` a macro took is no script mark); otherwise the events are kept as
+/// parsed.
 fn script_positions_as_grouped<'a>(
     latex: &str,
     mut events: Vec<pulldown_latex::event::Event<'a>>,
@@ -944,6 +946,9 @@ fn script_positions_as_grouped<'a>(
     use pulldown_latex::Storage;
     use pulldown_latex::event::{Content, Event, Grouping};
     let Some((braced, braces)) = brace_position_setting_arguments(latex) else {
+        return events;
+    };
+    let Some(arguments) = script_argument_starts(&events) else {
         return events;
     };
     let storage = Storage::new();
@@ -973,7 +978,8 @@ fn script_positions_as_grouped<'a>(
             (
                 Event::Content(Content::Function(_) | Content::LargeOp { .. }),
                 Some(Event::Begin(Grouping::Normal)),
-            ) if grouped.get(next + 1) == Some(event)
+            ) if arguments[index]
+                && grouped.get(next + 1) == Some(event)
                 && matches!(grouped.get(next + 2), Some(Event::End)) =>
             {
                 found += 1;
@@ -991,6 +997,86 @@ fn script_positions_as_grouped<'a>(
         }
     }
     events
+}
+
+/// For each event, whether it starts an argument of a script (a slot after
+/// its base), read with the model the writer follows: a group, a script or
+/// a visual is one element once closed, content is one, and any other event
+/// is one where a construct is waiting for it (as in
+/// [`fold_primes_into_superscripts`]). `None` when a group's end has no
+/// start.
+fn script_argument_starts(events: &[pulldown_latex::event::Event<'_>]) -> Option<Vec<bool>> {
+    use pulldown_latex::event::{Event, ScriptType, Visual};
+    enum Open {
+        Group,
+        Construct {
+            script: bool,
+            filled: usize,
+            needed: usize,
+        },
+    }
+    let mut starts = vec![false; events.len()];
+    let mut stack: Vec<Open> = Vec::new();
+    for (index, event) in events.iter().enumerate() {
+        let waiting = matches!(stack.last(), Some(Open::Construct { .. }));
+        if let Some(Open::Construct {
+            script: true,
+            filled,
+            ..
+        }) = stack.last()
+        {
+            starts[index] = *filled >= 1;
+        }
+        let complete = match event {
+            Event::Script { ty, .. } => {
+                let needed = if matches!(ty, ScriptType::SubSuperscript) {
+                    3
+                } else {
+                    2
+                };
+                stack.push(Open::Construct {
+                    script: true,
+                    filled: 0,
+                    needed,
+                });
+                false
+            }
+            Event::Visual(visual) => {
+                let needed = match visual {
+                    Visual::SquareRoot | Visual::Negation => 1,
+                    Visual::Root | Visual::Fraction(_) => 2,
+                };
+                stack.push(Open::Construct {
+                    script: false,
+                    filled: 0,
+                    needed,
+                });
+                false
+            }
+            Event::Begin(_) => {
+                stack.push(Open::Group);
+                false
+            }
+            Event::End => {
+                let Some(Open::Group) = stack.pop() else {
+                    return None;
+                };
+                true
+            }
+            Event::Content(_) => true,
+            _ => waiting,
+        };
+        if complete {
+            while let Some(Open::Construct { filled, needed, .. }) = stack.last_mut() {
+                *filled += 1;
+                if *filled < *needed {
+                    break;
+                }
+                stack.pop();
+            }
+        }
+    }
+    Some(starts)
 }
 
 /// `latex` with each ungrouped script argument that is a control word in
