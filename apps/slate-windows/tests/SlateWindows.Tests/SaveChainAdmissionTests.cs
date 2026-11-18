@@ -4138,6 +4138,54 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 1, finding 1's sweep: the turn's catch. The apply's
+    /// turn throws before its worker starts, the reader asked to close the
+    /// sheet while the apply waited, and the announcer throws at the
+    /// RenameFailed the catch speaks. The apply still ends: the sheet is no
+    /// longer in flight and the close it was asked for settles. Red today:
+    /// the sheet's failure publication speaks before it raises its publish
+    /// and settles a requested close, so the throw skips both and the close
+    /// never settles.</summary>
+    [Fact]
+    public void AnApplyWhoseTurnThrowsSettlesARequestedCloseEvenWhenItsFailureSentenceThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-turn-throws-sentence-throws", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.Workspace.BulkRenameApplyTurnHookForTests = () => throw new InvalidOperationException("the apply's turn failed (test seam)");
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.RenameFailed)
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+            Assert.Equal(0, settled);
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the apply's end");
+            Assert.False(sheet.WorkInFlight);
+            Assert.True(settled == 1, $"the close asked while the apply waited settled {settled} time(s)");
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.Workspace.BulkRenameApplyTurnHookForTests = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 2 (CB-9a Design 8). The apply's turn throws before its
     /// worker starts: the reader hears the existing RenameFailed once, the
     /// sheet is no longer in flight, a close asked meanwhile settles, and the
