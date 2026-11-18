@@ -20194,6 +20194,15 @@ impl VaultSession {
     }
 
     pub fn export_saved_query_as_base(&self, id: &str, path: &str) -> Result<(), VaultError> {
+        // Plan 47 CB-9b (#1889; CD5(d)): the export writes with no expected
+        // hash, so it must never name a note. It refuses what Save As
+        // refuses: any path that does not end in `.base`, in any case.
+        let (_, extension, _) = classify_path(path);
+        if extension.as_deref() != Some("base") {
+            return Err(VaultError::InvalidArgument {
+                message: "Base paths must end in .base".to_string(),
+            });
+        }
         let query = {
             let conn = self.conn.lock().expect("session connection mutex");
             let saved = load_saved_query(&conn, id)?;

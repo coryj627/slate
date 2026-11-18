@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows.Threading;
+using ICSharpCode.AvalonEdit.Document;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -96,6 +97,9 @@ internal sealed partial class WorkspaceTabViewModel
     /// dirty tab takes the stale-flag honesty with PROPERTY copy
     /// (adversarial round 1: never the task-toggle wording) because
     /// overwriting unsaved edits is worse than a reopen prompt.
+    /// Plan 47 CB-9b (Design 0): a clean tab, and each same-path peer,
+    /// keeps no undo step back across the written bytes, and its caret
+    /// keeps its line (<see cref="TakeAnotherWritersBytes"/>).
     /// Returns false only when the reload attempt itself failed —
     /// the caller aggregates that into RenameReloadFailed.</summary>
     internal bool RebaselineAfterPropertyWrite(
@@ -128,12 +132,64 @@ internal sealed partial class WorkspaceTabViewModel
             MarkPropertyStale(announce);
             return false;
         }
-        string fresh = read.Text;
-        if (_editorSession is not null)
+        AdoptAnotherWritersRead(read);
+        return true;
+    }
+
+    /// <summary>
+    /// Plan 47 CB-9b (Design 2's catch-up): a clean tab with no save pending
+    /// takes <paramref name="read"/>, made from disk by an admitted operation
+    /// inside its ticket, as its text, identity and saved baseline, with no
+    /// undo step back across it and its caret kept on its line; its same-path
+    /// peers take it too. It never speaks and never marks a tab stale. It
+    /// returns false, changing nothing, for a tab that is not a live Markdown
+    /// tab, is dirty, or has a save pending, whose next save publishes to it.
+    /// A tab that already holds the read's bytes keeps its buffer and only
+    /// loses a stale mark.
+    /// </summary>
+    internal bool RebaselineToRead(IdentifiedText read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        if (!IsMarkdown || _disposed || IsDirty || HasPendingSaves)
         {
-            _editorSession.ReplaceAll(fresh);
-            _editorSession.MarkSaved(fresh);
+            return false;
         }
+        if (string.Equals(
+            _contentHash, SlateUniffiMethods.EditorTextContentHash(read.Text), StringComparison.Ordinal))
+        {
+            IsExternallyStale = false;
+            return true;
+        }
+        AdoptAnotherWritersRead(read);
+        return true;
+    }
+
+    /// <summary>
+    /// Plan 47 CB-9b (Design 5; CD5(b)): a rename or a move rewrote the links
+    /// of this tab's note, and <paramref name="read"/>, made now, should hold
+    /// the bytes after the rewrite (<paramref name="hashAfter"/>, core's hash
+    /// in the report). A clean tab with no save pending takes the read as
+    /// <see cref="RebaselineToRead"/> does: its text, identity and saved
+    /// baseline, with no undo step back across it, its caret kept on its line
+    /// and its stale mark cleared, and its same-path peers take it too. It
+    /// never speaks and never marks a tab stale. It returns false, changing
+    /// nothing, for a read that does not hold the bytes asked for, a dirty
+    /// tab, or a tab with a save pending.
+    /// </summary>
+    internal bool RebaselineAfterLinkRewrite(IdentifiedText read, string hashAfter)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        return string.Equals(read.ContentHash, hashAfter, StringComparison.Ordinal) && RebaselineToRead(read);
+    }
+
+    /// <summary>A clean tab's adoption of another writer's bytes, read from
+    /// disk: its text and baseline (<see cref="TakeAnotherWritersBytes"/>),
+    /// the read's identity, clean and not stale, its interactions told, and
+    /// its same-path peers told the same way.</summary>
+    private void AdoptAnotherWritersRead(IdentifiedText read)
+    {
+        string fresh = read.Text;
+        TakeAnotherWritersBytes(fresh);
         _text = fresh;
         _contentHash = SlateUniffiMethods.EditorTextContentHash(fresh);
         FileIdentity = read.FileIdentity;
@@ -141,8 +197,70 @@ internal sealed partial class WorkspaceTabViewModel
         IsDirty = false;
         IsExternallyStale = false;
         _editorInteractions?.InvalidateExternalState();
-        _documentChanged?.Invoke(this, null);
-        return true;
+        TellPeersOfAnotherWritersBytes();
+    }
+
+    // Plan 47 CB-9b (Design 0): true while this tab tells its same-path
+    // peers that another writer's bytes became its text and baseline, so each
+    // peer takes them the same way (MirrorDocumentStateFrom) instead of
+    // adopting the baseline over an undo step that reaches the old bytes.
+    private bool _tookAnotherWritersBytes;
+
+    /// <summary>Plan 47 CB-9b (Design 0; the plan lead's word of 2026-11-17):
+    /// another writer's bytes, read from disk, become this tab's text and its
+    /// saved baseline with no undo step back across them
+    /// (<see cref="AvalonDocumentBufferSession.ReplaceAsSavedBaseline"/>), and
+    /// the caret keeps its line and column where the new text allows, by the
+    /// rescan's rule (<see cref="ReloadKeepingCaretLine"/>): a line past the
+    /// new end clamps to the last line, and the column to that line. The
+    /// caret lands through the bound offset, never a caret-navigation request,
+    /// which would take keyboard focus into the editor.</summary>
+    private void TakeAnotherWritersBytes(string text)
+    {
+        if (_editorSession is not { } session)
+        {
+            return;
+        }
+        TextDocument document = session.Document;
+        TextLocation caret = document.GetLocation(Math.Clamp(EditorCaretOffset, 0, document.TextLength));
+        session.ReplaceAsSavedBaseline(text);
+        int line = Math.Clamp(caret.Line, 1, document.LineCount);
+        DocumentLine target = document.GetLineByNumber(line);
+        int column = Math.Clamp(caret.Column, 1, target.Length + 1);
+        EditorCaretOffset = target.Offset + column - 1;
+        BumpContentGeneration();
+        OnPropertyChanged(nameof(Text));
+    }
+
+    /// <summary>The state change every same-path peer mirrors, said as
+    /// another writer's bytes: each peer takes them through
+    /// <see cref="TakeAnotherWritersBytes"/>, with its own caret.</summary>
+    private void TellPeersOfAnotherWritersBytes()
+    {
+        _tookAnotherWritersBytes = true;
+        try
+        {
+            _documentChanged?.Invoke(this, null);
+        }
+        finally
+        {
+            _tookAnotherWritersBytes = false;
+        }
+    }
+
+    /// <summary>Plan 47 CB-9b (Codex round 4): another writer's bytes landed
+    /// under this tab and could not be read back, so the tab is marked stale
+    /// with the property sentence (Call 2(b)'s occasion, a re-read that
+    /// fails), spoken through <paramref name="announce"/>; the workspace
+    /// gives the sentence to the first tab on the note only.</summary>
+    internal void MarkPropertyStaleAfterAFailedReadBack(Action<A11yEvent> announce)
+    {
+        ArgumentNullException.ThrowIfNull(announce);
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        MarkPropertyStale(announce);
     }
 
     private void MarkPropertyStale(Action<A11yEvent> announce)
