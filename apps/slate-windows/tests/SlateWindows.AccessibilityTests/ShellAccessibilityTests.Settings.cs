@@ -648,6 +648,11 @@ public sealed partial class ShellAccessibilityTests
                 () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
                 TimeSpan.FromSeconds(5));
             Assert.Equal(ExpandCollapseState.Expanded, combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            // CB-19 (#1783, #1836): with the list open, the scan reaches the open list's own
+            // window, and every row there says its place, as the combo box's own rows do.
+            AssertAxeClean(process, "settings-theme-list-open");
+            AssertTheListIsStillOpen(window, combo, "settings-theme-list-open");
+            AssertOpenListRowsSayTheirPlace(window, combo);
             PressKey(VirtualKeyShort.ESCAPE);
             Retry.WhileFalse(
                 () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,

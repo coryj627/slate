@@ -226,6 +226,12 @@ public partial class MainWindow
 
     private void BaseQueryBuilderOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // CB-19: an open list keeps its keys (Escape closes only the list).
+        if (OpenComboListOwnsKey(e))
+        {
+            return;
+        }
+
         if (e.Key == Key.Escape)
         {
             BasesWorkspace?.CloseQueryBuilder();
@@ -235,6 +241,12 @@ public partial class MainWindow
 
     private void DashboardEditorOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // CB-19: an open list keeps its keys (Escape closes only the list).
+        if (OpenComboListOwnsKey(e))
+        {
+            return;
+        }
+
         if (e.Key == Key.Escape)
         {
             BasesWorkspace?.CloseDashboardEditor();
