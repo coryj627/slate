@@ -1120,7 +1120,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 if (svgPixels <= 0)
                 {
-                    imageDecode = new ReadingEmbedImageDecode(null, null, BudgetRefused: true);
+                    // The pool is spent, so the SVG never enters the decoder;
+                    // but one the decoder remembers as timed out, or one past
+                    // the projection's deadline, still says its own sentence
+                    // (#1635, Codex round 2).
+                    string? refusal = EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(
+                        image.Bytes, svgDeadline);
+                    imageDecode = refusal is null
+                        ? new ReadingEmbedImageDecode(null, null, BudgetRefused: true)
+                        : new ReadingEmbedImageDecode(null, refusal);
                 }
                 else
                 {

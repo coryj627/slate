@@ -632,6 +632,46 @@ public sealed class W2EditorInteractionRedTeamTests
                 line => line == $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedRemembered} (bytes={svg.Length})"));
     }
 
+    /// <summary>#1635 (Codex round 2): the checks a decode makes before it
+    /// decodes, asked on their own as the reading view's spent pixel pool asks
+    /// them, give the remembered sentence, then the spent deadline's, or
+    /// nothing; and they take nothing: no deadline time, no decoder slot, no
+    /// decoder run.</summary>
+    [Fact]
+    public void SvgPreview_TheChecksBeforeDecodingTakeNothing()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] remembered = Encoding.UTF8.GetBytes(FilledSvg("peru"));
+        byte[] fresh = Encoding.UTF8.GetBytes(FilledSvg("sienna"));
+        RememberATimeout(slots, decodes, remembered);
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(1_000);
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                Assert.Equal(
+                    TookLonger,
+                    EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(remembered, deadline));
+                Assert.Equal(
+                    TookLonger,
+                    EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(
+                        remembered, new EditorInteractionCoordinator.SvgDecodeDeadline(0)));
+                Assert.Null(EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(fresh, deadline));
+                Assert.Equal(
+                    ProjectionSpent,
+                    EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(
+                        fresh, new EditorInteractionCoordinator.SvgDecodeDeadline(0)));
+
+                Assert.Equal(TimeSpan.FromMilliseconds(1_000), deadline.Left);
+                Assert.Equal(0, Volatile.Read(ref slots.Live));
+                Assert.Equal(0, decodes.RunsOf(fresh));
+                Assert.Equal(1, decodes.RunsOf(remembered));
+            });
+    }
+
     /// <summary>#1635: the deadline is charged only by a decode that started a
     /// decoder. A busy refusal and a remembered refusal leave it as it was; a
     /// decode that ends is charged the time it took, however short.</summary>

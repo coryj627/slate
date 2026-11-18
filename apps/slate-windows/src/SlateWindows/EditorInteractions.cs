@@ -3490,6 +3490,42 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// later fact. Never set by the app.</summary>
     internal static bool SvgDecodeProcessMemoryOffForTests { get; set; }
 
+    /// <summary>#1635: the sentence an SVG decode would refuse these bytes
+    /// with before it decodes anything, or null. The memory first, so a
+    /// remembered image says what it said the first time whatever was decoded
+    /// before it; then the projection's spent deadline. It takes no slot,
+    /// starts no thread, reserves no pixels and charges no deadline. A caller
+    /// that refuses an SVG for its own reason, as the reading view does once
+    /// its pixel pool is spent, asks it first, so the image still says these
+    /// sentences (Codex round 2).</summary>
+    internal static string? SvgDecodeRefusalBeforeDecoding(byte[] bytes, SvgDecodeDeadline? deadline) =>
+        SvgDecodeRefusalBeforeDecoding(
+            bytes, deadline, SvgDecodeSlotsForTests ?? s_svgDecodeSlots, out _, out _);
+
+    private static string? SvgDecodeRefusalBeforeDecoding(
+        byte[] bytes,
+        SvgDecodeDeadline? deadline,
+        SvgDecodeSlots slots,
+        out SvgDecodeTimeoutMemory? memory,
+        out string? key)
+    {
+        memory = SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
+            ? null
+            : slots.TimeoutMemory;
+        key = memory is null ? null : SvgDecodeTimeoutMemory.KeyOf(bytes);
+        if (key is not null && memory!.Contains(key))
+        {
+            HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedRemembered, $"bytes={bytes.Length}");
+            return SvgDecodeTimeExceededMessage;
+        }
+        if (deadline is { IsSpent: true })
+        {
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
+            return SvgProjectionDecodeDeadlineMessage;
+        }
+        return null;
+    }
+
     private static ImageSource? DecodeSvgImage(
         byte[] bytes,
         Func<long, bool>? reserveDecodedBytes,
@@ -3497,27 +3533,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         ref bool budgetSpent,
         out string? failureReason)
     {
-        failureReason = null;
         SvgDecodeSlots slots = SvgDecodeSlotsForTests ?? s_svgDecodeSlots;
-        // #1635 (CD19): the memory first, so a remembered image says what it
-        // said the first time whatever was decoded before it. It takes no
-        // slot, starts no thread and charges no deadline.
-        SvgDecodeTimeoutMemory? memory =
-            SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
-                ? null
-                : slots.TimeoutMemory;
-        string? key = memory is null ? null : SvgDecodeTimeoutMemory.KeyOf(bytes);
-        if (key is not null && memory!.Contains(key))
+        // #1635 (CD19): the memory, then the projection's deadline, then the
+        // cap: core's order after the memory. The memory and its key come
+        // back, so the bytes are hashed once.
+        failureReason = SvgDecodeRefusalBeforeDecoding(
+            bytes, deadline, slots, out SvgDecodeTimeoutMemory? memory, out string? key);
+        if (failureReason is not null)
         {
-            HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedRemembered, $"bytes={bytes.Length}");
-            failureReason = SvgDecodeTimeExceededMessage;
-            return null;
-        }
-        // Then the projection's deadline, then the cap: core's order.
-        if (deadline is { IsSpent: true })
-        {
-            HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
-            failureReason = SvgProjectionDecodeDeadlineMessage;
             return null;
         }
         if (Volatile.Read(ref slots.Abandoned) >= MaxAbandonedSvgDecodes
