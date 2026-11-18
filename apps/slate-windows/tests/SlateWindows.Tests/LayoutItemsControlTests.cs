@@ -335,25 +335,30 @@ public sealed class LayoutItemsControlTests
     /// children, D and E in the raw view (the control view was right). Premise: no client
     /// has connected the window before ours, since a connected window has WPF rebuild the
     /// host's children after each layout and would hide the stale peer without the reset.
-    /// While any UI Automation client in this process listens for an event, WPF connects
-    /// every new window's root itself as the window shows (a desktop client that read an
-    /// earlier fact's window leaves such a listener; AccessibilityNotificationDispatcherTests
-    /// records the route), so this schedule cannot occur, on main or with the fix. The fact
-    /// reads that before the window shows and skips there, saying so. Where nothing listened,
-    /// a root connected before ours fails the premise. Wherever this fact skips, facts 1 and
-    /// 3 (AChangedSourceLeavesNoStalePeerOnTheHost and ABurstOfRemovalsQueuesOneReset), whose
-    /// hosts are in no window, still carry the proof.</summary>
+    /// A desktop UI Automation client connects it by either of the two routes
+    /// AccessibilityNotificationDispatcherTests records: handlers it advised into this process
+    /// for an earlier window leave a listener in WPF's event map, and WPF then connects every
+    /// new window's root itself as it shows; or it sends the new window WM_GETOBJECT as it is
+    /// created. On either route this schedule cannot occur, on main or with the fix, so the
+    /// fact skips and names the route: it reads the event map before the window shows, and
+    /// counts WM_GETOBJECT with a thread hook installed before the window exists. A root
+    /// connected by neither route can come only from code in this process, and fails the
+    /// fact. Wherever this fact skips, facts 1 and 3 (AChangedSourceLeavesNoStalePeerOnTheHost
+    /// and ABurstOfRemovalsQueuesOneReset), whose hosts are in no window, still carry the
+    /// proof.</summary>
     [Fact]
     public void AClientThatConnectsAfterARemovalSeesNoExtraElement() => RunSta(() =>
     {
         string listening = ListeningEvents();
         if (listening.Length > 0)
         {
-            Assert.Skip($"a UI Automation client in this process already listens ({listening}), so WPF connects every new "
-                + "window's root itself and #1860's schedule, a client that connects only after the removal, cannot occur here; "
-                + "facts 1 and 3, hosts in no window, carry the proof");
+            Assert.Skip($"WPF's event map in this process already has a listener ({listening}), left by a UI Automation "
+                + "client that advised an earlier window, so WPF connects every new window's root itself and #1860's "
+                + "schedule, a client that connects only after the removal, cannot occur here; facts 1 and 3, hosts in no "
+                + "window, carry the proof");
         }
 
+        using var requests = new AccessibilityNotificationDispatcherTests.RootRequests();
         ObservableCollection<Row> rows = FiveRows();
         LayoutItemsControl host = ButtonRows(rows);
         AutomationProperties.SetAutomationId(host, ClientHostId);
@@ -370,15 +375,15 @@ public sealed class LayoutItemsControlTests
         window.Show();
         try
         {
+            nint handle = new WindowInteropHelper(window).Handle;
             Drain();
             _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
-            Assert.True(ConnectedRoots() == 0, PremiseBroken("the removal"));
+            SkipWhereAClientConnected(requests, handle, "the removal");
 
             rows.Remove(rows[2]);
             Drain();
-            Assert.True(ConnectedRoots() == 0, PremiseBroken("ours"));
+            SkipWhereAClientConnected(requests, handle, "our client");
 
-            nint handle = new WindowInteropHelper(window).Handle;
             Task<ClientView> read = Task.Run(() => ReadAsAClient(handle));
             PumpedDispatcher.PumpUntilDrained(read, TimeSpan.FromSeconds(30));
             ClientView view = read.Result;
@@ -397,7 +402,9 @@ public sealed class LayoutItemsControlTests
     /// whose peer a client read, not a hundred, and a list cleared and refilled (one
     /// ContainersGenerated per change) queues one, not six. A host no client has read has
     /// nothing cached and posts none, so the twin, whose peer was never made, counts every
-    /// Loaded post the same change makes besides the host's own.</summary>
+    /// Loaded post the same change makes besides the host's own: none, for hosts in no window.
+    /// The raw counts are asserted, host and twin, so a red run shows which defect it saw
+    /// (main posts none for the removals and six for each refill, the twin's too).</summary>
     [Fact]
     public void ABurstOfRemovalsQueuesOneReset() => RunSta(() =>
     {
@@ -408,11 +415,13 @@ public sealed class LayoutItemsControlTests
         _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
         Assert.True(UIElementAutomationPeer.FromElement(twin) is null, "premise: the twin's peer was made");
 
-        int removals = LoadedPostsDuring(() => RemoveAHundred(hostRows)) - LoadedPostsDuring(() => RemoveAHundred(twinRows));
+        int hostRemovals = LoadedPostsDuring(() => RemoveAHundred(hostRows));
+        int twinRemovals = LoadedPostsDuring(() => RemoveAHundred(twinRows));
         Drain();
-        int refill = LoadedPostsDuring(() => Refill(hostRows)) - LoadedPostsDuring(() => Refill(twinRows));
+        int hostRefill = LoadedPostsDuring(() => Refill(hostRows));
+        int twinRefill = LoadedPostsDuring(() => Refill(twinRows));
 
-        Assert.Equal((1, 1), (removals, refill));
+        Assert.Equal((1, 0, 1, 0), (hostRemovals, twinRemovals, hostRefill, twinRefill));
     });
 
     private const string ClientHostId = "Cb25ClientHost";
@@ -464,17 +473,45 @@ public sealed class LayoutItemsControlTests
         return (int)roots.GetType().GetProperty("Count", Any)!.GetValue(roots)!;
     }
 
-    /// <summary>The automation events some UI Automation client in this process listens for
-    /// (WPF's process-wide event map, read through the public per-event probe), joined; empty
-    /// when none.</summary>
+    /// <summary>The automation events WPF's process-wide event map has a listener for, joined
+    /// (read through the public per-event probe); empty when none. A listener is a UI
+    /// Automation client's handler advised into this process.</summary>
     private static string ListeningEvents() =>
         string.Join("+", Enum.GetValues<AutomationEvents>().Where(AutomationPeer.ListenerExists));
 
-    /// <summary>Fact 2's premise message: nothing listened before the window showed, yet its
-    /// root was connected before <paramref name="what"/>; it names what listens by now.</summary>
-    private static string PremiseBroken(string what) =>
-        "premise: nothing in this process listened before the window showed, yet a UI Automation client connected it "
-        + $"before {what} (listening now: {(ListeningEvents() is { Length: > 0 } events ? events : "nothing")})";
+    /// <summary>Fact 2's premise: no client connected the window's automation root before
+    /// <paramref name="what"/>. A desktop client connects it by one of two routes, and on
+    /// either #1860's schedule cannot occur, so the fact skips and names the route: a
+    /// WM_GETOBJECT sent to the window (counted from before the window existed), or a
+    /// listener a client advised into WPF's event map while the window showed. A root
+    /// connected with neither can come only from code in this process, and fails the
+    /// fact.</summary>
+    private static void SkipWhereAClientConnected(
+        AccessibilityNotificationDispatcherTests.RootRequests requests, nint window, string what)
+    {
+        if (ConnectedRoots() == 0)
+        {
+            return;
+        }
+
+        int asked = requests.To(window);
+        if (asked > 0)
+        {
+            Assert.Skip($"a desktop UI Automation client asked the window for its automation root ({asked} WM_GETOBJECT) "
+                + $"before {what}, so WPF connected it and #1860's schedule, a client that connects only after the removal, "
+                + "did not occur here; facts 1 and 3, hosts in no window, carry the proof");
+        }
+
+        if (ListeningEvents() is { Length: > 0 } listening)
+        {
+            Assert.Skip($"WPF's event map in this process gained a listener ({listening}) while the window showed, left by "
+                + $"a UI Automation client, so WPF connected the window's root itself before {what} and #1860's schedule "
+                + "did not occur here; facts 1 and 3, hosts in no window, carry the proof");
+        }
+
+        Assert.Fail($"the window's automation root was connected before {what} with no WM_GETOBJECT to it and no listener "
+            + "in WPF's event map: neither client route explains it, so code in this process connected it");
+    }
 
     /// <summary>The operations posted at Loaded priority while <paramref name="change"/>
     /// runs.</summary>

@@ -313,7 +313,7 @@ public sealed class AccessibilityNotificationDispatcherTests
     /// source exists — would miss. WPF connects the root on any object id, so
     /// every request counts.
     /// </summary>
-    private sealed class RootRequests : IDisposable
+    internal sealed class RootRequests : IDisposable
     {
         private readonly NativeWindow.HookProc _onSent;
         private readonly IntPtr _hook;

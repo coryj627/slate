@@ -290,9 +290,10 @@ internal sealed class LayoutItemsControl : ItemsControl
     /// again each time its containers are generated, so a list rebuilt while the host was
     /// collapsed (the recent vaults, republished while a vault opens) publishes its new
     /// buttons, not the old ones' stops. Containers are generated for an Add and for every
-    /// Reset (a Clear, a refill, a swapped source) on every host with a panel. A removal, a
-    /// replace and a move generate none: <see cref="OnItemsChanged"/> queues their reset
-    /// (#1860).</summary>
+    /// Reset (a Clear, a refill, a swapped source) on every host whose panel does not
+    /// virtualize, which is every site today (the default StackPanel or the
+    /// WeightedSplitPanel). A removal, a replace and a move generate none:
+    /// <see cref="OnItemsChanged"/> queues their reset (#1860).</summary>
     public LayoutItemsControl() =>
         ItemContainerGenerator.StatusChanged += (_, _) =>
         {
@@ -317,15 +318,17 @@ internal sealed class LayoutItemsControl : ItemsControl
     /// else rebuilt the host peer's children until a client had connected the window: a host
     /// read in process kept a removed item's peer, an empty element where the item was, and
     /// a replace's old item or a move's old order. The panel has applied the change by the
-    /// time this runs. Queued, not done here: done here, a burst would rebuild the children
-    /// once per change, and the item peers' re-reads (queued at Send) would run before a
-    /// pending layout gives a new container its template.</summary>
+    /// time this runs. Queued, not done here: done here, a burst of removals would rebuild
+    /// the children once per change, where one queued reset serves the whole burst and the
+    /// ContainersGenerated resets beside it; the item peers' re-reads (queued at Send) would
+    /// also run before a pending layout gives a new container its template.</summary>
     protected override void OnItemsChanged(NotifyCollectionChangedEventArgs e)
     {
         base.OnItemsChanged(e);
-        // Not Reset: on every host with a panel a Reset regenerates its containers and so
-        // resets through ContainersGenerated, collapsed or not, and a host with no panel
-        // lists no item peers. Not Add: it generates containers too.
+        // Not Reset: on every host whose panel does not virtualize (every site today: the
+        // default StackPanel or the WeightedSplitPanel) a Reset regenerates its containers
+        // and so resets through ContainersGenerated, collapsed or not, and a host with no
+        // panel lists no item peers. Not Add: it generates containers too.
         if (e.Action is NotifyCollectionChangedAction.Remove
             or NotifyCollectionChangedAction.Replace
             or NotifyCollectionChangedAction.Move)
