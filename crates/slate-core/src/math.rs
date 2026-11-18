@@ -856,7 +856,7 @@ fn write_mathml(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
 }
 
 /// Marks a function name for [`write_mathml_marked`]. A private-use
-/// character, so no source spells it by chance.
+/// character; a source that holds one itself is written unmarked.
 const FUNCTION_MARK: char = '\u{E000}';
 
 /// What the writer gives, with only its markup characters escaped, and for
@@ -865,16 +865,33 @@ const FUNCTION_MARK: char = '\u{E000}';
 /// ordinary character and for a function name of one character after
 /// escaping (`\&` and `\operatorname{&}` are both `<mi>&amp;</mi>`), so
 /// each function name is handed to the writer behind [`FUNCTION_MARK`] and
-/// the mark is taken out again here, with the `mathvariant="normal"` the
-/// writer gives a name of one character put back as it would have written
-/// it. A source that already holds the mark has no function told apart,
-/// and is written as the writer writes it.
+/// the mark is taken out again ([`unmark_functions`]). When the output
+/// holds any mark the writer was not handed (the source spells one), the
+/// formula is written again unmarked and no `<mi>` is told to be a
+/// function, so the repair leaves it as the writer wrote it.
 fn write_mathml_marked(events: Vec<pulldown_latex::event::Event<'_>>) -> (String, Vec<bool>) {
     use pulldown_latex::event::{Content, Event};
+    let functions = events
+        .iter()
+        .filter(|event| matches!(event, Event::Content(Content::Function(_))))
+        .count();
+    if functions == 0 {
+        return (write_mathml_names(events, false), Vec::new());
+    }
+    let marked = write_mathml_names(events.clone(), true);
+    if marked.matches(FUNCTION_MARK).count() == functions {
+        unmark_functions(&marked)
+    } else {
+        (write_mathml_names(events, false), Vec::new())
+    }
+}
+
+/// pulldown-latex's MathML for `events`, its markup characters escaped
+/// (#1557), with each function name escaped first and, when `mark` holds,
+/// put behind [`FUNCTION_MARK`]. Empty when the writer fails.
+fn write_mathml_names(events: Vec<pulldown_latex::event::Event<'_>>, mark: bool) -> String {
+    use pulldown_latex::event::{Content, Event};
     use pulldown_latex::{RenderConfig, mathml::push_mathml};
-    let mark = !events.iter().any(|event| {
-        matches!(event, Event::Content(Content::Function(name)) if name.contains(FUNCTION_MARK))
-    });
     let names: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
@@ -896,17 +913,20 @@ fn write_mathml_marked(events: Vec<pulldown_latex::event::Event<'_>>) -> (String
     });
     let mut out = String::new();
     match push_mathml(&mut out, escaped, RenderConfig::default()) {
-        Ok(()) => unmark_functions(&escape_stray_markup(&out)),
-        Err(_) => (String::new(), Vec::new()),
+        Ok(()) => escape_stray_markup(&out),
+        Err(_) => String::new(),
     }
 }
 
 /// Takes [`FUNCTION_MARK`] out of the writer's output, and answers, for each
-/// `<mi>` in order, whether it held the mark. A marked name of one
-/// character gets back the `mathvariant="normal"` the writer gives such a
-/// name (`mathml.rs:651-655` in pulldown-latex), which the mark kept it
-/// from writing; the writer counts the name as it was handed over, escaped.
+/// `<mi>` in order, whether it held the mark. The writer gives a name of
+/// one character `mathvariant="normal"` (`mathml.rs:651-655` in
+/// pulldown-latex), counting the name as it was handed over, so the mark
+/// moved that by one: a marked name of one character gets it back, and a
+/// marked empty name loses the one the mark alone earned it. Every other
+/// byte is the writer's.
 fn unmark_functions(marked: &str) -> (String, Vec<bool>) {
+    const UPRIGHT: &str = " mathvariant=\"normal\">";
     let mut out = String::with_capacity(marked.len());
     let mut functions = Vec::new();
     let mut rest = marked;
@@ -928,11 +948,16 @@ fn unmark_functions(marked: &str) -> (String, Vec<bool>) {
             Some(name) => {
                 functions.push(true);
                 let length = name[..name.find('<').unwrap_or(name.len())].chars().count();
-                if length == 1 && !tag.contains("mathvariant=") {
-                    out.push_str(&tag[..tag.len() - 1]);
-                    out.push_str(" mathvariant=\"normal\">");
-                } else {
-                    out.push_str(tag);
+                match (length, tag.strip_suffix(UPRIGHT)) {
+                    (0, Some(bare)) => {
+                        out.push_str(bare);
+                        out.push('>');
+                    }
+                    (1, None) => {
+                        out.push_str(&tag[..tag.len() - 1]);
+                        out.push_str(UPRIGHT);
+                    }
+                    _ => out.push_str(tag),
                 }
                 rest = name;
             }
@@ -3287,6 +3312,46 @@ mod tests {
         };
         let (events, _) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
         write_mathml_marked(events)
+    }
+
+    /// #1629: the function mark is taken out without a trace. For every
+    /// golden source and the shapes that could trip it (a source that spells
+    /// the mark itself, in a function name or alone; an empty function name;
+    /// a one-character name, escaped or not), the marked write gives the
+    /// writer's own bytes, and each `<mi>` is told a function name exactly
+    /// when the parser made it one.
+    #[test]
+    fn the_function_mark_leaves_the_writers_bytes() {
+        use pulldown_latex::Storage;
+        use pulldown_latex::event::Event;
+        let shapes = [
+            ("\\operatorname{\u{E000}x}", vec![]),
+            ("\\operatorname{\u{E000}}", vec![]),
+            ("\u{E000}", vec![]),
+            ("\\sin x + \u{E000}", vec![]),
+            ("\\operatorname{}", vec![true]),
+            ("\\operatorname{&}", vec![true]),
+            ("\\&", vec![]),
+            ("\\operatorname{f} x", vec![true, false]),
+            ("\\sin x", vec![true, false]),
+        ]
+        .map(|(source, functions)| (source.to_string(), Some(functions)));
+        let golden = golden_sources().into_iter().map(|source| (source, None));
+        for (source, functions) in shapes.into_iter().chain(golden) {
+            let storage = Storage::new();
+            let Ok(events) = pulldown_latex::Parser::new(&source, &storage)
+                .collect::<Result<Vec<Event<'_>>, _>>()
+            else {
+                continue;
+            };
+            let written = write_mathml_names(events.clone(), false);
+            let (marked, told) = write_mathml_marked(events);
+            assert_eq!(marked, written, "{source}");
+            assert!(!marked.contains(FUNCTION_MARK) || source.contains(FUNCTION_MARK));
+            if let Some(functions) = functions {
+                assert_eq!(told, functions, "{source}");
+            }
+        }
     }
 
     /// #1629: the repair changes only a script element with more children
