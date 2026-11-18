@@ -1037,6 +1037,88 @@ public sealed partial class ShellAccessibilityTests
                     string.Join(", ", error.Element.Properties))));
     }
 
+    /// <summary>CB-19 (#1783, #1836): a scan of a list that closed under it is
+    /// clean, so after a scan with a list open the list must still be open and
+    /// its own popup window still there: the one that holds its rows (a
+    /// tooltip or a context menu is a popup window too).</summary>
+    internal static void AssertTheListIsStillOpen(Window window, AutomationElement combo, string surface)
+    {
+        Assert.True(
+            combo.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault == ExpandCollapseState.Expanded,
+            $"{surface}: the list closed during the scan, so the scan did not see it open.");
+        (string[] names, AutomationElement[]? rows, List<string> found) = TheListsPopupRows(window, combo);
+        Assert.True(
+            rows is not null && names.Length > 0,
+            $"{surface}: the list says it is open and no popup window holds its rows "
+            + $"[{string.Join(", ", names.Select(name => "'" + name + "'"))}]; the popups found hold "
+            + $"{(found.Count == 0 ? "nothing" : string.Join(" and ", found))}.");
+    }
+
+    /// <summary>The rows of the combo box's own popup window: the popup whose
+    /// rows have the combo box's own rows' names, in order. Also the combo
+    /// box's own row names and what every popup found holds, for a
+    /// message.</summary>
+    private static (string[] Names, AutomationElement[]? Rows, List<string> Found) TheListsPopupRows(Window window, AutomationElement combo)
+    {
+        var conditions = window.Automation.ConditionFactory;
+        string[] names = [.. combo.FindAllChildren(conditions.ByControlType(ControlType.ListItem))
+            .Select(row => row.Properties.Name.ValueOrDefault ?? string.Empty)];
+        AutomationElement[] popups = window.FindAllDescendants(
+            conditions.ByClassName("Popup").And(conditions.ByControlType(ControlType.Window)));
+        var found = new List<string>();
+        AutomationElement[]? rows = null;
+        foreach (AutomationElement popup in popups)
+        {
+            AutomationElement[] items = popup.FindAllDescendants(conditions.ByControlType(ControlType.ListItem));
+            string[] itemNames = [.. items.Select(row => row.Properties.Name.ValueOrDefault ?? string.Empty)];
+            found.Add("[" + string.Join(", ", itemNames.Select(name => "'" + name + "'")) + "]");
+            if (rows is null && itemNames.SequenceEqual(names, StringComparer.Ordinal))
+            {
+                rows = items;
+            }
+        }
+
+        return (names, rows, found);
+    }
+
+    /// <summary>CB-19 (#1783, #1836): WPF publishes an open combo box's rows
+    /// twice, under the combo box and under the open list's own window, and a
+    /// client that walks or hit-tests the popup reads the second copy. The
+    /// popup is the one whose rows have the combo box's own rows' names, in
+    /// order (a tooltip or a context menu is a popup window too). It has at
+    /// least one row and as many as the combo box; row i says it is i + 1 of
+    /// n, and so does the combo box's own row i.</summary>
+    internal static void AssertOpenListRowsSayTheirPlace(Window window, AutomationElement combo)
+    {
+        var conditions = window.Automation.ConditionFactory;
+        AutomationElement[] own = combo.FindAllChildren(conditions.ByControlType(ControlType.ListItem));
+        (string[] names, AutomationElement[]? rows, List<string> found) = TheListsPopupRows(window, combo);
+        string comboName = combo.Properties.Name.ValueOrDefault ?? string.Empty;
+        Assert.True(
+            rows is not null,
+            $"'{comboName}': no popup window holds the list's rows [{string.Join(", ", names.Select(name => "'" + name + "'"))}]; "
+            + $"the popups found hold {(found.Count == 0 ? "nothing" : string.Join(" and ", found))}.");
+        Assert.True(own.Length > 0, $"'{comboName}': the open list has no rows.");
+        Assert.Equal(own.Length, rows!.Length);
+        var wrong = new List<string>();
+        for (int index = 0; index < rows.Length; index++)
+        {
+            foreach ((string copy, AutomationElement row) in new[] { ("the popup's", rows[index]), ("the combo box's", own[index]) })
+            {
+                int position = row.Properties.PositionInSet.ValueOrDefault;
+                int size = row.Properties.SizeOfSet.ValueOrDefault;
+                if (position != index + 1 || size != rows.Length)
+                {
+                    wrong.Add($"{copy} '{names[index]}' says {position} of {size}, not {index + 1} of {rows.Length}");
+                }
+            }
+        }
+
+        Assert.True(
+            wrong.Count == 0,
+            $"'{comboName}': rows that do not say their place:\n  " + string.Join("\n  ", wrong));
+    }
+
     /// <summary>Wait, bounded, until every on-screen TreeItem and DataItem
     /// of the process's main window has a non-empty bounding rectangle —
     /// the layout has arranged what it realized — before an axe scan.</summary>
@@ -4414,6 +4496,31 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the builder overlay opened without moving focus into the dialog");
             AssertAxeClean(process, "bases-builder-overlay");
+
+            // CB-19 (#1783, #1836): the combinator's list open, by the real chord. The scan
+            // reaches the open list's own window, every row there says its place, and Escape
+            // closes only the list: the builder stays, with the keys on the combinator.
+            AutomationElement combinator = WaitForElement(window, "BuilderCombinator", TimeSpan.FromSeconds(10));
+            ReassertForegroundForAChord(window);
+            combinator.Focus();
+            AssertEventuallyFocused(combinator, "the combinator took no keys.");
+            PressChord(VirtualKeyShort.ALT, VirtualKeyShort.DOWN);
+            Retry.WhileFalse(
+                () => combinator.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ExpandCollapseState.Expanded, combinator.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            AssertAxeClean(process, "bases-builder-combinator-list-open");
+            AssertTheListIsStillOpen(window, combinator, "bases-builder-combinator-list-open");
+            AssertOpenListRowsSayTheirPlace(window, combinator);
+            PressKey(VirtualKeyShort.ESCAPE);
+            Retry.WhileFalse(
+                () => combinator.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault != ExpandCollapseState.Expanded,
+                TimeSpan.FromSeconds(5));
+            Assert.True(
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("BaseQueryBuilderSheet")) is not null,
+                "Escape with the combinator's list open closed the builder, not the list.");
+            Assert.Equal(ExpandCollapseState.Collapsed, combinator.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            AssertEventuallyFocused(combinator, "closing the combinator's list took the keys from it.");
 
             // Save the query from the overlay — the saved-query TAB
             // surface and the dashboard surfaces ride on it below.
@@ -11515,6 +11622,26 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal("Local graph depth", depth.Properties.Name.Value);
             Assert.Equal("How many links away from this note to include.", depth.Properties.HelpText.Value);
             Assert.Equal("Links", depth.AsComboBox().SelectedItem?.Text);
+            // CB-19 (#1783, #1836): the depth's list open, by the real chord. The scan
+            // reaches the open list's own window, every row there says its place, and
+            // Escape closes the list with the keys left on the control.
+            ReassertForegroundForAChord(window);
+            depth.Focus();
+            AssertEventuallyFocused(depth, "the depth control took no keys.");
+            PressChord(VirtualKeyShort.ALT, VirtualKeyShort.DOWN);
+            Retry.WhileFalse(
+                () => depth.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ExpandCollapseState.Expanded, depth.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            AssertAxeClean(process, "connections-depth-list-open");
+            AssertTheListIsStillOpen(window, depth, "connections-depth-list-open");
+            AssertOpenListRowsSayTheirPlace(window, depth);
+            PressKey(VirtualKeyShort.ESCAPE);
+            Retry.WhileFalse(
+                () => depth.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ExpandCollapseState.Collapsed, depth.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            AssertEventuallyFocused(depth, "closing the depth's list took the keys from it.");
             depth.AsComboBox().Select("2 links away");
             Assert.True(
                 SpinWait.SpinUntil(() => summary.Properties.Name.Value == summaryAtTwo, TimeSpan.FromSeconds(10)),

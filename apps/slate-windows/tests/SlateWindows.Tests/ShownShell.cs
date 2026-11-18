@@ -113,6 +113,10 @@ internal sealed class ShownShell : IDisposable
     /// registries before it acts.</summary>
     public VaultSession Session => _session;
 
+    /// <summary>The fixture vault's folder, for a fact that builds a view model
+    /// over the same vault (the Files sidebar an import fact attaches).</summary>
+    internal string Root => _fixture.Root;
+
     /// <summary>A note's file rewritten on disk, as another program would.</summary>
     public void Rewrite(string path, string text) => File.WriteAllText(Path.Combine(_fixture.Root, path), text);
 

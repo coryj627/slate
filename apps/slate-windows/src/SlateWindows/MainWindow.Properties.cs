@@ -308,6 +308,13 @@ public partial class MainWindow
 
     private void AddPropertyOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // CB-19: an open list keeps its keys (Escape closes only the list,
+        // Enter chooses the highlighted row and adds nothing).
+        if (OpenComboListOwnsKey(e))
+        {
+            return;
+        }
+
         if (e.Key == Key.Escape)
         {
             _observedWorkspace?.CloseAddPropertySheetCommand.Execute(null);
@@ -329,6 +336,16 @@ public partial class MainWindow
 
     private void BulkRenameOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // CB-19: an open list keeps its keys (Escape closes only the list,
+        // Enter chooses the highlighted row and runs no preview). The handler
+        // stays on the tunnelling route: WPF's DataGrid takes Enter whenever a
+        // cell is current, so a bubbling handler would never see Enter from
+        // the preview grid.
+        if (OpenComboListOwnsKey(e))
+        {
+            return;
+        }
+
         if (e.Key == Key.Escape)
         {
             // Cancels in-flight core work through the CancelToken
