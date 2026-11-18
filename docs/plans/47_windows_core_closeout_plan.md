@@ -782,9 +782,13 @@ today:
   of the new import events, in place of the Mac's own summary and cancel
   sentences, CD10); #1900 (an unreadable note lists, and on the Mac its
   row says a 1969 or 1970 modified date until the file reads again,
-  CD41).
+  CD41); #1889 (the export's refusal: by reading uniffi 0.32.2's Swift
+  error template, VoiceOver would hear "Saved query could not be
+  exported: " and the error's type spelling, so the Mac's arm needs
+  `humanReadableVaultError`; moved here from the line below on
+  2026-11-17, CB-9b's Call 6).
 - Behaviour, with nothing new to hear: #1683 (one event stops arriving);
-  #1889 (the export's refusal); #1704 and #1705 (links that used to stay
+  #1704 and #1705 (links that used to stay
   unresolved now resolve; #1705's new fold rebuilds each vault's index
   once on upgrade, on the Mac too, CD22; if CB-32 makes the fold by
   changing the sort key, the line also names the Files tree's changed
@@ -897,9 +901,14 @@ started:
 | CB-10 | `specs/cb10_a_failed_vault_switch_returns_to_the_welcome_view_once.md` |
 | CB-13 | `specs/cb13_a_case_only_rename_on_fat_is_refused_and_says_so.md` |
 | CB-27 | `specs/cb27_one_panicking_diagram_does_not_disable_diagrams.md` |
+| CB-11 | `specs/cb11_a_parked_citation_summary_press_follows_its_notes_rename.md` |
+| CB-12 | `specs/cb12_a_repair_announces_only_what_it_changed.md` |
+| CB-19 | `specs/cb19_every_open_combo_boxs_rows_report_their_place.md` |
 
 CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
-each ends with the corrections its delivery made.
+each ends with the corrections its delivery made. Wave C5's specs were
+written on 2026-11-17 at eea6e7a2, each with a step 0 measurement and a
+red team before code, and each ends with what its delivery changed.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1023,6 +1032,9 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-9a | #1983 | 2026-11-17 (3d56978f) | none (Refs #1889, open for CB-9b) | 11 / 5 / 5 / 1 | CB-9b ends four census rows (`BulkRenameViewModel.Run`, `FilesSidebarViewModel.EditTag`, `ExportSavedQueryAsBase`, the bulk-rename caller of `ReconcileTabsAfterPropertyWrite`). Filed #1980 (a tabless Bases cell edit names a path), pinned by a fact. Five lines on #1955. Not delivered: an NVDA hearing of the raced-tab sentence. The owner's ear on that sentence's new occasion |
 | CB-7 | #1986 | 2026-11-17 (3ae84200) | #1788 (CD3) | 6 / 0 / 4 / 2 | Filed #1974 (every Windows writer makes the classic replacing rename; the spec's mechanism was wrong) and #1976 (the app menu pointer fact). Four lines on #1955. Codoki was bypassed on an independent judge's verdict: its one finding, that xunit has no `Assert.Fail`, is false. Not delivered: a failing test for #1788's own run. Three local reds never reproduced and never seen on a lane |
 | CB-13 | #1985 | 2026-11-17 (0a417b84) | #1727 | 7 / 1 / 4 / 2 | Filed #1975 (merged first, above) and #1977 (an outside edit made just before a rename is dropped as the rename's own echo). Three lines and a possible flake on #1955. A refusal records no echo. Run 43943403456: the read with the renamed handle still open equals the folder's listing in all twelve cases, and the watcher hears no event for either spelling around an ignored rename. Not delivered: an NVDA hearing on a real FAT32 or exFAT volume (an owner step); the read-back on an SMB share on the lane (it passed locally on a loopback share over NTFS); either read after a rename a FAT volume applied; the mixed folder outcome. The Mac's twin on #1954 |
+| CB-12 | #1996 | 2026-11-17 (6b098c1e) | #1683 (CD6) | 8 / 1 / 6 / 1 | Six lines on #1955: the Modified sibling, the launcher's second instance, the generation across sessions, the destination's re-read under a stale graph at `graph.rs:841`, the release DLL's reproducibility, and `delete_file`'s staging. Filed #1995 (a field pass started by the launcher without `-Root` runs with no hot-exit store). The Mac's line on #1954. NVDA two-session phrases for base and head are in the PR body. Not delivered: a VoiceOver or Mac run |
+| CB-11 | #1997 | 2026-11-17 (6351c82b) | #1714 | 15 / 9 / 1 / 5 | Filed #1988, #1989, #1990, #1993 and #1994 (more shapes added as comments on #1990, #1993 and #1994). A line on #1955: NVDA cuts off the leaf's count under the sheet's sentence when both arrive in one turn. Not delivered: another session's rename read before this window's rescan (#1990); a rename made outside Slate. The read-window exposure (another session replacing the file between the check and the load's read) was declined on the lead's call and recorded on #1990. NVDA ran on 2d45fbea, before the review fixes. No Mac work owed |
+| CB-19 | #1998 | 2026-11-18 (69380c4e) | #1783, #1836 | 5 / 2 / 3 / 0 | Three lines on #1955: the stale `ChordTable.cs` sort-combo comment, a possible `OpenRailPanel` flake, and key lag under NVDA during an import on `main`. NVDA phrases for base and head are in the PR body. NVDA speaks no position on the popup copy on either build, so the gate scans and UIA reads are the evidence. Not delivered: a fact for the tracker's attach guard, and a red run for the stricter still-open check |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1147,3 +1159,60 @@ in a wave yet; each waits for the owner's call:
 The home Mac runner stopped answering at 00:55 UTC on 2026-11-17. A run
 routed to it two minutes earlier stayed queued for ninety minutes; a
 cancel and a rerun routed it to Namespace.
+
+Wave C5, 2026-11-17 and 18. The account's Fable limit stopped both
+principals mid-spec at 08:40 UTC on 2026-11-17. On the owner's word
+that day, two new principals and their workers ran on Opus at xhigh
+from the saved specs and worktrees, until the limit resets on
+2026-11-21. Each spec had a step 0 measurement and an Opus red team
+before code, and each diff a fresh Opus red team. Codex ran at effort
+high to an approve: CB-12 two rounds, CB-19 four, CB-9b five and CB-11
+eight. Codoki reported Safe to merge at 5/5 on every PR.
+
+CB-11's rounds 1 to 7 each found a schedule in which the parked press
+answered for another note where `main` drops it, and each was fixed red
+first. The spec's rule, that the press follows the tab the leaf shows,
+was wrong where two tabs name one path. The press now follows the tab
+it was parked on, and only with proof that the moved file is that tab's
+version: the index at the new path for this window's renames, and the
+feed record's present hash for another session's. Round 7's second
+finding, another session replacing the file between the check and the
+load's read, has the same exposure on `main` for any parked press; the
+lead declined it as the residual risk of a read by path, recorded on
+#1990.
+
+CB-19's spec priced its row tracker against lists of 3 to about 10
+rows. Its diff red team showed the dashboard editor's saved-query picker
+is unbounded and stays realized after its first open, so a refill cost
+grew with the square of the rows. The tracker now stamps only while a
+list is open, and a fact shows a closed combo box reports what it
+reports on `main`.
+
+CB-9b's spec put eight calls to the lead, all ruled as recommended on
+2026-11-17. The lead's undo rule (Design 0) made the fix of an undo
+that wrote another writer's replaced bytes back part of the chunk.
+
+Defects on `main` that wave C5 found and filed, none placed in a wave
+yet; each waits for the owner's call, beside the five above:
+
+- #1988: a citation summary answered inside the unsaved-changes prompt
+  stays over the next note.
+- #1989: a re-seat that respells the active tab leaves the panels on the
+  old spelling.
+- #1990: a citation load for a path the index no longer has says no
+  citations.
+- #1991: after a task toggle through a tab, one undo and a save write
+  the old task state back to disk.
+- #1992: a cancelled bulk rename calls the files it never reached
+  "failed".
+- #1993: a parked citation summary press survives leaving its note
+  while another tab's save is writing, and the sheet opens unasked.
+- #1994: two notes with identical bytes both follow another session's
+  rename of one of them (the change feed plans a move by the shown
+  version, so a tab can follow a file that is not its note).
+- #1999: the reading view's 2,000-block notice is spoken again whenever
+  another writer's bytes land in a reading-mode tab.
+- #2000: the Windows app installs no handler for an unhandled exception,
+  so a publication whose sentence throws ends the process (by reading).
+- #1995 (tooling): a field pass started by the launcher without `-Root`
+  runs with no hot-exit store.
