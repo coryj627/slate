@@ -5143,6 +5143,37 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 3, finding 2. After a tag edit the note's header
+    /// refreshes; when that read fails, nothing is spoken (a tag edit's header
+    /// failure is no occasion the lead accepted), and the header still shows
+    /// its load error. Red today: the refresh speaks
+    /// PropertiesReloadFailed.</summary>
+    [Fact]
+    public void ATagEditsHeaderRefreshThatFailsIsNotSpokenAndShowsItsError() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-header-refresh-fails", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        header.RefreshReadHookForTests = () => throw new IOException("the header's read failed (test seam)");
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && TagSummaries(h) > 0 && !header.IsLoading && header.LoadError is not null,
+                "the tag edit and its header's failed refresh");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.PropertiesReloadFailed);
+            Assert.NotNull(header.LoadError);
+            Assert.Contains("probe", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            header.RefreshReadHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 4, CB-9a's first teardown shape. Close Vault's first
     /// step, settling the saves, waits for a tag edit queued behind an
     /// operation admitted for its note, and returns once the tag edit has
