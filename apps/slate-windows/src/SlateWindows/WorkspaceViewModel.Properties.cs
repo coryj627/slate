@@ -643,17 +643,22 @@ internal sealed partial class WorkspaceViewModel
         };
 
     /// <summary>The W4-3 read-back rule: a non-conflict failure whose
-    /// disk hash moved re-baselines tabs and re-derives headers.</summary>
+    /// disk hash moved re-baselines tabs and re-derives headers. Plan 47
+    /// CB-9b (the red team's m3; #1955's CB-9a item 3): the reconcile, the
+    /// header refresh and the panels are steps of their own, so a dirty
+    /// tab whose sentence throws skips neither the refresh nor the panels;
+    /// the first fault is rethrown once every step has run.</summary>
     private void ReconcileAfterReadBack(string path, string? postFailureDiskHash)
     {
-        if (postFailureDiskHash is not null
+        if (postFailureDiskHash is { } diskHash
             && FindTabForPath(path) is { } tab
             && !string.Equals(
-                tab.SavedContentHash, postFailureDiskHash, StringComparison.Ordinal))
+                tab.SavedContentHash, diskHash, StringComparison.Ordinal))
         {
-            _ = ReconcileTabsAfterPropertyWrite(path, postFailureDiskHash);
-            RefreshPropertiesFor(path);
-            NotePersisted(path);
+            AdmittedPublication.RunEvery(
+                () => _ = ReconcileTabsAfterPropertyWrite(path, diskHash),
+                () => RefreshPropertiesFor(path),
+                () => NotePersisted(path));
         }
     }
 
