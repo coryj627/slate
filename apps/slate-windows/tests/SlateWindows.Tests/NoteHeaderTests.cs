@@ -818,6 +818,7 @@ public sealed class NoteHeaderTests
         Button more = More(HeaderOf(host, "Lecture.md"));
         ContextMenu menu = more.ContextMenu!;
         MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
 
         // (a) By its Invoke pattern: held while open, and a close with no press gives them back.
         Assert.True(more.Focus());
@@ -826,8 +827,7 @@ public sealed class NoteHeaderTests
         host.Settle();
         Assert.True(menu.IsOpen);
         AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
-        menu.IsOpen = false;
-        host.Settle();
+        CloseAndAwait(host, menu, closes);
         AssertGivenBack(rows, "once ⋯ closed with no press");
 
         // (b) A press gives them back.
@@ -838,8 +838,7 @@ public sealed class NoteHeaderTests
         AssertHeld(rows, "with ⋯ opened again");
         menu.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
         AssertGivenBack(rows, "after a press on the menu");
-        menu.IsOpen = false;
-        host.Settle();
+        CloseAndAwait(host, menu, closes);
 
         // (c) A move that leaves the pointer where it rested keeps them; a move elsewhere gives them back.
         Assert.True(more.Focus());
@@ -853,8 +852,7 @@ public sealed class NoteHeaderTests
         menu.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = UIElement.PreviewMouseMoveEvent });
         AssertGivenBack(rows, "after a move to another place");
         pointer.At = (40, 40);
-        menu.IsOpen = false;
-        host.Settle();
+        CloseAndAwait(host, menu, closes);
 
         // (d) A pointer's click, its mouse-up and Click in one input, holds nothing.
         Assert.True(more.Focus());
@@ -864,8 +862,7 @@ public sealed class NoteHeaderTests
         host.Settle();
         Assert.True(menu.IsOpen);
         AssertGivenBack(rows, "with ⋯ opened by a pointer's click");
-        menu.IsOpen = false;
-        host.Settle();
+        CloseAndAwait(host, menu, closes);
 
         // (e) The Apps key on ⋯, through WPF's own route: the keys' open, held, on its first row.
         Assert.True(more.Focus());
@@ -874,12 +871,13 @@ public sealed class NoteHeaderTests
         host.Settle();
         Assert.True(menu.IsOpen, "the Apps key on ⋯ opened nothing.");
         AssertHeld(rows, "with ⋯ opened by the Apps key");
+        int open = closes.Count;
         if (LandedOnTheFirstRow(more))
         {
             menu.IsOpen = false;
         }
 
-        host.Settle();
+        closes.AwaitOneAfter(host, open);
         AssertGivenBack(rows, "once the Apps key's menu closed");
     }));
 
@@ -898,6 +896,7 @@ public sealed class NoteHeaderTests
         Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         ContextMenu menu = folders.ContextMenu!;
         MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
 
         Assert.True(folders.Focus());
         Invoke(folders);
@@ -905,8 +904,7 @@ public sealed class NoteHeaderTests
         host.Settle();
         Assert.True(menu.IsOpen);
         AssertHeld(rows, "with Folders opened by its Invoke pattern");
-        menu.IsOpen = false;
-        host.Settle();
+        CloseAndAwait(host, menu, closes);
         AssertGivenBack(rows, "once Folders closed with no press");
 
         Assert.True(folders.Focus());
@@ -915,14 +913,43 @@ public sealed class NoteHeaderTests
         host.Settle();
         Assert.True(menu.IsOpen, "the Apps key on Folders opened nothing.");
         AssertHeld(rows, "with Folders opened by the Apps key");
+        int open = closes.Count;
         if (LandedOn(folders, rows[0]))
         {
             menu.IsOpen = false;
         }
 
-        host.Settle();
+        closes.AwaitOneAfter(host, open);
         AssertGivenBack(rows, "once the Apps key's menu closed");
     }));
+
+    /// <summary>Counts a menu's Closed events. With no theme in the hosted shell its popup fades
+    /// out (about 170 ms) before it raises Closed, which is when the hold ends.</summary>
+    private sealed class Closes
+    {
+        internal Closes(ContextMenu menu) => menu.Closed += (_, _) => Count++;
+
+        internal int Count { get; private set; }
+
+        /// <summary>Pumps until a Closed after the <paramref name="before"/>th has come.</summary>
+        internal void AwaitOneAfter(ShownShell host, int before) =>
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        host.Settle();
+                        return Count > before;
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "the menu never raised Closed.");
+    }
+
+    private static void CloseAndAwait(ShownShell host, ContextMenu menu, Closes closes)
+    {
+        int before = closes.Count;
+        menu.IsOpen = false;
+        closes.AwaitOneAfter(host, before);
+    }
 
     /// <summary>The pointer the hold reads, which a fact moves.</summary>
     private sealed class FakePointer

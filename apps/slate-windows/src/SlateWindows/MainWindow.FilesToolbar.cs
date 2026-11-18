@@ -100,12 +100,18 @@ public partial class MainWindow
         // menu's own restore.
         menu.Closed += (_, _) =>
         {
+            RestingPointerHold.Release(menu);
             if (ReferenceEquals(SidebarSortMenu, menu))
             {
                 SidebarSortMenu = null;
             }
         };
         SidebarSortMenu = menu;
+        // Every open lands the checked order, a pointer's click too, so every open holds the
+        // rows from a pointer resting where they appear (#1849). A click leaves the pointer on
+        // the button, which the menu's window overlaps only by its shadow; its first move
+        // gives the rows back.
+        RestingPointerHold.Begin(menu, menu.Items.OfType<MenuItem>());
         menu.IsOpen = true;
     }
 
