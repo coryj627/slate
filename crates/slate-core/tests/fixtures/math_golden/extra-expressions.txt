@@ -98,11 +98,31 @@ x_\min^\max
 x^\rm a
 x^\, 2
 
-# Three or more primes (#1628, CD21): spoken from the folded tree, brailled
-# and exposed from the loose one.
+# Three or more primes (#1628, CD21): spoken from the folded tree, exposed from
+# the loose one, brailled from it with an authored glyph spelled as primes.
 f''''(x)
 f'''''(x)
 \sin'''(x)
 f\dprime'(x)
 f\trprime(x)
 2\sin^2 x + f'''(x)
+
+# Fraction and root arguments, authored primes and script positions (#1629,
+# #1628, the plan lead's second ruling): a function as an ungrouped fraction
+# or root argument reads as its group; an authored triple or quadruple prime
+# after a carrier brailles as its primes, while one in a superscript or after
+# no carrier keeps MathCAT's stray full stop; a script takes the position its
+# base sets.
+\frac x\sin y
+\frac\sin x y
+\sqrt[3]\sin x
+\sqrt[\sin]x y
+\frac x\hat\sin y
+f\qprime(x)
+\sin\trprime(x)
+f^{\trprime}(x)
+(fg)\trprime
+\liminf\limits_{n}^\max x
+\max\limits_\min x
+\displaystyle x_\max y
+\int_0^\max f

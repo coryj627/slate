@@ -2559,8 +2559,8 @@ ClearSpeak Verbose: f triple prime, of x
 SimpleSpeak Terse: f triple prime, x
 SimpleSpeak Medium: f triple prime, of x
 SimpleSpeak Verbose: f triple prime, of x
-Nemeth: ⠋⠄⠄.⠷⠭⠾
-UEB: ⠋⠰⠶⠶⠶⠐⠣⠭⠐⠜
+Nemeth: ⠋⠄⠄⠄⠷⠭⠾
+UEB: ⠰⠰⠋⠶⠶⠶⠐⠣⠭⠐⠜
 === extra-expressions.txt:108
 source: 2\sin^2 x + f'''(x)
 MathML: <math display="inline"><mn>2</mn><mspace width="0.1667em" /><msup><mi>sin</mi><mn>2</mn></msup><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi><mo>+</mo><mi>f</mi><mi>′</mi><mi>′</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
@@ -2572,3 +2572,146 @@ SimpleSpeak Medium: 2 sine squared of x, plus f triple prime, of x
 SimpleSpeak Verbose: 2 sine squared of x, plus f triple prime, of x
 Nemeth: ⠼⠆⠎⠊⠝⠘⠆⠀⠭⠬⠋⠄⠄⠄⠷⠭⠾
 UEB: ⠼⠃⠎⠊⠝⠔⠼⠃⠭⠐⠖⠋⠶⠶⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:116
+source: \frac x\sin y
+MathML: <math display="inline"><mfrac><mi>x</mi><mi>sin</mi></mfrac><mi>y</mi></math>
+ClearSpeak Terse: the fraction with numerator x; and denominator sine; y
+ClearSpeak Medium: the fraction with numerator x; and denominator sine; y
+ClearSpeak Verbose: the fraction with numerator x; and denominator sine; end fraction; y
+SimpleSpeak Terse: x over sine, y
+SimpleSpeak Medium: x over sine, y
+SimpleSpeak Verbose: x over sine, y
+Nemeth: ⠹⠭⠌⠎⠊⠝⠼⠽
+UEB: ⠰⠰⠷⠭⠨⠌⠎⠊⠝⠾⠽
+=== extra-expressions.txt:117
+source: \frac\sin x y
+MathML: <math display="inline"><mfrac><mi>sin</mi><mi>x</mi></mfrac><mi>y</mi></math>
+ClearSpeak Terse: the fraction with numerator; sine; and denominator x; y
+ClearSpeak Medium: the fraction with numerator; sine; and denominator x; y
+ClearSpeak Verbose: the fraction with numerator; sine; and denominator x; end fraction; y
+SimpleSpeak Terse: sine over x, y
+SimpleSpeak Medium: sine over x, y
+SimpleSpeak Verbose: sine over x, y
+Nemeth: ⠹⠎⠊⠝⠌⠭⠼⠽
+UEB: ⠰⠰⠷⠎⠊⠝⠨⠌⠭⠾⠽
+=== extra-expressions.txt:118
+source: \sqrt[3]\sin x
+MathML: <math display="inline"><mroot><mi>sin</mi><mn>3</mn></mroot><mi>x</mi></math>
+ClearSpeak Terse: cube root sine; x
+ClearSpeak Medium: the cube root of sine; x
+ClearSpeak Verbose: the cube root of sine, end root; x
+SimpleSpeak Terse: cube root sine, x
+SimpleSpeak Medium: the cube root of sine; x
+SimpleSpeak Verbose: the cube root of sine; x
+Nemeth: ⠣⠒⠜⠎⠊⠝⠻⠭
+UEB: ⠰⠰⠩⠔⠼⠉⠎⠊⠝⠬⠭
+=== extra-expressions.txt:119
+source: \sqrt[\sin]x y
+MathML: <math display="inline"><mroot><mi>x</mi><mi>sin</mi></mroot><mi>y</mi></math>
+ClearSpeak Terse: sine root x, y
+ClearSpeak Medium: the sine root of x; y
+ClearSpeak Verbose: the sine root of x, end root; y
+SimpleSpeak Terse: sine root x, y
+SimpleSpeak Medium: the sine root of x; y
+SimpleSpeak Verbose: the sine root of x; y
+Nemeth: ⠣⠎⠊⠝⠜⠭⠻⠽
+UEB: ⠰⠰⠩⠔⠣⠎⠊⠝⠜⠭⠬⠽
+=== extra-expressions.txt:120
+source: \frac x\hat\sin y
+MathML: <math display="inline"><mfrac><mi>x</mi><mover><mi>sin</mi><mi>^</mi></mover></mfrac><mi>y</mi></math>
+ClearSpeak Terse: the fraction with numerator x; and denominator sine hat; y
+ClearSpeak Medium: the fraction with numerator x; and denominator sine hat; y
+ClearSpeak Verbose: the fraction with numerator x; and denominator sine hat; end fraction; y
+SimpleSpeak Terse: fraction, x over, sine hat; end fraction; y
+SimpleSpeak Medium: fraction, x over, sine hat; end fraction; y
+SimpleSpeak Verbose: fraction, x over, sine hat; end fraction; y
+Nemeth: ⠹⠭⠌⠐⠎⠊⠝⠣⠸⠣⠻⠼⠽
+UEB: ⠰⠰⠷⠭⠨⠌⠎⠊⠝⠐⠱⠾⠽
+=== extra-expressions.txt:121
+source: f\qprime(x)
+MathML: <math display="inline"><mi>f</mi><mi>⁗</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: f quadruple prime; x
+ClearSpeak Medium: f quadruple prime, of x
+ClearSpeak Verbose: f quadruple prime, of x
+SimpleSpeak Terse: f quadruple prime; x
+SimpleSpeak Medium: f quadruple prime, of x
+SimpleSpeak Verbose: f quadruple prime, of x
+Nemeth: ⠋⠄⠄⠄⠄⠷⠭⠾
+UEB: ⠰⠰⠋⠶⠶⠶⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:122
+source: \sin\trprime(x)
+MathML: <math display="inline"><mi>sin</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>‴</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: sine triple prime; x
+ClearSpeak Medium: sine triple prime, of x
+ClearSpeak Verbose: sine triple prime, of x
+SimpleSpeak Terse: sine triple prime; x
+SimpleSpeak Medium: sine triple prime, of x
+SimpleSpeak Verbose: sine triple prime, of x
+Nemeth: ⠎⠊⠝⠀⠄⠄⠄⠷⠭⠾
+UEB: ⠰⠰⠎⠊⠝⠶⠶⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:123
+source: f^{\trprime}(x)
+MathML: <math display="inline"><msup><mi>f</mi><mrow><mi>‴</mi></mrow></msup><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: f triple prime, x
+ClearSpeak Medium: f triple prime, of x
+ClearSpeak Verbose: f triple prime, of x
+SimpleSpeak Terse: f triple prime, x
+SimpleSpeak Medium: f triple prime, of x
+SimpleSpeak Verbose: f triple prime, of x
+Nemeth: ⠋⠄⠄.⠷⠭⠾
+UEB: ⠋⠰⠶⠶⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:124
+source: (fg)\trprime
+MathML: <math display="inline"><mo symmetric="false" stretchy="false">(</mo><mi>f</mi><mi>g</mi><mo symmetric="false" stretchy="false">)</mo><mi>‴</mi></math>
+ClearSpeak Terse: f g triple prime
+ClearSpeak Medium: f g triple prime
+ClearSpeak Verbose: f g triple prime
+SimpleSpeak Terse: f g triple prime
+SimpleSpeak Medium: f g triple prime
+SimpleSpeak Verbose: f g triple prime
+Nemeth: ⠷⠋⠛⠾⠄⠄.
+UEB: ⠐⠣⠋⠛⠐⠜⠰⠶⠶⠶
+=== extra-expressions.txt:125
+source: \liminf\limits_{n}^\max x
+MathML: <math display="inline"><munderover><mi>lim inf</mi><mrow><mi>n</mi></mrow><mi>max</mi></munderover><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi></math>
+ClearSpeak Terse: lim inf with n below and max above, x
+ClearSpeak Medium: lim inf with n below and max above of x
+ClearSpeak Verbose: lim inf with n below and max above of x
+SimpleSpeak Terse: lim inf with n below and max above, x
+SimpleSpeak Medium: lim inf with n below and max above of x
+SimpleSpeak Verbose: lim inf with n below and max above of x
+Nemeth: ⠐⠇⠊⠍⠀⠊⠝⠋⠩⠝⠣⠍⠁⠭⠻⠀⠭
+UEB: ⠰⠣⠇⠊⠍⠀⠔⠋⠰⠜⠨⠢⠝⠨⠔⠍⠁⠭⠭
+=== extra-expressions.txt:126
+source: \max\limits_\min x
+MathML: <math display="inline"><munder><mi>max</mi><mi>min</mi></munder><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi></math>
+ClearSpeak Terse: max with min below x
+ClearSpeak Medium: max with min below of x
+ClearSpeak Verbose: max with min below of x
+SimpleSpeak Terse: max with min below x
+SimpleSpeak Medium: max with min below of x
+SimpleSpeak Verbose: max with min below of x
+Nemeth: ⠐⠍⠁⠭⠩⠍⠊⠝⠻⠀⠭
+UEB: ⠍⠁⠭⠨⠢⠍⠔⠭
+=== extra-expressions.txt:127
+source: \displaystyle x_\max y
+MathML: <math display="inline"><msub displaystyle="true" scriptlevel="0"><mi displaystyle="true" scriptlevel="0">x</mi><mi>max</mi></msub><mi displaystyle="true" scriptlevel="0">y</mi></math>
+ClearSpeak Terse: x sub max end sub; y
+ClearSpeak Medium: x sub max end sub; y
+ClearSpeak Verbose: x sub max end subscript; y
+SimpleSpeak Terse: x sub max end sub; y
+SimpleSpeak Medium: x sub max end sub; y
+SimpleSpeak Verbose: x sub max end subscript; y
+Nemeth: ⠭⠰⠍⠁⠭⠐⠽
+UEB: ⠭⠰⠢⠍⠁⠭⠽
+=== extra-expressions.txt:128
+source: \int_0^\max f
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∫</mo><mn>0</mn><mi>max</mi></msubsup><mi>f</mi></math>
+ClearSpeak Terse: integral from 0, to max of f
+ClearSpeak Medium: the integral from 0, to max of f
+ClearSpeak Verbose: the integral from 0, to max of f
+SimpleSpeak Terse: integral from 0, to max of f
+SimpleSpeak Medium: the integral from 0, to max of f
+SimpleSpeak Verbose: the integral from 0, to max of f
+Nemeth: ⠮⠰⠴⠘⠍⠁⠭⠐⠋
+UEB: ⠰⠰⠮⠢⠼⠚⠔⠍⠁⠭⠋
