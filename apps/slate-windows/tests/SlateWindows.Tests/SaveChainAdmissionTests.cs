@@ -565,14 +565,31 @@ public sealed class SaveChainAdmissionTests
                 () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
                 "the throwing toggle's end");
             Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
-            // Plan 47 CB-14: only a SavedButUnindexed is a landed write that
-            // says so and reconciles the note's tabs on this route; any other
-            // failure, after the write or before it, is still a failure.
+            // Plan 47 CB-14: only a SavedButUnindexed says the toggle landed;
+            // any other failure, after the write or before it, still says it
+            // failed. A failure whose read-back shows the write landed anyway
+            // (the seam throws after the core's write) leaves the note's tabs
+            // over changed disk, so the tab reconciles them after the failure
+            // sentence, as the panel route's completion does; a failure before
+            // the write leaves them as they were.
             _ = Assert.Single(events, e => e is A11yEvent.TaskToggleFailed);
             Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggledUnindexed);
-            Assert.DoesNotContain(events, e => e is A11yEvent.HostComposed);
-            Assert.False(peers.A.IsExternallyStale, "a failure that is not a landed write marked the tab stale");
-            Assert.False(peers.B.IsExternallyStale, "a failure that is not a landed write marked the peer stale");
+            if (afterTheWrite)
+            {
+                A11yEvent.HostComposed reconciled = Assert.Single(events.OfType<A11yEvent.HostComposed>());
+                Assert.Equal(ReconcileSentence, reconciled.Text);
+                Assert.True(
+                    events.FindIndex(e => e is A11yEvent.TaskToggleFailed) < events.IndexOf(reconciled),
+                    "the reconcile sentence came before the failure sentence");
+                Assert.True(peers.A.IsExternallyStale, "the tab stayed clean over a write that landed");
+                Assert.True(peers.B.IsExternallyStale, "the peer stayed clean over a write that landed");
+            }
+            else
+            {
+                Assert.DoesNotContain(events, e => e is A11yEvent.HostComposed);
+                Assert.False(peers.A.IsExternallyStale, "a failure before the write marked the tab stale");
+                Assert.False(peers.B.IsExternallyStale, "a failure before the write marked the peer stale");
+            }
 
             peers.A.TaskToggleFaultForTests = null;
             peers.A.TaskToggleBeforeWriteForTests = null;
@@ -954,6 +971,124 @@ public sealed class SaveChainAdmissionTests
             (tab.IsExternallyStale, "the renamed tab's stale flag"),
             (h.Events.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the completion's landed sentence"),
             (!h.Workspace.TaskIndexRepairsForTests.HasPendingFor(path), "the index repair"));
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's review): the Tasks Review's tabless
+    /// toggle lands but is not indexed, and a tab opened on the note while
+    /// its write ran. The workspace reconciles that tab first (its sentence
+    /// at High) and only then does the review say the toggle landed (Medium),
+    /// so the reconcile line cannot cut it.</summary>
+    [Fact]
+    public void ATablessReviewToggleThatLandedReconcilesATabThatOpenedBeforeItSaysItLanded() =>
+        ATablessReviewToggleThatLandedReconcilesATabThatOpened("cb14-review-raced", unreadableReadBack: false);
+
+    /// <summary>Plan 47 CB-14 (the judge's review): the same, with the
+    /// read-back after the failed index commit unreadable. The error names the
+    /// hash that landed, so the tab that opened is still reconciled and
+    /// guarded (the tab routes' rule).</summary>
+    [Fact]
+    public void ATablessReviewToggleThatLandedReconcilesATabThatOpenedWhenItsReadBackFails() =>
+        ATablessReviewToggleThatLandedReconcilesATabThatOpened("cb14-review-unread", unreadableReadBack: true);
+
+    private static void ATablessReviewToggleThatLandedReconcilesATabThatOpened(string label, bool unreadableReadBack) => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        string path = label + ".md";
+        using var h = new Vault(label, (path, TaskNote));
+        TasksReviewViewModel review = h.Workspace.TasksReview;
+        review.EnsureLoaded();
+        h.PumpUntil(() => !review.IsLoading && review.Rows.Any(row => row.Path == path), "the review's rows");
+        ReviewTaskRowViewModel row = review.Rows.Single(candidate => candidate.Path == path);
+        Assert.DoesNotContain(h.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == path);
+        using var held = new HeldWork(hook => review.DirectToggleBeforeWriteForTests = hook);
+        if (unreadableReadBack)
+        {
+            review.DirectToggleReadBackFaultForTests = () => throw new IOException("the read-back failed (test seam)");
+        }
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", label);
+        try
+        {
+            review.ToggleTask(row);
+            h.PumpUntil(() => held.Entered, "premise: the toggle reaching its hold before its core call");
+            WorkspaceTabViewModel opened = h.OpenNow(path);
+            h.Events.Clear();
+            held.Release();
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the tabless toggle's publication");
+            h.Settle();
+            Assert.Contains("- [x] the task", h.Read(path), StringComparison.Ordinal);
+            Assert.Empty(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+            A11yEvent.HostComposed reconciled = Assert.Single(
+                h.Events.OfType<A11yEvent.HostComposed>(), line => line.Text == ReconcileSentence);
+            A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+            Assert.True(landed.Completed);
+            Assert.True(
+                h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed),
+                "the landed sentence came before the reconcile line that cuts it");
+            Assert.True(opened.IsExternallyStale, "the tab that opened stayed clean over the landed write");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            review.DirectToggleReadBackFaultForTests = null;
+            h.ReleaseAndDrain(held);
+            ReleaseAndDrainTheReview(h, review);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Plan 47 CB-14 (the judge's review): an edit made and saved
+    /// before the toggle stays on the undo stack of the tab and of its mirrored
+    /// peer after a landed but unindexed toggle; nothing is reset, and one Undo
+    /// on either tab still takes the edit back in both (the peers mirror each
+    /// other's document changes).</summary>
+    [Theory]
+    [InlineData("source")]
+    [InlineData("peer")]
+    public void AnEditsUndoHistorySurvivesALandedUnindexedToggleOnTheTabAndItsPeer(string undoOn) => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        string label = "cb14-undo-history-" + undoOn;
+        string path = label + ".md";
+        const string edit = "An edit before the toggle.\n";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote(label, path);
+        using (h)
+        {
+            a.EditorDocument!.Insert(a.EditorDocument.TextLength, edit);
+            SaveNow(h, a);
+            h.Settle();
+            Assert.True(a.EditorDocument.UndoStack.CanUndo, "premise: the saved edit is on the tab's undo stack");
+            Assert.Contains(edit, b.Text, StringComparison.Ordinal);
+            bool peerCouldUndo = b.EditorDocument!.UndoStack.CanUndo;
+            string textBefore = a.Text;
+            var spoken = new List<A11yEvent>();
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", label);
+            try
+            {
+                Assert.Equal(TabTaskToggle.Started, a.ToggleTask(h.Session.TasksForFile(path)[0], spoken.Add));
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && spoken.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                    "the landed toggle's publication");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+            h.Settle();
+            _ = Assert.Single(spoken, e => e is A11yEvent.TaskToggledUnindexed);
+            Assert.True(a.IsExternallyStale && b.IsExternallyStale, "premise: both tabs were reconciled");
+            Assert.Equal(textBefore, a.Text);
+            Assert.Equal(textBefore, b.Text);
+            Assert.True(a.EditorDocument.UndoStack.CanUndo, "the landed toggle reset the tab's undo history");
+            Assert.True(peerCouldUndo, "premise: the peer's mirrored edit is on its undo stack");
+            Assert.True(b.EditorDocument.UndoStack.CanUndo, "the landed toggle reset the peer's undo history");
+            (undoOn == "source" ? a : b).EditorDocument!.UndoStack.Undo();
+            Assert.DoesNotContain(edit, a.EditorDocument.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(edit, b.EditorDocument.Text, StringComparison.Ordinal);
+        }
     });
 
     /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle

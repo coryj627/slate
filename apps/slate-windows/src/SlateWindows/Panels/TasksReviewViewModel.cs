@@ -476,6 +476,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// holds the toggle there, counts it, or throws.</summary>
     internal Action? DirectToggleBeforeWriteForTests { get; set; }
 
+    /// <summary>Plan 47 CB-14 test seam: runs inside the direct toggle's
+    /// read-back after a failed write, within its guard, so a fact can make
+    /// that read-back unreadable (the disk's hash unknown).</summary>
+    internal Action? DirectToggleReadBackFaultForTests { get; set; }
+
     /// <summary>Internal so stale-ordering is testable
     /// deterministically (the PublishOutline pattern).</summary>
     internal void PublishFirstPage(
@@ -810,6 +815,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 // does NOT mean disk is unchanged — read it back.
                 try
                 {
+                    DirectToggleReadBackFaultForTests?.Invoke();
                     postFailureDiskHash =
                         _session.ReadNoteParts(path).ContentHash;
                 }
