@@ -2281,4 +2281,348 @@ mod tests {
         assert!(!speech.is_empty());
         assert!(braille.is_empty());
     }
+
+    /// #1629: a function name with a script after an ordinary atom. The
+    /// writer puts the thin space it writes before such a name inside the
+    /// script element it has just opened, MathCAT rejects the element, and
+    /// the whole formula used to fall back to its source.
+    const SCRIPTED_FUNCTIONS_AFTER_AN_ATOM: &[&str] = &[
+        r"2\sin^2 x",
+        r"x\sin^2 x",
+        r"\sin^2 x\cos^2 x",
+        r"\sin^2\theta\cos^2\theta",
+        r"\pi\cos^2 t",
+        r"-\sin^2 x",
+        r"(-\sin^2 x)",
+        r"(a+b)\sin^2 x",
+        r"\left(a\right)\sin^2 x",
+        r"\frac{1}{2}\sin^2 x",
+        r"\sqrt{2}\cos^2 x",
+        r"{a}\sin^2 x",
+        r"x^2\sin^2 x",
+        r"\text{if }\sin^2 x",
+        r"\|x\|\sin^2 x",
+        r"x\operatorname{erf}^2 x",
+        r"n\log_2 n",
+        r"2\log_{10} x",
+        r"x\log_2^2 n",
+        r"2\max_i a_i",
+        r"c\lim_{n\to\infty} a_n",
+        r"a\liminf_n x_n",
+        r"2\max\limits_i a_i",
+        r"c\lim\limits_{n\to\infty} a_n",
+        r"\displaystyle 2\max_i a_i",
+        r"2\sin^2 x + 3\cos^2 x = 1",
+        r"x\hspace{0.1667em}\sin^2 x",
+        r"2\hat\sin x",
+    ];
+
+    /// #1629: a function as an ungrouped script argument, each beside its
+    /// grouped form, which renders and is the reading the ungrouped one
+    /// must give.
+    const FUNCTIONS_AS_SCRIPT_ARGUMENTS: &[(&str, &str)] = &[
+        (r"x_\max", r"x_{\max}"),
+        (r"x_\max y", r"x_{\max} y"),
+        (r"x_\max(t)", r"x_{\max}(t)"),
+        (r"T_\min + 1", r"T_{\min} + 1"),
+        (r"x^\ln y", r"x^{\ln} y"),
+        (r"2x_\max", r"2x_{\max}"),
+        (r"a_\max b_\min", r"a_{\max} b_{\min}"),
+        (r"x_\max^2", r"x_{\max}^2"),
+        (r"x_\min^\max", r"x_{\min}^{\max}"),
+        (r"x_\min^\max y", r"x_{\min}^{\max} y"),
+    ];
+
+    /// #1629, the plan lead's ruling of 2026-11-18: an accented function as
+    /// a script's base. The writer puts the accent's application mark
+    /// inside the outer script element, so it too had too many children.
+    const ACCENTED_FUNCTIONS_AS_SCRIPT_BASES: &[(&str, &str)] = &[
+        (r"2\hat\sin^2 x", r"2{\hat\sin}^2 x"),
+        (r"\hat\sin^2 x", r"{\hat\sin}^2 x"),
+        (r"x\bar\cos^2 x", r"x{\bar\cos}^2 x"),
+        (r"2\tilde\log_2 n", r"2{\tilde\log}_2 n"),
+        (r"2\overline\sin^2 x", r"2{\overline\sin}^2 x"),
+        (r"2\widehat\sin^2 x", r"2{\widehat\sin}^2 x"),
+        (r"2\hat\sin_2^3 x", r"2{\hat\sin}_2^3 x"),
+        (r"2\vec\max_i a_i", r"2{\vec\max}_i a_i"),
+        (r"2\hat\sin^2(x)", r"2{\hat\sin}^2(x)"),
+        (r"x_\hat\max y", r"x_{\hat\max} y"),
+    ];
+
+    /// Every speech setting under Nemeth, then the braille of each code.
+    fn every_reading(source: &str) -> Vec<String> {
+        let raw = RawMathBlock {
+            source: source.to_string(),
+            display_style: MathDisplayStyle::Inline,
+            line: 1,
+            byte_offset: 0,
+        };
+        let mut readings = Vec::new();
+        for speech_style in [MathSpeechStyle::ClearSpeak, MathSpeechStyle::SimpleSpeak] {
+            for verbosity in [
+                MathVerbosity::Terse,
+                MathVerbosity::Medium,
+                MathVerbosity::Verbose,
+            ] {
+                let prefs = MathPrefs {
+                    speech_style,
+                    verbosity,
+                    braille_code: BrailleCode::Nemeth,
+                };
+                readings.push(render_math(&raw, prefs).speech);
+            }
+        }
+        for braille_code in [BrailleCode::Nemeth, BrailleCode::Ueb] {
+            let block = render_with(source, braille_code);
+            readings.push(String::from_utf8_lossy(&block.braille).into_owned());
+        }
+        readings
+    }
+
+    /// Each script element's name and its count of element children, read
+    /// with a stack over the tags. Written apart from the repair, so it can
+    /// judge it.
+    fn script_child_counts(mathml: &str) -> Vec<(String, usize)> {
+        let mut counts = Vec::new();
+        let mut stack: Vec<(String, usize)> = vec![(String::new(), 0)];
+        let mut rest = mathml;
+        while let Some(open) = rest.find('<') {
+            let Some(close) = rest[open..].find('>') else {
+                break;
+            };
+            let tag = &rest[open + 1..open + close];
+            rest = &rest[open + close + 1..];
+            if let Some(name) = tag.strip_prefix('/') {
+                let (opened, children) = stack.pop().expect("an open element");
+                assert_eq!(opened, name, "{mathml}");
+                if matches!(
+                    name,
+                    "msup" | "msub" | "munder" | "mover" | "msubsup" | "munderover"
+                ) {
+                    counts.push((opened, children));
+                }
+            } else {
+                stack.last_mut().expect("a parent").1 += 1;
+                if !tag.ends_with('/') {
+                    let name = tag.split([' ', '/']).next().unwrap_or("").to_string();
+                    stack.push((name, 0));
+                }
+            }
+        }
+        counts
+    }
+
+    fn golden_sources() -> Vec<String> {
+        let expected = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/math_golden/expected.txt"
+        ))
+        .expect("read the math golden");
+        expected
+            .lines()
+            .filter_map(|line| line.strip_prefix("source: "))
+            .map(|source| source.replace('⏎', "\n").replace('␍', "\r"))
+            .collect()
+    }
+
+    /// #1629: each formula renders, and is spoken as a function with its
+    /// script.
+    #[test]
+    fn a_scripted_function_after_an_ordinary_atom_still_renders() {
+        for &source in SCRIPTED_FUNCTIONS_AFTER_AN_ATOM {
+            let block = render_with(source, BrailleCode::Nemeth);
+            assert!(
+                !block.speech.starts_with("Math expression"),
+                "{source} fell back: {}",
+                block.speech
+            );
+            assert!(!block.braille.is_empty(), "{source} has no braille");
+            if source.contains("^2") {
+                assert!(
+                    block.speech.contains("squared") && block.speech.contains(" of "),
+                    "{source}: {}",
+                    block.speech
+                );
+            }
+        }
+    }
+
+    /// #1629: a function as an ungrouped script argument reads exactly as
+    /// its grouped form, under every speech setting and both braille codes.
+    #[test]
+    fn a_function_as_a_script_argument_is_read_as_its_group() {
+        for &(ungrouped, grouped) in FUNCTIONS_AS_SCRIPT_ARGUMENTS {
+            let readings = every_reading(ungrouped);
+            assert!(
+                !readings[0].starts_with("Math expression"),
+                "{ungrouped} fell back: {}",
+                readings[0]
+            );
+            assert_eq!(readings, every_reading(grouped), "{ungrouped}");
+        }
+    }
+
+    /// #1629 (the plan lead's ruling): an accented function as a script's
+    /// base reads exactly as its grouped form.
+    #[test]
+    fn an_accented_function_as_a_scripts_base_is_read_as_its_group() {
+        for &(ungrouped, grouped) in ACCENTED_FUNCTIONS_AS_SCRIPT_BASES {
+            let readings = every_reading(ungrouped);
+            assert!(
+                !readings[0].starts_with("Math expression"),
+                "{ungrouped} fell back: {}",
+                readings[0]
+            );
+            assert_eq!(readings, every_reading(grouped), "{ungrouped}");
+        }
+    }
+
+    /// #1629: no script element is written with more element children than
+    /// MathCAT takes, for the family above and every golden source. (Fewer
+    /// is out of scope: `x^\rm a`, whose slot a state change fills, has
+    /// one, and plan 47 §9 leaves it.)
+    #[test]
+    fn no_script_element_has_more_children_than_its_arity() {
+        let family = SCRIPTED_FUNCTIONS_AFTER_AN_ATOM
+            .iter()
+            .map(|source| (*source).to_string())
+            .chain(
+                FUNCTIONS_AS_SCRIPT_ARGUMENTS
+                    .iter()
+                    .chain(ACCENTED_FUNCTIONS_AS_SCRIPT_BASES)
+                    .map(|(ungrouped, _)| (*ungrouped).to_string()),
+            );
+        for source in family.chain(golden_sources()) {
+            let mathml = latex_to_mathml(&source);
+            for (name, children) in script_child_counts(&mathml) {
+                let arity = if matches!(name.as_str(), "msubsup" | "munderover") {
+                    3
+                } else {
+                    2
+                };
+                assert!(
+                    children <= arity,
+                    "{source}: {name} has {children} children: {mathml}"
+                );
+            }
+        }
+    }
+
+    /// #1628: three or more primes after a carrier are spoken as primes on
+    /// it, never as a product ("times"), under every speech setting.
+    #[test]
+    fn three_or_more_primes_are_spoken_as_primes() {
+        for source in [
+            r"f'''(x)",
+            r"f''''(x)",
+            r"f'''''(x)",
+            r"\sin'''(x)",
+            r"f\dprime'(x)",
+            r"f'\dprime(x)",
+            r"f\trprime(x)",
+            r"f\qprime(x)",
+            r"2\sin^2 x + f'''(x)",
+            r"x_\max'''",
+        ] {
+            let raw = RawMathBlock {
+                source: source.to_string(),
+                display_style: MathDisplayStyle::Inline,
+                line: 1,
+                byte_offset: 0,
+            };
+            for speech_style in [MathSpeechStyle::ClearSpeak, MathSpeechStyle::SimpleSpeak] {
+                for verbosity in [
+                    MathVerbosity::Terse,
+                    MathVerbosity::Medium,
+                    MathVerbosity::Verbose,
+                ] {
+                    let prefs = MathPrefs {
+                        speech_style,
+                        verbosity,
+                        braille_code: BrailleCode::Nemeth,
+                    };
+                    let speech = render_math(&raw, prefs).speech;
+                    assert!(
+                        !speech.contains("times") && !speech.starts_with("Math expression"),
+                        "{source} {speech_style:?} {verbosity:?}: {speech}"
+                    );
+                    if verbosity != MathVerbosity::Terse && source.ends_with("(x)") {
+                        assert!(
+                            speech.contains("of x"),
+                            "{source} {speech_style:?} {verbosity:?}: {speech}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            render_with(r"f'''(x)", BrailleCode::Nemeth).speech,
+            "f triple prime, of x"
+        );
+    }
+
+    /// #1628, CD21: a long run of primes is spoken from a folded tree, but
+    /// its braille and the MathML Windows exposes stay the loose form's,
+    /// whose Nemeth is right (MathCAT 0.7.7's `‴` and `⁗` cells hold a
+    /// stray full stop).
+    #[test]
+    fn a_long_prime_run_keeps_its_loose_braille_and_mathml() {
+        for (source, nemeth, ueb, mathml) in [
+            (
+                r"f'''(x)",
+                "⠋⠄⠄⠄⠷⠭⠾",
+                "⠰⠰⠋⠶⠶⠶⠐⠣⠭⠐⠜",
+                "<math display=\"inline\"><mi>f</mi><mi>′</mi><mi>′</mi><mi>′</mi>\
+                 <mo symmetric=\"false\" stretchy=\"false\">(</mo><mi>x</mi>\
+                 <mo symmetric=\"false\" stretchy=\"false\">)</mo></math>",
+            ),
+            (
+                r"f''''(x)",
+                "⠋⠄⠄⠄⠄⠷⠭⠾",
+                "⠰⠰⠋⠶⠶⠶⠶⠐⠣⠭⠐⠜",
+                "<math display=\"inline\"><mi>f</mi><mi>′</mi><mi>′</mi><mi>′</mi><mi>′</mi>\
+                 <mo symmetric=\"false\" stretchy=\"false\">(</mo><mi>x</mi>\
+                 <mo symmetric=\"false\" stretchy=\"false\">)</mo></math>",
+            ),
+            (
+                r"y'''",
+                "⠽⠄⠄⠄",
+                "⠰⠰⠽⠶⠶⠶",
+                "<math display=\"inline\"><mi>y</mi><mi>′</mi><mi>′</mi><mi>′</mi></math>",
+            ),
+        ] {
+            let nemeth_block = render_with(source, BrailleCode::Nemeth);
+            assert_eq!(
+                String::from_utf8_lossy(&nemeth_block.braille),
+                nemeth,
+                "{source}"
+            );
+            assert_eq!(nemeth_block.mathml, mathml, "{source}");
+            let ueb_block = render_with(source, BrailleCode::Ueb);
+            assert_eq!(String::from_utf8_lossy(&ueb_block.braille), ueb, "{source}");
+        }
+        let block = render_with(r"\sin'''(x)", BrailleCode::Nemeth);
+        assert_eq!(String::from_utf8_lossy(&block.braille), "⠎⠊⠝⠀⠄⠄⠄⠷⠭⠾");
+        assert!(!block.mathml.contains("<msup>"), "{}", block.mathml);
+        let combined = render_with(r"2\sin^2 x + f'''(x)", BrailleCode::Nemeth);
+        assert_eq!(
+            String::from_utf8_lossy(&combined.braille),
+            "⠼⠆⠎⠊⠝⠘⠆⠀⠭⠬⠋⠄⠄⠄⠷⠭⠾"
+        );
+    }
+
+    /// A formula nested deeper than MathCAT reads (512 levels) falls back
+    /// to its source and ends nothing: every step that reads the writer's
+    /// output walks it without recursion, so 4,000 nested groups cannot
+    /// overflow the MathCAT worker's stack.
+    #[test]
+    fn a_deeply_nested_formula_falls_back_without_ending_the_process() {
+        let source = format!("{}{}{}", "{".repeat(4000), r"2\sin^2 x", "}".repeat(4000));
+        let block = render_with(&source, BrailleCode::Nemeth);
+        assert!(
+            block.speech.starts_with("Math expression"),
+            "{}",
+            &block.speech[..block.speech.len().min(80)]
+        );
+    }
 }
