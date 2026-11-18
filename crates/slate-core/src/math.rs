@@ -803,12 +803,12 @@ struct MathTrees {
     speech: Option<String>,
     /// The loose tree with each authored `‴` or `⁗` of a long run spelled as
     /// the single primes it stands for, so it brailles as `f'''` does.
-    /// `None` when that is the loose tree itself.
+    /// `None` when no long run holds one; braille then reads the loose tree.
     braille: Option<String>,
 }
 
-/// LaTeX → MathML using pulldown-latex, with the speech tree of
-/// [`MathTrees`] when a long prime run asks for one.
+/// LaTeX → MathML using pulldown-latex, with the speech and braille trees
+/// of [`MathTrees`] when a long prime run asks for them.
 ///
 /// The loose tree is an empty string, and there is no speech tree, when
 /// pulldown-latex cannot render the source faithfully, and `render_math`
@@ -845,16 +845,22 @@ fn latex_to_mathml_trees(latex: &str) -> MathTrees {
         .iter()
         .any(|event| primes_in(event).is_some())
         .then(|| events.clone());
-    let (events, long_run) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
+    let (events, met) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
     let loose = write_mathml(events);
     let (speech, braille) = match original {
-        Some(original) if long_run && !loose.is_empty() => {
-            let (folded, _) =
-                fold_primes_into_superscripts(original.clone(), LongPrimeRuns::Folded);
-            let (spelled, _) = fold_primes_into_superscripts(original, LongPrimeRuns::Spelled);
+        Some(original) if met.long_run && !loose.is_empty() => {
+            let braille = met
+                .authored_glyph
+                .then(|| {
+                    let (spelled, _) =
+                        fold_primes_into_superscripts(original.clone(), LongPrimeRuns::Spelled);
+                    write_mathml(spelled)
+                })
+                .filter(|tree| !tree.is_empty());
+            let (folded, _) = fold_primes_into_superscripts(original, LongPrimeRuns::Folded);
             (
                 Some(write_mathml(folded)).filter(|tree| !tree.is_empty()),
-                Some(write_mathml(spelled)).filter(|tree| !tree.is_empty() && *tree != loose),
+                braille,
             )
         }
         _ => (None, None),
@@ -867,7 +873,7 @@ fn latex_to_mathml_trees(latex: &str) -> MathTrees {
 }
 
 /// Control words whose primitive in pulldown-latex 0.8 sets the parser's
-/// script position (`parser/primitives.rs:139-153`, `:587-616`, `:2116-2119`):
+/// script position (`parser/primitives.rs:140-154`, `:588-630`, `:2116-2119`):
 /// the operators with limits and the large operators.
 const SCRIPT_POSITION_SETTERS: &[&str] = &[
     "lim",
@@ -990,8 +996,11 @@ fn script_positions_as_grouped<'a>(
 /// `latex` with each ungrouped script argument that is a control word in
 /// [`SCRIPT_POSITION_SETTERS`] put in braces (`x_\max` becomes `x_{\max}`),
 /// and how many were; `None` when there is none. A control word or control
-/// symbol is read whole, so `\_` and `\^` are not scripts; whatever this
-/// misreads, [`script_positions_as_grouped`] finds in the parse.
+/// symbol is read whole, so `\_` and `\^` are not scripts, and a `%`
+/// comment is skipped to the end of its line, as is the whitespace and any
+/// comment between a script mark and its argument, as pulldown-latex's
+/// lexer skips them (`parser/lex.rs:463-483`); whatever this misreads,
+/// [`script_positions_as_grouped`] finds in the parse.
 fn brace_position_setting_arguments(latex: &str) -> Option<(String, usize)> {
     let bytes = latex.as_bytes();
     let word_end = |start: usize| {
@@ -1001,6 +1010,8 @@ fn brace_position_setting_arguments(latex: &str) -> Option<(String, usize)> {
         }
         end
     };
+    // The end of the `%` comment at `at`: past its line's newline.
+    let comment_end = |at: usize| latex[at..].find('\n').map_or(latex.len(), |n| at + n + 1);
     let mut out = String::new();
     let mut copied = 0;
     let mut braces = 0;
@@ -1015,11 +1026,18 @@ fn brace_position_setting_arguments(latex: &str) -> Option<(String, usize)> {
                     i + 1 + latex[i + 1..].chars().next().map_or(0, char::len_utf8)
                 };
             }
+            b'%' => i = comment_end(i),
             b'^' | b'_' => {
                 i += 1;
                 let mut start = i;
-                while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-                    start += 1;
+                loop {
+                    let rest = &latex[start..];
+                    start += rest.len() - rest.trim_start().len();
+                    if bytes.get(start) == Some(&b'%') {
+                        start = comment_end(start);
+                    } else {
+                        break;
+                    }
                 }
                 if bytes.get(start) == Some(&b'\\') {
                     let end = word_end(start + 1);
@@ -1205,9 +1223,10 @@ fn unmark_functions(marked: &str) -> (String, Vec<bool>) {
 /// MathML, [`LongPrimeRuns::Spelled`] keeps them loose with an authored `‴`
 /// or `⁗` spelled as single primes, for braille, and
 /// [`LongPrimeRuns::Folded`] folds them as one and two are (`‴`, `⁗`, and
-/// an `mrow` of single primes past four), for speech. The second answer is
-/// whether a long run after a carrier was met, so a formula without one is
-/// written once. When a MathCAT release corrects the two cells, the folded
+/// an `mrow` of single primes past four), for speech. The second answer
+/// says whether a long run after a carrier was met, and one holding an
+/// authored `‴` or `⁗`, so a formula is written only as many times as its
+/// trees differ. When a MathCAT release corrects the two cells, the folded
 /// tree serves speech and braille and the split goes.
 ///
 /// An element is free when it is not an argument a script or visual is
@@ -1222,7 +1241,7 @@ fn unmark_functions(marked: &str) -> (String, Vec<bool>) {
 fn fold_primes_into_superscripts(
     events: Vec<pulldown_latex::event::Event<'_>>,
     long_runs: LongPrimeRuns,
-) -> (Vec<pulldown_latex::event::Event<'_>>, bool) {
+) -> (Vec<pulldown_latex::event::Event<'_>>, LongRunsMet) {
     use pulldown_latex::event::{Content, Event, Grouping, ScriptPosition, ScriptType, Visual};
 
     /// What an element still open at this point is waiting for.
@@ -1273,13 +1292,13 @@ fn fold_primes_into_superscripts(
     }
 
     if !events.iter().any(|event| primes_in(event).is_some()) {
-        return (events, false);
+        return (events, LongRunsMet::default());
     }
     let original = events.clone();
     let mut out: Vec<Event<'_>> = Vec::with_capacity(events.len() + 6);
     let mut stack: Vec<Open> = Vec::new();
     let mut previous: Option<Carrier> = None;
-    let mut long_run = false;
+    let mut met = LongRunsMet::default();
     let mut events = events.into_iter().peekable();
     while let Some(event) = events.next() {
         // A carrier is only ever free: `complete` answers one only when no
@@ -1294,20 +1313,24 @@ fn fold_primes_into_superscripts(
                 run.extend(events.next());
             }
             previous = None;
+            if count >= 3 {
+                met.long_run = true;
+                met.authored_glyph |= run
+                    .iter()
+                    .any(|event| primes_in(event).is_some_and(|primes| primes >= 3));
+            }
             let glyphs = match (count, long_runs) {
                 (1, _) => vec!['′'],
                 (2, _) => vec!['″'],
                 (_, LongPrimeRuns::Loose) => {
                     // Three or more, for the exposed MathML: kept as parsed
                     // (see above).
-                    long_run = true;
                     out.extend(run);
                     continue;
                 }
                 (_, LongPrimeRuns::Spelled) => {
                     // Three or more, for braille: loose, an authored `‴` or
                     // `⁗` spelled as the single primes it stands for.
-                    long_run = true;
                     for event in run {
                         match primes_in(&event) {
                             Some(count @ 3..) => {
@@ -1329,7 +1352,6 @@ fn fold_primes_into_superscripts(
                 // primes, which MathCAT speaks one by one on the function.
                 (_, LongPrimeRuns::Folded) => vec!['′'; count],
             };
-            long_run |= count >= 3;
             out.insert(
                 carrier.start,
                 Event::Script {
@@ -1384,7 +1406,7 @@ fn fold_primes_into_superscripts(
                 let Some(Open::Group(start)) = stack.pop() else {
                     // The walker's arity model disagrees with the stream:
                     // leave it exactly as parsed, in either mode.
-                    return (original, false);
+                    return (original, LongRunsMet::default());
                 };
                 // Only a plain `{...}` group carries: a `\left...\right` group
                 // or an environment is bracketed, and keeps its prime loose as
@@ -1421,7 +1443,17 @@ fn fold_primes_into_superscripts(
         }
         out.push(event);
     }
-    (out, long_run)
+    (out, met)
+}
+
+/// What [`fold_primes_into_superscripts`] met (#1628).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LongRunsMet {
+    /// A run of three or more primes after a carrier: speech needs its own
+    /// tree.
+    long_run: bool,
+    /// Such a run holding an authored `‴` or `⁗`: braille needs its own tree.
+    authored_glyph: bool,
 }
 
 /// What [`fold_primes_into_superscripts`] makes of a run of three or more
@@ -1522,8 +1554,9 @@ fn fixed_arity(name: &str) -> Option<(usize, bool)> {
 /// (`x_\max y`, `\int_0^\max f`). That mark applies nothing, so it goes,
 /// with its thin space, and the formula reads as its grouped form does
 /// (`x_{\max} y`); a function base keeps it (`\operatorname{foo}_{2}^\max x`).
-/// After a mark moved out of the element, that mark of the element's own
-/// goes as well (`\hat\sin^\max x`), so one mark remains.
+/// An accented function base is not a function name, so after its mark
+/// moved out of the element the element's own goes (`\hat\sin^\max x`),
+/// and one mark remains.
 ///
 /// No other element MathCAT accepts is touched, and neither is a thin space
 /// that fills a slot (`x^\hspace{0.1667em} 2`). A formula with another
@@ -1758,7 +1791,6 @@ fn repair_script_children(mathml: &str, functions: &[bool]) -> String {
                 push_child(parent, child, &mut edits);
             }
             push_child(parent, element, &mut edits);
-            let moved_a_mark = !trailing.is_empty();
             for child in trailing {
                 push_child(parent, child, &mut edits);
             }
@@ -1770,12 +1802,11 @@ fn repair_script_children(mathml: &str, functions: &[bool]) -> String {
                 .iter()
                 .enumerate()
                 .any(|(i, child)| i != base && !candidate[i] && child.kind == Kind::Function);
-            // The element's own application mark goes when it applies
-            // nothing: an argument function's mark on a base that is not a
-            // function (a function base keeps it, as
-            // `\operatorname{foo}_{2}^{\max} x` does), and a mark after one
-            // moved out of the element, which would be a second one.
-            if script && ((argument_is_a_function && !base_is_a_function) || moved_a_mark) {
+            // That mark applies nothing on a base that is not a function (a
+            // function base keeps it, as `\operatorname{foo}_{2}^{\max} x`
+            // does), and after an accent's mark moved out of the element it
+            // would be a second one (`\hat\sin^\max x`): it goes.
+            if script && argument_is_a_function && !base_is_a_function {
                 parent.dropping = Dropping::Mark;
             }
         } else {
