@@ -3489,7 +3489,10 @@ public sealed class SaveChainAdmissionTests
     /// and an Undo then a save writes the old bytes back (M10, M11). The tag
     /// edit's row (stage B, Design 4) and the link rewrite's (Design 5) are
     /// red today on their first assertion: no tab follows a tag edit or a
-    /// link rewrite at all.</summary>
+    /// link rewrite at all. Each assertion names the tab it is about, so the
+    /// peer route is held on its own: with the branch in
+    /// MirrorDocumentStateFrom that makes a peer take another writer's bytes
+    /// itself removed, every row fails on the split peer.</summary>
     [Theory]
     [InlineData("property set from the header")]
     [InlineData("property delete")]
@@ -3549,11 +3552,15 @@ public sealed class SaveChainAdmissionTests
 
             foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a!), ("the split peer", b!) })
             {
-                Assert.Equal(written, tab.Text);
+                Assert.True(
+                    string.Equals(written, tab.Text, StringComparison.Ordinal),
+                    $"{name} does not show the bytes the write left on disk; it shows "
+                    + tab.Text.Replace("\n", "\\n", StringComparison.Ordinal));
                 Assert.False(tab.IsDirty, $"{name} is dirty after the write");
                 Assert.False(tab.EditorDocument!.UndoStack.CanUndo, $"{name} can undo across the bytes another writer wrote");
                 Assert.InRange(tab.EditorCaretOffset, 0, tab.EditorDocument.TextLength);
-                Assert.Equal(5, tab.EditorDocument.GetLocation(tab.EditorCaretOffset).Line);
+                int line = tab.EditorDocument.GetLocation(tab.EditorCaretOffset).Line;
+                Assert.True(line == 5, $"{name}'s caret is on line {line}; expected line 5");
             }
             foreach (WorkspaceTabViewModel tab in new[] { a!, b! })
             {
