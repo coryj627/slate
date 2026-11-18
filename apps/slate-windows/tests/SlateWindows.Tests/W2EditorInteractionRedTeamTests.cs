@@ -583,11 +583,11 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
             decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
         }
         Assert.Contains(
             $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedRemembered} (bytes={svg.Length})",
             lines.Snapshot);
-        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
     }
 
     /// <summary>#1635 (CD19): the memory is the first check, so a remembered
@@ -678,6 +678,94 @@ public sealed class W2EditorInteractionRedTeamTests
             });
     }
 
+    /// <summary>#1635 (Codex round 1): a decode whose pixels the caller's pool
+    /// refused before its budget ended is not remembered, though it is
+    /// abandoned at its whole budget and says the timeout sentence: the
+    /// refusal belongs to that pool, and another view with pixels to spare may
+    /// decode the same bytes.</summary>
+    [Fact]
+    public void SvgPreview_ADecodeWhosePixelsWereRefusedIsNotRemembered()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = Encoding.UTF8.GetBytes(FilledSvg("linen"));
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+        try
+        {
+            // The body asks for its pixels, is refused, then parks; the wait
+            // ends its whole budget only once the body has parked.
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: decodes.ParkedAfterReserving(64),
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        svg, "image/svg+xml", _ => false, out _, out string? reason));
+                    Assert.Equal(TookLonger, reason);
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+        }
+
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? again));
+                Assert.Null(again);
+                Assert.Equal(2, decodes.RunsOf(svg));
+            });
+    }
+
+    /// <summary>#1635 (Codex round 1): a wait that timed out costs the
+    /// deadline at least the wait it was given, even when the decode finished
+    /// first and is read as an ordinary end.</summary>
+    [Fact]
+    public void SvgPreview_AWaitThatTimedOutCostsItsWaitEvenWhenTheDecodeFinishedFirst()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = Encoding.UTF8.GetBytes(FilledSvg("ivory"));
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(1_000);
+        // The budget "ends" only after the decode has finished entirely, so
+        // the caller loses TryAbandon.
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = (handle, _) =>
+        {
+            Assert.Equal(0u, WaitForSingleObject(handle, UnhurriedSvgDecodes.Milliseconds));
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+            return 0x102;
+        };
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: decodes.Ending,
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        svg, "image/svg+xml", null, deadline, out _, out string? reason));
+                    Assert.Null(reason);
+                    Assert.Equal(1, decodes.RunsOf(svg));
+                    Assert.True(
+                        deadline.Left <= TimeSpan.FromMilliseconds(900),
+                        $"a timed-out 100 ms wait left the deadline at {deadline.Left}");
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+        }
+        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+    }
+
     /// <summary>#1635: a deadline with less than a millisecond left is spent,
     /// so its decode is refused before the decoder rather than given a wait
     /// of 0 ms; an open deadline never shortens a wait, and a shorter one
@@ -734,8 +822,8 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
             decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0 && Volatile.Read(ref slots.Abandoned) == 0);
         }
-        WaitUntil(() => Volatile.Read(ref slots.Live) == 0 && Volatile.Read(ref slots.Abandoned) == 0);
     }
 
     /// <summary>#1635: a decode refused while two abandoned ones run never
@@ -905,8 +993,8 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
             cut.Release();
+            WaitUntil(() => Volatile.Read(ref cutSlots.Live) == 0);
         }
-        WaitUntil(() => Volatile.Read(ref cutSlots.Live) == 0);
         WithSvgDecodeSeams(
             cutSlots,
             budgetMilliseconds: null,
@@ -956,6 +1044,7 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
             decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
         }
         string[] decodeLines =
         [
@@ -969,7 +1058,6 @@ public sealed class W2EditorInteractionRedTeamTests
                 $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedPastDeadline}",
             },
             decodeLines);
-        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
 
         WithSvgDecodeSeams(
             slots,
@@ -1018,8 +1106,8 @@ public sealed class W2EditorInteractionRedTeamTests
             EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = null;
             EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
             decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
         }
-        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
     }
 
     private static byte[][] GallerySvgs(params string[] fills) =>

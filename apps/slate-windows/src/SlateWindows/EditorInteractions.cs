@@ -3532,6 +3532,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         bool spent = false;
         ExceptionDispatchInfo? failure = null;
         int state = DecodeStateRunning;
+        // 1 once the caller's pixel pool refused this decode's raster.
+        int pixelsRefused = 0;
         // Owned by the caller unless it abandons the decode; then by the
         // decoder, which disposes it at its end.
         var finished = new ManualResetEvent(initialState: false);
@@ -3549,7 +3551,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             try
             {
-                return reserveDecodedBytes?.Invoke(cost) ?? true;
+                bool admitted = reserveDecodedBytes?.Invoke(cost) ?? true;
+                if (!admitted)
+                {
+                    // Written before the state leaves Reserving, so a caller
+                    // that abandons the decode after it reads it.
+                    Volatile.Write(ref pixelsRefused, 1);
+                }
+                return admitted;
             }
             finally
             {
@@ -3599,10 +3608,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             finished.Dispose();
             throw;
         }
-        // What the decode costs its projection's deadline, set once the wait
-        // returns and charged in the finally, so a decode that throws is
-        // charged too.
-        TimeSpan? charge = null;
+        // What the finally charges the projection's deadline: the wait given
+        // to a wait that timed out, and whether the caller then abandoned the
+        // decode.
+        uint? timedOutWait = null;
+        bool abandoned = false;
         try
         {
             // A plain Win32 wait: Thread.Join and WaitHandle.WaitOne pump COM
@@ -3625,16 +3635,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             Func<SafeWaitHandle, uint, uint> waitOn =
                 SvgDecodeWaitForTests ?? NativeMethods.WaitForSingleObject;
             uint waited = waitOn(finished.SafeWaitHandle, wait);
-            charge = System.Diagnostics.Stopwatch.GetElapsedTime(started);
             if (waited == NativeMethods.WaitTimeout)
             {
+                timedOutWait = wait;
                 // Counted before the decode is marked abandoned, so the
                 // decoder's release can only follow the count.
                 Interlocked.Increment(ref slots.Abandoned);
                 if (TryAbandon(ref state))
                 {
-                    // A timed-out wait costs what it was given.
-                    charge = TimeSpan.FromMilliseconds(wait);
+                    abandoned = true;
                     HostLog.WriteDetail(
                         HostDiagnosticEvent.SvgDecodeAbandoned,
                         cut
@@ -3649,8 +3658,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                         failureReason = SvgProjectionDecodeDeadlineMessage;
                         return null;
                     }
-                    // Only the caller writes the memory, and only here.
-                    memory?.Remember(key!);
+                    // Only the caller writes the memory, and only here. A
+                    // decode the caller's pixel pool refused is not
+                    // remembered: the refusal belongs to that pool, and
+                    // another view with pixels to spare may decode it.
+                    if (Volatile.Read(ref pixelsRefused) == 0)
+                    {
+                        memory?.Remember(key!);
+                    }
                     failureReason = SvgDecodeTimeExceededMessage;
                     return null;
                 }
@@ -3675,7 +3690,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         finally
         {
-            deadline?.Charge(charge ?? System.Diagnostics.Stopwatch.GetElapsedTime(started));
+            if (deadline is not null)
+            {
+                // The decode's one end point, after its PNG conversion and a
+                // failed wait's Join. An abandoned decode costs exactly the
+                // wait it was given. Any other costs the time since its
+                // thread started, and never less than a wait that timed out.
+                TimeSpan given = TimeSpan.FromMilliseconds(timedOutWait ?? 0);
+                TimeSpan taken = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                deadline.Charge(abandoned || given > taken ? given : taken);
+            }
         }
     }
 

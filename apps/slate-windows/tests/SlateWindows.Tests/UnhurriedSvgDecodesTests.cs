@@ -72,9 +72,9 @@ public sealed class UnhurriedSvgDecodesTests
             EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
             UnhurriedSvgDecodes.LetEveryRealDecodeFinish();
             decodes.Release();
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref process.Live) == liveBefore, TimeSpan.FromSeconds(10)),
+                "the parked decode never ended");
         }
-        Assert.True(
-            SpinWait.SpinUntil(() => Volatile.Read(ref process.Live) == liveBefore, TimeSpan.FromSeconds(10)),
-            "the parked decode never ended");
     }
 }

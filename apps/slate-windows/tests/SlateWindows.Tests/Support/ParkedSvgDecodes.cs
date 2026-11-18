@@ -14,7 +14,8 @@ namespace SlateWindows.Tests;
 /// Use <see cref="Parked"/> with <see cref="TimeoutOnceEntered"/>, and
 /// <see cref="Ending"/> with the real wait. A parked body waits for
 /// <see cref="Release"/>, at most ten seconds; the fact releases it and waits
-/// for its slots' <c>Live</c> to return to 0. Nothing here is disposed: a
+/// for its slots' <c>Live</c> to return to 0 in a <c>finally</c>, so a failed
+/// assertion still drains its decoders. Nothing here is disposed: a
 /// decoder may still be waking on a gate when the fact ends.
 /// </summary>
 internal sealed class ParkedSvgDecodes
@@ -40,8 +41,12 @@ internal sealed class ParkedSvgDecodes
     public byte[]? Parked(byte[] bytes, Func<long, bool> reserve)
     {
         Count(bytes);
+        // The gate is read before entry is announced: a fact that reparks
+        // once the wait has seen this entry releases the gate this body waits
+        // on, never one it reads afterwards (Codex round 1 on #1635).
+        ManualResetEventSlim gate = Volatile.Read(ref _release);
         Interlocked.Increment(ref _entered);
-        Volatile.Read(ref _release).Wait(TimeSpan.FromSeconds(10));
+        gate.Wait(TimeSpan.FromSeconds(10));
         return null;
     }
 
