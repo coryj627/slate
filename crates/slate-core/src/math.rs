@@ -2957,6 +2957,50 @@ mod tests {
             r"\operatorname{&}_{2}^\max x",
             r"\operatorname{&}_{2}^{\max} x",
         ),
+        // No thin space before the argument (after a number), so the element
+        // has its arity, but the writer still puts its mark after it.
+        (r"x_0^\max y", r"x_0^{\max} y"),
+        (r"x_1^\ln y", r"x_1^{\ln} y"),
+        (r"\int_0^\max f", r"\int_0^{\max} f"),
+        // The parser reads the script position the base set (`\limits`,
+        // `\nolimits`, a large operator's) from its state, and an ungrouped
+        // argument that is an operator with limits overwrites it.
+        (r"\liminf\limits_{n}^\max x", r"\liminf\limits_{n}^{\max} x"),
+        (r"\max\limits_\min x", r"\max\limits_{\min} x"),
+        (r"\sum\limits_{n}^\max x", r"\sum\limits_{n}^{\max} x"),
+        (r"\int\limits_0^\max f", r"\int\limits_0^{\max} f"),
+        (r"\displaystyle x_\max y", r"\displaystyle x_{\max} y"),
+        (r"\displaystyle x_\sum y", r"\displaystyle x_{\sum} y"),
+        (
+            r"\displaystyle\int_0^\max f",
+            r"\displaystyle\int_0^{\max} f",
+        ),
+        (
+            r"\displaystyle\lim\nolimits_n^\max x",
+            r"\displaystyle\lim\nolimits_n^{\max} x",
+        ),
+    ];
+
+    /// #1629, the plan lead's second ruling of 2026-11-18: a function as an
+    /// ungrouped argument of a fraction or a root, each beside the grouped
+    /// form whose reading it must give. The writer puts the thin space before
+    /// the function, and its application mark, inside the element.
+    const FUNCTIONS_AS_FRACTION_AND_ROOT_ARGUMENTS: &[(&str, &str)] = &[
+        (r"\frac x\sin y", r"\frac{x}{\sin} y"),
+        (r"\frac x\sin", r"\frac{x}{\sin}"),
+        (r"\frac\sin x y", r"\frac{\sin}{x} y"),
+        (r"2\frac\sin x y", r"2\frac{\sin}{x} y"),
+        (r"\frac\sin\cos x", r"\frac{\sin}{\cos} x"),
+        (r"\frac 1\ln 2", r"\frac{1}{\ln} 2"),
+        (r"\frac x\sin\cos y", r"\frac x{\sin}\cos y"),
+        (r"\frac x\sin^2 y", r"\frac{x}{\sin}^2 y"),
+        (r"\dfrac x\sin y", r"\dfrac{x}{\sin} y"),
+        (r"\tfrac x\sin y", r"\tfrac{x}{\sin} y"),
+        (r"\binom x\sin y", r"\binom{x}{\sin} y"),
+        (r"\frac x\hat\sin y", r"\frac{x}{\hat\sin} y"),
+        (r"\sqrt[3]\sin x", r"\sqrt[3]{\sin} x"),
+        (r"\sqrt[\sin]x y", r"\sqrt[{\sin}]x y"),
+        (r"\sqrt[\sin]{x} y", r"\sqrt[{\sin}]{x} y"),
     ];
 
     /// #1629, the plan lead's ruling of 2026-11-18: an accented function as
@@ -3013,9 +3057,9 @@ mod tests {
         readings
     }
 
-    /// Each script element's name and its count of element children, read
-    /// with a stack over the tags. Written apart from the repair, so it can
-    /// judge it.
+    /// Each script, fraction and root element's name and its count of element
+    /// children, read with a stack over the tags. Written apart from the
+    /// repair, so it can judge it.
     fn script_child_counts(mathml: &str) -> Vec<(String, usize)> {
         let mut counts = Vec::new();
         let mut stack: Vec<(String, usize)> = vec![(String::new(), 0)];
@@ -3031,7 +3075,14 @@ mod tests {
                 assert_eq!(opened, name, "{mathml}");
                 if matches!(
                     name,
-                    "msup" | "msub" | "munder" | "mover" | "msubsup" | "munderover"
+                    "msup"
+                        | "msub"
+                        | "munder"
+                        | "mover"
+                        | "msubsup"
+                        | "munderover"
+                        | "mfrac"
+                        | "mroot"
                 ) {
                     counts.push((opened, children));
                 }
@@ -3096,6 +3147,66 @@ mod tests {
         }
     }
 
+    /// #1629 (the plan lead's second ruling): a function as an ungrouped
+    /// argument of a fraction or a root reads exactly as its grouped form.
+    #[test]
+    fn a_function_as_a_fraction_or_root_argument_is_read_as_its_group() {
+        for &(ungrouped, grouped) in FUNCTIONS_AS_FRACTION_AND_ROOT_ARGUMENTS {
+            let readings = every_reading(ungrouped);
+            assert!(
+                !readings[0].starts_with("Math expression"),
+                "{ungrouped} fell back: {}",
+                readings[0]
+            );
+            assert_eq!(readings, every_reading(grouped), "{ungrouped}");
+        }
+    }
+
+    /// #1628 (the plan lead's second ruling): an authored triple or quadruple
+    /// prime after a carrier brailles as the primes typed one by one do,
+    /// without the full stop MathCAT 0.7.7's Nemeth cells for `‴` and `⁗`
+    /// hold, in both codes; it is still spoken as one, and the MathML the
+    /// block keeps still holds the glyph as written.
+    #[test]
+    fn an_authored_triple_or_quadruple_prime_brailles_as_its_primes() {
+        for (authored, typed, glyph) in [
+            (r"f\trprime(x)", r"f'''(x)", '‴'),
+            (r"f\qprime(x)", r"f''''(x)", '⁗'),
+            (r"\sin\trprime(x)", r"\sin'''(x)", '‴'),
+            (r"f\trprime'(x)", r"f''''(x)", '‴'),
+            (r"f'\trprime(x)", r"f''''(x)", '‴'),
+            (r"y\trprime", r"y'''", '‴'),
+            (r"2\sin^2 x + f\trprime(x)", r"2\sin^2 x + f'''(x)", '‴'),
+        ] {
+            for code in [BrailleCode::Nemeth, BrailleCode::Ueb] {
+                let block = render_with(authored, code);
+                let braille = String::from_utf8_lossy(&block.braille).into_owned();
+                assert!(
+                    !braille.is_empty() && !braille.contains('.'),
+                    "{authored} {code:?}: {braille}"
+                );
+                assert_eq!(
+                    braille,
+                    String::from_utf8_lossy(&render_with(typed, code).braille),
+                    "{authored} {code:?}"
+                );
+                assert!(
+                    block.mathml.contains(&format!("<mi>{glyph}</mi>")),
+                    "{}",
+                    block.mathml
+                );
+            }
+        }
+        assert_eq!(
+            render_with(r"f\trprime(x)", BrailleCode::Nemeth).speech,
+            "f triple prime, of x"
+        );
+        assert_eq!(
+            render_with(r"f\qprime(x)", BrailleCode::Nemeth).speech,
+            "f quadruple prime, of x"
+        );
+    }
+
     /// #1629 (the plan lead's ruling): an accented function as a script's
     /// base reads exactly as its grouped form.
     #[test]
@@ -3131,12 +3242,12 @@ mod tests {
         assert!(one_mark.contains("</msup><mo>\u{2061}</mo>"), "{one_mark}");
     }
 
-    /// #1629: no script element is written with more element children than
-    /// MathCAT takes, for the family above and every golden source. (Fewer
-    /// is out of scope: `x^\rm a`, whose slot a state change fills, has
-    /// one, and plan 47 §9 leaves it.)
+    /// #1629: no script, fraction or root element is written with more
+    /// element children than MathCAT takes, for the families above and every
+    /// golden source. (Fewer is out of scope: `x^\rm a`, whose slot a state
+    /// change fills, has one, and plan 47 §9 leaves it.)
     #[test]
-    fn no_script_element_has_more_children_than_its_arity() {
+    fn no_element_has_more_children_than_mathcat_takes() {
         let family = SCRIPTED_FUNCTIONS_AFTER_AN_ATOM
             .iter()
             .map(|source| (*source).to_string())
@@ -3144,6 +3255,7 @@ mod tests {
                 FUNCTIONS_AS_SCRIPT_ARGUMENTS
                     .iter()
                     .chain(ACCENTED_FUNCTIONS_AS_SCRIPT_BASES)
+                    .chain(FUNCTIONS_AS_FRACTION_AND_ROOT_ARGUMENTS)
                     .map(|(ungrouped, _)| (*ungrouped).to_string()),
             );
         let long_runs = [r"2\sin^2 x + f'''(x)", r"x_\max'''", r"n\log_2 n + y'''"]
@@ -3283,9 +3395,10 @@ mod tests {
     /// A script element under 8,000 nested groups, about as deep as a
     /// formula under [`MAX_FORMULA_SOURCE_BYTES`] can nest, is repaired and
     /// then refused by MathCAT's depth limit (512 levels), and the formula
-    /// falls back to its source with the process alive. The repair's walk
-    /// keeps its own stack on the heap, so its depth costs the MathCAT
-    /// worker's stack nothing.
+    /// falls back to its source with the process alive. (A walk that
+    /// recursed once per element fits this depth in the worker's stack;
+    /// [`the_repair_walk_keeps_its_depth_off_the_stack`] is the fact that a
+    /// recursing walk fails.)
     #[test]
     fn a_deeply_nested_formula_falls_back_without_ending_the_process() {
         let source = format!("{}{}{}", "{".repeat(8000), r"2\sin^2 x", "}".repeat(8000));
@@ -3295,6 +3408,37 @@ mod tests {
             block.speech.starts_with("Math expression"),
             "{}",
             &block.speech[..block.speech.len().min(80)]
+        );
+    }
+
+    /// The repair walks the tags with its own stack on the heap, never
+    /// recursing: a script element under 200,000 nested rows, far deeper
+    /// than any formula under [`MAX_FORMULA_SOURCE_BYTES`] writes, is
+    /// repaired on a thread with the MathCAT worker's stack (the standard
+    /// 2 MiB), which a walk that recursed once per element overflows.
+    #[test]
+    fn the_repair_walk_keeps_its_depth_off_the_stack() {
+        const DEPTH: usize = 200_000;
+        let space = WRITER_THIN_SPACE;
+        let inner = format!(
+            "<mn>2</mn><msup>{space}<mi>sin</mi><mn>2</mn></msup><mo>\u{2061}</mo>{space}<mi>x</mi>"
+        );
+        let mathml = format!(
+            "<math>{}{inner}{}</math>",
+            "<mrow>".repeat(DEPTH),
+            "</mrow>".repeat(DEPTH)
+        );
+        let repaired = thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || repair_script_children(&mathml, &[true, false]))
+            .expect("a thread with the worker's stack")
+            .join()
+            .expect("the repair ran");
+        assert!(
+            repaired.contains(&format!(
+                "<mn>2</mn>{space}<msup><mi>sin</mi><mn>2</mn></msup><mo>\u{2061}</mo>"
+            )),
+            "the msup under {DEPTH} rows was not repaired"
         );
     }
 
