@@ -207,7 +207,6 @@ public sealed class SaveChainAdmissionCensus
         ("RenamePropertyByIdentityAcrossVault", "a property's key in every note that has it"),
         ("AddTagToFiles", "a tag in each named note"),
         ("RemoveTagFromFiles", "a tag in each named note"),
-        ("ExportSavedQueryAsBase", "a whole file at a path the reader names"),
         ("RenameFile", "the links of every note that links to the file"),
         ("RenameFileIfIdentity", "the links of every note that links to the file"),
         ("RenameFolder", "the links of every note that links into the folder"),
@@ -286,10 +285,14 @@ public sealed class SaveChainAdmissionCensus
             ]),
         (
             "a base or a canvas through its handle, and a base saved from a query: neither kind has an editor save "
-            + "(a tab's save takes a path key for Markdown only), so no admitted save can stand beside the write",
+            + "(a tab's save takes a path key for Markdown only), so no admitted save can stand beside the write; "
+            + "and a saved query exported as a base: core refuses any path that does not end in .base (core fact "
+            + "export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base), so it never writes a note; it "
+            + "can still replace an existing .base, which no note save holds",
             [
                 "BaseApplyEdit", "BaseApplyEdits", "BaseSetTransientSort", "CanvasApply", "CloseBase", "CloseCanvas",
-                "OpenBaseCancellable", "OpenCanvas", "OpenDql", "OpenQuery", "OpenSavedQuery", "SaveQueryAsBase",
+                "ExportSavedQueryAsBase", "OpenBaseCancellable", "OpenCanvas", "OpenDql", "OpenQuery", "OpenSavedQuery",
+                "SaveQueryAsBase",
             ]),
         (
             "saved queries, dashboards, preferences and settings: the app's own stores",
@@ -314,6 +317,10 @@ public sealed class SaveChainAdmissionCensus
         "ReloadKeepingCaretLine",
         "ReloadKeepingQueuedSave",
         "RebaselineAfterPropertyWrite",
+        // Plan 47 CB-9b: the catch-up's rebaseline of a clean tab to a read.
+        "RebaselineToRead",
+        // Plan 47 CB-9b: a clean tab's rebaseline after a link rewrite.
+        "RebaselineAfterLinkRewrite",
     ];
 
     /// <summary>One route that writes a note, or reloads a tab, outside the
@@ -331,42 +338,13 @@ public sealed class SaveChainAdmissionCensus
 
     private const string LinkRewriteReason =
         "core rewrites the notes that link to the item and reports them, each under its own compare-and-swap, "
-        + "and the set is not known before the call, so there is no path to admit";
+        + "and the set is not known before the call, so there is no path to admit; clean open tabs are brought "
+        + "up to the report's bytes (CB-9b)";
 
     private const string AcceptedLinkRewrite = "accepted (plan 47 CD5(b)); put to the owner again in CB-46's table";
 
     private static readonly Row[] OutsideTheChain =
     [
-        new(
-            "Panels/BulkRenameViewModel.cs",
-            "Run",
-            ["RenamePropertyAcrossVault", "RenamePropertyByIdentityAcrossVault"],
-            "the bulk rename's apply rewrites every note that has the key on its own worker",
-            "2026-11-16",
-            "CB-9b"),
-        new(
-            "FilesSidebarViewModel.cs",
-            "EditTag",
-            ["AddTagToFiles", "RemoveTagFromFiles"],
-            "a tag added to or removed from the checked files rewrites each of them on the sidebar's worker",
-            "2026-11-16",
-            "CB-9b"),
-        new(
-            "WorkspaceViewModel.Bases.cs",
-            "ExportSavedQueryAsBase",
-            ["ExportSavedQueryAsBase"],
-            "a saved query exported as a base overwrites the file at the path the reader names, with no "
-            + "compare-and-swap",
-            "2026-11-16",
-            "CB-9b (plan 47 CD5(d))"),
-        new(
-            "WorkspaceViewModel.Properties.cs",
-            "ReconcileTabsAfterPropertyWrite",
-            ["RebaselineAfterPropertyWrite"],
-            "the bulk rename's reconcile reaches this fan-out outside the chain; every other caller is admitted",
-            "2026-11-16",
-            "CB-9b",
-            ExcusedCallers: ["WorkspaceViewModel.Properties.cs (ReconcileTabsAfterBulkRename)"]),
         new(
             "FilesSidebarViewModel.FileManagement.cs",
             "TryRenameSelected",
@@ -518,6 +496,46 @@ public sealed class SaveChainAdmissionCensus
             "DirectToggleAtItsTurn",
             "the review's direct toggle, its admitted operation: run only by the lambda ToggleTask hands to "
             + "INoteSaveChain.Admit"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "BulkRenameApplyAtItsTurn",
+            "the bulk rename's apply at its turn (plan 47 CB-9b): run only by the lambda ApplyBulkRenameAdmitted "
+            + "hands to AdmitPropertyWrite over the notes the armed preview listed"),
+        new(
+            "Panels/BulkRenameViewModel.cs",
+            "StartApplyWork",
+            "the bulk rename apply's worker: started only by BulkRenameApplyAtItsTurn, which hands the worker to "
+            + "TrackWorker and whose ticket ends when its publication has run"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "FinishBulkRenameApply",
+            "the bulk rename apply's publication: called only by BulkRenameApplyAtItsTurn, in its turn or from the "
+            + "continuation on its worker, before its operation ends"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "ReconcileTabsAfterBulkRename",
+            "the bulk rename's reconcile of the renamed notes' tabs: called only by FinishBulkRenameApply"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "CatchUpCleanTabsAfterAdmittedWrite",
+            "the catch-up of the clean tabs on the notes an admitted operation held: called only by "
+            + "FinishBulkRenameApply and EditTagAtItsTurn, inside the operation's ticket"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "ReconcileTabsAfterPropertyWrite",
+            "the property write's fan-out over a note's tabs (contract 8): called only by the two property "
+            + "completions, the read-back reconcile, the bulk rename's reconcile, the tag edit's turn and the "
+            + "reconcile from a read, each inside its ticket"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "ReconcileTabsFromARead",
+            "a note's tabs reconciled from a read of the disk (plan 47 CB-9b, Codex round 3): called only by "
+            + "EditTagAtItsTurn and ReconcileTabsAfterBulkRename, each inside its operation's ticket"),
+        new(
+            "WorkspaceViewModel.Properties.cs",
+            "EditTagAtItsTurn",
+            "the tag edit at its turn (plan 47 CB-9b): run only by the lambda EditTagAdmitted hands to "
+            + "AdmitPropertyWrite over the checked notes"),
     ];
 
     private static string Label(NamedMember row) => $"{row.File} ({row.Member})";
@@ -832,7 +850,7 @@ public sealed class SaveChainAdmissionCensus
                     break;
                 case IInvocationOperation invocation:
                     _ = _seen.Add(at);
-                    Weigh(at, [invocation.TargetMethod], null);
+                    Weigh(at, [invocation.TargetMethod], null, IsADryRun(invocation));
                     break;
                 case IObjectCreationOperation creation:
                     _ = _seen.Add(at);
@@ -1159,9 +1177,21 @@ public sealed class SaveChainAdmissionCensus
                 .Any(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" });
         }
 
+        /// <summary>Plan 47 CB-9b (Design 7): a call to either bulk-rename
+        /// method whose argument for <c>dryRun</c>, read from its
+        /// <see cref="IArgumentOperation"/>, has the constant value true
+        /// writes nothing (core returns before any save), so it is no site of
+        /// rule 2. Anything else stands for it (false, a local, a field, an
+        /// expression), and the call is a site.</summary>
+        private static bool IsADryRun(IInvocationOperation invocation) =>
+            invocation.TargetMethod.Name is "RenamePropertyAcrossVault" or "RenamePropertyByIdentityAcrossVault"
+            && invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Name == "dryRun") is { } dryRun
+            && dryRun.Value.ConstantValue is { HasValue: true, Value: true };
+
         /// <summary>Add the edge and the site a call makes; true when it
-        /// made either.</summary>
-        private bool Weigh(SyntaxNode node, IMethodSymbol[] methods, string? spelled)
+        /// made either. A dry run (<see cref="IsADryRun"/>) makes its edge and
+        /// no site.</summary>
+        private bool Weigh(SyntaxNode node, IMethodSymbol[] methods, string? spelled, bool aDryRun = false)
         {
             bool read = false;
             if (methods.Length == 0)
@@ -1199,7 +1229,7 @@ public sealed class SaveChainAdmissionCensus
                 SiteKind? kind = method.ContainingType is { } owner
                     && _sessionTypes.Contains(owner.OriginalDefinition)
                     && sessionMethods.Contains(method.Name)
-                        ? SiteKind.Session
+                        ? aDryRun ? null : SiteKind.Session
                         : IsShellType(method.ContainingType, "WorkspaceTabViewModel")
                             && ReloadMethods.Contains(method.Name)
                             && !InsideTheTab(node)
@@ -1992,6 +2022,34 @@ public sealed class SaveChainAdmissionCensus
             + "first and the tab's save first), or admit it and flag its row in ExclusiveCreatorRows.");
     }
 
+    // ---- The reclassified export is tied to its twin fact -----------------
+
+    private const string ExportTwinFact = "TheSavedQueryExportCannotNameANote";
+
+    /// <summary>Plan 47 CB-9b (CD5(d)): ExportSavedQueryAsBase is read with
+    /// SaveQueryAsBase, as a base writer and no note writer, on the strength
+    /// of core's refusal of any path that does not end in .base (core fact
+    /// export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base)
+    /// and of its Windows twin, which hears the refusal and finds the note
+    /// unchanged. The twin must stand as a fact in
+    /// <see cref="BasesRedTeamRegressionTests"/>: renaming or deleting it, or
+    /// moving the export out of that group, fails here.</summary>
+    [Fact]
+    public void TheReclassifiedExportIsHeldByItsTwinFact()
+    {
+        Assert.Contains(
+            NotNoteBytes,
+            group => group.Names.Contains("ExportSavedQueryAsBase") && group.Names.Contains("SaveQueryAsBase"));
+        Assert.DoesNotContain(NoteWriters, writer => writer.Name == "ExportSavedQueryAsBase");
+        MethodInfo? fact = typeof(BasesRedTeamRegressionTests).GetMethod(ExportTwinFact);
+        Assert.True(
+            fact is not null && fact.GetCustomAttributes(typeof(FactAttribute), inherit: false).Length > 0,
+            $"BasesRedTeamRegressionTests.{ExportTwinFact} is not a fact. The save chain census reads "
+            + "ExportSavedQueryAsBase as a base writer only while core refuses a path that does not end in .base "
+            + "and this twin holds the refusal on Windows. Restore the twin, or put the export back among the note "
+            + "writers with a row.");
+    }
+
     // ---- Fail closed, and the floors --------------------------------------
 
     /// <summary>Sources the rules read whether or not they hold a site
@@ -2074,7 +2132,16 @@ public sealed class SaveChainAdmissionCensus
     /// admits and 20 named as admitted by their callers. The walk from
     /// syntax kinds, which this replaced, found the same sources, calls,
     /// reloads and admission calls. Fewer means the walk missed files or
-    /// calls, not that the shell writes less.</summary>
+    /// calls, not that the shell writes less. Counted again on 2026-11-17
+    /// for plan 47 CB-9b's stage A: 308 sources, 31 calls to a note writer
+    /// (the preview's dry runs are no site), 6 to an exclusive creator, 12
+    /// reloads, 18 admission calls, 9,265 operation trees, 17,238 edges,
+    /// 9,259 members no caller admits and 26 named; each floor is pinned just
+    /// under. Counted again for its stage B: 308 sources, 30 calls to a note
+    /// writer (the saved-query export is a base writer now), 6 to an
+    /// exclusive creator, 13 reloads, 19 admission calls, 9,274 operation
+    /// trees, 17,286 edges, 9,287 members no caller admits and 27
+    /// named.</summary>
     [Fact]
     public void TheWalkReadsTheShell()
     {
@@ -2082,14 +2149,14 @@ public sealed class SaveChainAdmissionCensus
         (string What, int Found, int AtLeast)[] floors =
         [
             ("sources", Shell.Value.Trees.Count, 300),
-            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 30),
+            ("calls to a note writer", reading.Sites.Count(site => site.Kind == SiteKind.Session && NoteWriters.Any(writer => writer.Name == site.Name)), 29),
             ("calls to an exclusive creator", reading.Sites.Count(site => site.Kind == SiteKind.Session && ExclusiveCreators.Contains(site.Name)), 5),
-            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 10),
-            ("admission calls", reading.AdmissionCalls.Count, 14),
-            ("operation trees walked", reading.TreesWalked, 9000),
-            ("edges between members", reading.Edges.Count, 16500),
-            ("members no caller admits", reading.Open.Count, 9000),
-            ("members named as admitted by their callers", AdmittedByItsCallers.Length, 19),
+            ("reloads of a tab from outside it", reading.Sites.Count(site => site.Kind == SiteKind.Reload), 12),
+            ("admission calls", reading.AdmissionCalls.Count, 18),
+            ("operation trees walked", reading.TreesWalked, 9250),
+            ("edges between members", reading.Edges.Count, 17250),
+            ("members no caller admits", reading.Open.Count, 9250),
+            ("members named as admitted by their callers", AdmittedByItsCallers.Length, 26),
         ];
         string[] missing = [.. floors.Where(floor => floor.Found < floor.AtLeast)
             .Select(floor => $"{floor.What}: the walk found {floor.Found}; it held at least {floor.AtLeast} when the census was written")];
@@ -2253,6 +2320,13 @@ public sealed class SaveChainAdmissionCensus
             "a writer in the abandoned argument",
             InTheWorkspace(
                 "void PlantedM() { AdmitPropertyWrite(\"a.md\", () => Task.CompletedTask, "
+                + "() => { _ = _session.SaveText(\"a.md\", \"text\", null); }); }"),
+            "unjoined"
+        },
+        {
+            "a writer in the abandoned argument of AdmitPropertyWrite over several notes",
+            InTheWorkspace(
+                "void PlantedM() { AdmitPropertyWrite([\"a.md\", \"b.md\"], () => Task.CompletedTask, "
                 + "() => { _ = _session.SaveText(\"a.md\", \"text\", null); }); }"),
             "unjoined"
         },
@@ -2537,6 +2611,21 @@ public sealed class SaveChainAdmissionCensus
             "joined"
         },
         {
+            // Plan 47 CB-9b: the admission over several notes.
+            "a writer in an Admit lambda over several notes",
+            InAClass(
+                "void PlantedM() { _ = saves.Admit([\"a.md\", \"b.md\"], ticket => { " + AWrite
+                + " return Task.CompletedTask; }); }"),
+            "joined"
+        },
+        {
+            "through AdmitPropertyWrite over several notes",
+            InTheWorkspace(
+                "void PlantedM() { AdmitPropertyWrite([\"a.md\", \"b.md\"], "
+                + "() => { _ = _session.SaveText(\"a.md\", \"text\", null); return Task.CompletedTask; }, () => { }); }"),
+            "joined"
+        },
+        {
             "a writer lambda in a local only an admission lambda reads",
             InAClass(
                 "void PlantedM() { Func<Task> write = () => { " + AWrite + " return Task.CompletedTask; }; "
@@ -2551,6 +2640,42 @@ public sealed class SaveChainAdmissionCensus
                     "Task PlantedWrite() { " + AWrite + " return Task.CompletedTask; }\n"
                     + "void PlantedM() { _ = chain.Admit(\"a.md\", PlantedWrite); }")),
             "joined"
+        },
+
+        // Plan 47 CB-9b: the bulk rename's dry run writes nothing. A call
+        // whose dryRun is the constant true is no site; any other value is.
+        {
+            "a bulk rename's dry run in a plain method",
+            InAClass("void PlantedM(CancelToken cancel) { _ = session.RenamePropertyAcrossVault(\"k\", \"n\", true, cancel); }"),
+            "clean"
+        },
+        {
+            "a bulk rename's dry run by identity, its dryRun named, in a plain method",
+            InAClass(
+                "void PlantedM(CancelToken cancel) { _ = session.RenamePropertyByIdentityAcrossVault(\"k\", \"n\", dryRun: true, cancel); }"),
+            "clean"
+        },
+        {
+            "a bulk rename whose dryRun is a local, in a plain method",
+            InAClass(
+                "void PlantedM(CancelToken cancel, bool preview) { bool dry = preview; "
+                + "_ = session.RenamePropertyAcrossVault(\"k\", \"n\", dry, cancel); }"),
+            "unjoined"
+        },
+        {
+            "a bulk rename's apply in a plain method",
+            InAClass("void PlantedM(CancelToken cancel) { _ = session.RenamePropertyAcrossVault(\"k\", \"n\", false, cancel); }"),
+            "unjoined"
+        },
+        {
+            // Not followed: a delegate kept in a field is its maker's.
+            "a writer reached from an admission lambda through a delegate field",
+            InAClass(
+                "private Action _write = () => { };\n"
+                + "void PlantedWrite() { " + AWrite + " }\n"
+                + "void PlantedWire() { _write = PlantedWrite; }\n"
+                + "void PlantedM() { _ = saves.Admit(\"a.md\", _ => { _write(); return Task.CompletedTask; }); }"),
+            "unjoined"
         },
 
         // No site of rule 2: an exclusive create outside the admitted creators.
@@ -2597,6 +2722,34 @@ public sealed class SaveChainAdmissionCensus
             InTheTab("void PlantedM() { ReplaceItem(Item); }"),
             "clean"
         },
+        {
+            // Plan 47 CB-9b: the catch-up's rebaseline is a reload.
+            "RebaselineToRead in a plain method",
+            InAClass("void PlantedM(WorkspaceTabViewModel tab) { _ = tab.RebaselineToRead(session.ReadTextIdentified(\"a.md\")); }"),
+            "unguarded"
+        },
+        {
+            "HasAdmittedSaveFor before RebaselineToRead",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) { if (!saves.HasAdmittedSaveFor(\"a.md\")) "
+                + "{ _ = tab.RebaselineToRead(session.ReadTextIdentified(\"a.md\")); } }"),
+            "guarded"
+        },
+        {
+            // Plan 47 CB-9b: a link rewrite's rebaseline is a reload.
+            "RebaselineAfterLinkRewrite in a plain method",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) "
+                + "{ _ = tab.RebaselineAfterLinkRewrite(session.ReadTextIdentified(\"a.md\"), \"hash\"); }"),
+            "unguarded"
+        },
+        {
+            "HasAdmittedSaveFor before RebaselineAfterLinkRewrite",
+            InAClass(
+                "void PlantedM(WorkspaceTabViewModel tab) { if (!saves.HasAdmittedSaveFor(\"a.md\")) "
+                + "{ _ = tab.RebaselineAfterLinkRewrite(session.ReadTextIdentified(\"a.md\"), \"hash\"); } }"),
+            "guarded"
+        },
 
         // The chain's one implementer.
         {
@@ -2622,15 +2775,15 @@ public sealed class SaveChainAdmissionCensus
         "partial class WorkspaceViewModel { void PublishBasesExport(int planted) { _ = _session.SaveText(\"a.md\", \"text\", null); } }",
         "WorkspaceViewModel.Bases.cs (PublishBasesExport): SaveText is called at 2 site(s) and the row lists 1")]
     [InlineData(
-        "a second AddTagToFiles in another overload of EditTag",
+        "a second BatchMove in another overload of BatchMove",
         "FilesSidebarViewModel.cs",
-        "partial class FilesSidebarViewModel { void EditTag(int planted) { Delegate add = _session.AddTagToFiles; _ = add; } }",
-        "FilesSidebarViewModel.cs (EditTag): AddTagToFiles is called at 2 site(s) and the row lists 1")]
+        "partial class FilesSidebarViewModel { void BatchMove(int planted) { Delegate move = _session.BatchMove; _ = move; } }",
+        "FilesSidebarViewModel.cs (BatchMove): BatchMove is called at 2 site(s) and the row lists 1")]
     [InlineData(
-        "a new caller of ReconcileTabsAfterPropertyWrite outside the chain",
-        "WorkspaceViewModel.Properties.cs",
-        "partial class WorkspaceViewModel { void PlantedCaller() { _ = ReconcileTabsAfterPropertyWrite(\"a.md\", \"hash\"); } }",
-        "WorkspaceViewModel.Properties.cs (ReconcileTabsAfterPropertyWrite): WorkspaceViewModel.Properties.cs (PlantedCaller) calls it outside the chain")]
+        "a second RenameFile in another overload of TryRenameSelected",
+        "FilesSidebarViewModel.FileManagement.cs",
+        "partial class FilesSidebarViewModel { void TryRenameSelected(int planted) { Delegate rename = _session.RenameFile; _ = rename; } }",
+        "FilesSidebarViewModel.FileManagement.cs (TryRenameSelected): RenameFile is called at 2 site(s) and the row lists 1")]
     public void ARowAnswersOnlyTheSitesAndTheCallersItLists(string form, string file, string members, string expected)
     {
         Reading all = Shell.Value.Reading.With(Planted(PlantedPrelude + members + "\n", file: file));
@@ -2643,6 +2796,37 @@ public sealed class SaveChainAdmissionCensus
         Assert.True(
             problems.Any(problem => problem.StartsWith(expected, StringComparison.Ordinal)),
             $"{form}: the rows answered it. Problems found:\n" + string.Join("\n", problems));
+    }
+
+    /// <summary>A row's excused callers, held on a row planted here (plan 47
+    /// CB-9b: no row of the shell excuses a caller any more, and the check
+    /// stays). A reload in a member two callers reach outside the chain,
+    /// with a row that excuses one of them: the other is named. And a row
+    /// that excuses a caller that no longer calls it is told to drop it.</summary>
+    [Fact]
+    public void ARowsExcusedCallersAreTheOnlyCallersItAnswersFor()
+    {
+        Reading all = Shell.Value.Reading.With(Planted(InAClass(
+            "void PlantedFanOut(WorkspaceTabViewModel tab) { tab.ReplaceItem(tab.Item); }\n"
+            + "void PlantedExcused(WorkspaceTabViewModel tab) { PlantedFanOut(tab); }\n"
+            + "void PlantedNew(WorkspaceTabViewModel tab) { PlantedFanOut(tab); }")));
+        HashSet<string> named = Labels(AdmittedByItsCallers);
+        IReadOnlyList<Violation> found = UnguardedReloads(all, named);
+        Row excusingOne = new(
+            "Planted.cs", "PlantedFanOut", ["ReplaceItem"], "planted", "2026-11-17", "planted",
+            ExcusedCallers: ["Planted.cs (PlantedExcused)"]);
+        IReadOnlyList<string> problems = Problems(all, found, [excusingOne], named);
+        Assert.Contains(problems, problem => problem.StartsWith(
+            "Planted.cs (PlantedFanOut): Planted.cs (PlantedNew) calls it outside the chain", StringComparison.Ordinal));
+        Assert.DoesNotContain(problems, problem => problem.Contains("(PlantedExcused) calls it", StringComparison.Ordinal));
+
+        Row excusingAGhost = excusingOne with
+        {
+            ExcusedCallers = ["Planted.cs (PlantedExcused)", "Planted.cs (PlantedNew)", "Planted.cs (PlantedGone)"],
+        };
+        Assert.Contains(Problems(all, found, [excusingAGhost], named), problem => problem.StartsWith(
+            "Planted.cs (PlantedFanOut): the row excuses Planted.cs (PlantedGone), which no longer calls it",
+            StringComparison.Ordinal));
     }
 
     // ---- Rule (A) refuses by default --------------------------------------

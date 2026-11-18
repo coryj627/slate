@@ -907,10 +907,20 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
         if (_editorSession is not null && sourceSession is not null)
         {
-            _editorSession.SynchronizeFromPeer(
-                source.Text,
-                sourceSession.SavedBaseline,
-                reconstructUndoHistory);
+            if (source._tookAnotherWritersBytes)
+            {
+                // Plan 47 CB-9b (Design 0): the source took another
+                // writer's bytes with no undo step back across them, and so
+                // does this peer, keeping its own caret's line.
+                TakeAnotherWritersBytes(source.Text);
+            }
+            else
+            {
+                _editorSession.SynchronizeFromPeer(
+                    source.Text,
+                    sourceSession.SavedBaseline,
+                    reconstructUndoHistory);
+            }
         }
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(IsDirty));
@@ -3532,11 +3542,30 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         return false;
     }
 
-    /// <summary>#1280: teardown's first step — pump until every admitted
-    /// save has published, so the dirty state it then evaluates is settled
-    /// and no write admitted before the prompt lands after it. False only
-    /// when the dispatcher is shutting down.</summary>
-    internal bool SettleSaves() => _saves.SettlePumping();
+    /// <summary>#1280: teardown's first step — its one caller is the vault
+    /// lifecycle's close — pump until every admitted save has published, so
+    /// the dirty state it then evaluates is settled and no write admitted
+    /// before the prompt lands after it. False only when the dispatcher is
+    /// shutting down.
+    /// <para>Plan 47 CB-9b (Design 3; Call 3): it first cancels every admitted
+    /// bulk rename apply, and while it pumps, an apply admitted inside its
+    /// frame is cancelled at admission. Core stops a cancelled apply at the
+    /// next file, so the settle waits for at most one file's write of each
+    /// and its publication, which speaks the apply's summary before the
+    /// close's own sentence, and never for a whole apply.</para></summary>
+    internal bool SettleSaves()
+    {
+        _teardownSettles++;
+        try
+        {
+            CancelAdmittedApplies();
+            return _saves.SettlePumping();
+        }
+        finally
+        {
+            _teardownSettles--;
+        }
+    }
 
     /// <summary>#1280: true when no admitted save is waiting or writing.</summary>
     internal bool SavesIdle => _saves.IsIdle;
@@ -3604,6 +3633,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 _closedTabs[index] = (item with { Path = retargeted }, group);
             }
         }
+
+        // Plan 47 CB-9b (Codex round 2): a tag edit waiting its turn follows
+        // the notes it was asked for, as the tabs do.
+        RetargetQueuedTagEdits(source, destination);
 
         // The Bases registry keys documents by byte-exact path, and a
         // document's Path is immutable — a rename must re-key or the
@@ -3796,6 +3829,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
         _closedTabs.RemoveAll(entry =>
             IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
+        // Plan 47 CB-9b (Codex round 2): a tag edit waiting its turn drops
+        // the note that left, so a note created at its path is never tagged.
+        DropQueuedTagEditPaths(invalidated);
         // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
         // entries under the deleted path are pruned, so Back never opens a
         // note that is gone; the pin and the note in view are kept (the
@@ -3832,6 +3868,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // WB-16 (#1305): a pending rail settle is cancelled, never run — the
         // one write below carries the leaf an arrow chose.
         RailSettle.Dispose();
+        // Plan 47 CB-9b (Design 3): every admitted bulk rename apply, and the
+        // sheet's run, is cancelled before the join below, so the join waits
+        // for at most one file's write of an apply, never a whole apply.
+        CancelAdmittedApplies();
+        _bulkRenameSheet?.CancelInFlight();
         // #1280 (contract 35 A-1, close-before-session): no save starts
         // from here on, and every save worker already writing is JOINED
         // before this returns — the vault lifecycle disposes the session
@@ -3840,13 +3881,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // disposed and says nothing.
         _saves.CloseAndJoinWorkers();
         // W4-4 (adversarial round 2): the bulk-rename worker holds
-        // the shared session too — cancel any in-flight run through
-        // its CancelToken and shut the scheduler down so a terminal
-        // publish can't land in this dying workspace. The rename's
-        // per-file CAS writes are individually safe; cancellation
-        // reports the unprocessed remainder at the core layer.
-        _bulkRenameSheet?.CancelInFlight();
+        // the shared session too — its in-flight run was cancelled
+        // through its CancelToken above; shut the scheduler down so a
+        // terminal publish can't land in this dying workspace. The
+        // rename's per-file CAS writes are individually safe;
+        // cancellation reports the unprocessed remainder at the core
+        // layer.
+        // Plan 47 CB-9b (Design 3): the sheet's other work (a preview, which
+        // reads only) joins the bounded pre-session drain below.
         _bulkRenameSheet?.Shutdown();
+        Task? bulkRenameDrain = _bulkRenameSheet?.WhenWorkDrained();
         _bulkRenameSheet = null;
         _addPropertySheet = null;
         // W4-5: the citation workers hold the shared session too —
@@ -3887,6 +3931,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // absolute: a >5 s uncancellable FFI call at the exact moment
         // of app close forfeits the ordering rather than the UI).
         var basesDrains = new List<Task>();
+        if (bulkRenameDrain is not null)
+        {
+            basesDrains.Add(bulkRenameDrain);
+        }
         foreach (Bases.BaseDocumentViewModel document in _baseDocuments.Values)
         {
             document.Shutdown();

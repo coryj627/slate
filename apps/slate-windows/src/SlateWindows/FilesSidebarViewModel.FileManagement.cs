@@ -34,6 +34,15 @@ internal sealed partial class FilesSidebarViewModel
     /// construction — it matches on the old path).</summary>
     internal Action<string, string>? RetargetRequested { get; set; }
 
+    /// <summary>Plan 47 CB-9b (#1889; CD5(b); F9): the lifecycle wires this
+    /// to the workspace, which brings each clean open tab on a note whose
+    /// links a rename or a move rewrote up to the rewritten bytes
+    /// (WorkspaceViewModel.RebaselineCleanTabsAfterLinkRewrite). Raised with a
+    /// report's rewrites once its moved pairs are retargeted, so a tab on a
+    /// rewritten note inside a moved folder already carries its new
+    /// path.</summary>
+    internal Action<IReadOnlyList<RewriteOutcome>>? LinksRewritten { get; set; }
+
     /// <summary>The pending failure detail from the last consumed
     /// report — the caller's FINAL status composes it in (codex round
     /// 1: setting Status here and letting the success sentence
@@ -49,6 +58,11 @@ internal sealed partial class FilesSidebarViewModel
         foreach (MovedPath moved in report.Moved)
         {
             RetargetRequested?.Invoke(moved.OldPath, moved.NewPath);
+        }
+
+        if (report.Rewritten.Length > 0)
+        {
+            LinksRewritten?.Invoke(report.Rewritten);
         }
 
         if (report.Failed.Length > 0)
@@ -427,6 +441,11 @@ internal sealed partial class FilesSidebarViewModel
                             TransformStoredPaths(
                                 change.OldPath, change.NewPath,
                                 change.IsDirectory, deleted: false);
+                        }
+
+                        if (batchReport.Rewritten.Length > 0)
+                        {
+                            LinksRewritten?.Invoke(batchReport.Rewritten);
                         }
 
                         // Red team (correctness 1): the endpoint reports

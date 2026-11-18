@@ -1690,37 +1690,59 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>Plan 47 CB-9b (#1889; CD5(a)): a tag edit of the checked
+    /// notes, as the sidebar asks the workspace to admit it into their save
+    /// chains: the checked paths in order, the tag, whether it adds or
+    /// removes, the sidebar's publication of core's summary or of the
+    /// failure's message, and the test seam that runs before the core
+    /// call.</summary>
+    internal sealed record TagEditRequest(
+        IReadOnlyList<string> Paths,
+        string Tag,
+        bool Add,
+        Action<TagEditReport?, string?> Publish,
+        Action HookForTests);
+
+    /// <summary>Plan 47 CB-9b (#1889; CD5(a)): the lifecycle wires this to
+    /// the workspace, which admits the tag edit into the checked notes' save
+    /// chains and runs it at its turn (WorkspaceViewModel.EditTagAdmitted). A
+    /// sidebar with nothing wired edits no tag.</summary>
+    internal Action<TagEditRequest>? TagEditRequested { get; set; }
+
+    /// <summary>Plan 47 CB-9b test seam: runs before a tag edit's core call,
+    /// at its turn in the notes' chains. A fact makes it throw.</summary>
+    internal Action? TagEditHookForTests { get; set; }
+
     private void EditTag(bool add)
     {
         string[] paths = [.. _batchChecked
             .Where(pair => !pair.Value)
             .Select(pair => pair.Key)
             .OrderBy(path => path, StringComparer.Ordinal)];
-        if (paths.Length == 0 || TagInput.Length == 0)
+        if (paths.Length == 0 || TagInput.Length == 0 || SessionShutdownStarted)
         {
             return;
         }
 
-        try
-        {
-            if (!TryRunSessionWork(
-                () => add
-                    ? _session.AddTagToFiles(paths, TagInput)
-                    : _session.RemoveTagFromFiles(paths, TagInput),
-                out TagEditReport report))
-            {
-                return;
-            }
+        TagEditRequested?.Invoke(new TagEditRequest(
+            paths, TagInput, add, PublishTagEdit, () => TagEditHookForTests?.Invoke()));
+    }
 
-            Status = report.AudioSummary;
-            // W0.5-3 residue: core tag report carries engine-composed audio copy.
-            _announce(new A11yEvent.HostComposed(report.AudioSummary, A11yPriority.Medium));
-            LoadTags();
-        }
-        catch (VaultException exception)
+    /// <summary>Plan 47 CB-9b: a tag edit's publication, which the workspace
+    /// runs at the edit's turn once the notes' tabs are reconciled: core's
+    /// summary, or the failure's sentence with its message.</summary>
+    private void PublishTagEdit(TagEditReport? report, string? failure)
+    {
+        if (report is null)
         {
-            ReportFailure($"Tag edit failed: {exception.Message}");
+            ReportFailure($"Tag edit failed: {failure}");
+            return;
         }
+
+        Status = report.AudioSummary;
+        // W0.5-3 residue: core tag report carries engine-composed audio copy.
+        _announce(new A11yEvent.HostComposed(report.AudioSummary, A11yPriority.Medium));
+        LoadTags();
     }
 
     private void CreateFolder()
@@ -2317,6 +2339,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 RetargetRequested?.Invoke(change.OldPath, change.NewPath);
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
+            }
+
+            // Plan 47 CB-9b (CD5(b); F9): clean tabs follow the rewritten
+            // links, once the standing changes are retargeted.
+            if (report.Rewritten.Length > 0)
+            {
+                LinksRewritten?.Invoke(report.Rewritten);
             }
 
             StoredPathsFollowed(journalEntry);

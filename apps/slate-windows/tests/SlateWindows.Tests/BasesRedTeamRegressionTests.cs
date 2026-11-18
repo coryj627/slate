@@ -388,6 +388,35 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
             _announced, e => e is A11yEvent.BasesSavedQueryExported);
     }
 
+    /// <summary>Plan 47 CB-9b (#1889; CD5(d)): the saved-query export cannot
+    /// name a note. Core refuses a path that does not end in .base, so the
+    /// reader hears the export's failure with core's reason, once, nothing
+    /// is exported, and the note keeps its text. The Windows twin of core's
+    /// export_saved_query_as_base_refuses_a_path_that_does_not_end_in_base:
+    /// the save chain census reads the export as a base writer on the
+    /// strength of the two.</summary>
+    [Fact]
+    public void TheSavedQueryExportCannotNameANote()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        string id = _session.SaveQuery(
+            "Exportable", null, SeedQueryJson(), SavedQuerySourceSyntax.Builder);
+        string note = Path.Combine(_root, "note0.md");
+        string before = File.ReadAllText(note);
+        _announced.Clear();
+
+        workspace.ExportSavedQueryAsBase(id, "note0.md");
+
+        A11yEvent failed = Assert.Single(
+            _announced, e => e is A11yEvent.BasesSavedQueryExportFailed);
+        Assert.Equal(
+            "Saved query could not be exported: Base paths must end in .base",
+            SlateUniffiMethods.A11yRender(failed).Text);
+        Assert.DoesNotContain(
+            _announced, e => e is A11yEvent.BasesSavedQueryExported);
+        Assert.Equal(before, File.ReadAllText(note));
+    }
+
     [Fact]
     public void DashboardEditorRefusesAStaleSaveWithTheCanonicalSentence()
     {

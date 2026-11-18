@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Windows.Threading;
 using SlateWindows.Bases;
+using SlateWindows.FileManagement;
 using SlateWindows.Panels;
 using SlateWindows.Templates;
 using uniffi.slate_uniffi;
@@ -3474,6 +3475,2357 @@ public sealed class SaveChainAdmissionTests
         }
     }, TimeSpan.FromSeconds(120), "STA test body timed out.");
 
+    // ---- No undo step restores another writer's bytes (plan 47 CB-9b, Design 0) --
+
+    private const string TwoKeyNote = "---\nstatus: draft\ntitle: A\n---\n\nBody.\n";
+
+    /// <summary>Plan 47 CB-9b, Design 0 (the plan lead's word of 2026-11-17).
+    /// Another writer's bytes land in a clean tab on a.md and in its split
+    /// peer. Afterwards neither tab can undo, so one Undo and a save from
+    /// either tab leave the write on disk, and each tab's caret keeps its
+    /// line (line 5, the blank line under the frontmatter, which every
+    /// route's new text keeps). Today the whole-document replace stays on
+    /// the source's undo stack and reaches the peer's through the mirroring,
+    /// and an Undo then a save writes the old bytes back (M10, M11). The tag
+    /// edit's row (stage B, Design 4) and the link rewrite's (Design 5) are
+    /// red today on their first assertion: no tab follows a tag edit or a
+    /// link rewrite at all. Each assertion names the tab it is about, so the
+    /// peer route is held on its own: with the branch in
+    /// MirrorDocumentStateFrom that makes a peer take another writer's bytes
+    /// itself removed, every row fails on the split peer.</summary>
+    [Theory]
+    [InlineData("property set from the header")]
+    [InlineData("property delete")]
+    [InlineData("property add")]
+    [InlineData("Bases cell edit through a tab")]
+    [InlineData("tabless Bases cell write with tabs that raced open")]
+    [InlineData("bulk rename")]
+    [InlineData("tag edit")]
+    [InlineData("link rewrite (rename)")]
+    public void AnUndoCannotRestoreBytesAnotherWriterReplaced(string route) => RunSta(() =>
+    {
+        // The link rewrite's row: a.md links to b.md, which the reader
+        // renames from the Files sidebar, so core rewrites a.md's link.
+        using var h = route == "link rewrite (rename)"
+            ? new Vault("undo-across-writer", ("a.md", TwoKeyNote + "See [[b]].\n"), ("b.md", "# B\n"))
+            : new Vault("undo-across-writer", ("a.md", TwoKeyNote), ("Notes.base", NotesBase));
+        bool tabless = route == "tabless Bases cell write with tabs that raced open";
+        WorkspaceTabViewModel? a = null;
+        WorkspaceTabViewModel? b = null;
+        void OpenBoth()
+        {
+            a = h.OpenNow("a.md");
+            WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+            b = OpenSplitPeer(h, "a.md");
+            h.Workspace.Activate(groupA, a);
+            foreach (WorkspaceTabViewModel tab in new[] { a, b })
+            {
+                Assert.False(tab.IsDirty, "premise: a tab opened dirty");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "premise: a tab opened with an undo step");
+                tab.EditorCaretOffset = tab.EditorDocument.GetLineByNumber(5).Offset;
+            }
+        }
+        HeldWork? held = null;
+        try
+        {
+            string expected;
+            Func<bool> landed;
+            if (tabless)
+            {
+                (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = TablessStatusCell(h);
+                held = new HeldWork(hook => h.Workspace.BasesTablessWriteHookForTests = hook);
+                document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+                h.PumpUntil(() => held.Entered, "premise: the cell write reaching its hold before its core call");
+                OpenBoth();
+                held.Release();
+                expected = "status: done";
+                landed = () => h.Events.Any(e => e is A11yEvent.BasesCellSaved);
+            }
+            else
+            {
+                OpenBoth();
+                (expected, landed) = WriteThroughAnOpenTab(h, route);
+            }
+            h.PumpUntil(() => landed() && h.Workspace.SavesIdle, $"the {route} landing");
+            string written = h.Read("a.md");
+            Assert.Contains(expected, written, StringComparison.Ordinal);
+
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a!), ("the split peer", b!) })
+            {
+                Assert.True(
+                    string.Equals(written, tab.Text, StringComparison.Ordinal),
+                    $"{name} does not show the bytes the write left on disk; it shows "
+                    + tab.Text.Replace("\n", "\\n", StringComparison.Ordinal));
+                Assert.False(tab.IsDirty, $"{name} is dirty after the write");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, $"{name} can undo across the bytes another writer wrote");
+                Assert.InRange(tab.EditorCaretOffset, 0, tab.EditorDocument.TextLength);
+                int line = tab.EditorDocument.GetLocation(tab.EditorCaretOffset).Line;
+                Assert.True(line == 5, $"{name}'s caret is on line {line}; expected line 5");
+            }
+            foreach (WorkspaceTabViewModel tab in new[] { a!, b! })
+            {
+                tab.EditorDocument!.UndoStack.Undo();
+                Task<bool> save = tab.SaveAsync();
+                h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a save after an Undo");
+                Assert.Equal(written, h.Read("a.md"));
+            }
+        }
+        finally
+        {
+            h.Workspace.BasesTablessWriteHookForTests = null;
+            h.ReleaseAndDrain([.. held is null ? Array.Empty<HeldWork>() : [held]]);
+        }
+        held?.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Plan 47 CB-9b, the lead's ruling 8: another writer's bytes
+    /// keep the caret on its line, as the rescan's reload does
+    /// (<c>WorkspaceTabViewModel.ReloadKeepingCaretLine</c>), in the tab the
+    /// write rebaselines and in its split peer; a line past the new end
+    /// clamps to the last line, and the column clamps to that line. Today
+    /// the replace leaves the caret's offset where it was (headless; with
+    /// the editor view, AvalonEdit moves it to an end of the new
+    /// text).</summary>
+    [Theory]
+    [InlineData("a line the new text keeps")]
+    [InlineData("a line past the new end")]
+    public void ABaselineReplaceKeepsTheCaretsLineAndClampsALinePastTheNewEnd(string where) => RunSta(() =>
+    {
+        const string Before = "one\ntwo\nthree\nfour\nfive\n";
+        bool past = where == "a line past the new end";
+        string after = past ? "x\ny\n" : "a much longer first line than before\ntwo\nthree\nfour\nfive\n";
+        using var h = new Vault("baseline-caret", ("a.md", Before));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = OpenSplitPeer(h, "a.md");
+        foreach (WorkspaceTabViewModel tab in new[] { a, b })
+        {
+            // Line 5 ("five"), column 3.
+            tab.EditorCaretOffset = tab.EditorDocument!.GetLineByNumber(5).Offset + 2;
+        }
+
+        SaveReport report = h.Session.SaveText("a.md", after, a.SavedContentHash);
+        Assert.True(h.Workspace.ReconcileTabsAfterPropertyWrite("a.md", report.NewContentHash));
+
+        // "x\ny\n" has three lines, the last empty: line 5 clamps to line 3,
+        // and column 3 to that line's column 1.
+        (int line, int column) = past ? (3, 1) : (5, 3);
+        foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+        {
+            Assert.Equal(after, tab.Text);
+            Assert.InRange(tab.EditorCaretOffset, 0, tab.EditorDocument!.TextLength);
+            ICSharpCode.AvalonEdit.Document.TextLocation caret = tab.EditorDocument.GetLocation(tab.EditorCaretOffset);
+            Assert.True(
+                caret.Line == line && caret.Column == column,
+                $"{name}'s caret is at line {caret.Line}, column {caret.Column}; expected line {line}, column {column}");
+        }
+    });
+
+    /// <summary>Plan 47 CB-9b, Design 0 (the lead's ruling on stage A's
+    /// departure (b), 2026-11-17). A transient tab, the one a Files selection
+    /// shows its note in, stays transient when another writer's bytes land in
+    /// it: the reader made no edit, so the next selection may still replace
+    /// it. It takes the bytes clean, with no undo step back across them. Red
+    /// by mutation: take the bytes with a replace that passes through a dirty
+    /// state (ReplaceAll, then MarkSaved), which ends the tab's transience for
+    /// good.</summary>
+    [Theory]
+    [InlineData("property set from the header")]
+    [InlineData("tag edit")]
+    public void ATransientTabStaysTransientWhenAnotherWritersBytesLand(string route) => RunSta(() =>
+    {
+        using var h = new Vault("transient-stays-transient", ("a.md", TwoKeyNote));
+        h.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab, fromSelection: true);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.Equal("a.md", tab.Path);
+        Assert.True(tab.IsTransient, "premise: a Files selection did not open a transient tab");
+        try
+        {
+            (string expected, Func<bool> landed) = WriteThroughAnOpenTab(h, route);
+            h.PumpUntil(() => landed() && h.Workspace.SavesIdle, $"the {route} landing");
+            string written = h.Read("a.md");
+            Assert.Contains(expected, written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.True(tab.IsTransient, "the transient tab stopped being transient when another writer's bytes landed");
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the transient tab can undo back across the bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    // ---- A bulk rename's apply in the notes' chain (plan 47 CB-9b, Design 2) ---
+
+    /// <summary>Design 2 (CD5(a); M1). A save of an open note is admitted and
+    /// held before its write; the reader applies a bulk rename whose preview
+    /// listed the note. The apply takes a ticket behind the save and writes
+    /// nothing while the save is held. After release the save publishes
+    /// first, and the apply renames the key on the saved bytes: no conflict,
+    /// and the tab ends clean and current.</summary>
+    [Fact]
+    public void ABulkRenameApplyWaitsForAnOpenNotesAdmittedSaveAndRenamesOnTheSavedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("apply-behind-save", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(Note, h.Read("a.md"));
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the save and then the apply");
+            Assert.True(save.Result, "the save admitted before the apply was refused");
+            int saved = h.Events.FindIndex(e => e is A11yEvent.NoteSaved);
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+            Assert.True(saved >= 0 && summary > saved, $"expected the save's sentence and then the summary; heard {Heard(h)}");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string written = h.Read("a.md");
+            Assert.Contains("state: draft", written, StringComparison.Ordinal);
+            Assert.Contains("An edit on its way to disk.", written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (CD5(a); M2). The apply is held on its worker
+    /// before its core call; the reader edits a note its preview listed and
+    /// saves. The save takes a ticket behind the apply and does not complete
+    /// while the apply is held; it ends after the apply's summary.</summary>
+    [Fact]
+    public void ASaveOfACandidateNoteAskedDuringAnApplyWaitsForItsPublication() => RunSta(() =>
+    {
+        using var h = new Vault("save-behind-apply", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.False(save.IsCompleted, "the save did not wait for the apply's publication");
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the apply and then the save");
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true });
+            int saveOutcome = h.Events.FindIndex(e => e is A11yEvent.NoteSaved or A11yEvent.NoteSaveConflict);
+            Assert.True(summary >= 0 && saveOutcome > summary, $"expected the summary and then the save's outcome; heard {Heard(h)}");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (Call 4). The apply holds only the notes its
+    /// preview listed: while it is held, a save of a note the preview did not
+    /// list completes.</summary>
+    [Fact]
+    public void ASaveOfANoteThePreviewDidNotListDoesNotWaitForAnApply() => RunSta(() =>
+    {
+        const string Edited = "# B\n\nEdited beside the apply.\n";
+        using var h = new Vault("unlisted-save-beside-apply", ("a.md", Note), ("b.md", "# B\n"));
+        WorkspaceTabViewModel other = h.OpenNow("b.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Assert.DoesNotContain(sheet.Rows, row => row.Path == "b.md");
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            other.Text = Edited;
+            Task<bool> save = other.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted, "the save of a note the preview did not list, while the apply is held");
+            Assert.True(save.Result);
+            Assert.Equal(Edited, h.Read("b.md"));
+            Assert.True(sheet.WorkInFlight, "premise: the apply was no longer held");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (Call 5, on WB-2's precedent). The apply is held;
+    /// the reader edits a note its preview listed and saves. The save waits;
+    /// the apply then renames the key under the dirty buffer, so the reader
+    /// hears the property sentence and the summary, and the save that runs
+    /// after them is refused: the renamed bytes stay on disk and the edit
+    /// stays in the editor.</summary>
+    [Fact]
+    public void ADirtySaveAskedDuringAnApplyThatRewritesItsNoteIsRefusedAndOverwritesNothing() => RunSta(() =>
+    {
+        using var h = new Vault("dirty-save-behind-apply", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && !sheet.WorkInFlight && h.Workspace.SavesIdle,
+                "the apply and then the save");
+            Assert.False(save.Result, "the dirty save over the renamed bytes was not refused");
+            int stale = h.Events.FindIndex(e => e is A11yEvent.HostComposed composed
+                && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal));
+            int summary = h.Events.FindIndex(e => e is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+            int conflict = h.Events.FindIndex(e => e is A11yEvent.NoteSaveConflict);
+            Assert.True(
+                stale >= 0 && summary > stale && conflict > summary,
+                $"expected the property sentence, the summary and then the save's conflict; heard {Heard(h)}");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string disk = h.Read("a.md");
+            Assert.Contains("state: draft", disk, StringComparison.Ordinal);
+            Assert.DoesNotContain("An edit on its way to disk.", disk, StringComparison.Ordinal);
+            Assert.True(tab.IsDirty);
+            Assert.Equal(NoteEdited, tab.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2's catch-up. While the apply holds a note its preview
+    /// listed, the note is rewritten outside Slate without the key and a
+    /// rescan's re-sync runs: the re-sync, which asks the chain, marks the
+    /// clean tab stale and keeps its bytes. Core then skips the note, so no
+    /// reconcile touches it; the apply's catch-up brings the tab to the
+    /// outside bytes inside its ticket, with no second re-sync, and leaves no
+    /// undo step back. Red by mutation: drop the catch-up.</summary>
+    [Fact]
+    public void AnApplyCatchesUpATabARescanMarkedStaleWhileItHeldTheNote() => RunSta(() =>
+    {
+        const string Outside = "---\ntitle: written outside Slate\n---\n\nThe key is gone.\n";
+        using var h = new Vault("apply-catches-up-stale", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.ReSyncDocuments("a.md");
+            Assert.True(tab.IsExternallyStale, "premise: the re-sync reloaded the tab under the apply that holds its note");
+            Assert.Equal(Note, tab.Text);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Outside, h.Read("a.md"));
+            Assert.Equal(Outside, tab.Text);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the caught-up tab can undo back across the outside bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2's catch-up, M13's shape on a note the preview
+    /// listed. While the apply holds the note, its file goes missing and
+    /// comes back with other bytes and no key, and the index is rescanned:
+    /// the re-seat, which asks the chain, marks the tab back on disk with its
+    /// old bytes, old identity and old hash. Core skips the note; the
+    /// apply's catch-up brings the tab to the returned file. Red by
+    /// mutation: drop the catch-up.</summary>
+    [Fact]
+    public void AnApplyCatchesUpATabReseatedWhileItHeldTheNote() => RunSta(() =>
+    {
+        const string Returned = "---\ntitle: back\n---\n\nIt came back without the key.\n";
+        using var h = new Vault("apply-catches-up-reseat", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            string full = Path.Combine(h.Root, "a.md");
+            File.Delete(full);
+            h.Workspace.InvalidatePath("a.md");
+            Assert.True(tab.IsMissingFromDisk, "premise: the tab was not marked missing");
+            File.WriteAllText(full, Returned);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.Workspace.ReseatMissingTabs();
+            Assert.False(tab.IsMissingFromDisk, "premise: the re-seat did not mark the tab back on disk");
+            Assert.Equal(Note, tab.Text);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Returned, h.Read("a.md"));
+            Assert.Equal(Returned, tab.Text);
+            Assert.Equal(h.Session.ReadTextIdentified("a.md").FileIdentity, tab.FileIdentity);
+            Assert.False(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the caught-up tab can undo back across the returned bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2's catch-up when its read fails (the lead's ruling on
+    /// stage A's departure (c), 2026-11-17). M13's shape: while the apply
+    /// holds the note, its file goes missing and comes back with other bytes,
+    /// and the re-seat marks the tab back on disk with its old bytes and old
+    /// hash. The file is then held open with no sharing, so the catch-up's
+    /// read of it fails, and RebaselineToRead never runs: the tab is left
+    /// clean on its old bytes, unmarked and silent. Its next save is refused
+    /// by the compare against that old hash, so nothing the file came back
+    /// with is overwritten and the edit stays in the editor. Red by mutation:
+    /// a save written with no expected hash overwrites the file.</summary>
+    [Fact]
+    public void ATabTheCatchUpCouldNotReadKeepsItsOldHashAndItsNextSaveIsRefused() => RunSta(() =>
+    {
+        const string Returned = "---\ntitle: back\n---\n\nIt came back without the key.\n";
+        const string Edited = Note + "An edit after the catch-up could not read.\n";
+        using var h = new Vault("catch-up-read-fails", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        string? oldHash = tab.SavedContentHash;
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        string full = Path.Combine(h.Root, "a.md");
+        FileStream? holdTheFile = null;
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            File.Delete(full);
+            h.Workspace.InvalidatePath("a.md");
+            File.WriteAllText(full, Returned);
+            using (var scan = new CancelToken())
+            {
+                _ = h.Session.Rescan(scan);
+            }
+            h.Workspace.ReseatMissingTabs();
+            Assert.False(tab.IsMissingFromDisk, "premise: the re-seat did not mark the tab back on disk");
+            Assert.Equal(Note, tab.Text);
+            holdTheFile = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            held.Release();
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Workspace.SavesIdle && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply's publication");
+            Assert.Equal(Note, tab.Text);
+            Assert.Equal(oldHash, tab.SavedContentHash);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+            Assert.DoesNotContain(h.Events, IsThePropertySentence);
+            holdTheFile.Dispose();
+            holdTheFile = null;
+
+            h.Events.Clear();
+            tab.Text = Edited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the tab's next save");
+            Assert.False(save.Result, "the next save of a tab the catch-up could not read was not refused");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Equal(Returned, h.Read("a.md"));
+            Assert.True(tab.IsDirty);
+            Assert.Equal(Edited, tab.Text);
+        }
+        finally
+        {
+            holdTheFile?.Dispose();
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2. The preview writes nothing and is not admitted: it
+    /// publishes its rows while a save of the note it lists is held, and takes
+    /// no ticket. Red by mutation: route the preview through the
+    /// admission.</summary>
+    [Fact]
+    public void TheBulkRenamePreviewWaitsForNothing() => RunSta(() =>
+    {
+        using var h = new Vault("preview-waits-for-nothing", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            int admitted = h.Workspace.SavesForTests.AdmittedForTests;
+
+            h.Workspace.OpenBulkRenameSheet();
+            BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+            sheet.OldKey = "status";
+            sheet.NewKey = "state";
+            sheet.Preview();
+            h.PumpUntil(() => !sheet.WorkInFlight && sheet.Rows.Count > 0, "the preview publishing beside the held save");
+            Assert.Equal(admitted, h.Workspace.SavesForTests.AdmittedForTests);
+            Assert.Contains(sheet.Rows, row => row.Path == "a.md" && row.Status == "Will apply");
+            Assert.False(save.IsCompleted, "premise: the save was no longer held");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 2 (the red team's finding 3a). The apply waits behind
+    /// an operation admitted for its note; the reader presses Escape. At its
+    /// turn the apply still runs, with its token cancelled: core answers at
+    /// once with the note cancelled, the reader hears what Escape gives today,
+    /// "0 renamed, 0 skipped, 1 failed.", once, the sheet settles its close
+    /// once, and nothing is written.</summary>
+    [Fact]
+    public void AnApplyCancelledWhileItWaitedSpeaksTodaysSummary() => RunSta(() =>
+    {
+        using var h = new Vault("apply-cancelled-while-waiting", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+            Assert.Equal(0, settled);
+
+            ahead.SetResult();
+            h.PumpUntil(() => settled > 0 && h.Workspace.SavesIdle, "the cancelled apply's publication");
+            A11yEvent.RenameSummary summary = Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1), summary);
+            Assert.Equal(1, settled);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (Call 2(d); the red team's finding 17). The apply
+    /// re-checks the header-draft gate at its turn: a header row's draft set
+    /// dirty while the apply waited refuses it with the draft sentence, once,
+    /// and nothing is written.</summary>
+    [Fact]
+    public void AnApplyWhoseDraftsWentDirtyWhileItWaitedRefusesWithTheDraftSentence() => RunSta(() =>
+    {
+        using var h = new Vault("apply-drafts-dirty-at-turn", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused at the press");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            header.Rows.Single(row => row.Key == "status").EditorText = "edited in the header";
+            Assert.True(header.AnyRowDirty, "premise: the header's draft is not dirty");
+
+            ahead.SetResult();
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's turn");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text == PropertyPhrase.BulkRenameDirtyDraftsReason);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 1, finding 1 (Call 2(d)). The apply waits behind an
+    /// operation admitted for its note, a header draft goes dirty, and the
+    /// announcer throws at the draft refusal its turn speaks. The apply still
+    /// ends as one that did not run: the notes' chains are free, the sheet is
+    /// no longer in flight, nothing is written, and a close asked afterwards
+    /// settles. Red today: the throw skips EndApplyUnrun, so the sheet stays
+    /// in flight for good and a close only cancels a token no worker
+    /// holds.</summary>
+    [Fact]
+    public void AnApplyRefusedForADirtyDraftAtItsTurnEndsEvenWhenTheRefusalThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-draft-refusal-throws", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.HostComposed composed && composed.Text == PropertyPhrase.BulkRenameDirtyDraftsReason)
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused at the press");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            header.Rows.Single(row => row.Key == "status").EditorText = "edited in the header";
+            Assert.True(header.AnyRowDirty, "premise: the header's draft is not dirty");
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the apply's turn");
+            Assert.False(sheet.WorkInFlight, "the sheet stayed in flight after its refused apply's sentence threw");
+            sheet.RequestClose();
+            Assert.Equal(1, settled);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 1, finding 1's sweep: the turn's catch. The apply's
+    /// turn throws before its worker starts, the reader asked to close the
+    /// sheet while the apply waited, and the announcer throws at the
+    /// RenameFailed the catch speaks. The apply still ends: the sheet is no
+    /// longer in flight and the close it was asked for settles. Red today:
+    /// the sheet's failure publication speaks before it raises its publish
+    /// and settles a requested close, so the throw skips both and the close
+    /// never settles.</summary>
+    [Fact]
+    public void AnApplyWhoseTurnThrowsSettlesARequestedCloseEvenWhenItsFailureSentenceThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-turn-throws-sentence-throws", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.Workspace.BulkRenameApplyTurnHookForTests = () => throw new InvalidOperationException("the apply's turn failed (test seam)");
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.RenameFailed)
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+            Assert.Equal(0, settled);
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the apply's end");
+            Assert.False(sheet.WorkInFlight);
+            Assert.True(settled == 1, $"the close asked while the apply waited settled {settled} time(s)");
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.Workspace.BulkRenameApplyTurnHookForTests = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (CB-9a Design 8). The apply's turn throws before its
+    /// worker starts: the reader hears the existing RenameFailed once, the
+    /// sheet is no longer in flight, a close asked meanwhile settles, and the
+    /// notes' chains are free. Red by mutation: drop the turn's catch.</summary>
+    [Fact]
+    public void AnApplyWhoseTurnThrowsBeforeItsWorkerStartsEndsAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("apply-turn-throws", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.Workspace.BulkRenameApplyTurnHookForTests = () => throw new InvalidOperationException("the apply's turn failed (test seam)");
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            sheet.RequestClose();
+
+            ahead.SetResult();
+            h.PumpUntil(() => settled > 0 && h.Workspace.SavesIdle, "the apply's end");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.RenameFailed);
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary);
+            Assert.Equal(1, settled);
+            Assert.False(sheet.WorkInFlight);
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.Workspace.BulkRenameApplyTurnHookForTests = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2 (CB-9a Design 8). The apply's worker faults outside
+    /// its catch, on one of the three faults the catch leaves alone, so its
+    /// body reports nothing. The apply still ends, silently, as one that did
+    /// not run: the sheet is no longer in flight and the notes' chains are
+    /// free. Red by mutation: remove the backstop.</summary>
+    [Fact]
+    public void AnApplyWhoseWorkerFaultsOutsideItsCatchStillEndsAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("apply-worker-faults", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        sheet.ApplyHookForTests = () => throw new OutOfMemoryException("the apply's worker faulted (test seam)");
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the faulted apply's end");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            sheet.ApplyHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 2. The announcer throws at the apply's summary: the
+    /// reconcile before it still ran (the clean tab shows the renamed key),
+    /// the sheet's own publication after it still ran (no longer in flight),
+    /// and the notes' chains are free. Red by mutation: drop RunEvery.</summary>
+    [Fact]
+    public void AnApplyEndsEvenWhenItsPublicationThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-publication-throws", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.RenameSummary { Applied: true })
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's end");
+            Assert.Contains("state: draft", tab.Text, StringComparison.Ordinal);
+            Assert.False(tab.IsDirty);
+            Assert.Equal(h.Read("a.md"), tab.Text);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The lead's ruling 4 (2026-11-17). The leftover race of
+    /// admitting the preview's candidate notes: a note gains the key after the
+    /// preview, so the apply does not wait for it. A save of that note is held
+    /// before its write, on the hash of the bytes the apply then reads and
+    /// renames. The two meet on the note and end in one refused write: the
+    /// save is refused with its conflict sentence, the note holds exactly the
+    /// apply's bytes, and the edit stays in the editor. Nothing is silently
+    /// overwritten. Red by mutation: the save writes with no expected hash.
+    /// The mutation the ruling names, the apply skipping its own compare,
+    /// needs a core seam between the apply's read and its write, which no
+    /// headless fact has; in this order the save's compare is the one that
+    /// stands between the two writers.</summary>
+    [Fact]
+    public void TheLeftoverRaceEndsInOneRefusedWriteAndNoOverwrite() => RunSta(() =>
+    {
+        const string Gained = "---\nstatus: gained after the preview\n---\n\nC.\n";
+        const string Second = Gained + "A second edit, held before its write.\n";
+        using var h = new Vault("leftover-race", ("a.md", Note), ("c.md", "# C\n\nNo key yet.\n"));
+        WorkspaceTabViewModel c = h.OpenNow("c.md");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Assert.DoesNotContain(sheet.Rows, row => row.Path == "c.md");
+        c.Text = Gained;
+        SaveNow(h, c);
+        var held = new HeldWork(hook => c.SaveWriteHookForTests = hook);
+        try
+        {
+            c.Text = Second;
+            Task<bool> save = c.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the second save reaching its hold before its write");
+            h.Events.Clear();
+
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(
+                () => !sheet.WorkInFlight && h.Events.Any(e => e is A11yEvent.RenameSummary),
+                "the apply, beside the held save of a note its preview did not list");
+            string renamed = h.Read("c.md");
+            Assert.Contains("state: gained after the preview", renamed, StringComparison.Ordinal);
+
+            held.Release();
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the held save");
+            Assert.False(save.Result, "the save over the bytes the apply wrote was not refused");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            Assert.Equal(renamed, h.Read("c.md"));
+            Assert.True(c.IsDirty, "the refused edit left the editor");
+            Assert.Equal(Second, c.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    // ---- Teardown never waits for a whole apply (plan 47 CB-9b, Design 3) ----
+
+    /// <summary>Design 3 (Call 3; the red team's finding 11). Teardown's
+    /// settle cancels every admitted apply before it pumps: the sheet's own;
+    /// one of a sheet the headless open replaced; and one admitted inside the
+    /// settle's own frame, cancelled at admission. Each apply's core call
+    /// then runs with its token cancelled and stops before its first file,
+    /// so the reader hears "0 renamed, 0 skipped, 1 failed." before the
+    /// settle returns true, and nothing is written.</summary>
+    [Theory]
+    [InlineData("the sheet's own apply")]
+    [InlineData("an apply of a sheet the headless open replaced")]
+    [InlineData("an apply admitted inside the settle's frame")]
+    public void SettlingSavesCancelsEveryAdmittedApplyAndReturnsAfterItsPublication(string which) => RunSta(() =>
+    {
+        using var h = new Vault("settle-cancels-applies", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        Dispatcher dispatcher = h.Workspace.SavesForTests.Dispatcher;
+        bool? cancelled = null;
+        HeldWork? held = null;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            if (which == "an apply admitted inside the settle's frame")
+            {
+                // Something for the settle to wait on, so it pumps; the apply
+                // is asked inside that frame.
+                _ = h.Workspace.SavesForTests.Admit("b.md", _ => ahead.Task);
+                _ = dispatcher.BeginInvoke(new Action(() =>
+                {
+                    Assert.True(sheet.Apply(), "premise: the apply was refused");
+                    cancelled = sheet.InFlightCancelForTests!.IsCancelled();
+                    ahead.SetResult();
+                }));
+            }
+            else
+            {
+                held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+                Assert.True(sheet.Apply(), "premise: the apply was refused");
+                h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+                CancelToken token = sheet.InFlightCancelForTests!;
+                if (which == "an apply of a sheet the headless open replaced")
+                {
+                    h.Workspace.OpenBulkRenameSheet();
+                    Assert.NotSame(sheet, h.Workspace.BulkRenameSheet);
+                }
+                HeldWork hold = held;
+                _ = dispatcher.BeginInvoke(new Action(() =>
+                {
+                    cancelled = token.IsCancelled();
+                    hold.Release();
+                }));
+            }
+
+            Assert.True(h.Workspace.SettleSaves(), "the settle did not finish");
+            Assert.True(cancelled == true, $"the apply's token was not cancelled before its core call ran (cancelled: {cancelled})");
+            A11yEvent.RenameSummary summary = Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1), summary);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(h.Workspace.SavesIdle);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain([.. held is null ? Array.Empty<HeldWork>() : [held]]);
+        }
+        held?.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (contract 35 A-1; M5). The workspace is disposed
+    /// with no settle while the apply is held on its worker: its token is
+    /// cancelled before the join, the join holds the worker
+    /// (<c>BeforeJoinForTests</c> sees one tracked worker), and the worker,
+    /// let go there, gets core's report for a cancelled run on a session
+    /// still open, which its publication speaks. Nothing is written.</summary>
+    [Fact]
+    public void TeardownCancelsARunningApplyBeforeItJoinsItsWorker() => RunSta(() =>
+    {
+        using var h = new Vault("teardown-cancels-apply", ("a.md", Note));
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        int tracked = -1;
+        bool cancelled = false;
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => held.Entered, "premise: the apply reaching its hold before its core call");
+            CancelToken token = sheet.InFlightCancelForTests!;
+            h.Workspace.SavesForTests.BeforeJoinForTests = () =>
+            {
+                tracked = h.Workspace.SavesForTests.TrackedWorkersForTests;
+                cancelled = token.IsCancelled();
+                held.Release();
+            };
+
+            h.DisposeWorkspace();
+            Assert.Equal(1, tracked);
+            Assert.True(cancelled, "teardown joined the apply's worker before it cancelled the apply");
+            h.PumpUntil(() => h.Events.Any(e => e is A11yEvent.RenameSummary or A11yEvent.RenameFailed), "the apply's publication");
+            Assert.Equal(
+                new A11yEvent.RenameSummary(Applied: true, Renamed: 0, Skipped: 0, Failed: 1),
+                Assert.Single(h.Events.OfType<A11yEvent.RenameSummary>()));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RenameFailed);
+            Assert.Equal(Note, h.Read("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (the red team's finding 10). A preview over 300
+    /// notes is running on the sheet's worker when the workspace is disposed:
+    /// its work joins the workspace's bounded pre-session drain, so Dispose
+    /// waits for it. The preview is held on its worker and let go as the join
+    /// begins, so it ends well inside the drain's bound; Dispose returns only
+    /// once the preview's work has ended. Without the drain, Dispose returns
+    /// while the preview still reads the vault (a race the preview's length
+    /// decides, so this fact's red depends on it). The drain is bounded (five
+    /// seconds, the INV-2/INV-6 policy that forfeits the ordering rather than
+    /// the UI): a preview blocked in a read past the bound can still be
+    /// running when the lifecycle disposes the session. That is memory-safe
+    /// (uniffi's call counter keeps the object alive) and the preview is a
+    /// dry run that writes nothing. This fact shows the drain, not an
+    /// unconditional order (Codex round 1).</summary>
+    [Fact]
+    public void TeardownDrainsARunningPreviewInTheBoundedPreSessionDrain() => RunSta(() =>
+    {
+        (string Path, string Text)[] notes = [.. Enumerable.Range(0, 300)
+            .Select(n => ($"n{n:D3}.md", $"---\nstatus: draft\n---\n\nNote {n}.\n"))];
+        using var h = new Vault("teardown-drains-preview", notes);
+        h.Workspace.OpenBulkRenameSheet();
+        BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        var held = new HeldWork(hook => sheet.PreviewHookForTests = hook);
+        try
+        {
+            sheet.Preview();
+            h.PumpUntil(() => held.Entered, "premise: the preview reaching its hold before its core call");
+            // Teardown cancels the sheet's run, which would stop the preview
+            // at its first note; the preview keeps its own token here, so it
+            // reads the whole vault after the join lets it go.
+            using var keep = new CancelToken();
+            sheet.SetInFlightCancelForTests(keep);
+            h.Workspace.SavesForTests.BeforeJoinForTests = held.Release;
+
+            h.DisposeWorkspace();
+            Assert.True(sheet.WhenWorkDrained().IsCompleted, "Dispose returned while the preview's worker still ran");
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 3 (Call 3; M6's shape). Close Vault while an apply
+    /// over 300 notes is inside core's loop, on the real lifecycle: the
+    /// close's settle cancels the apply, waits for at most one file's write
+    /// and the apply's publication, and the reader hears the apply's summary
+    /// before the close's sentence. The apply's worker has ended by the time
+    /// the close returns.</summary>
+    [Fact]
+    public void CloseVaultDuringAnApplySpeaksItsSummaryBeforeTheVaultClosedSentence()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        for (int n = 0; n < 300; n++)
+        {
+            File.WriteAllText(Path.Combine(host.Root, $"p{n:D3}.md"), $"---\nstatus: draft\n---\n\nNote {n}.\n");
+        }
+        Task rescan = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => rescan.IsCompleted, TimeSpan.FromSeconds(120)), "premise: the rescan never finished");
+        host.Workspace.OpenBulkRenameSheet(synchronousForTests: false);
+        BulkRenameViewModel sheet = Assert.IsType<BulkRenameViewModel>(host.Workspace.BulkRenameSheet);
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => sheet.CanApply, TimeSpan.FromSeconds(60)), "premise: the preview never armed the apply");
+        bool entered = false;
+        sheet.ApplyHookForTests = () => Volatile.Write(ref entered, true);
+        host.Announced.Clear();
+        Assert.True(sheet.Apply(), "premise: the apply was refused");
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => Volatile.Read(ref entered), TimeSpan.FromSeconds(10)),
+            "premise: the apply's worker never started");
+
+        host.Lifecycle.CloseVault();
+        Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
+        Assert.True(sheet.WhenWorkDrained().IsCompleted, "the close returned while the apply's worker still ran");
+        A11yEvent.RenameSummary spoken = Assert.Single(host.Announced.Select(item => item.Event).OfType<A11yEvent.RenameSummary>());
+        Assert.True(
+            spoken.Failed > 0 && spoken.Renamed + spoken.Failed == 300,
+            $"the close waited for the whole apply instead of cancelling it: {spoken.Renamed} renamed, {spoken.Failed} failed");
+        string heard = string.Join(" | ", host.Announced.Select(item => item.Event.GetType().Name));
+        int summary = host.Announced.FindIndex(item => item.Event is A11yEvent.RenameSummary { Applied: true });
+        int closed = host.Announced.FindIndex(item => item.Event
+            is A11yEvent.VaultClosed or A11yEvent.VaultClosedAllSaved or A11yEvent.VaultClosedChangesDiscarded);
+        Assert.True(summary >= 0 && closed > summary, $"expected the apply's summary and then the close's sentence; heard {heard}");
+    }
+
+    /// <summary>Design 3 on the application close's path (the plan lead's
+    /// word of 2026-11-17): MainWindow.Window_Closing calls
+    /// VaultLifecycleViewModel.PrepareForApplicationClose, whose teardown
+    /// (TryCloseWorkspace with the ApplicationClose route) runs the same
+    /// SettleSaves as Close Vault. On the real lifecycle, an apply over three
+    /// notes is held on its worker before its core call when the application
+    /// closes. The settle cancels the apply's token before it pumps: the
+    /// hold, let go from inside the settle's frame, finds it cancelled, so
+    /// core renames nothing. The apply's worker has ended by the time the
+    /// close path returns, and the notes' bytes do not change after it
+    /// returns, through the lifecycle's own teardown. Red by mutation: the
+    /// settle not cancelling the admitted applies.</summary>
+    [Fact]
+    public void TheApplicationCloseDuringAnApplyCancelsItInItsSettleAndEndsItsWorkerBeforeItReturns()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host(VaultCloseDecision.Discard);
+        string[] notes = ["p0.md", "p1.md", "p2.md"];
+        foreach (string note in notes)
+        {
+            File.WriteAllText(Path.Combine(host.Root, note), $"---\nstatus: draft\n---\n\n{note}.\n");
+        }
+        Task rescan = host.Lifecycle.RescanAsync(RescanReason.Explicit);
+        Assert.True(PumpedDispatcher.PumpUntil(() => rescan.IsCompleted, TimeSpan.FromSeconds(60)), "premise: the rescan never finished");
+        host.Workspace.OpenBulkRenameSheet(synchronousForTests: false);
+        BulkRenameViewModel sheet = Assert.IsType<BulkRenameViewModel>(host.Workspace.BulkRenameSheet);
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => sheet.CanApply, TimeSpan.FromSeconds(60)), "premise: the preview never armed the apply");
+        var held = new HeldWork(hook => sheet.ApplyHookForTests = hook);
+        bool? cancelledInTheSettle = null;
+        try
+        {
+            host.Announced.Clear();
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => held.Entered, TimeSpan.FromSeconds(10)),
+                "premise: the apply's worker never reached its hold");
+            CancelToken token = sheet.InFlightCancelForTests!;
+            Assert.False(token.IsCancelled(), "premise: the apply's token was cancelled before the close");
+            // Queued now, so it runs only inside the close's own pumping.
+            _ = host.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                cancelledInTheSettle = token.IsCancelled();
+                held.Release();
+            }));
+
+            Assert.True(host.Lifecycle.PrepareForApplicationClose(), $"the application close was refused: {host.Lifecycle.StatusText}");
+            Assert.True(
+                cancelledInTheSettle == true,
+                $"the apply's token was not cancelled before the settle let its worker go (cancelled: {cancelledInTheSettle})");
+            Assert.True(sheet.WhenWorkDrained().IsCompleted, "the application close returned while the apply's worker still ran");
+            A11yEvent.RenameSummary spoken = Assert.Single(host.Announced.Select(item => item.Event).OfType<A11yEvent.RenameSummary>());
+            Assert.Equal(0u, spoken.Renamed);
+            string[] atReturn = [.. notes.Select(note => File.ReadAllText(Path.Combine(host.Root, note)))];
+            Assert.All(atReturn, text => Assert.Contains("status: draft", text, StringComparison.Ordinal));
+
+            host.DisposeLifecycle();
+            string[] afterTeardown = [.. notes.Select(note => File.ReadAllText(Path.Combine(host.Root, note)))];
+            Assert.Equal(atReturn, afterTeardown);
+        }
+        finally
+        {
+            held.Release();
+        }
+        held.AssertHeldUntilReleased();
+    }
+
+    // ---- #1955's CB-9a items 1 and 3 (plan 47 CB-9b, Design 8) ----------------
+
+    /// <summary>Design 8, #1955's CB-9a item 3 (all three parts). A property
+    /// write from A's header is held on its worker; B, A's split peer, takes
+    /// an unsaved edit, so both tabs are dirty when the write lands. The
+    /// announcer throws at the property sentence a dirty tab is told, or at
+    /// the failure sentence when the write lands and then faults. The fan-out
+    /// still reaches every tab on the note (each is marked stale), and the
+    /// header refresh and the rest of the completion still run; after a
+    /// failure, the read-back reconcile still brings the clean tabs to the
+    /// landed bytes. Red today: the first sentence that throws skips every
+    /// step after it.</summary>
+    [Theory]
+    [InlineData("set", "the dirty tab's sentence")]
+    [InlineData("add", "the dirty tab's sentence")]
+    [InlineData("set", "the failure's sentence")]
+    [InlineData("add", "the failure's sentence")]
+    public void APropertyWriteCompletionRunsEveryStepWhenASentenceThrows(string write, string sentence) => RunSta(() =>
+    {
+        using var peers = new Peers("completion-steps");
+        bool failure = sentence == "the failure's sentence";
+        var held = new HeldWork(hook =>
+        {
+            peers.A.PropertyWriteHookForTests = hook;
+            peers.B.PropertyWriteHookForTests = hook;
+        });
+        if (failure)
+        {
+            peers.A.PropertyWriteFaultForTests = () => throw new InvalidOperationException("the write landed and then failed (test seam)");
+            peers.B.PropertyWriteFaultForTests = peers.A.PropertyWriteFaultForTests;
+        }
+        peers.H.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.PropertyEditFailed
+                || (spoken is A11yEvent.HostComposed composed
+                    && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            if (write == "set")
+            {
+                PropertyRowViewModel status = peers.Row("status");
+                status.EditorText = "done";
+                Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            }
+            else
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenAddPropertySheet();
+                AddPropertyViewModel sheet = peers.H.Workspace.AddPropertySheet!;
+                sheet.Key = "owner";
+                sheet.Value = "alice";
+                Assert.True(sheet.Add(), "premise: the add was refused at commit");
+            }
+            peers.H.PumpUntil(() => held.Entered, "premise: the write reaching its hold before its core call");
+            if (!failure)
+            {
+                peers.B.Text = NoteEdited;
+                Assert.True(peers.A.IsDirty && peers.B.IsDirty, "premise: the peers are not both dirty");
+            }
+
+            held.Release();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the write's completion");
+            string disk = peers.H.Read("a.md");
+            Assert.Contains(write == "set" ? "status: done" : "owner: alice", disk, StringComparison.Ordinal);
+            if (failure)
+            {
+                // The read-back reconcile ran after the failure's sentence.
+                foreach (WorkspaceTabViewModel tab in new[] { peers.A, peers.B })
+                {
+                    Assert.Equal(disk, tab.Text);
+                    Assert.False(tab.IsDirty);
+                    Assert.False(tab.IsExternallyStale);
+                }
+            }
+            else
+            {
+                // The fan-out reached the tab after the one whose sentence threw.
+                Assert.True(peers.A.IsExternallyStale, "the first tab on the note was not marked stale");
+                Assert.True(peers.B.IsExternallyStale, "the fan-out stopped at the tab whose sentence threw");
+                _ = Assert.Single(peers.H.Events, e => e is A11yEvent.PropertyChanged);
+            }
+            string hash = peers.H.Session.ReadNoteParts("a.md").ContentHash;
+            peers.H.PumpUntil(
+                () => !peers.Properties.IsLoading && peers.Properties.ContentHash == hash,
+                "the header's refresh to the written bytes");
+        }
+        finally
+        {
+            peers.H.BeforeAnnounce = null;
+            peers.A.PropertyWriteFaultForTests = null;
+            peers.B.PropertyWriteFaultForTests = null;
+            peers.H.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 8, #1955's CB-9a item 1. A property write's worker
+    /// faults outside its catch, on one of the three faults the catch leaves
+    /// alone, so it posts no completion. The write still ends: the note's
+    /// chain goes idle, the note's write lease is released, the row is no
+    /// longer in flight (a set) and the sheet hears the add did not land (an
+    /// add). Nothing is written and nothing new is spoken. Red today: the
+    /// wait for the end runs out.</summary>
+    [Theory]
+    [InlineData("set")]
+    [InlineData("add")]
+    public void APropertyWriteWhoseWorkerFaultsOutsideItsCatchStillEnds(string write) => RunSta(() =>
+    {
+        using var peers = new Peers("property-worker-faults");
+        Action fault = () => throw new OutOfMemoryException("the property write's worker faulted (test seam)");
+        peers.A.PropertyWriteHookForTests = fault;
+        peers.B.PropertyWriteHookForTests = fault;
+        PropertyRowViewModel status = peers.Row("status");
+        AddPropertyViewModel? sheet = null;
+        try
+        {
+            if (write == "set")
+            {
+                status.EditorText = "done";
+                Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            }
+            else
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenAddPropertySheet();
+                sheet = peers.H.Workspace.AddPropertySheet!;
+                sheet.Key = "owner";
+                sheet.Value = "alice";
+                Assert.True(sheet.Add(), "premise: the add was refused at commit");
+            }
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the faulted write's end");
+            Assert.Equal(Note, peers.H.Read("a.md"));
+            Assert.False(status.WriteInFlight);
+            Assert.DoesNotContain(peers.H.Events, e => e is A11yEvent.PropertyChanged);
+            AssertALaterOperationRuns(peers.H, "a.md");
+        }
+        finally
+        {
+            peers.A.PropertyWriteHookForTests = null;
+            peers.B.PropertyWriteHookForTests = null;
+            peers.H.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The red team's m2 (#1955's CB-9a item 3, for the bulk
+    /// rename's fan-out). Two notes the preview listed are each open in a
+    /// dirty tab, and the announcer throws at the property sentence a dirty
+    /// tab is told. The apply's reconcile still reaches the second note: both
+    /// tabs are marked stale and keep the reader's edits, each sentence is
+    /// attempted, and the apply ends with the notes' chains free. Red today:
+    /// the reconcile loops over the report's notes with no step per note, so
+    /// the throw at a.md's sentence skips b.md.</summary>
+    [Fact]
+    public void ABulkRenameReconcileReachesEveryNoteWhenADirtyTabsSentenceThrows() => RunSta(() =>
+    {
+        using var h = new Vault("bulk-reconcile-every-note", ("a.md", Note), ("b.md", Note));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        a.Text = NoteEdited;
+        b.Text = NoteEdited;
+        Assert.True(a.IsDirty && b.IsDirty, "premise: the two tabs are not both dirty");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int thrown = 0;
+        h.BeforeAnnounce = spoken =>
+        {
+            if (IsThePropertySentence(spoken))
+            {
+                thrown++;
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's end");
+            Assert.Contains("state: draft", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.Contains("state: draft", h.Read("b.md"), StringComparison.Ordinal);
+            Assert.True(a.IsExternallyStale, "a.md's dirty tab was not marked stale");
+            Assert.True(b.IsExternallyStale, "b.md's dirty tab was not marked stale: the reconcile stopped at a.md's throw");
+            Assert.Equal(2, thrown);
+            Assert.Equal(NoteEdited, a.Text);
+            Assert.Equal(NoteEdited, b.Text);
+            AssertALaterOperationRuns(h, "b.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>The red team's m3 (#1955's CB-9a item 3, the read-back arm).
+    /// A property set from A's header lands and then faults, with B, A's
+    /// split peer, dirty, so the failure's read-back reconcile marks the
+    /// dirty tabs stale, and the announcer throws at the property sentence
+    /// each is told. The read-back still refreshes the header to the bytes
+    /// the failed write left on disk. Red today: ReconcileAfterReadBack runs
+    /// its reconcile, the header refresh and NotePersisted as plain
+    /// statements, so the throw skips the refresh.</summary>
+    [Fact]
+    public void AFailedPropertyWritesReadBackStillRefreshesTheHeaderWhenADirtyTabsSentenceThrows() => RunSta(() =>
+    {
+        using var peers = new Peers("read-back-refresh");
+        var held = new HeldWork(hook =>
+        {
+            peers.A.PropertyWriteHookForTests = hook;
+            peers.B.PropertyWriteHookForTests = hook;
+        });
+        peers.A.PropertyWriteFaultForTests = () => throw new InvalidOperationException("the write landed and then failed (test seam)");
+        peers.B.PropertyWriteFaultForTests = peers.A.PropertyWriteFaultForTests;
+        int thrown = 0;
+        peers.H.BeforeAnnounce = spoken =>
+        {
+            if (IsThePropertySentence(spoken))
+            {
+                thrown++;
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            PropertyRowViewModel status = peers.Row("status");
+            status.EditorText = "done";
+            Assert.True(peers.H.Workspace.SetPanelProperty(status));
+            peers.H.PumpUntil(() => held.Entered, "premise: the write reaching its hold before its core call");
+            peers.B.Text = NoteEdited;
+            Assert.True(peers.A.IsDirty && peers.B.IsDirty, "premise: the peers are not both dirty");
+            held.Release();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the write's completion");
+            Assert.Contains("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
+            Assert.True(peers.A.IsExternallyStale && peers.B.IsExternallyStale, "premise: the dirty peers were not marked stale");
+            Assert.True(thrown > 0, "premise: no property sentence was told");
+            string hash = peers.H.Session.ReadNoteParts("a.md").ContentHash;
+            peers.H.PumpUntil(
+                () => !peers.Properties.IsLoading && peers.Properties.ContentHash == hash,
+                "the header refreshing to the bytes the failed write left");
+        }
+        finally
+        {
+            peers.H.BeforeAnnounce = null;
+            peers.A.PropertyWriteFaultForTests = null;
+            peers.B.PropertyWriteFaultForTests = null;
+            peers.A.PropertyWriteHookForTests = null;
+            peers.B.PropertyWriteHookForTests = null;
+            peers.H.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    // ---- A tag edit in the notes' chains (plan 47 CB-9b, Design 4) ------------
+
+    /// <summary>Design 4 (CD5(a); M3). A save of an open note is admitted and
+    /// held before its write; the reader adds a tag to the note from the
+    /// Files sidebar. The tag edit takes a ticket behind the save and writes
+    /// nothing while the save is held. After release the save publishes
+    /// first, and the tag edit tags the saved bytes: no conflict, and the tab
+    /// ends clean and current. Red today: the tag edit runs at the press and
+    /// takes no ticket, and the save is refused.</summary>
+    [Fact]
+    public void ATagEditWaitsForAnOpenNotesAdmittedSaveAndTagsTheSavedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-behind-save", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var held = new HeldWork(hook => tab.SaveWriteHookForTests = hook);
+        try
+        {
+            tab.Text = NoteEdited;
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => held.Entered, "premise: the save reaching its hold before its write");
+            h.Events.Clear();
+
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            PumpedDispatcher.Drain();
+            Assert.Equal(Note, h.Read("a.md"));
+
+            held.Release();
+            h.PumpUntil(
+                () => save.IsCompleted && h.Workspace.SavesIdle && TagSummaries(h) > 0,
+                "the save and then the tag edit");
+            Assert.True(save.Result, "the save admitted before the tag edit was refused");
+            int saved = h.Events.FindIndex(e => e is A11yEvent.NoteSaved);
+            int summary = h.Events.FindIndex(IsTagSummary);
+            Assert.True(saved >= 0 && summary > saved, $"expected the save's sentence and then the tag edit's; heard {Heard(h)}");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.NoteSaveConflict);
+            string written = h.Read("a.md");
+            Assert.Contains("probe", written, StringComparison.Ordinal);
+            Assert.Contains("An edit on its way to disk.", written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.IsExternallyStale);
+        }
+        finally
+        {
+            h.ReleaseAndDrain(held);
+        }
+        held.AssertHeldUntilReleased();
+    });
+
+    /// <summary>Design 4 (M4). Two checked notes with clean tabs and an
+    /// unchecked one with a clean tab. Each tagged tab is brought up to the
+    /// tagged bytes at the index's hash, with no undo step back across them;
+    /// the unchecked one is untouched; and a later save from a tagged tab
+    /// lands. Red today: the tagged tabs keep the bytes from before the tag
+    /// edit, and the later save is refused.</summary>
+    [Fact]
+    public void ATagEditBringsACleanTabOnEachTaggedNoteUpToTheTaggedBytes() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-clean-tabs", ("a.md", Note), ("b.md", "# B\n"), ("c.md", "# C\n"));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        WorkspaceTabViewModel c = h.OpenNow("c.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md", "b.md");
+        string? untouched = c.SavedContentHash;
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            foreach (WorkspaceTabViewModel tagged in new[] { a, b })
+            {
+                string disk = h.Read(tagged.Path);
+                Assert.Contains("probe", disk, StringComparison.Ordinal);
+                Assert.Equal(disk, tagged.Text);
+                Assert.Equal(IndexedHash(h, tagged.Path), tagged.SavedContentHash);
+                Assert.False(tagged.IsDirty, $"{tagged.Path} is dirty after the tag edit");
+                Assert.False(tagged.IsExternallyStale, $"{tagged.Path} is stale after the tag edit");
+                Assert.False(tagged.EditorDocument!.UndoStack.CanUndo, $"{tagged.Path} can undo back across the tag edit");
+            }
+            Assert.Equal("# C\n", c.Text);
+            Assert.Equal(untouched, c.SavedContentHash);
+
+            a.Text = a.Text + "A later edit.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a later save from a tagged tab");
+            Assert.True(save.Result, "a later save from a tagged tab was refused");
+            Assert.Equal(a.Text, h.Read("a.md"));
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (Call 2(a)). A dirty tab on a note the tag edit
+    /// rewrites is marked stale with the property sentence, once, before the
+    /// tag edit's summary, and keeps the reader's edit. Red today: it is told
+    /// nothing and is not stale.</summary>
+    [Fact]
+    public void ATagEditMarksADirtyTabOnATaggedNoteStaleAndSaysSo() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-dirty-tab", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        tab.Text = NoteEdited;
+        h.Events.Clear();
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            _ = Assert.Single(h.Events, IsThePropertySentence);
+            int stale = h.Events.FindIndex(IsThePropertySentence);
+            int summary = h.Events.FindIndex(IsTagSummary);
+            Assert.True(summary > stale, $"expected the property sentence and then the tag edit's summary; heard {Heard(h)}");
+            Assert.True(tab.IsExternallyStale, "the dirty tab on the tagged note is not stale");
+            Assert.True(tab.IsDirty);
+            Assert.Equal(NoteEdited, tab.Text);
+            string disk = h.Read("a.md");
+            Assert.Contains("probe", disk, StringComparison.Ordinal);
+            Assert.DoesNotContain("An edit on its way to disk.", disk, StringComparison.Ordinal);
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (M15). Core skips a checked note changed outside
+    /// Slate since it was indexed, so the index's hash of that note does not
+    /// move, and its clean tab is not reloaded: the before-and-after reads,
+    /// not a read of the disk, decide which tabs the edit wrote. The summary
+    /// counts only the files tagged. Green today, where no tab is reconciled
+    /// at all; red by mutation: reconcile every checked note's tabs from a
+    /// read of the disk.</summary>
+    [Fact]
+    public void ATagEditCoreSkippedLeavesItsCleanTabAlone() => RunSta(() =>
+    {
+        const string Outside = "---\nstatus: changed outside Slate\n---\n\nBody.\n";
+        using var h = new Vault("tag-edit-core-skipped", ("a.md", Note), ("b.md", "# B\n"));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md", "b.md");
+        File.WriteAllText(Path.Combine(h.Root, "a.md"), Outside);
+        string indexedBefore = IndexedHash(h, "a.md");
+        string? saved = a.SavedContentHash;
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            Assert.Equal(Outside, h.Read("a.md"));
+            Assert.Equal(indexedBefore, IndexedHash(h, "a.md"));
+            Assert.Equal(Note, a.Text);
+            Assert.Equal(saved, a.SavedContentHash);
+            Assert.False(a.IsExternallyStale);
+            A11yEvent.HostComposed summary = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(h.Events, IsTagSummary));
+            Assert.Equal("Tagged 1 file with #probe.", summary.Text);
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (M14). A tag edit over 1,025 checked notes, more than
+    /// one index lookup takes, three of them open in tabs: the two written
+    /// are brought up to the tagged bytes, the one changed outside Slate is
+    /// left alone, and the summary is spoken. The reads are made for the
+    /// notes with an open tab only, in slices of core's bound. Red by
+    /// mutation: one unsliced read over every checked note, which core
+    /// refuses, so the open tabs are reconciled from the disk instead and the
+    /// skipped note's tab is reloaded. Codex round 3: three open tabs never
+    /// reach core's bound, so the slice is set to two through the
+    /// workspace's seam and every lookup is counted: each read of the three
+    /// open notes is two lookups, of two paths and one. Red by mutation: one
+    /// unsliced lookup over the open tabs.</summary>
+    [Fact]
+    public void ATagEditOverMoreNotesThanOneIndexLookupTakesStillReconcilesAndSpeaks() => RunSta(() =>
+    {
+        const string Outside = "# Changed outside Slate\n";
+        const int Count = 1_025;
+        (string Path, string Text)[] files = [.. Enumerable.Range(0, Count).Select(n => ($"n{n:D4}.md", $"# Note {n}\n"))];
+        Assert.True(Count > SlateUniffiMethods.MaxIndexedHashPaths(), "premise: the notes fit one index lookup");
+        using var h = new Vault("tag-edit-past-one-lookup", files);
+        WorkspaceTabViewModel first = h.OpenNow("n0000.md");
+        WorkspaceTabViewModel last = h.OpenNow($"n{Count - 1:D4}.md");
+        WorkspaceTabViewModel skipped = h.OpenNow("n0500.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, [.. files.Select(file => file.Path)]);
+        File.WriteAllText(Path.Combine(h.Root, "n0500.md"), Outside);
+        var lookups = new List<int>();
+        h.Workspace.IndexedHashSliceForTests = 2;
+        h.Workspace.IndexedHashLookupHookForTests = lookups.Add;
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit over every note");
+            Assert.True(
+                lookups.Take(4).SequenceEqual([2, 1, 2, 1]) && lookups.All(paths => paths <= 2),
+                $"the reads of the three open notes were not two lookups each of at most two paths: [{string.Join(", ", lookups)}]");
+            foreach (WorkspaceTabViewModel tagged in new[] { first, last })
+            {
+                string disk = h.Read(tagged.Path);
+                Assert.Contains("probe", disk, StringComparison.Ordinal);
+                Assert.Equal(disk, tagged.Text);
+                Assert.False(tagged.IsDirty);
+            }
+            Assert.Equal("# Note 500\n", skipped.Text);
+            Assert.Equal(Outside, h.Read("n0500.md"));
+            A11yEvent.HostComposed summary = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(h.Events, IsTagSummary));
+            Assert.Equal("Tagged 1,024 files with #probe.", summary.Text);
+        }
+        finally
+        {
+            h.Workspace.IndexedHashSliceForTests = null;
+            h.Workspace.IndexedHashLookupHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 3, finding 1. Core writes a note and then fails its
+    /// index commit (SavedButUnindexed, through core's after-write fault
+    /// seam): the bulk rename reports the note as failed and the tag edit as
+    /// skipped, and the index still holds the old hash, so neither read of
+    /// it moved. The note's clean tab and its split peer, which hold saved
+    /// undo history, are still brought up to the bytes on disk, with no undo
+    /// step back across them, as the index-read fallback brings them. Red
+    /// today: both tabs keep the bytes from before the write over a changed
+    /// file.</summary>
+    [Theory]
+    [InlineData("tag edit")]
+    [InlineData("bulk rename")]
+    public void AWriteWhoseIndexCommitFailedStillBringsTheNotesCleanTabsUpToDisk(string route) => RunSta(() =>
+    {
+        const string Faulted = "faulted-commit.md";
+        using var h = new Vault("write-landed-unindexed", (Faulted, Note));
+        WorkspaceTabViewModel a = h.OpenNow(Faulted);
+        WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+        WorkspaceTabViewModel b = OpenSplitPeer(h, Faulted);
+        h.Workspace.Activate(groupA, a);
+        a.EditorDocument!.Insert(a.EditorDocument.TextLength, "Typed by the reader.\n");
+        SaveNow(h, a);
+        foreach (WorkspaceTabViewModel tab in new[] { a, b })
+        {
+            Assert.False(tab.IsDirty, "premise: a tab is dirty after the save");
+            Assert.True(tab.EditorDocument!.UndoStack.CanUndo, "premise: a tab holds no saved undo history");
+        }
+        FilesSidebarViewModel? sidebar = null;
+        BulkRenameViewModel? sheet = null;
+        if (route == "tag edit")
+        {
+            sidebar = h.Sidebar();
+            CheckForATagEdit(h, sidebar, Faulted);
+        }
+        else
+        {
+            sheet = ArmedBulkRename(h);
+        }
+        string expected = route == "tag edit" ? "probe" : "state: draft";
+        try
+        {
+            using (EnvFaultLock.Acquire())
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-commit");
+                try
+                {
+                    if (sidebar is not null)
+                    {
+                        sidebar.AddTagCommand.Execute(null);
+                        h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+                    }
+                    else
+                    {
+                        Assert.True(sheet!.Apply(), "premise: the apply was refused");
+                        h.PumpUntil(
+                            () => !sheet.WorkInFlight && h.Workspace.SavesIdle
+                                && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }),
+                            "the apply");
+                    }
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+                }
+            }
+            string disk = h.Read(Faulted);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+            {
+                Assert.True(
+                    string.Equals(disk, tab.Text, StringComparison.Ordinal),
+                    $"{name} keeps the bytes from before the write; it shows "
+                    + tab.Text.Replace("\n", "\\n", StringComparison.Ordinal));
+                Assert.False(tab.IsDirty, $"{name} is dirty");
+                Assert.False(tab.IsExternallyStale, $"{name} is stale");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, $"{name} can undo back across the bytes the write left");
+            }
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 4. As above, core writes the note and fails its
+    /// index commit, and now the read that would bring the note's tabs up to
+    /// the landed bytes fails too: the file is held open with no sharing just
+    /// before it. The tabs cannot take the bytes, so each is marked stale and
+    /// the reader hears "Properties changed on disk, but the editor no longer
+    /// matches it. Save or reopen the note to reconcile." once for the note
+    /// (Call 2(b)'s occasion: a re-read that fails); the summary is still
+    /// spoken, and the tab's next save is refused, so nothing the write left
+    /// is overwritten. Red today: the failed read leaves both tabs clean on
+    /// their old bytes, silently.</summary>
+    [Theory]
+    [InlineData("tag edit")]
+    [InlineData("bulk rename")]
+    public void AWriteWhoseIndexCommitAndReadBackBothFailMarksTheNotesTabsStaleAndSaysSo(string route) => RunSta(() =>
+    {
+        const string Faulted = "faulted-readback.md";
+        using var h = new Vault("write-landed-unread", (Faulted, Note));
+        WorkspaceTabViewModel a = h.OpenNow(Faulted);
+        WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+        WorkspaceTabViewModel b = OpenSplitPeer(h, Faulted);
+        h.Workspace.Activate(groupA, a);
+        FilesSidebarViewModel? sidebar = null;
+        BulkRenameViewModel? sheet = null;
+        if (route == "tag edit")
+        {
+            sidebar = h.Sidebar();
+            CheckForATagEdit(h, sidebar, Faulted);
+        }
+        else
+        {
+            sheet = ArmedBulkRename(h);
+        }
+        string expected = route == "tag edit" ? "probe" : "state: draft";
+        FileStream? hold = null;
+        h.Workspace.ReadBackHookForTests = path =>
+            hold ??= new FileStream(Path.Combine(h.Root, path), FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            using (EnvFaultLock.Acquire())
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-readback");
+                try
+                {
+                    if (sidebar is not null)
+                    {
+                        sidebar.AddTagCommand.Execute(null);
+                        h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+                    }
+                    else
+                    {
+                        Assert.True(sheet!.Apply(), "premise: the apply was refused");
+                        h.PumpUntil(
+                            () => !sheet.WorkInFlight && h.Workspace.SavesIdle
+                                && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }),
+                            "the apply");
+                    }
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+                }
+            }
+            Assert.True(hold is not null, "premise: the read back never ran");
+            hold.Dispose();
+            hold = null;
+            string disk = h.Read(Faulted);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+            {
+                Assert.True(tab.IsExternallyStale, $"{name} was left clean on its old bytes after the read back failed");
+                Assert.Equal(Note, tab.Text);
+            }
+            _ = Assert.Single(h.Events, IsThePropertySentence);
+            if (route == "tag edit")
+            {
+                Assert.Equal(1, TagSummaries(h));
+            }
+            else
+            {
+                _ = Assert.Single(h.Events, e => e is A11yEvent.RenameSummary { Applied: true });
+            }
+
+            a.Text = Note + "An edit after the read back failed.\n";
+            Task<bool> save = a.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "the tab's next save");
+            Assert.False(save.Result, "the next save of a tab whose read back failed was not refused");
+            Assert.Equal(disk, h.Read(Faulted));
+        }
+        finally
+        {
+            hold?.Dispose();
+            h.Workspace.ReadBackHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (the red team's finding 4). The index read after the
+    /// core call fails: the open tabs on the checked notes are reconciled
+    /// from a read of the disk instead, core's summary is still spoken, and
+    /// the note's chain is free. Red today: no tab is reconciled. Red by
+    /// mutation: let the failed read end the operation.</summary>
+    [Fact]
+    public void ATagEditWhoseIndexReadFailsStillReconcilesByReadAndSpeaks() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-index-read-fails", ("a.md", Note));
+        WorkspaceTabViewModel tab = h.OpenNow("a.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        h.Workspace.TagEditIndexReadHookForTests = when =>
+        {
+            if (when == "after")
+            {
+                throw new InvalidOperationException("the index read failed (test seam)");
+            }
+        };
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+            _ = Assert.Single(h.Events, IsTagSummary);
+            string disk = h.Read("a.md");
+            Assert.Contains("probe", disk, StringComparison.Ordinal);
+            Assert.Equal(disk, tab.Text);
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the tab reconciled by a read can undo back across the tag edit");
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.Workspace.TagEditIndexReadHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4 (Call 2(c)). The tag edit's core call throws
+    /// something other than a VaultException: the reader hears "Tag edit
+    /// failed: " and the message, once, nothing is written, and the note's
+    /// chain is free. Red today: the exception escapes the command.</summary>
+    [Fact]
+    public void ATagEditWhoseCoreCallFaultsSaysTagEditFailedAndFreesTheChain() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-core-faults", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        sidebar.TagEditHookForTests = () => throw new InvalidOperationException("the tag edit failed (test seam)");
+        try
+        {
+            Exception? escaped = Record.Exception(() => sidebar.AddTagCommand.Execute(null));
+            Assert.Null(escaped);
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the failed tag edit's end");
+            _ = Assert.Single(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text == "Tag edit failed: the tag edit failed (test seam)");
+            Assert.Equal(0, TagSummaries(h));
+            Assert.Equal(Note, h.Read("a.md"));
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            sidebar.TagEditHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 3, finding 2. After a tag edit the note's header
+    /// refreshes; when that read fails, nothing is spoken (a tag edit's header
+    /// failure is no occasion the lead accepted), and the header still shows
+    /// its load error. Red today: the refresh speaks
+    /// PropertiesReloadFailed.</summary>
+    [Fact]
+    public void ATagEditsHeaderRefreshThatFailsIsNotSpokenAndShowsItsError() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-header-refresh-fails", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        header.RefreshReadHookForTests = () => throw new IOException("the header's read failed (test seam)");
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            h.PumpUntil(
+                () => h.Workspace.SavesIdle && TagSummaries(h) > 0 && !header.IsLoading && header.LoadError is not null,
+                "the tag edit and its header's failed refresh");
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.PropertiesReloadFailed);
+            Assert.NotNull(header.LoadError);
+            Assert.Contains("probe", h.Read("a.md"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            header.RefreshReadHookForTests = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4, CB-9a's first teardown shape. Close Vault's first
+    /// step, settling the saves, waits for a tag edit queued behind an
+    /// operation admitted for its note, and returns once the tag edit has
+    /// written and spoken. The release is queued on the dispatcher, so it
+    /// can only run inside the settle's own pumping. Red today: nothing is
+    /// admitted.</summary>
+    [Fact]
+    public void SettlingSavesWaitsForAQueuedTagEditAndReturns() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-settle", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            Assert.Equal(Note, h.Read("a.md"));
+
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => ahead.SetResult()));
+            Assert.True(h.Workspace.SettleSaves(), "the settle did not return true");
+            Assert.Contains("probe", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.Equal(1, TagSummaries(h));
+            Assert.True(h.Workspace.SavesIdle);
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Codex round 2 (a wrong-target write the deferral brought). A
+    /// tag edit over x.md and a.md waits behind an operation admitted for
+    /// x.md. While it waits, the note the reader checked at a.md leaves that
+    /// path through Slate's own routes, and another note takes it: renamed
+    /// to b.md from the Files tree, with c.md renamed to a.md; or deleted,
+    /// with a new a.md created in its place. At its turn the tag edit tags
+    /// the note the reader checked, wherever it went, and never the note now
+    /// at a.md: that note's bytes and index hash are unchanged. Red today:
+    /// the queued request keeps its paths, so it tags the note now at
+    /// a.md.</summary>
+    [Theory]
+    [InlineData("renamed away, another note renamed in")]
+    [InlineData("deleted, another note created in its place")]
+    public void AQueuedTagEditFollowsItsNoteAndNeverTagsTheNoteThatTookItsPath(string how) => RunSta(() =>
+    {
+        const string Replacement = "# The note now at a.md\n";
+        bool renamed = how == "renamed away, another note renamed in";
+        using var h = new Vault(
+            "queued-tag-edit-follows",
+            ("x.md", "# X\n"),
+            ("a.md", "# The note the reader checked\n"),
+            ("c.md", Replacement));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "x.md", "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("x.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            if (renamed)
+            {
+                RenameInTheSidebar(h, sidebar, "a.md", "b.md");
+                RenameInTheSidebar(h, sidebar, "c.md", "a.md");
+            }
+            else
+            {
+                File.Delete(Path.Combine(h.Root, "a.md"));
+                h.Workspace.InvalidatePath("a.md");
+                _ = h.Session.SaveText("a.md", Replacement, expectedContentHash: null);
+            }
+            Assert.Equal(Replacement, h.Read("a.md"));
+            string replacementHash = IndexedHash(h, "a.md");
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the queued tag edit");
+            Assert.True(held.Result);
+            Assert.Equal(Replacement, h.Read("a.md"));
+            Assert.Equal(replacementHash, IndexedHash(h, "a.md"));
+            Assert.Contains("probe", h.Read("x.md"), StringComparison.Ordinal);
+            if (renamed)
+            {
+                Assert.Contains("probe", h.Read("b.md"), StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 4, CB-9a's second teardown shape. A tag edit still
+    /// waiting its turn when the workspace is torn down never runs: nothing
+    /// is written or spoken. Red today: the tag edit wrote at the
+    /// press.</summary>
+    [Fact]
+    public void ATagEditStillQueuedAtTeardownEndsUnwritten() => RunSta(() =>
+    {
+        using var h = new Vault("tag-edit-queued-at-teardown", ("a.md", Note));
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        CheckForATagEdit(h, sidebar, "a.md");
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            sidebar.AddTagCommand.Execute(null);
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+
+            h.DisposeWorkspace();
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesForTests.IsIdle, "the queued tag edit ending after teardown");
+            Assert.True(held.Result);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.Equal(0, TagSummaries(h));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text.StartsWith("Tag edit failed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Checks <paramref name="paths"/> in the sidebar's tree for a
+    /// tag edit of #probe, once each is listed, and drops what was
+    /// spoken.</summary>
+    private static void CheckForATagEdit(Vault h, FilesSidebarViewModel sidebar, params string[] paths)
+    {
+        HashSet<string> wanted = new(paths, StringComparer.Ordinal);
+        h.PumpUntil(
+            () => sidebar.RootNodes.Count(node => wanted.Contains(node.Path)) == wanted.Count,
+            "premise: the sidebar listing the notes to tag");
+        foreach (FileTreeNodeViewModel node in sidebar.RootNodes.Where(node => wanted.Contains(node.Path)))
+        {
+            node.IsBatchSelected = true;
+        }
+        sidebar.TagInput = "probe";
+        h.Events.Clear();
+    }
+
+    private static bool IsTagSummary(A11yEvent spoken) =>
+        spoken is A11yEvent.HostComposed composed && composed.Text.StartsWith("Tagged ", StringComparison.Ordinal);
+
+    private static int TagSummaries(Vault h) => h.Events.Count(IsTagSummary);
+
+    private static bool IsThePropertySentence(A11yEvent spoken) =>
+        spoken is A11yEvent.HostComposed composed
+        && composed.Text.StartsWith("Properties changed on disk", StringComparison.Ordinal);
+
+    private static string IndexedHash(Vault h, string path)
+    {
+        using var cancel = new CancelToken();
+        return h.Session.IndexedContentHashes([path], cancel)[0] ?? "<none>";
+    }
+
+    // ---- Clean tabs follow a link rewrite (plan 47 CB-9b, Design 5) -------------
+
+    /// <summary>Design 5 (CD5(b); M9, M16). A note links to an item that a
+    /// rename or a move from the Files sidebar renames or moves, and core
+    /// rewrites the note's links. The note's tab is open and clean (for an
+    /// undo or a redo, opened just before it, on the bytes it rewrites). The
+    /// tab then shows the rewritten bytes at the index's hash, under the
+    /// note's path after the change, is not stale, cannot undo back across
+    /// them, nothing is spoken for it, and a later save from it lands. Red
+    /// today: the tab keeps the bytes from before the rewrite, and the later
+    /// save is refused.</summary>
+    [Theory]
+    [InlineData("rename")]
+    [InlineData("folder-with-note rename")]
+    [InlineData("a note inside a renamed folder")]
+    [InlineData("move")]
+    [InlineData("batch move")]
+    [InlineData("undo of a rename")]
+    [InlineData("redo of a move")]
+    [InlineData("undo of a batch move")]
+    public void ACleanTabOnANoteWhoseLinksAStructuralChangeRewroteShowsTheRewrittenBytes(string change) => RunSta(() =>
+    {
+        (string Path, string Text)[] files;
+        string linking;
+        string after;
+        string expected;
+        switch (change)
+        {
+            case "rename":
+            case "undo of a rename":
+                files = [("note3.md", "# Note 3\n\nSee [[note4]].\n"), ("note4.md", "# Note 4\n")];
+                (linking, after) = ("note3.md", "note3.md");
+                expected = change == "rename" ? "See [[renamed4]]." : "See [[note4]].";
+                break;
+            case "folder-with-note rename":
+                // One note rewritten twice, chained (M16).
+                files = [("F/F.md", "# Folder note\n"), ("a.md", "See [[F/F]] and [[F/F.md]].\n")];
+                (linking, after, expected) = ("a.md", "a.md", "See [[G/G]] and [[G/G]].");
+                break;
+            case "a note inside a renamed folder":
+                // Named in the report under its new path (M16).
+                files = [("F/F.md", "# Folder note\n"), ("F/x.md", "Up [[F/F]].\n")];
+                (linking, after, expected) = ("F/x.md", "G/x.md", "Up [[G/G]].");
+                break;
+            default:
+                // A markdown link by its folder's path is rewritten when the
+                // folder moves; a link by name alone still resolves and is
+                // left as it is (core's no-churn rule).
+                files = [("notes/target.md", "# Target\n"), ("y/keep.md", "# Keep\n"), ("linker.md", "See [t](notes/target.md).\n")];
+                (linking, after) = ("linker.md", "linker.md");
+                expected = change == "undo of a batch move" ? "See [t](notes/target.md)." : "See [t](y/notes/target.md).";
+                break;
+        }
+        using var h = new Vault("link-rewrite", files);
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        WorkspaceTabViewModel? tab = change.StartsWith("undo", StringComparison.Ordinal)
+            || change.StartsWith("redo", StringComparison.Ordinal)
+                ? null
+                : h.OpenNow(linking);
+        switch (change)
+        {
+            case "rename":
+                RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+                break;
+            case "folder-with-note rename":
+            case "a note inside a renamed folder":
+                RenameInTheSidebar(h, sidebar, "F", "G");
+                break;
+            case "move":
+                MoveInTheSidebar(h, sidebar, "notes", "y");
+                break;
+            case "batch move":
+                BatchMoveInTheSidebar(h, sidebar, "notes", "y");
+                break;
+            case "undo of a rename":
+                RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+                tab = h.OpenNow(linking);
+                sidebar.UndoStructural();
+                break;
+            case "redo of a move":
+                MoveInTheSidebar(h, sidebar, "notes", "y");
+                sidebar.UndoStructural();
+                tab = h.OpenNow(linking);
+                sidebar.RedoStructural();
+                break;
+            default:
+                Assert.Equal("undo of a batch move", change);
+                BatchMoveInTheSidebar(h, sidebar, "notes", "y");
+                tab = h.OpenNow(linking);
+                sidebar.UndoStructural();
+                break;
+        }
+        try
+        {
+            string disk = h.Read(after);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            Assert.Equal(after, tab!.Path);
+            Assert.Equal(disk, tab.Text);
+            Assert.Equal(IndexedHash(h, after), tab.SavedContentHash);
+            Assert.False(tab.IsExternallyStale, "the tab on the rewritten note is stale");
+            Assert.False(tab.IsDirty, "the tab on the rewritten note is dirty");
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the tab can undo back across the rewritten links");
+            Assert.DoesNotContain(h.Events, e => IsThePropertySentence(e) || e is A11yEvent.NoteSaveConflict);
+
+            tab.Text = tab.Text + "A later edit.\n";
+            Task<bool> save = tab.SaveAsync(announce: true);
+            h.PumpUntil(() => save.IsCompleted && h.Workspace.SavesIdle, "a later save from the tab");
+            Assert.True(save.Result, "a later save from the tab on the rewritten note was refused");
+            Assert.Equal(tab.Text, h.Read(after));
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
+    /// <summary>Design 5. A link rewrite leaves alone a dirty tab on the
+    /// rewritten note (no reload, no sentence: the change event marks it
+    /// stale), and a clean tab whose note has an operation admitted, which
+    /// publishes to it itself. Green today, where nothing follows a link
+    /// rewrite; red by mutation: drop the HasAdmittedSaveFor guard, and the
+    /// second row reloads under the operation.</summary>
+    [Theory]
+    [InlineData("a dirty tab")]
+    [InlineData("a clean tab under an admitted operation")]
+    public void ALinkRewriteLeavesADirtyTabAndATabUnderAnAdmittedOperationAsTheyAre(string which) => RunSta(() =>
+    {
+        const string Linking = "# Note 3\n\nSee [[note4]].\n";
+        const string Edited = Linking + "An unsaved edit.\n";
+        using var h = new Vault("link-rewrite-left-alone", ("note3.md", Linking), ("note4.md", "# Note 4\n"));
+        WorkspaceTabViewModel tab = h.OpenNow("note3.md");
+        FilesSidebarViewModel sidebar = h.Sidebar();
+        bool dirty = which == "a dirty tab";
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? held = null;
+        if (dirty)
+        {
+            tab.Text = Edited;
+        }
+        else
+        {
+            held = h.Workspace.SavesForTests.Admit("note3.md", _ => ahead.Task);
+            Assert.False(tab.HasPendingSaves, "premise: the tab has a save of its own pending");
+        }
+        string? saved = tab.SavedContentHash;
+        h.Events.Clear();
+        try
+        {
+            RenameInTheSidebar(h, sidebar, "note4.md", "renamed4.md");
+            Assert.Contains("See [[renamed4]].", h.Read("note3.md"), StringComparison.Ordinal);
+            Assert.Equal(dirty ? Edited : Linking, tab.Text);
+            Assert.Equal(saved, tab.SavedContentHash);
+            Assert.Equal(dirty, tab.IsDirty);
+            Assert.DoesNotContain(h.Events, IsThePropertySentence);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+        Assert.True(held is null || held.Result);
+    });
+
+    /// <summary>Renames <paramref name="path"/>, a note or a folder listed at
+    /// the vault's root, to <paramref name="newName"/> from the sidebar, as
+    /// the rename box does.</summary>
+    private static void RenameInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string newName)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == path);
+        sidebar.MutationName = newName;
+        Assert.True(sidebar.TryRenameSelected(), $"premise: the rename of {path} was refused");
+    }
+
+    /// <summary>Moves <paramref name="path"/>, a note or a folder listed at
+    /// the vault's root, into <paramref name="destination"/> through the Move
+    /// To sheet: the single-item route.</summary>
+    private static void MoveInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string destination)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == path);
+        sidebar.MoveToCommand.Execute(null);
+        h.PumpUntil(
+            () => sidebar.MoveToSheet is { IsReady: true } sheet && sheet.Rows.Any(row => row.Destination == destination),
+            $"premise: the Move To sheet ready, listing {destination}");
+        MoveToPickerViewModel picker = sidebar.MoveToSheet!;
+        picker.ActivateCommand.Execute(picker.Rows.Single(row => row.Destination == destination));
+        Assert.Null(sidebar.MoveToSheet);
+    }
+
+    /// <summary>Moves the checked <paramref name="path"/>, a note or a folder
+    /// listed at the vault's root, into <paramref name="destination"/> as a
+    /// batch.</summary>
+    private static void BatchMoveInTheSidebar(Vault h, FilesSidebarViewModel sidebar, string path, string destination)
+    {
+        h.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == path), $"premise: the sidebar listing {path}");
+        sidebar.RootNodes.Single(node => node.Path == path).IsBatchSelected = true;
+        sidebar.MoveDestination = destination;
+        sidebar.BatchMoveCommand.Execute(null);
+    }
+
+    /// <summary>The workspace's bulk rename sheet, opened and armed by a
+    /// preview of <paramref name="oldKey"/> to <paramref name="newKey"/>,
+    /// with what the preview spoke dropped.</summary>
+    private static BulkRenameViewModel ArmedBulkRename(Vault h, string oldKey = "status", string newKey = "state")
+    {
+        h.Workspace.OpenBulkRenameSheet();
+        BulkRenameViewModel sheet = h.Workspace.BulkRenameSheet!;
+        sheet.OldKey = oldKey;
+        sheet.NewKey = newKey;
+        sheet.Preview();
+        h.PumpUntil(() => sheet.CanApply, "premise: the preview arming the apply");
+        h.Events.Clear();
+        return sheet;
+    }
+
+    /// <summary>What was spoken, by event, for a failure message.</summary>
+    private static string Heard(Vault h) => string.Join(" | ", h.Events.Select(e => e.GetType().Name));
+
+    /// <summary>Another writer's write to a.md, asked with its tabs open: what
+    /// it writes, and when it has landed.</summary>
+    private static (string Expected, Func<bool> Landed) WriteThroughAnOpenTab(Vault h, string route)
+    {
+        Func<bool> propertyChanged = () => h.Events.Any(e => e is A11yEvent.PropertyChanged);
+        if (route == "property set from the header")
+        {
+            PropertyRowViewModel status = LoadedHeader(h).Rows.Single(row => row.Key == "status");
+            status.EditorText = "done";
+            Assert.True(h.Workspace.SetPanelProperty(status));
+            return ("status: done", propertyChanged);
+        }
+        if (route == "property delete")
+        {
+            Assert.True(h.Workspace.DeletePanelProperty(LoadedHeader(h).Rows.Single(row => row.Key == "title")));
+            return ("status: draft\n---", propertyChanged);
+        }
+        if (route == "property add")
+        {
+            _ = LoadedHeader(h);
+            h.Workspace.OpenAddPropertySheet();
+            AddPropertyViewModel add = h.Workspace.AddPropertySheet!;
+            add.Key = "owner";
+            add.Value = "alice";
+            Assert.True(add.Add(), "premise: the add was refused at commit");
+            return ("owner: alice", propertyChanged);
+        }
+        if (route == "Bases cell edit through a tab")
+        {
+            (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCellOf(h);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            return ("status: done", () => h.Events.Any(e => e is A11yEvent.BasesCellSaved));
+        }
+        if (route == "tag edit")
+        {
+            FilesSidebarViewModel tagging = h.Sidebar();
+            CheckForATagEdit(h, tagging, "a.md");
+            tagging.AddTagCommand.Execute(null);
+            return ("probe", () => TagSummaries(h) > 0);
+        }
+        if (route == "link rewrite (rename)")
+        {
+            RenameInTheSidebar(h, h.Sidebar(), "b.md", "c.md");
+            return ("See [[c]].", () => true);
+        }
+        Assert.Equal("bulk rename", route);
+        BulkRenameViewModel sheet = h.Workspace.CreateBulkRename();
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        sheet.Preview();
+        h.PumpUntil(() => sheet.CanApply, "premise: the preview arming the apply");
+        Assert.True(sheet.Apply(), "premise: the apply was refused");
+        return (
+            "state: draft",
+            () => !sheet.WorkInFlight && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }));
+    }
+
+    /// <summary>A second tab on <paramref name="path"/>'s note, in a split to
+    /// the right, opened with one drained turn and no fixed wait.</summary>
+    private static WorkspaceTabViewModel OpenSplitPeer(Vault h, string path)
+    {
+        WorkspaceTabViewModel first = h.Workspace.Groups.SelectMany(group => group.Tabs).Single(tab => tab.Path == path);
+        h.Workspace.OpenPath(path, WorkspaceOpenTarget.SplitRight);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel peer = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(first, peer);
+        Assert.Equal(path, peer.Path);
+        Assert.Equal(first.Text, peer.Text);
+        return peer;
+    }
+
+    /// <summary>The active tab's properties header, loaded.</summary>
+    private static NotePropertiesViewModel LoadedHeader(Vault h)
+    {
+        NotePropertiesViewModel header = h.Workspace.EnsureActiveTabProperties()!;
+        h.PumpUntil(() => header.Rows.Count > 0 && !header.IsLoading, "the header loading");
+        h.Events.Clear();
+        return header;
+    }
+
     // ---- Harness ---------------------------------------------------------------
 
     /// <summary>A vault on disk and a workspace over it in the app's mode:
@@ -3484,6 +5836,7 @@ public sealed class SaveChainAdmissionTests
     {
         private readonly FixtureVault _fixture;
         private readonly VaultSession _session;
+        private readonly List<FilesSidebarViewModel> _sidebars = [];
         private bool _workspaceDisposed;
 
         public Vault(string label, params (string Path, string Text)[] files)
@@ -3586,6 +5939,22 @@ public sealed class SaveChainAdmissionTests
 
         public string Read(string path) => File.ReadAllText(Path.Combine(Root, path));
 
+        /// <summary>A Files sidebar on this vault's session, wired to the
+        /// workspace as the vault lifecycle wires it
+        /// (<c>VaultLifecycleViewModel.InitializeWorkspace</c>), speaking
+        /// into <see cref="Events"/>. The vault shuts it down before the
+        /// workspace goes.</summary>
+        public FilesSidebarViewModel Sidebar()
+        {
+            var sidebar = new FilesSidebarViewModel(
+                _session, Announce, vaultRoot: Root, localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot());
+            sidebar.RetargetRequested = (oldPath, newPath) => Workspace.RetargetPath(oldPath, newPath);
+            sidebar.TagEditRequested = Workspace.EditTagAdmitted;
+            sidebar.LinksRewritten = Workspace.RebaselineCleanTabsAfterLinkRewrite;
+            _sidebars.Add(sidebar);
+            return sidebar;
+        }
+
         public void PumpUntil(Func<bool> condition, string what) =>
             Assert.True(PumpedDispatcher.PumpUntil(condition, TimeSpan.FromSeconds(30)), $"{what} never happened");
 
@@ -3657,6 +6026,14 @@ public sealed class SaveChainAdmissionTests
         {
             try
             {
+                foreach (FilesSidebarViewModel sidebar in _sidebars)
+                {
+                    SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
+                    _ = PumpedDispatcher.PumpUntil(
+                        () => shutdown.SessionWork.IsCompleted && shutdown.TreeRefresh.IsCompleted
+                            && shutdown.Filter.IsCompleted && shutdown.ChildExpansions.IsCompleted,
+                        TimeSpan.FromSeconds(30));
+                }
                 DisposeWorkspace();
                 _session.Dispose();
             }

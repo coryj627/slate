@@ -70,7 +70,8 @@ public sealed class NotePropertiesTests
         using FixtureVault fixture = MakeVault("typed-property-rename");
         File.WriteAllText(Path.Combine(fixture.Root, "props.md"), "---\n1: old\n\"1\": twin\n---\nBody\n");
         using VaultSession session = OpenScanned(fixture.Root);
-        var vm = new BulkRenameViewModel(session, _ => { }, () => false, _ => { }, synchronousForTests: true);
+        var vm = new BulkRenameViewModel(
+            session, _ => { }, () => false, BulkRenameTests.ApplyAtOnce(_ => { }), synchronousForTests: true);
         vm.OldKey = "1";
         vm.NewKey = "renamed";
         vm.OldKeyType = BulkRenameViewModel.KeyTypes.Single(c => c.Kind == PropertyKeyType.Integer);

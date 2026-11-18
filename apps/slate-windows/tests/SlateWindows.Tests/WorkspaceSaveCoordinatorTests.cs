@@ -75,6 +75,70 @@ public sealed class WorkspaceSaveCoordinatorTests
         Assert.False(saves.HasAdmittedSaveFor("a.md"));
     });
 
+    /// <summary>Plan 47 CB-9b (#1889; CD5(a)): an admission over several
+    /// notes takes one ticket under every note's chain. It runs only once the
+    /// operation admitted for one of them before it has ended, and holds each
+    /// note's chain until its own Task ends, so a save of any of them asked
+    /// meanwhile waits for it. Spellings that fold to one chain are one note,
+    /// and a note it does not name is not held.</summary>
+    [Fact]
+    public void AnAdmissionOverSeveralNotesWaitsForEachAndHoldsEachUntilItEnds() => RunSta(() =>
+    {
+        var saves = new WorkspaceSaveCoordinator(Dispatcher.CurrentDispatcher);
+        var ahead = new TaskCompletionSource();
+        Task<bool> first = saves.Admit("b.md", _ => ahead.Task);
+        var operation = new TaskCompletionSource();
+        bool ran = false;
+        Task<bool> admitted = saves.Admit(["a.md", "B.md", "c.md", "A.md"], _ =>
+        {
+            ran = true;
+            return operation.Task;
+        });
+        Assert.Equal(2, saves.AdmittedForTests);
+        PumpedDispatcher.Drain();
+        Assert.False(ran, "the operation ran beside the operation admitted for b.md before it");
+        foreach (string path in new[] { "a.md", "b.md", "c.md" })
+        {
+            Assert.True(saves.HasAdmittedSaveFor(path), $"the admission did not hold {path}'s chain");
+        }
+        Assert.False(saves.HasAdmittedSaveFor("d.md"), "the admission held a note it does not name");
+
+        bool savedC = false;
+        Task<bool> saveC = saves.Enqueue(
+            WorkspaceSaveCoordinator.KeysFor(Guid.NewGuid(), "c.md"),
+            ticket =>
+            {
+                savedC = true;
+                ticket.Complete(true);
+            });
+        bool savedD = false;
+        Task<bool> saveD = saves.Enqueue(
+            WorkspaceSaveCoordinator.KeysFor(Guid.NewGuid(), "d.md"),
+            ticket =>
+            {
+                savedD = true;
+                ticket.Complete(true);
+            });
+        Assert.True(savedD, "a save of a note the admission does not name waited for it");
+
+        ahead.SetResult();
+        Assert.True(PumpedDispatcher.PumpUntil(() => ran, TimeSpan.FromSeconds(10)), "the operation never ran");
+        PumpedDispatcher.Drain();
+        Assert.False(savedC, "a save of c.md started beside the operation that holds its chain");
+
+        operation.SetResult();
+        Assert.True(PumpedDispatcher.PumpUntil(() => admitted.IsCompleted && saveC.IsCompleted, TimeSpan.FromSeconds(10)));
+        Assert.True(first.Result);
+        Assert.True(admitted.Result);
+        Assert.True(saveC.Result);
+        Assert.True(saveD.Result);
+        Assert.True(saves.IsIdle);
+        foreach (string path in new[] { "a.md", "b.md", "c.md" })
+        {
+            Assert.False(saves.HasAdmittedSaveFor(path));
+        }
+    });
+
     [Fact]
     public void AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing() => RunSta(() =>
     {
