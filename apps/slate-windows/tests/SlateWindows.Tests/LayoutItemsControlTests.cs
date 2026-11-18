@@ -334,11 +334,26 @@ public sealed class LayoutItemsControlTests
     /// connects. It saw A, B, an empty SlateLayoutItem with an empty rectangle and no
     /// children, D and E in the raw view (the control view was right). Premise: no client
     /// has connected the window before ours, since a connected window has WPF rebuild the
-    /// host's children after each layout and would hide the stale peer without the
-    /// reset.</summary>
+    /// host's children after each layout and would hide the stale peer without the reset.
+    /// While any UI Automation client in this process listens for an event, WPF connects
+    /// every new window's root itself as the window shows (a desktop client that read an
+    /// earlier fact's window leaves such a listener; AccessibilityNotificationDispatcherTests
+    /// records the route), so this schedule cannot occur, on main or with the fix. The fact
+    /// reads that before the window shows and skips there, saying so. Where nothing listened,
+    /// a root connected before ours fails the premise. Wherever this fact skips, facts 1 and
+    /// 3 (AChangedSourceLeavesNoStalePeerOnTheHost and ABurstOfRemovalsQueuesOneReset), whose
+    /// hosts are in no window, still carry the proof.</summary>
     [Fact]
     public void AClientThatConnectsAfterARemovalSeesNoExtraElement() => RunSta(() =>
     {
+        string listening = ListeningEvents();
+        if (listening.Length > 0)
+        {
+            Assert.Skip($"a UI Automation client in this process already listens ({listening}), so WPF connects every new "
+                + "window's root itself and #1860's schedule, a client that connects only after the removal, cannot occur here; "
+                + "facts 1 and 3, hosts in no window, carry the proof");
+        }
+
         ObservableCollection<Row> rows = FiveRows();
         LayoutItemsControl host = ButtonRows(rows);
         AutomationProperties.SetAutomationId(host, ClientHostId);
@@ -357,11 +372,11 @@ public sealed class LayoutItemsControlTests
         {
             Drain();
             _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
-            Assert.True(ConnectedRoots() == 0, "premise: a UI Automation client connected the window before the removal");
+            Assert.True(ConnectedRoots() == 0, PremiseBroken("the removal"));
 
             rows.Remove(rows[2]);
             Drain();
-            Assert.True(ConnectedRoots() == 0, "premise: a UI Automation client connected the window before ours");
+            Assert.True(ConnectedRoots() == 0, PremiseBroken("ours"));
 
             nint handle = new WindowInteropHelper(window).Handle;
             Task<ClientView> read = Task.Run(() => ReadAsAClient(handle));
@@ -448,6 +463,18 @@ public sealed class LayoutItemsControlTests
         object roots = manager.GetProperty("AutomationEvents", Any)!.GetValue(layout)!;
         return (int)roots.GetType().GetProperty("Count", Any)!.GetValue(roots)!;
     }
+
+    /// <summary>The automation events some UI Automation client in this process listens for
+    /// (WPF's process-wide event map, read through the public per-event probe), joined; empty
+    /// when none.</summary>
+    private static string ListeningEvents() =>
+        string.Join("+", Enum.GetValues<AutomationEvents>().Where(AutomationPeer.ListenerExists));
+
+    /// <summary>Fact 2's premise message: nothing listened before the window showed, yet its
+    /// root was connected before <paramref name="what"/>; it names what listens by now.</summary>
+    private static string PremiseBroken(string what) =>
+        "premise: nothing in this process listened before the window showed, yet a UI Automation client connected it "
+        + $"before {what} (listening now: {(ListeningEvents() is { Length: > 0 } events ? events : "nothing")})";
 
     /// <summary>The operations posted at Loaded priority while <paramref name="change"/>
     /// runs.</summary>
