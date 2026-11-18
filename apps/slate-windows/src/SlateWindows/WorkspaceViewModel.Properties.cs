@@ -1168,14 +1168,14 @@ internal sealed partial class WorkspaceViewModel
                     }
                     _ = ReconcileTabsAfterPropertyWrite(path, SlateUniffiMethods.EditorTextContentHash(read.Text));
                 });
-                steps.Add(() => RefreshPropertiesFor(path));
+                steps.Add(() => RefreshPropertiesFor(path, ReloadAnnounce.None));
                 steps.Add(() => NotePersisted(path));
             }
             else if (after.GetValueOrDefault(path) is { Length: > 0 } written
                 && !string.Equals(before.GetValueOrDefault(path), written, StringComparison.Ordinal))
             {
                 steps.Add(() => _ = ReconcileTabsAfterPropertyWrite(path, written));
-                steps.Add(() => RefreshPropertiesFor(path));
+                steps.Add(() => RefreshPropertiesFor(path, ReloadAnnounce.None));
                 steps.Add(() => NotePersisted(path));
             }
         }
