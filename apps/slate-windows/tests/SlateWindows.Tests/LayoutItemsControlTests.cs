@@ -1,11 +1,15 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.ObjectModel;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace SlateWindows.Tests;
 
@@ -247,6 +251,300 @@ public sealed class LayoutItemsControlTests
             window.Close();
         }
     });
+
+    /// <summary>#1860: a removal, a replace and a move generate no containers, so the
+    /// host's reset on ContainersGenerated never ran for them, and nothing else rebuilt the
+    /// host peer's children until a client had connected the window. A host read in process
+    /// kept a removed item's peer (an empty element where the item was), the old item of a
+    /// replace and the old order of a move. Once the reset queued for the change has run,
+    /// the host lists exactly its items' peers, in order, and an item the change kept keeps
+    /// its peer (in the refill and the swap, WPF hands the peer of an equal item to the new
+    /// record). Clear, a refill, a swapped source and an Add reset through ContainersGenerated
+    /// already; they stay as guards. The host is in no window, so no client can connect
+    /// it.</summary>
+    [Theory]
+    [InlineData("remove")]
+    [InlineData("replace")]
+    [InlineData("move")]
+    [InlineData("burst")]
+    [InlineData("clear")]
+    [InlineData("refill")]
+    [InlineData("swap")]
+    [InlineData("add")]
+    [InlineData("collapsed remove")]
+    public void AChangedSourceLeavesNoStalePeerOnTheHost(string change) => RunSta(() =>
+    {
+        ObservableCollection<Row> rows = change == "burst" ? HundredAndFiveRows() : FiveRows();
+        LayoutItemsControl host = LaidOutAlone(rows);
+        AutomationPeer hostPeer = UIElementAutomationPeer.CreatePeerForElement(host);
+        Dictionary<string, AutomationPeer> before = ReadLikeAClient(hostPeer);
+
+        switch (change)
+        {
+            case "remove":
+                rows.Remove(rows[2]);
+                break;
+            case "replace":
+                rows[2] = new Row("C2");
+                break;
+            case "move":
+                rows.Move(0, 4);
+                break;
+            case "burst":
+                RemoveAHundred(rows);
+                break;
+            case "clear":
+                rows.Clear();
+                break;
+            case "refill":
+                Refill(rows);
+                break;
+            case "swap":
+                host.ItemsSource = new List<Row> { new("A"), new("B"), new("Z") };
+                break;
+            case "add":
+                rows.Add(new Row("F"));
+                break;
+            case "collapsed remove":
+                host.Visibility = Visibility.Collapsed;
+                host.UpdateLayout();
+                rows.Remove(rows[2]);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(change), change, "no such change");
+        }
+        Drain();
+
+        Row[] items = [.. host.Items.Cast<Row>()];
+        List<AutomationPeer> children = hostPeer.GetChildren() ?? [];
+        Assert.Equal(string.Join(" | ", items.Select(row => row.Label)), string.Join(" | ", children.Select(LabelOf)));
+        for (int index = 0; index < items.Length; index++)
+        {
+            ItemAutomationPeer peer = Assert.IsAssignableFrom<ItemAutomationPeer>(children[index]);
+            Assert.Same(items[index], peer.Item);
+            if (before.TryGetValue(items[index].Label, out AutomationPeer? kept))
+            {
+                Assert.Same(kept, peer);
+            }
+        }
+    });
+
+    /// <summary>#1860, the issue's schedule: the host's peer is read in process while no
+    /// UI Automation client has connected the window, a row is removed, and a client then
+    /// connects. It saw A, B, an empty SlateLayoutItem with an empty rectangle and no
+    /// children, D and E in the raw view (the control view was right). Premise: no client
+    /// has connected the window before ours, since a connected window has WPF rebuild the
+    /// host's children after each layout and would hide the stale peer without the
+    /// reset.</summary>
+    [Fact]
+    public void AClientThatConnectsAfterARemovalSeesNoExtraElement() => RunSta(() =>
+    {
+        ObservableCollection<Row> rows = FiveRows();
+        LayoutItemsControl host = ButtonRows(rows);
+        AutomationProperties.SetAutomationId(host, ClientHostId);
+        AutomationProperties.SetName(host, "Rows");
+        var window = new Window
+        {
+            Content = host,
+            Width = 320,
+            Height = 400,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        try
+        {
+            Drain();
+            _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
+            Assert.True(ConnectedRoots() == 0, "premise: a UI Automation client connected the window before the removal");
+
+            rows.Remove(rows[2]);
+            Drain();
+            Assert.True(ConnectedRoots() == 0, "premise: a UI Automation client connected the window before ours");
+
+            nint handle = new WindowInteropHelper(window).Handle;
+            Task<ClientView> read = Task.Run(() => ReadAsAClient(handle));
+            PumpedDispatcher.PumpUntilDrained(read, TimeSpan.FromSeconds(30));
+            ClientView view = read.Result;
+            Assert.Equal(
+                "SlateLayoutItem[Button A] | SlateLayoutItem[Button B] | SlateLayoutItem[Button D] | SlateLayoutItem[Button E]",
+                string.Join(" | ", view.Raw));
+            Assert.Equal("Button A | Button B | Button D | Button E", string.Join(" | ", view.Control));
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>#1860: one reset serves a burst. A hundred removals queue one reset on a host
+    /// whose peer a client read, not a hundred, and a list cleared and refilled (one
+    /// ContainersGenerated per change) queues one, not six. A host no client has read has
+    /// nothing cached and posts none, so the twin, whose peer was never made, counts every
+    /// Loaded post the same change makes besides the host's own.</summary>
+    [Fact]
+    public void ABurstOfRemovalsQueuesOneReset() => RunSta(() =>
+    {
+        ObservableCollection<Row> hostRows = HundredAndFiveRows();
+        ObservableCollection<Row> twinRows = HundredAndFiveRows();
+        LayoutItemsControl host = LaidOutAlone(hostRows);
+        LayoutItemsControl twin = LaidOutAlone(twinRows);
+        _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
+        Assert.True(UIElementAutomationPeer.FromElement(twin) is null, "premise: the twin's peer was made");
+
+        int removals = LoadedPostsDuring(() => RemoveAHundred(hostRows)) - LoadedPostsDuring(() => RemoveAHundred(twinRows));
+        Drain();
+        int refill = LoadedPostsDuring(() => Refill(hostRows)) - LoadedPostsDuring(() => Refill(twinRows));
+
+        Assert.Equal((1, 1), (removals, refill));
+    });
+
+    private const string ClientHostId = "Cb25ClientHost";
+
+    /// <summary>What a UI Automation client saw under the host: each raw child as its class
+    /// name and its raw children, and the control view's children.</summary>
+    private sealed record ClientView(IReadOnlyList<string> Raw, IReadOnlyList<string> Control);
+
+    /// <summary>A client on another thread, through UI Automation's core, as a reader
+    /// connects. An element with an empty rectangle says so.</summary>
+    private static ClientView ReadAsAClient(nint handle)
+    {
+        AutomationElement window = AutomationElement.FromHandle(handle);
+        AutomationElement host = window.FindFirst(
+            TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, ClientHostId))
+            ?? throw new InvalidOperationException("the client found no host");
+        static string Element(AutomationElement element) =>
+            element.Current.ControlType.ProgrammaticName.Replace("ControlType.", string.Empty, StringComparison.Ordinal)
+            + " " + element.Current.Name + EmptyRectangle(element);
+        static string EmptyRectangle(AutomationElement element) =>
+            element.Current.BoundingRectangle.IsEmpty ? " (empty rectangle)" : string.Empty;
+        List<string> raw = [];
+        foreach (AutomationElement item in Children(TreeWalker.RawViewWalker, host))
+        {
+            raw.Add(item.Current.ClassName + EmptyRectangle(item)
+                + "[" + string.Join(", ", Children(TreeWalker.RawViewWalker, item).Select(Element)) + "]");
+        }
+        return new ClientView(raw, [.. Children(TreeWalker.ControlViewWalker, host).Select(Element)]);
+    }
+
+    private static IEnumerable<AutomationElement> Children(TreeWalker walker, AutomationElement parent)
+    {
+        for (AutomationElement? child = walker.GetFirstChild(parent); child is not null; child = walker.GetNextSibling(child))
+        {
+            yield return child;
+        }
+    }
+
+    /// <summary>The windows on this thread a UI Automation client has connected (WPF's
+    /// ContextLayoutManager.AutomationEvents). WPF rebuilds a connected window's peers after
+    /// each layout, so a fact that needs a stale cache on main asserts this is empty.</summary>
+    private static int ConnectedRoots()
+    {
+        const BindingFlags Any = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+        Type manager = typeof(UIElement).Assembly.GetType("System.Windows.ContextLayoutManager", throwOnError: true)!;
+        object layout = manager.GetMethod("From", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [Dispatcher.CurrentDispatcher])!;
+        object roots = manager.GetProperty("AutomationEvents", Any)!.GetValue(layout)!;
+        return (int)roots.GetType().GetProperty("Count", Any)!.GetValue(roots)!;
+    }
+
+    /// <summary>The operations posted at Loaded priority while <paramref name="change"/>
+    /// runs.</summary>
+    private static int LoadedPostsDuring(Action change)
+    {
+        int posted = 0;
+        DispatcherHooks hooks = Dispatcher.CurrentDispatcher.Hooks;
+        void Posted(object? sender, DispatcherHookEventArgs args)
+        {
+            if (args.Operation.Priority == DispatcherPriority.Loaded)
+            {
+                posted++;
+            }
+        }
+        hooks.OperationPosted += Posted;
+        try
+        {
+            change();
+        }
+        finally
+        {
+            hooks.OperationPosted -= Posted;
+        }
+        return posted;
+    }
+
+    private static ObservableCollection<Row> FiveRows() => [new("A"), new("B"), new("C"), new("D"), new("E")];
+
+    private static ObservableCollection<Row> HundredAndFiveRows() =>
+        [.. Enumerable.Range(0, 105).Select(index => new Row($"R{index:000}"))];
+
+    private static void RemoveAHundred(ObservableCollection<Row> rows)
+    {
+        for (int removed = 0; removed < 100; removed++)
+        {
+            rows.RemoveAt(0);
+        }
+    }
+
+    /// <summary>Clear, then five Adds of records equal to <see cref="FiveRows"/>.</summary>
+    private static void Refill(ObservableCollection<Row> rows)
+    {
+        rows.Clear();
+        foreach (Row row in FiveRows())
+        {
+            rows.Add(row);
+        }
+    }
+
+    /// <summary>A host of one Button per row, named by the row's label (fact 5's
+    /// shape).</summary>
+    private static LayoutItemsControl ButtonRows(ObservableCollection<Row> rows)
+    {
+        var button = new FrameworkElementFactory(typeof(Button));
+        button.SetBinding(AutomationProperties.NameProperty, new Binding(nameof(Row.Label)));
+        return new LayoutItemsControl
+        {
+            ItemsSource = rows,
+            ItemTemplate = new DataTemplate { VisualTree = button },
+        };
+    }
+
+    /// <summary><see cref="ButtonRows"/> laid out in no window. A root built in code takes
+    /// its theme template, and so its items panel, only once initialized.</summary>
+    private static LayoutItemsControl LaidOutAlone(ObservableCollection<Row> rows)
+    {
+        LayoutItemsControl host = ButtonRows(rows);
+        host.BeginInit();
+        host.EndInit();
+        host.Measure(new Size(320, 400));
+        host.Arrange(new Rect(0, 0, 320, 400));
+        host.UpdateLayout();
+        Drain();
+        return host;
+    }
+
+    /// <summary>Reads the host's children and each item's children once, as a client walk
+    /// does; answers each item peer by its row's label.</summary>
+    private static Dictionary<string, AutomationPeer> ReadLikeAClient(AutomationPeer hostPeer)
+    {
+        Dictionary<string, AutomationPeer> byLabel = [];
+        foreach (AutomationPeer child in hostPeer.GetChildren() ?? [])
+        {
+            _ = child.GetChildren();
+            byLabel.Add(LabelOf(child), child);
+        }
+        return byLabel;
+    }
+
+    /// <summary>An item peer's row label. An item peer holds its item weakly, so a stale
+    /// peer's removed row may be gone.</summary>
+    private static string LabelOf(AutomationPeer peer) => peer switch
+    {
+        ItemAutomationPeer { Item: Row row } => row.Label,
+        ItemAutomationPeer => "(an item peer whose item was collected)",
+        _ => peer.GetType().Name,
+    };
 
     /// <summary>Runs layout and the Loaded-priority work queued behind it.</summary>
     private static void Drain()
