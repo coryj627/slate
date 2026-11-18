@@ -1184,7 +1184,8 @@ fn script_arity(name: &str) -> Option<usize> {
 ///   function name in an argument slot (`x_\max y`), the function was
 ///   written directly in the element, and the application mark the writer
 ///   then puts after the element goes too, with its thin space, so
-///   `x_\max y` reads as `x_{\max} y`. After a moved mark, that mark of the
+///   `x_\max y` reads as `x_{\max} y`; a base that is itself a function
+///   name keeps it (`\operatorname{foo}_{2}^\max x`). After a moved mark, that mark of the
 ///   element's own goes as well (`\hat\sin^\max x`), so one mark remains.
 ///
 /// An element MathCAT accepts has its arity, so it is never touched, and
@@ -1429,10 +1430,20 @@ fn repair_script_children(mathml: &str) -> String {
             for child in trailing {
                 push_child(parent, child, &mut edits);
             }
+            // The base is a function name when the writer wrote it as one: an
+            // `<mi>` of more than one character, or of one with
+            // `mathvariant="normal"` (`mathml.rs:651-655` in pulldown-latex).
+            let base_child = children[base];
+            let base_is_a_function = base_child.kind == Kind::Function
+                && base_child.end == base_child.start + 3
+                && (pieces[base_child.start].contains("mathvariant=\"normal\"")
+                    || pieces[base_child.start + 1].chars().count() > 1);
             // The element's own application mark, which the writer puts after
-            // it, goes: for an argument there is nothing to apply, and after
-            // a mark moved out of the element it would be a second one.
-            if argument_was_a_function || moved_a_mark {
+            // it, goes when it applies nothing: an argument function's mark on
+            // an ordinary base (a function base keeps it, as
+            // `\operatorname{foo}_{2}^{\max} x` does), and a mark after one
+            // moved out of the element, which would be a second one.
+            if (argument_was_a_function && !base_is_a_function) || moved_a_mark {
                 parent.dropping = Dropping::Mark;
             }
         } else {
@@ -2836,6 +2847,16 @@ mod tests {
         (r"x_\max^2", r"x_{\max}^2"),
         (r"x_\min^\max", r"x_{\min}^{\max}"),
         (r"x_\min^\max y", r"x_{\min}^{\max} y"),
+        // A function base keeps the mark it applies to x by, when an
+        // argument is a function too; an ordinary base does not have one.
+        (
+            r"\operatorname{foo}_{2}^\max x",
+            r"\operatorname{foo}_{2}^{\max} x",
+        ),
+        (r"\sin_{2}^\max x", r"\sin_{2}^{\max} x"),
+        (r"\liminf_{n}^\max x", r"\liminf_{n}^{\max} x"),
+        (r"\limsup_{n}^\min x", r"\limsup_{n}^{\min} x"),
+        (r"x_{2}^\max y", r"x_{2}^{\max} y"),
     ];
 
     /// #1629, the plan lead's ruling of 2026-11-18: an accented function as
@@ -3196,10 +3217,21 @@ mod tests {
     /// than MathCAT takes, and then only when the writer's spaces and marks
     /// account for every extra one. A thin space that fills a slot, an extra
     /// space that is not before a function, and every golden formula that
-    /// MathCAT accepts as written are left exactly as they are.
+    /// MathCAT accepts as written are left exactly as they are; the writer's
+    /// own extra space is repaired, so a repair that changed nothing would
+    /// fail here too.
     #[test]
-    fn a_script_whose_children_fit_is_left_as_written() {
+    fn the_repair_changes_only_a_script_with_too_many_children() {
         let space = WRITER_THIN_SPACE;
+        let written = as_written(r"2\sin^2 x");
+        assert_eq!(
+            repair_script_children(&written),
+            format!(
+                "<math display=\"inline\"><mn>2</mn>{space}<msup><mi>sin</mi><mn>2</mn></msup>\
+                 <mo>\u{2061}</mo>{space}<mi>x</mi></math>"
+            ),
+            "{written}"
+        );
         for mathml in [
             format!("<math><msup><mi>x</mi>{space}</msup><mn>2</mn></math>"),
             format!("<math><msubsup><mi>x</mi>{space}<mn>2</mn></msubsup></math>"),
