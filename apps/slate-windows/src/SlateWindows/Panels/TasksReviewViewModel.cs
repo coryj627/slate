@@ -941,30 +941,48 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // both surfaces query a possibly-stale index with
             // nothing barring them. Either way the repair
             // must succeed before any reload (rounds 14-15).
-            bool diskMoved = postFailureDiskHash is not null
+            //
+            // Plan 47 CB-14 (#1660, CD8): a write that landed with only its
+            // index commit failed names the hash it wrote, so an unreadable
+            // read-back still reconciles a tab that opened on the note while
+            // the write ran (the tab routes' rule); and it says it landed
+            // (task.Completed is the state before the toggle) AFTER that
+            // reconcile, which would cut it at High. Every other failure says
+            // it failed, first, as before.
+            var landedWrite = vaultFailure as VaultException.SavedButUnindexed;
+            string? landedHash = postFailureDiskHash ?? landedWrite?.newContentHash;
+            bool diskMoved = landedHash is not null
                 && !string.Equals(
-                    postFailureDiskHash, expectedHash, StringComparison.Ordinal);
-            bool outcomeUnknown = postFailureDiskHash is null;
+                    landedHash, expectedHash, StringComparison.Ordinal);
+            bool outcomeUnknown = landedHash is null;
             // Every step is attempted (plan 47 CB-9a; codex round 1): a
             // sentence that throws, here or in the tab the workspace
             // reconciles, skips neither the repair nor the rows' reload.
-            // Plan 47 CB-14 (#1660, CD8): a write that landed with only its
-            // index commit failed says it landed (task.Completed is the state
-            // before the toggle); every other failure says it failed.
             bool repaired = false;
             AdmittedPublication.RunEvery(
-                () => _announce(vaultFailure is VaultException.SavedButUnindexed unindexed
-                    ? (A11yEvent)new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail)
-                    : new A11yEvent.TaskToggleFailed(
-                        vaultFailure is not null
-                            ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
-                            : failure)),
+                () =>
+                {
+                    if (landedWrite is null)
+                    {
+                        _announce(new A11yEvent.TaskToggleFailed(
+                            vaultFailure is not null
+                                ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
+                                : failure));
+                    }
+                },
                 () => repaired = (diskMoved || outcomeUnknown) && _repairs.TryRepairNow(path, out _),
                 () =>
                 {
                     if (diskMoved)
                     {
-                        DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
+                        DiskWriteLanded?.Invoke(path, landedHash!);
+                    }
+                },
+                () =>
+                {
+                    if (landedWrite is not null)
+                    {
+                        _announce(new A11yEvent.TaskToggledUnindexed(!task.Completed, landedWrite.detail));
                     }
                 },
                 () =>

@@ -1991,7 +1991,26 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // field-labelled message ("@message=…").
             var failed = new A11yEvent.TaskToggleFailed(SlateUniffiMethods.VaultErrorDetail(error));
             Status = SlateUniffiMethods.A11yRender(failed).Text;
-            announce(failed);
+            // Plan 47 CB-14 (the judge's review): a failure whose read-back
+            // shows the write landed anyway leaves this tab over changed
+            // disk. With no completion behind it (the editor's activate-at-
+            // cursor, the reading view) the tab reconciles itself and its
+            // peers by the completion's own rule (a moved read-back), after
+            // the failure sentence as on the panel route; with one, the
+            // completion does.
+            bool landedAnyway = outcome.PostFailureDiskHash is { } readBack
+                && !string.Equals(readBack, _contentHash, StringComparison.Ordinal);
+            if (!completionFollows && landedAnyway)
+            {
+                AdmittedPublication.RunEvery(
+                    () => announce(failed),
+                    () => ReconcileAfterExternalTaskWrite(outcome.PostFailureDiskHash!, announce),
+                    () => _documentChanged?.Invoke(this, null));
+            }
+            else
+            {
+                announce(failed);
+            }
             return;
         }
 
