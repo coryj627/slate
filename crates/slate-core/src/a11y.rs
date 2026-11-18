@@ -930,10 +930,10 @@ pub enum A11yEvent {
     /// Spoken after the create's own sentence, never instead of it — the
     /// file is real and opens, only the index lags, and the one thing the
     /// user must not do is recreate it. `name` is the created file's leaf
-    /// name; `reason` is the post-publish failure core reported, spliced
-    /// verbatim (a blank one drops the colon instead). The wording is
-    /// Windows' `CreateOutcomes.PublishedUnindexedCaveat` moved here byte
-    /// for byte, so both hosts render it from core.
+    /// name; `reason` is the post-publish failure core reported, closed as a
+    /// sentence once (plan 47 CB-14, #1395; a blank one drops the colon
+    /// instead). Windows' `CreateOutcomes.PublishedUnindexedCaveat` moved
+    /// here (#1140), so both hosts render it from core.
     CreatePublishedUnindexed {
         name: String,
         reason: String,
@@ -2227,7 +2227,16 @@ impl A11yEvent {
                 "Task could not be toggled.".to_owned()
             }
             TaskToggleFailed { detail } => lead_then_sentence("Task could not be toggled:", detail),
-            TaskToggledUnindexed { .. } => "Task could not be toggled.".to_owned(),
+            // Plan 47 CB-14 (#1660, CD8): the toggle's own sentence, then the
+            // save twin's clause with the innermost error's message.
+            TaskToggledUnindexed { completed, detail } => format!(
+                "{} {}",
+                TaskToggled {
+                    completed: *completed
+                }
+                .render(),
+                saved_but_unindexed(innermost_error_message(detail))
+            ),
             TasksReviewShown { filter_name } => format!("Tasks review. {filter_name}."),
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
@@ -2255,11 +2264,11 @@ impl A11yEvent {
                 "{name} was written but not indexed. It will appear in listings after the \
                  next scan; do not recreate it."
             ),
-            // Otherwise the reason is spliced verbatim, as the save twin's
-            // detail is (`SavedButUnindexed`): Windows' bytes before #1140.
+            // Otherwise the reason is closed once before the next sentence
+            // (plan 47 CB-14, #1395), as the save twin's detail is.
             CreatePublishedUnindexed { name, reason } => format!(
-                "{name} was written but not indexed: {reason} It will appear in listings \
-                 after the next scan; do not recreate it."
+                "{} It will appear in listings after the next scan; do not recreate it.",
+                lead_then_sentence(&format!("{name} was written but not indexed:"), reason)
             ),
 
             RestoredVersionFrom { formatted_date } => {
@@ -3418,6 +3427,42 @@ fn lead_then_sentence(lead: &str, text: &str) -> String {
     }
 }
 
+/// "Saved, but not indexed yet: <reason>. It will appear after the next
+/// scan." (plan 47 CB-14, #1660, #1395): the reason closed as a sentence
+/// once, and a blank one drops the colon. `vault_error_detail`'s
+/// `SavedButUnindexed` arm and `A11yEvent::TaskToggledUnindexed` both render
+/// it, so the save detail and the landed toggle cannot read differently.
+fn saved_but_unindexed(reason: &str) -> String {
+    let saved = if reason.trim().is_empty() {
+        "Saved, but not indexed yet.".to_owned()
+    } else {
+        lead_then_sentence("Saved, but not indexed yet:", reason)
+    };
+    format!("{saved} It will appear after the next scan.")
+}
+
+/// The innermost error's own message in a `SavedButUnindexed` detail (plan
+/// 47 CB-14, the lead's ruling on owner decision CD8's sentence). Core
+/// flattens the failed step's error with `to_string()` where it creates the
+/// error (`save_text_locked_checked`), so an index failure's detail reads
+/// "database error: sqlite error: database is locked". This drops, from the
+/// start and repeatedly, exactly the Display wrappers core puts in front of
+/// an inner error: `VaultError::Io`'s, `VaultError::Db`'s and
+/// `DbError::Sqlite`'s. Only the landed toggle's sentence uses it; every
+/// other reader of the detail, `vault_error_detail` included, keeps it
+/// verbatim.
+fn innermost_error_message(detail: &str) -> &str {
+    const WRAPPERS: [&str; 3] = ["io error: ", "database error: ", "sqlite error: "];
+    let mut text = detail.trim_start();
+    while let Some(inner) = WRAPPERS
+        .iter()
+        .find_map(|wrapper| text.strip_prefix(wrapper))
+    {
+        text = inner;
+    }
+    text
+}
+
 /// What a resolved embed card shows (#1278): the resolution's kind and
 /// the fields that identify it — never its content and never a title. A
 /// host hands this back to core, which words the card title from it
@@ -3637,9 +3682,7 @@ pub fn vault_error_detail(error: &VaultError) -> String {
         ),
         VaultError::Unsupported { feature } => format!("{feature} is not implemented yet."),
         VaultError::WriteConflict { .. } => "File changed externally.".to_owned(),
-        VaultError::SavedButUnindexed { detail, .. } => {
-            format!("Saved, but not indexed yet: {detail} It will appear after the next scan.")
-        }
+        VaultError::SavedButUnindexed { detail, .. } => saved_but_unindexed(detail),
         VaultError::HistoryUnavailable { path, .. } => {
             format!("History for {path} is unavailable: it failed an integrity check.")
         }

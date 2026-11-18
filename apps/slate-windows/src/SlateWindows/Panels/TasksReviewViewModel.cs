@@ -942,12 +942,17 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // Every step is attempted (plan 47 CB-9a; codex round 1): a
             // sentence that throws, here or in the tab the workspace
             // reconciles, skips neither the repair nor the rows' reload.
+            // Plan 47 CB-14 (#1660, CD8): a write that landed with only its
+            // index commit failed says it landed (task.Completed is the state
+            // before the toggle); every other failure says it failed.
             bool repaired = false;
             AdmittedPublication.RunEvery(
-                () => _announce(new A11yEvent.TaskToggleFailed(
-                    vaultFailure is not null
-                        ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
-                        : failure)),
+                () => _announce(vaultFailure is VaultException.SavedButUnindexed unindexed
+                    ? (A11yEvent)new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail)
+                    : new A11yEvent.TaskToggleFailed(
+                        vaultFailure is not null
+                            ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
+                            : failure)),
                 () => repaired = (diskMoved || outcomeUnknown) && _repairs.TryRepairNow(path, out _),
                 () =>
                 {

@@ -512,22 +512,22 @@
   {
     "event": "TaskToggledUnindexed { completed: true, detail: \"database error: sqlite error: database is locked\" }",
     "priority": "medium",
-    "text": "Task could not be toggled."
+    "text": "Task completed. Saved, but not indexed yet: database is locked. It will appear after the next scan."
   },
   {
     "event": "TaskToggledUnindexed { completed: false, detail: \"database is locked\" }",
     "priority": "medium",
-    "text": "Task could not be toggled."
+    "text": "Task reopened. Saved, but not indexed yet: database is locked. It will appear after the next scan."
   },
   {
     "event": "TaskToggledUnindexed { completed: true, detail: \"the index is locked.\" }",
     "priority": "medium",
-    "text": "Task could not be toggled."
+    "text": "Task completed. Saved, but not indexed yet: the index is locked. It will appear after the next scan."
   },
   {
     "event": "TaskToggledUnindexed { completed: true, detail: \"\" }",
     "priority": "medium",
-    "text": "Task could not be toggled."
+    "text": "Task completed. Saved, but not indexed yet. It will appear after the next scan."
   },
   {
     "event": "TasksReviewShown { filter_name: \"Open tasks\" }",
@@ -572,7 +572,7 @@
   {
     "event": "CreatePublishedUnindexed { name: \"notes.md\", reason: \"database error: disk I/O error\" }",
     "priority": "medium",
-    "text": "notes.md was written but not indexed: database error: disk I/O error It will appear in listings after the next scan; do not recreate it."
+    "text": "notes.md was written but not indexed: database error: disk I/O error. It will appear in listings after the next scan; do not recreate it."
   },
   {
     "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",

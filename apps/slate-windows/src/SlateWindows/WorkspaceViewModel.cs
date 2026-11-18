@@ -1908,7 +1908,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         if (tabPublished)
         {
             PublishTaskToggleThroughTab(
-                path, expectedHash, revision, task, nextStatus, announce, outcome);
+                path, expectedHash, revision, task, nextStatus, announce, outcome,
+                completionFollows: completion is not null);
         }
         completion?.Invoke(
             outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished);
@@ -1921,12 +1922,38 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
-        TaskToggleOutcome outcome)
+        TaskToggleOutcome outcome,
+        bool completionFollows)
     {
         _taskToggleInFlight = false;
         if (outcome.Error is VaultException.WriteConflict)
         {
             announce(new A11yEvent.TaskToggleConflict(System.IO.Path.GetFileName(path)));
+            return;
+        }
+        if (outcome.Error is VaultException.SavedButUnindexed unindexed)
+        {
+            // Plan 47 CB-14 (#1660; CD8 as the lead ruled): the write LANDED
+            // and only the index commit failed, so the toggle says it landed,
+            // in core's words (task.Completed is the state before the toggle).
+            // The buffer and the baseline stay as they are: no splice, no undo
+            // step, no rebaseline. The reconcile sentence is spoken FIRST (High,
+            // unchanged) and this one after it (Medium): under NVDA a High line
+            // cancels the speech raised just before it, so this is the order in
+            // which a reader hears both. With a completion behind this tab (the
+            // panel, the review through a tab) the completion reconciles every
+            // tab of the note and then speaks it. Without one (the editor's
+            // activate-at-cursor, the reading view) this tab reconciles itself,
+            // its peers mirror the stale state silently, and it speaks here.
+            var landed = new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail);
+            Status = SlateUniffiMethods.A11yRender(landed).Text;
+            if (!completionFollows)
+            {
+                ReconcileAfterExternalTaskWrite(
+                    outcome.PostFailureDiskHash ?? unindexed.newContentHash, announce);
+                _documentChanged?.Invoke(this, null);
+                announce(landed);
+            }
             return;
         }
         if (outcome.Error is VaultException error)
@@ -4196,7 +4223,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // Idempotent after NoteRefreshed consumed the marker;
                 // disarms it when disk truly never changed.
                 TasksReview.ToggleAbandoned(path);
-                if (!publishedThroughTab)
+                if (error is VaultException.SavedButUnindexed unindexed)
+                {
+                    // Plan 47 CB-14 (#1660; CD8 as the lead ruled): the write
+                    // landed, so the toggle says so, AFTER the reconcile above
+                    // (a High line raised after it would cut it), whether or
+                    // not the tab published: a tab that published left the
+                    // sentence to this completion.
+                    _announce(new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail));
+                }
+                else if (!publishedThroughTab)
                 {
                     if (error is VaultException.WriteConflict)
                     {
