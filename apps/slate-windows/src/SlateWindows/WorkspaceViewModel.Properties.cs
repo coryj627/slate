@@ -1332,12 +1332,14 @@ internal sealed partial class WorkspaceViewModel
     /// bytes with no undo step back, a dirty tab hears the property
     /// sentence). Used where the index cannot say what was written: a failed
     /// index read, and a write whose index commit failed. False when a tab's
-    /// reload failed; a note with no open Markdown tab, or a read that fails,
-    /// reconciles nothing.</summary>
+    /// reload failed, or when the read failed, which marks the note's tabs
+    /// stale with the property sentence, once (Codex round 4). A note with no
+    /// open Markdown tab reconciles nothing.</summary>
     private bool ReconcileTabsFromARead(string path)
     {
-        if (!Groups.SelectMany(group => group.Tabs)
-            .Any(tab => tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal)))
+        WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.IsMarkdown && string.Equals(tab.Path, path, StringComparison.Ordinal))];
+        if (tabs.Length == 0)
         {
             return true;
         }
@@ -1349,7 +1351,14 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException)
         {
-            return true;
+            // Codex round 4: the tabs cannot take bytes they cannot read, and
+            // nothing repairs them later (the index still holds the old hash),
+            // so each is marked stale, and the note's first tab speaks the
+            // property sentence once (Call 2(b)'s occasion). A tab whose
+            // sentence throws skips no tab after it.
+            AdmittedPublication.RunEvery([.. tabs.Select<WorkspaceTabViewModel, Action>((tab, index) => () =>
+                tab.MarkPropertyStaleAfterAFailedReadBack(index == 0 ? _announce : _ => { }))]);
+            return false;
         }
         return ReconcileTabsAfterPropertyWrite(path, SlateUniffiMethods.EditorTextContentHash(read.Text));
     }

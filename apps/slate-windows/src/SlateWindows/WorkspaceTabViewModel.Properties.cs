@@ -248,6 +248,21 @@ internal sealed partial class WorkspaceTabViewModel
         }
     }
 
+    /// <summary>Plan 47 CB-9b (Codex round 4): another writer's bytes landed
+    /// under this tab and could not be read back, so the tab is marked stale
+    /// with the property sentence (Call 2(b)'s occasion, a re-read that
+    /// fails), spoken through <paramref name="announce"/>; the workspace
+    /// gives the sentence to the first tab on the note only.</summary>
+    internal void MarkPropertyStaleAfterAFailedReadBack(Action<A11yEvent> announce)
+    {
+        ArgumentNullException.ThrowIfNull(announce);
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        MarkPropertyStale(announce);
+    }
+
     private void MarkPropertyStale(Action<A11yEvent> announce)
     {
         IsExternallyStale = true;
