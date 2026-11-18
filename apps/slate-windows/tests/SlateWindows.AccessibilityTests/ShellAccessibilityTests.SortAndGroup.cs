@@ -18,6 +18,7 @@ public sealed partial class ShellAccessibilityTests
     public void SortAndGroup_APointerRestingWhereItOpensLeavesTheKeysOnTheCheckedRow() =>
         RunRestingPointerJourney("sort-and-group-resting-pointer", (process, window, automation, said) =>
             AssertALandingRowStaysUnderARestingPointer(
+                process,
                 window,
                 automation,
                 "SidebarSortAndGroup",

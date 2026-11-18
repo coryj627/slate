@@ -820,12 +820,25 @@ public sealed class NoteHeaderTests
         MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
         var closes = new Closes(menu);
 
-        // (a) By its Invoke pattern: held while open, and a close with no press gives them back.
+        // (a) By its Invoke pattern: held already when the popup opens (a menu that slides in
+        // passes its rows under a resting pointer before it settles), held while open, and a
+        // close with no press gives them back.
+        bool opened = false;
+        bool heldWhenOpened = false;
+        void Opened(object sender, RoutedEventArgs eventArgs)
+        {
+            opened = true;
+            heldWhenOpened = rows.All(row => row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) is false);
+        }
+
+        menu.Opened += Opened;
         Assert.True(more.Focus());
         Invoke(more);
         host.Settle();
         host.Settle();
+        menu.Opened -= Opened;
         Assert.True(menu.IsOpen);
+        Assert.True(!opened || heldWhenOpened, "⋯'s rows were not held yet when its popup opened.");
         AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
         CloseAndAwait(host, menu, closes);
         AssertGivenBack(rows, "once ⋯ closed with no press");

@@ -180,6 +180,7 @@ public sealed partial class ShellAccessibilityTests
                 ("Enter on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.RETURN)),
                 ("Shift+F10 on ⋯", () => FocusFor(more), () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
             ];
+            bool named = false;
             foreach ((string how, Action putTheKeys, Action open) in opens)
             {
                 putTheKeys();
@@ -187,6 +188,13 @@ public sealed partial class ShellAccessibilityTests
                 open();
                 string context = $"⋯ opened by {how}, the pointer resting on Bulk Rename Properties… at {resting}. {said}";
                 AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, "NoteHeaderSplitRight"), context);
+                if (!named)
+                {
+                    // The census sees the open menu's rows, held, under the resting pointer.
+                    AssertItemNamesAreSpeakable(process, "note-header-resting-pointer");
+                    named = true;
+                }
+
                 Assert.Equal(resting, Mouse.Position);
                 PressKey(VirtualKeyShort.DOWN);
                 AssertEventuallyFocused(WaitForOpenMenuRow(window, automation, "NoteHeaderAddProperty"), $"Down from Split Right didn't reach Add Property…: {context}");
@@ -223,6 +231,7 @@ public sealed partial class ShellAccessibilityTests
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             Mouse.Position = resting with { X = resting.X + 8 };
             AssertEventuallyFocused(bulkRename, $"Moving the pointer within Bulk Rename Properties… didn't give it the keys. {said}");
+            AssertItemNamesAreSpeakable(process, "note-header-moved-pointer");
             CloseOpenMenu(window, automation, "NoteHeaderSplitRight");
 
             // A click with the pointer still resting works the row under it.
@@ -431,6 +440,7 @@ public sealed partial class ShellAccessibilityTests
     /// land and stay, a move within the row under the pointer gives it the keys, Escape
     /// gives the button the keys back, and every toggle is as it was.</summary>
     private static void AssertALandingRowStaysUnderARestingPointer(
+        Process process,
         Window window,
         UIA3Automation automation,
         string buttonId,
@@ -486,6 +496,7 @@ public sealed partial class ShellAccessibilityTests
         PressKey(VirtualKeyShort.RETURN);
         string context = $"{menuName} opened by Enter, the pointer resting on '{parkedName}' at {resting}. {said}";
         AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, landId), context);
+        AssertItemNamesAreSpeakable(process, $"{buttonId}-resting-pointer");
         Assert.Equal(resting, Mouse.Position);
 
         // A move within that row gives it the keys.

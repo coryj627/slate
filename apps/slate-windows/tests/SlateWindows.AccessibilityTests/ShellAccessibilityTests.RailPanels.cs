@@ -17,6 +17,7 @@ public sealed partial class ShellAccessibilityTests
     public void MorePanels_APointerRestingWhereItOpensLeavesTheKeysOnTheLandingRow() =>
         RunRestingPointerJourney("more-panels-resting-pointer", (process, window, automation, said) =>
             AssertALandingRowStaysUnderARestingPointer(
+                process,
                 window,
                 automation,
                 "RightPaneMorePanels",
