@@ -1910,15 +1910,23 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // when disposal suppresses the tab-state publish. It fires
         // AFTER the tab publish so the source tab and its mirrored
         // peers are already re-baselined when the caller reconciles.
+        // Both are attempted though the tab's publication throws (plan 47
+        // CB-14, codex round 2; CB-9a's rule): a sentence the tab speaks may
+        // throw on its way to UIA, and the completion still repairs,
+        // reconciles and speaks its own sentence.
         bool tabPublished = !_disposed && generation == _taskToggleGeneration;
-        if (tabPublished)
-        {
-            PublishTaskToggleThroughTab(
-                path, expectedHash, revision, task, nextStatus, announce, outcome,
-                completionFollows: completion is not null);
-        }
-        completion?.Invoke(
-            outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished);
+        AdmittedPublication.RunEvery(
+            () =>
+            {
+                if (tabPublished)
+                {
+                    PublishTaskToggleThroughTab(
+                        path, expectedHash, revision, task, nextStatus, announce, outcome,
+                        completionFollows: completion is not null);
+                }
+            },
+            () => completion?.Invoke(
+                outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished));
     }
 
     private void PublishTaskToggleThroughTab(

@@ -898,6 +898,64 @@ public sealed class SaveChainAdmissionTests
         Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the landed write");
     });
 
+    /// <summary>Plan 47 CB-14 (codex round 2): the renamed tab of the fact
+    /// above speaks its reconcile sentence through an announcer that throws.
+    /// The completion still runs after the tab's publication: the index is
+    /// repaired and the toggle says it landed.</summary>
+    [Fact]
+    public void ARenamedTabsThrowingReconcileSentenceStillLetsTheCompletionSayItLanded() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-renamed-throws.md";
+        const string renamed = "cb14-renamed-throws-after.md";
+        using var h = new Vault("cb14-renamed-throws", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        bool thrown = false;
+        h.BeforeAnnounce = line =>
+        {
+            if (line is A11yEvent.HostComposed composed && composed.Text == ReconcileSentence && !thrown)
+            {
+                thrown = true;
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        };
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleReadBackFaultForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-renamed-throws");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its read-back after the landed write");
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            release.Set();
+            PumpPastTheAnnouncersFailure(
+                h,
+                () => thrown && !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle,
+                "the landed toggle's completion after the renamed tab's sentence threw");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            release.Set();
+            tab.TaskToggleReadBackFaultForTests = null;
+            h.BeforeAnnounce = null;
+        }
+        h.Settle();
+        AssertNoStepSkipped(
+            (tab.IsExternallyStale, "the renamed tab's stale flag"),
+            (h.Events.Count(e => e is A11yEvent.TaskToggledUnindexed) == 1, "the completion's landed sentence"),
+            (!h.Workspace.TaskIndexRepairsForTests.HasPendingFor(path), "the index repair"));
+    });
+
     /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle
     /// made through a tab is the reader's own edit and stays on the tab's undo
     /// stack; one Undo takes it back in the buffer.</summary>
