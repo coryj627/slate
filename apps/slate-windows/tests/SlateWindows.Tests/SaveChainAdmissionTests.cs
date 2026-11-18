@@ -5088,6 +5088,90 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 3, finding 1. Core writes a note and then fails its
+    /// index commit (SavedButUnindexed, through core's after-write fault
+    /// seam): the bulk rename reports the note as failed and the tag edit as
+    /// skipped, and the index still holds the old hash, so neither read of
+    /// it moved. The note's clean tab and its split peer, which hold saved
+    /// undo history, are still brought up to the bytes on disk, with no undo
+    /// step back across them, as the index-read fallback brings them. Red
+    /// today: both tabs keep the bytes from before the write over a changed
+    /// file.</summary>
+    [Theory]
+    [InlineData("tag edit")]
+    [InlineData("bulk rename")]
+    public void AWriteWhoseIndexCommitFailedStillBringsTheNotesCleanTabsUpToDisk(string route) => RunSta(() =>
+    {
+        const string Faulted = "faulted-commit.md";
+        using var h = new Vault("write-landed-unindexed", (Faulted, Note));
+        WorkspaceTabViewModel a = h.OpenNow(Faulted);
+        WorkspaceGroupViewModel groupA = h.Workspace.ActiveGroup;
+        WorkspaceTabViewModel b = OpenSplitPeer(h, Faulted);
+        h.Workspace.Activate(groupA, a);
+        a.EditorDocument!.Insert(a.EditorDocument.TextLength, "Typed by the reader.\n");
+        SaveNow(h, a);
+        foreach (WorkspaceTabViewModel tab in new[] { a, b })
+        {
+            Assert.False(tab.IsDirty, "premise: a tab is dirty after the save");
+            Assert.True(tab.EditorDocument!.UndoStack.CanUndo, "premise: a tab holds no saved undo history");
+        }
+        FilesSidebarViewModel? sidebar = null;
+        BulkRenameViewModel? sheet = null;
+        if (route == "tag edit")
+        {
+            sidebar = h.Sidebar();
+            CheckForATagEdit(h, sidebar, Faulted);
+        }
+        else
+        {
+            sheet = ArmedBulkRename(h);
+        }
+        string expected = route == "tag edit" ? "probe" : "state: draft";
+        try
+        {
+            using (EnvFaultLock.Acquire())
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-commit");
+                try
+                {
+                    if (sidebar is not null)
+                    {
+                        sidebar.AddTagCommand.Execute(null);
+                        h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit");
+                    }
+                    else
+                    {
+                        Assert.True(sheet!.Apply(), "premise: the apply was refused");
+                        h.PumpUntil(
+                            () => !sheet.WorkInFlight && h.Workspace.SavesIdle
+                                && h.Events.Any(e => e is A11yEvent.RenameSummary { Applied: true }),
+                            "the apply");
+                    }
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+                }
+            }
+            string disk = h.Read(Faulted);
+            Assert.Contains(expected, disk, StringComparison.Ordinal);
+            foreach ((string name, WorkspaceTabViewModel tab) in new[] { ("the source", a), ("the split peer", b) })
+            {
+                Assert.True(
+                    string.Equals(disk, tab.Text, StringComparison.Ordinal),
+                    $"{name} keeps the bytes from before the write; it shows "
+                    + tab.Text.Replace("\n", "\\n", StringComparison.Ordinal));
+                Assert.False(tab.IsDirty, $"{name} is dirty");
+                Assert.False(tab.IsExternallyStale, $"{name} is stale");
+                Assert.False(tab.EditorDocument!.UndoStack.CanUndo, $"{name} can undo back across the bytes the write left");
+            }
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 4 (the red team's finding 4). The index read after the
     /// core call fails: the open tabs on the checked notes are reconciled
     /// from a read of the disk instead, core's summary is still spoken, and
