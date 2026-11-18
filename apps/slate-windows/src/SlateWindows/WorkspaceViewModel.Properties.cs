@@ -1028,8 +1028,29 @@ internal sealed partial class WorkspaceViewModel
     // it look written: its clean tab is brought up to the disk, and a dirty
     // one hears the property sentence.
 
+    // Plan 47 CB-9b (Codex round 2): the tag edits admitted and not yet run,
+    // each with the paths it will write. On main the tag edit ran at the
+    // press; queued, it must follow this window's renames and moves
+    // (RetargetPath) and drop a note that left with no destination
+    // (InvalidatePath), as the tabs do, or at its turn core would tag
+    // whatever note now sits at a path the reader checked. Another session's
+    // rename while it waits is the race main has at the press: core tags
+    // what its index holds at the path.
+    private readonly List<QueuedTagEdit> _queuedTagEdits = [];
+
+    /// <summary>A tag edit admitted and not yet run, and the paths it will
+    /// write, which this window's renames, moves and deletes keep
+    /// current.</summary>
+    private sealed class QueuedTagEdit(FilesSidebarViewModel.TagEditRequest request)
+    {
+        internal FilesSidebarViewModel.TagEditRequest Request { get; } = request;
+
+        internal List<string> Paths { get; } = [.. request.Paths];
+    }
+
     /// <summary>The sidebar's tag edit: admitted over the checked notes, and
-    /// run at its turn. A torn-down workspace admits nothing.</summary>
+    /// run at its turn over the paths those notes have then (Codex round 2).
+    /// A torn-down workspace admits nothing.</summary>
     internal void EditTagAdmitted(FilesSidebarViewModel.TagEditRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1037,7 +1058,49 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        AdmitPropertyWrite(request.Paths, () => EditTagAtItsTurn(request), abandoned: () => { });
+        var queued = new QueuedTagEdit(request);
+        _queuedTagEdits.Add(queued);
+        AdmitPropertyWrite(
+            request.Paths,
+            () =>
+            {
+                _ = _queuedTagEdits.Remove(queued);
+                return EditTagAtItsTurn(queued.Request with { Paths = [.. queued.Paths] });
+            },
+            abandoned: () => _ = _queuedTagEdits.Remove(queued));
+    }
+
+    /// <summary>Plan 47 CB-9b (Codex round 2): this window renamed or moved
+    /// <paramref name="source"/> to <paramref name="destination"/>. Each
+    /// queued tag edit's path under it follows by the rule the tabs follow
+    /// (<see cref="TryRetargetPath"/>), and the new path's chain continues
+    /// from the old one's, so a save of the moved note waits for the tag
+    /// edit as it would have at the old path.</summary>
+    private void RetargetQueuedTagEdits(string source, string destination)
+    {
+        foreach (QueuedTagEdit queued in _queuedTagEdits)
+        {
+            for (int index = 0; index < queued.Paths.Count; index++)
+            {
+                if (TryRetargetPath(queued.Paths[index], source, destination, out string retargeted))
+                {
+                    _saves.ContinueChain(queued.Paths[index], retargeted);
+                    queued.Paths[index] = retargeted;
+                }
+            }
+        }
+    }
+
+    /// <summary>Plan 47 CB-9b (Codex round 2): the note at
+    /// <paramref name="invalidated"/>, or under it, left with no destination.
+    /// Each queued tag edit drops it, so a note created there later is never
+    /// tagged in its place.</summary>
+    private void DropQueuedTagEditPaths(string invalidated)
+    {
+        foreach (QueuedTagEdit queued in _queuedTagEdits)
+        {
+            _ = queued.Paths.RemoveAll(path => IsSameOrDescendantPath(path, invalidated));
+        }
     }
 
     /// <summary>

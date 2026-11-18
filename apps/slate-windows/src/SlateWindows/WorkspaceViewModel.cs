@@ -3634,6 +3634,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         }
 
+        // Plan 47 CB-9b (Codex round 2): a tag edit waiting its turn follows
+        // the notes it was asked for, as the tabs do.
+        RetargetQueuedTagEdits(source, destination);
+
         // The Bases registry keys documents by byte-exact path, and a
         // document's Path is immutable — a rename must re-key or the
         // renamed tab keeps a document whose Retry reopens the OLD
@@ -3825,6 +3829,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
         _closedTabs.RemoveAll(entry =>
             IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
+        // Plan 47 CB-9b (Codex round 2): a tag edit waiting its turn drops
+        // the note that left, so a note created at its path is never tagged.
+        DropQueuedTagEditPaths(invalidated);
         // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
         // entries under the deleted path are pruned, so Back never opens a
         // note that is gone; the pin and the note in view are kept (the
