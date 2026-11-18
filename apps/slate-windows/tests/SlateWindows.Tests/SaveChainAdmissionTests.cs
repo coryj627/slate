@@ -3620,6 +3620,42 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Plan 47 CB-9b, Design 0 (the lead's ruling on stage A's
+    /// departure (b), 2026-11-17). A transient tab, the one a Files selection
+    /// shows its note in, stays transient when another writer's bytes land in
+    /// it: the reader made no edit, so the next selection may still replace
+    /// it. It takes the bytes clean, with no undo step back across them. Red
+    /// by mutation: take the bytes with a replace that passes through a dirty
+    /// state (ReplaceAll, then MarkSaved), which ends the tab's transience for
+    /// good.</summary>
+    [Theory]
+    [InlineData("property set from the header")]
+    [InlineData("tag edit")]
+    public void ATransientTabStaysTransientWhenAnotherWritersBytesLand(string route) => RunSta(() =>
+    {
+        using var h = new Vault("transient-stays-transient", ("a.md", TwoKeyNote));
+        h.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab, fromSelection: true);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = h.Workspace.ActiveGroup.ActiveTab!;
+        Assert.Equal("a.md", tab.Path);
+        Assert.True(tab.IsTransient, "premise: a Files selection did not open a transient tab");
+        try
+        {
+            (string expected, Func<bool> landed) = WriteThroughAnOpenTab(h, route);
+            h.PumpUntil(() => landed() && h.Workspace.SavesIdle, $"the {route} landing");
+            string written = h.Read("a.md");
+            Assert.Contains(expected, written, StringComparison.Ordinal);
+            Assert.Equal(written, tab.Text);
+            Assert.True(tab.IsTransient, "the transient tab stopped being transient when another writer's bytes landed");
+            Assert.False(tab.IsDirty);
+            Assert.False(tab.EditorDocument!.UndoStack.CanUndo, "the transient tab can undo back across the bytes");
+        }
+        finally
+        {
+            h.ReleaseAndDrain();
+        }
+    });
+
     // ---- A bulk rename's apply in the notes' chain (plan 47 CB-9b, Design 2) ---
 
     /// <summary>Design 2 (CD5(a); M1). A save of an open note is admitted and

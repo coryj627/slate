@@ -92,7 +92,9 @@ them.
   write, and its caret keeps its line and column where the new text allows,
   as the rescan's reload keeps it; a line past the new end clamps to the
   last line (the plan lead's ruling 8). The reader's earlier undo steps in
-  that tab go with it; those edits were already saved. The Files sidebar's
+  that tab go with it; those edits were already saved. A transient tab, the
+  one a Files selection shows its note in, stays transient when another
+  writer's bytes land in it, since the reader made no edit. The Files sidebar's
   tag edit reconciles its notes' tabs by the same rule, clean and dirty: a
   clean tab takes the tagged bytes, a dirty tab hears "Properties changed on
   disk, but the editor no longer matches it. Save or reopen the note to
