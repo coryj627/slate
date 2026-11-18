@@ -3619,6 +3619,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // continues from the old path's, so a peer's save after the
                 // rename starts from the hash a pre-rename write published.
                 _saves.ContinueChain(tab.Path, retargeted);
+                FollowParkedSummaryThroughOwnRename(tab, retargeted);
                 tab.RetargetPath(retargeted);
             }
         }
