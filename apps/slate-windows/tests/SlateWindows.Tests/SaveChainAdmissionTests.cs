@@ -844,6 +844,58 @@ public sealed class SaveChainAdmissionTests
         Assert.True(tab.IsExternallyStale, "the tab stayed clean over the landed write");
     });
 
+    /// <summary>Plan 47 CB-14 (codex round 1): a panel toggle lands but is not
+    /// indexed, and the note is renamed before the toggle publishes. The
+    /// completion reconciles the path the toggle wrote, where no tab is left,
+    /// so the renamed tab reconciles itself: it is marked stale and says the
+    /// editor no longer matches, and then the toggle says it landed.</summary>
+    [Fact]
+    public void APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab() => RunSta(() =>
+    {
+        using IDisposable envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-renamed-midflight.md";
+        const string renamed = "cb14-renamed-after.md";
+        using var h = new Vault("cb14-renamed-midflight", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleReadBackFaultForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-renamed-midflight");
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its read-back after the landed write");
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            Assert.Equal(renamed, tab.Path);
+            release.Set();
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                "the landed toggle's publication after the rename");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            release.Set();
+            tab.TaskToggleReadBackFaultForTests = null;
+        }
+        h.Settle();
+        Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(h.Events.IndexOf(reconciled) < h.Events.IndexOf(landed));
+        Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the landed write");
+    });
+
     /// <summary>The owner's ruling (2026-11-18) that CB-14 keeps: a task toggle
     /// made through a tab is the reader's own edit and stays on the tab's undo
     /// stack; one Undo takes it back in the buffer.</summary>

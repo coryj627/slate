@@ -1952,16 +1952,27 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // activate-at-cursor, the reading view) this tab reconciles itself,
             // its peers mirror the stale state silently, and it speaks here;
             // each step is attempted though a sentence before it throws (the
-            // CB-9a rule).
+            // CB-9a rule). A tab renamed or moved while the write ran (codex
+            // round 1) is no longer under the path the completion reconciles,
+            // so it reconciles itself and its peers here too, and the
+            // completion still speaks after it.
             var landed = new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail);
             Status = SlateUniffiMethods.A11yRender(landed).Text;
-            if (!completionFollows)
+            bool completionReconcilesThisTab = completionFollows
+                && string.Equals(Path, path, StringComparison.Ordinal);
+            if (!completionReconcilesThisTab)
             {
                 AdmittedPublication.RunEvery(
                     () => ReconcileAfterExternalTaskWrite(
                         outcome.PostFailureDiskHash ?? unindexed.newContentHash, announce),
                     () => _documentChanged?.Invoke(this, null),
-                    () => announce(landed));
+                    () =>
+                    {
+                        if (!completionFollows)
+                        {
+                            announce(landed);
+                        }
+                    });
             }
             return;
         }
