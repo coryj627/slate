@@ -887,6 +887,16 @@ pub enum A11yEvent {
     TaskToggleFailed {
         detail: String,
     },
+    /// A toggle whose bytes LANDED but whose index commit failed
+    /// (`VaultError::SavedButUnindexed`; plan 47 CB-14, #1660, owner
+    /// decision CD8): the toggle happened, so it says so, then the save
+    /// twin's index caveat. `detail` is the error's own detail field; the
+    /// sentence speaks its innermost message. Medium, as `TaskToggled` is:
+    /// the write is a commit.
+    TaskToggledUnindexed {
+        completed: bool,
+        detail: String,
+    },
     TasksReviewShown {
         filter_name: String,
     },
@@ -920,10 +930,10 @@ pub enum A11yEvent {
     /// Spoken after the create's own sentence, never instead of it — the
     /// file is real and opens, only the index lags, and the one thing the
     /// user must not do is recreate it. `name` is the created file's leaf
-    /// name; `reason` is the post-publish failure core reported, spliced
-    /// verbatim (a blank one drops the colon instead). The wording is
-    /// Windows' `CreateOutcomes.PublishedUnindexedCaveat` moved here byte
-    /// for byte, so both hosts render it from core.
+    /// name; `reason` is the post-publish failure core reported, closed as a
+    /// sentence once (plan 47 CB-14, #1395; a blank one drops the colon
+    /// instead). Windows' `CreateOutcomes.PublishedUnindexedCaveat` moved
+    /// here (#1140), so both hosts render it from core.
     CreatePublishedUnindexed {
         name: String,
         reason: String,
@@ -2217,6 +2227,16 @@ impl A11yEvent {
                 "Task could not be toggled.".to_owned()
             }
             TaskToggleFailed { detail } => lead_then_sentence("Task could not be toggled:", detail),
+            // Plan 47 CB-14 (#1660, CD8): the toggle's own sentence, then the
+            // save twin's clause with the innermost error's message.
+            TaskToggledUnindexed { completed, detail } => format!(
+                "{} {}",
+                TaskToggled {
+                    completed: *completed
+                }
+                .render(),
+                saved_but_unindexed(innermost_error_message(detail))
+            ),
             TasksReviewShown { filter_name } => format!("Tasks review. {filter_name}."),
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
@@ -2244,11 +2264,11 @@ impl A11yEvent {
                 "{name} was written but not indexed. It will appear in listings after the \
                  next scan; do not recreate it."
             ),
-            // Otherwise the reason is spliced verbatim, as the save twin's
-            // detail is (`SavedButUnindexed`): Windows' bytes before #1140.
+            // Otherwise the reason is closed once before the next sentence
+            // (plan 47 CB-14, #1395), as the save twin's detail is.
             CreatePublishedUnindexed { name, reason } => format!(
-                "{name} was written but not indexed: {reason} It will appear in listings \
-                 after the next scan; do not recreate it."
+                "{} It will appear in listings after the next scan; do not recreate it.",
+                lead_then_sentence(&format!("{name} was written but not indexed:"), reason)
             ),
 
             RestoredVersionFrom { formatted_date } => {
@@ -3407,6 +3427,42 @@ fn lead_then_sentence(lead: &str, text: &str) -> String {
     }
 }
 
+/// "Saved, but not indexed yet: <reason>. It will appear after the next
+/// scan." (plan 47 CB-14, #1660, #1395): the reason closed as a sentence
+/// once, and a blank one drops the colon. `vault_error_detail`'s
+/// `SavedButUnindexed` arm and `A11yEvent::TaskToggledUnindexed` both render
+/// it, so the save detail and the landed toggle cannot read differently.
+fn saved_but_unindexed(reason: &str) -> String {
+    let saved = if reason.trim().is_empty() {
+        "Saved, but not indexed yet.".to_owned()
+    } else {
+        lead_then_sentence("Saved, but not indexed yet:", reason)
+    };
+    format!("{saved} It will appear after the next scan.")
+}
+
+/// The innermost error's own message in a `SavedButUnindexed` detail (plan
+/// 47 CB-14, the lead's ruling on owner decision CD8's sentence). Core
+/// flattens the failed step's error with `to_string()` where it creates the
+/// error (`save_text_locked_checked`), so an index failure's detail reads
+/// "database error: sqlite error: database is locked". This drops, from the
+/// start and repeatedly, exactly the Display wrappers core puts in front of
+/// an inner error: `VaultError::Io`'s, `VaultError::Db`'s and
+/// `DbError::Sqlite`'s. Only the landed toggle's sentence uses it; every
+/// other reader of the detail, `vault_error_detail` included, keeps it
+/// verbatim.
+fn innermost_error_message(detail: &str) -> &str {
+    const WRAPPERS: [&str; 3] = ["io error: ", "database error: ", "sqlite error: "];
+    let mut text = detail.trim_start();
+    while let Some(inner) = WRAPPERS
+        .iter()
+        .find_map(|wrapper| text.strip_prefix(wrapper))
+    {
+        text = inner;
+    }
+    text
+}
+
 /// What a resolved embed card shows (#1278): the resolution's kind and
 /// the fields that identify it — never its content and never a title. A
 /// host hands this back to core, which words the card title from it
@@ -3626,9 +3682,7 @@ pub fn vault_error_detail(error: &VaultError) -> String {
         ),
         VaultError::Unsupported { feature } => format!("{feature} is not implemented yet."),
         VaultError::WriteConflict { .. } => "File changed externally.".to_owned(),
-        VaultError::SavedButUnindexed { detail, .. } => {
-            format!("Saved, but not indexed yet: {detail} It will appear after the next scan.")
-        }
+        VaultError::SavedButUnindexed { detail, .. } => saved_but_unindexed(detail),
         VaultError::HistoryUnavailable { path, .. } => {
             format!("History for {path} is unavailable: it failed an integrity check.")
         }
@@ -4569,6 +4623,25 @@ pub fn corpus() -> Vec<A11yEvent> {
         TaskToggleFailed {
             detail: String::new(),
         },
+        // Plan 47 CB-14: the index step's detail, which the sentence speaks
+        // by its innermost message; the commit step's bare one, reopened; a
+        // detail that already closes its sentence; and none.
+        TaskToggledUnindexed {
+            completed: true,
+            detail: "database error: sqlite error: database is locked".into(),
+        },
+        TaskToggledUnindexed {
+            completed: false,
+            detail: "database is locked".into(),
+        },
+        TaskToggledUnindexed {
+            completed: true,
+            detail: "the index is locked.".into(),
+        },
+        TaskToggledUnindexed {
+            completed: true,
+            detail: String::new(),
+        },
         TasksReviewShown {
             filter_name: "Open tasks".into(),
         },
@@ -4594,6 +4667,11 @@ pub fn corpus() -> Vec<A11yEvent> {
         CreatePublishedUnindexed {
             name: "notes.md".into(),
             reason: "the index is locked.".into(),
+        },
+        // Plan 47 CB-14 (#1395): a reason with no terminal punctuation.
+        CreatePublishedUnindexed {
+            name: "notes.md".into(),
+            reason: "database error: disk I/O error".into(),
         },
         RestoredVersionFrom {
             formatted_date: "July 19, 2026 at 9:41 AM".into(),
@@ -6896,46 +6974,45 @@ mod tests {
         );
     }
 
-    /// #1140 (owner decision D9, plan 43 PR 9): the landed-but-unindexed
-    /// create caveat is core's, byte for byte the sentence Windows'
-    /// `CreateOutcomes.PublishedUnindexedCaveat` composed before it moved
-    /// here, so both hosts speak one sentence and no Windows fact that
-    /// pins it moves. The reason is spliced verbatim, as the save twin's
-    /// detail is (`SavedButUnindexed` in `vault_error_detail`). Medium:
-    /// it follows the create's own sentence and never replaces it, so
-    /// the template flow's High created sentence still wins the
-    /// tab-switch race.
+    /// #1140 (owner decision D9, plan 43 PR 9) and plan 47 CB-14 (#1395):
+    /// the landed-but-unindexed create caveat is core's, so both hosts speak
+    /// one sentence, and it closes a reason that has no terminal punctuation
+    /// of its own before "It will appear …" (the save twin's rule,
+    /// `an_unindexed_save_detail_closes_its_reason`). Medium: it follows the
+    /// create's own sentence and never replaces it, so the template flow's
+    /// High created sentence still wins the tab-switch race.
     #[test]
-    fn the_unindexed_create_caveat_is_the_windows_sentence_byte_for_byte() {
-        let name = "landed-outcome.md";
-        let reason = "invalid argument: test fault: injected failure after write, \
-                      before index commit";
+    fn the_unindexed_create_caveat_closes_its_reason() {
         let event = A11yEvent::CreatePublishedUnindexed {
-            name: name.into(),
-            reason: reason.into(),
+            name: "landed-outcome.md".into(),
+            reason: "invalid argument: test fault: injected failure after write, \
+                     before index commit"
+                .into(),
         };
-        // Windows' composition before #1140, verbatim:
-        // `$"{name} was written but not indexed: {reason} "
-        //  + "It will appear in listings after the next scan; do not recreate it."`
-        let windows = format!("{name} was written but not indexed: {reason} ")
-            + "It will appear in listings after the next scan; do not recreate it.";
-        assert_eq!(event.render(), windows);
         assert_eq!(
             event.render(),
             "landed-outcome.md was written but not indexed: invalid argument: test fault: \
-             injected failure after write, before index commit It will appear in listings \
+             injected failure after write, before index commit. It will appear in listings \
              after the next scan; do not recreate it."
         );
         assert_eq!(event.priority(), A11yPriority::Medium);
+        // A reason that already closes its sentence is not closed twice.
+        assert_eq!(
+            A11yEvent::CreatePublishedUnindexed {
+                name: "notes.md".into(),
+                reason: "the index is locked.".into(),
+            }
+            .render(),
+            "notes.md was written but not indexed: the index is locked. It will appear in \
+             listings after the next scan; do not recreate it."
+        );
     }
 
     /// #1140 review (codoki on #1396): an empty or blank reason leaves no
     /// dangling separator. The colon goes and the clause closes, which is
     /// `NoteSaveBlocked`'s rule for a missing detail
     /// (`an_empty_detail_leaves_no_dangling_separator`), rather than
-    /// "indexed:  It will …". A non-empty reason is still spliced verbatim,
-    /// Windows' bytes before #1140 (the byte-for-byte fact above). Closing the
-    /// sentence of a reason that has no terminal punctuation is #1395.
+    /// "indexed:  It will …". A non-empty reason is closed once (#1395).
     #[test]
     fn an_empty_create_reason_leaves_no_dangling_separator() {
         for reason in ["", " ", "   ", "\n", "\t \n"] {
@@ -6957,10 +7034,205 @@ mod tests {
                 reason: "database error: disk I/O error".into(),
             }
             .render(),
-            "notes.md was written but not indexed: database error: disk I/O error It will \
+            "notes.md was written but not indexed: database error: disk I/O error. It will \
              appear in listings after the next scan; do not recreate it.",
-            "a non-empty reason keeps Windows' bytes"
+            "a non-empty reason is closed once"
         );
+    }
+
+    /// Plan 47 CB-14 (#1660, owner decision CD8): a task toggle whose bytes
+    /// landed but whose index commit failed says it landed, with the index
+    /// caveat, in one sentence: the toggle's own words, then the save twin's
+    /// clause, its reason closed once. Medium, as `TaskToggled` is: the
+    /// write happened.
+    #[test]
+    fn a_landed_unindexed_toggle_says_it_landed() {
+        let seam = "test fault: injected failure after write, before index commit";
+        for (completed, detail, expected) in [
+            (
+                true,
+                seam,
+                "Task completed. Saved, but not indexed yet: test fault: injected failure \
+                 after write, before index commit. It will appear after the next scan.",
+            ),
+            (
+                false,
+                seam,
+                "Task reopened. Saved, but not indexed yet: test fault: injected failure \
+                 after write, before index commit. It will appear after the next scan.",
+            ),
+            (
+                true,
+                "database is locked",
+                "Task completed. Saved, but not indexed yet: database is locked. It will \
+                 appear after the next scan.",
+            ),
+            (
+                true,
+                "the index is locked.",
+                "Task completed. Saved, but not indexed yet: the index is locked. It will \
+                 appear after the next scan.",
+            ),
+            (
+                true,
+                "The system cannot find the file specified. (os error 2)",
+                "Task completed. Saved, but not indexed yet: The system cannot find the file \
+                 specified. (os error 2). It will appear after the next scan.",
+            ),
+            (
+                true,
+                "",
+                "Task completed. Saved, but not indexed yet. It will appear after the next scan.",
+            ),
+            (
+                false,
+                "  \n",
+                "Task reopened. Saved, but not indexed yet. It will appear after the next scan.",
+            ),
+        ] {
+            let event = A11yEvent::TaskToggledUnindexed {
+                completed,
+                detail: detail.into(),
+            };
+            assert_eq!(event.render(), expected, "{completed} {detail:?}");
+            assert_eq!(event.priority(), A11yPriority::Medium, "{detail:?}");
+        }
+    }
+
+    /// Plan 47 CB-14 (lead's ruling on CD8's sentence): the landed toggle
+    /// speaks the innermost error's own message. Core flattens the failed
+    /// step's error with `to_string()` where it creates `SavedButUnindexed`,
+    /// so an index failure's detail reads "database error: sqlite error:
+    /// database is locked"; the sentence drops exactly the Display wrappers
+    /// core puts in front of an inner error, so it reads as CD8 shows. Only
+    /// the event's composition does this: the save detail keeps the
+    /// wrappers, and a wrapper's words later in the text are not cut.
+    #[test]
+    fn the_landed_toggle_speaks_the_innermost_error_message() {
+        let locked = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".into()),
+        );
+        let db = VaultError::Db(crate::db::DbError::Sqlite(locked));
+        let io = VaultError::Io(std::io::Error::other("Access is denied. (os error 5)"));
+        for (error, inner) in [
+            (&db, "database is locked"),
+            (&io, "Access is denied. (os error 5)"),
+        ] {
+            let flattened = error.to_string();
+            assert_ne!(
+                flattened, inner,
+                "premise: core's Display wraps the inner error"
+            );
+            let event = A11yEvent::TaskToggledUnindexed {
+                completed: true,
+                detail: flattened.clone(),
+            };
+            assert_eq!(
+                event.render(),
+                format!(
+                    "Task completed. {}",
+                    vault_error_detail(&VaultError::SavedButUnindexed {
+                        new_content_hash: "c".repeat(64),
+                        detail: inner.into(),
+                    })
+                ),
+                "{flattened:?}"
+            );
+            // The save detail, every other caller's, keeps the wrappers.
+            assert!(
+                vault_error_detail(&VaultError::SavedButUnindexed {
+                    new_content_hash: "c".repeat(64),
+                    detail: flattened.clone(),
+                })
+                .contains(&flattened),
+                "{flattened:?}"
+            );
+        }
+        assert_eq!(
+            A11yEvent::TaskToggledUnindexed {
+                completed: true,
+                detail: "invalid argument: the database error: field".into(),
+            }
+            .render(),
+            "Task completed. Saved, but not indexed yet: invalid argument: the database \
+             error: field. It will appear after the next scan.",
+            "only a leading wrapper is dropped"
+        );
+    }
+
+    /// Plan 47 CB-14 (#1660, #1395): the save twin's detail closes a reason
+    /// that has none of its own, so it no longer runs into "It will appear
+    /// …", and a blank reason drops the colon. Verbatim otherwise: the
+    /// wrappers stay (`the_landed_toggle_speaks_the_innermost_error_message`).
+    #[test]
+    fn an_unindexed_save_detail_closes_its_reason() {
+        let detail = |text: &str| {
+            vault_error_detail(&VaultError::SavedButUnindexed {
+                new_content_hash: "c".repeat(64),
+                detail: text.into(),
+            })
+        };
+        assert_eq!(
+            detail("database error: sqlite error: database is locked"),
+            "Saved, but not indexed yet: database error: sqlite error: database is locked. \
+             It will appear after the next scan."
+        );
+        assert_eq!(
+            detail("the index is locked."),
+            "Saved, but not indexed yet: the index is locked. It will appear after the next scan."
+        );
+        assert_eq!(
+            detail("io error: The system cannot find the file specified. (os error 2)"),
+            "Saved, but not indexed yet: io error: The system cannot find the file specified. \
+             (os error 2). It will appear after the next scan."
+        );
+        for blank in ["", " ", "\t\n"] {
+            assert_eq!(
+                detail(blank),
+                "Saved, but not indexed yet. It will appear after the next scan.",
+                "{blank:?}"
+            );
+        }
+    }
+
+    /// Plan 47 CB-14: the landed toggle's caveat and the save detail are one
+    /// clause, so the two can never read differently for the same reason.
+    #[test]
+    fn the_landed_toggle_and_the_save_detail_share_one_clause() {
+        for text in [
+            "test fault: injected failure after write, before index commit",
+            "database is locked",
+            "the index is locked.",
+            "(os error 2)",
+            "Why?",
+            "",
+            "   ",
+        ] {
+            for completed in [true, false] {
+                let toggled = A11yEvent::TaskToggledUnindexed {
+                    completed,
+                    detail: text.into(),
+                }
+                .render();
+                let lead = if completed {
+                    "Task completed. "
+                } else {
+                    "Task reopened. "
+                };
+                let clause = toggled
+                    .strip_prefix(lead)
+                    .expect("the toggle's own sentence leads");
+                assert_eq!(
+                    clause,
+                    vault_error_detail(&VaultError::SavedButUnindexed {
+                        new_content_hash: "c".repeat(64),
+                        detail: text.into(),
+                    }),
+                    "{text:?}"
+                );
+            }
+        }
     }
 
     /// W7-7 (#1249, #1251): an empty or blank carried detail never leaves
@@ -7413,6 +7685,25 @@ mod tests {
             (Medium, "Task reopened."),
             (High, "Task could not be toggled: The disk is full."),
             (High, "Task could not be toggled."),
+            (
+                Medium,
+                "Task completed. Saved, but not indexed yet: database is locked. It will appear \
+                 after the next scan.",
+            ),
+            (
+                Medium,
+                "Task reopened. Saved, but not indexed yet: database is locked. It will appear \
+                 after the next scan.",
+            ),
+            (
+                Medium,
+                "Task completed. Saved, but not indexed yet: the index is locked. It will appear \
+                 after the next scan.",
+            ),
+            (
+                Medium,
+                "Task completed. Saved, but not indexed yet. It will appear after the next scan.",
+            ),
             (Medium, "Tasks review. Open tasks."),
             (Medium, "Filter set to All tasks."),
             (Medium, "Saved notes.md."),
@@ -7436,6 +7727,11 @@ mod tests {
                 Medium,
                 "notes.md was written but not indexed: the index is locked. It will appear \
                  in listings after the next scan; do not recreate it.",
+            ),
+            (
+                Medium,
+                "notes.md was written but not indexed: database error: disk I/O error. It will \
+                 appear in listings after the next scan; do not recreate it.",
             ),
             (High, "Restored version from July 19, 2026 at 9:41 AM."),
             (High, "Restored notes.md."),
@@ -8909,8 +9205,9 @@ mod tests {
             // plan 44 WB-29a (#1525) the seven hot-exit events, 230;
             // plan 46 DS-7 the Files sidebar's show and hide, 232;
             // plan 46 DS-10 the palette's choices, the chosen theme and the
-            // Settings sheet, 237; DS-11's accent, 238.
-            238,
+            // Settings sheet, 237; DS-11's accent, 238; plan 47 CB-14
+            // (#1660) the landed-unindexed toggle, TaskToggledUnindexed, 239.
+            239,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
