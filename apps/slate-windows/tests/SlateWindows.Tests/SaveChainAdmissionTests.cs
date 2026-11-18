@@ -4449,14 +4449,20 @@ public sealed class SaveChainAdmissionTests
 
     /// <summary>Design 3 (the red team's finding 10). A preview over 300
     /// notes is running on the sheet's worker when the workspace is disposed:
-    /// teardown drains it before it returns, so the session the lifecycle
-    /// disposes next is never under it. The preview is held on its worker and
-    /// let go as the join begins; Dispose returns only once the preview's
-    /// work has ended. Without the drain, Dispose returns while the preview
-    /// still reads the vault (a race the preview's length decides, so this
-    /// fact's red depends on it).</summary>
+    /// its work joins the workspace's bounded pre-session drain, so Dispose
+    /// waits for it. The preview is held on its worker and let go as the join
+    /// begins, so it ends well inside the drain's bound; Dispose returns only
+    /// once the preview's work has ended. Without the drain, Dispose returns
+    /// while the preview still reads the vault (a race the preview's length
+    /// decides, so this fact's red depends on it). The drain is bounded (five
+    /// seconds, the INV-2/INV-6 policy that forfeits the ordering rather than
+    /// the UI): a preview blocked in a read past the bound can still be
+    /// running when the lifecycle disposes the session. That is memory-safe
+    /// (uniffi's call counter keeps the object alive) and the preview is a
+    /// dry run that writes nothing. This fact shows the drain, not an
+    /// unconditional order (Codex round 1).</summary>
     [Fact]
-    public void TeardownDrainsARunningPreviewBeforeTheSessionGoes() => RunSta(() =>
+    public void TeardownDrainsARunningPreviewInTheBoundedPreSessionDrain() => RunSta(() =>
     {
         (string Path, string Text)[] notes = [.. Enumerable.Range(0, 300)
             .Select(n => ($"n{n:D3}.md", $"---\nstatus: draft\n---\n\nNote {n}.\n"))];
