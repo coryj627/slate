@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -288,16 +289,16 @@ internal sealed class LayoutItemsControl : ItemsControl
     /// <summary>#1677, #1678: the host's peer (once a client made one) reads its items
     /// again each time its containers are generated, so a list rebuilt while the host was
     /// collapsed (the recent vaults, republished while a vault opens) publishes its new
-    /// buttons, not the old ones' stops. After layout: a container is generated before its
-    /// template makes the stop it wraps, and an item peer read then has no children.</summary>
+    /// buttons, not the old ones' stops. Containers are generated for an Add and for every
+    /// Reset (a Clear, a refill, a swapped source) on every host with a panel. A removal, a
+    /// replace and a move generate none: <see cref="OnItemsChanged"/> queues their reset
+    /// (#1860).</summary>
     public LayoutItemsControl() =>
         ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             if (ItemContainerGenerator.Status == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
             {
-                _ = Dispatcher.InvokeAsync(
-                    () => UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache(),
-                    System.Windows.Threading.DispatcherPriority.Loaded);
+                QueuePeerReset();
             }
         };
 
@@ -305,6 +306,56 @@ internal sealed class LayoutItemsControl : ItemsControl
     {
         get => (bool)GetValue(IsStructuralProperty);
         set => SetValue(IsStructuralProperty, value);
+    }
+
+    /// <summary>Whether a reset of the host peer's children is queued and has not run.</summary>
+    private bool _peerResetQueued;
+
+    /// <summary>#1860: a removal, a replace and a move generate no containers (the panel
+    /// drops or moves the container at once, and a replace relinks the old container to
+    /// the new item), so the reset on ContainersGenerated never ran for them, and nothing
+    /// else rebuilt the host peer's children until a client had connected the window: a host
+    /// read in process kept a removed item's peer, an empty element where the item was, and
+    /// a replace's old item or a move's old order. The panel has applied the change by the
+    /// time this runs. Queued, not done here: done here, a burst would rebuild the children
+    /// once per change, and the item peers' re-reads (queued at Send) would run before a
+    /// pending layout gives a new container its template.</summary>
+    protected override void OnItemsChanged(NotifyCollectionChangedEventArgs e)
+    {
+        base.OnItemsChanged(e);
+        // Not Reset: on every host with a panel a Reset regenerates its containers and so
+        // resets through ContainersGenerated, collapsed or not, and a host with no panel
+        // lists no item peers. Not Add: it generates containers too.
+        if (e.Action is NotifyCollectionChangedAction.Remove
+            or NotifyCollectionChangedAction.Replace
+            or NotifyCollectionChangedAction.Move)
+        {
+            QueuePeerReset();
+        }
+    }
+
+    /// <summary>Queues one reset of the host peer's children at Loaded priority, so it runs
+    /// after layout: a container is generated before its template makes the stop it wraps,
+    /// and an item peer read then has no children. One reset serves every change made before
+    /// it runs (a burst of removals, a Clear and its refill). A host whose peer no client
+    /// made has nothing cached, and a peer made later reads the panel fresh, so it posts
+    /// nothing. The flag clears before the reset: a change made while the reset runs then
+    /// queues a reset of its own, which a flag cleared after the reset would drop.</summary>
+    private void QueuePeerReset()
+    {
+        if (_peerResetQueued || UIElementAutomationPeer.FromElement(this) is null)
+        {
+            return;
+        }
+
+        _peerResetQueued = true;
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                _peerResetQueued = false;
+                UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
+            },
+            System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
