@@ -4585,6 +4585,53 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>The red team's m2 (#1955's CB-9a item 3, for the bulk
+    /// rename's fan-out). Two notes the preview listed are each open in a
+    /// dirty tab, and the announcer throws at the property sentence a dirty
+    /// tab is told. The apply's reconcile still reaches the second note: both
+    /// tabs are marked stale and keep the reader's edits, each sentence is
+    /// attempted, and the apply ends with the notes' chains free. Red today:
+    /// the reconcile loops over the report's notes with no step per note, so
+    /// the throw at a.md's sentence skips b.md.</summary>
+    [Fact]
+    public void ABulkRenameReconcileReachesEveryNoteWhenADirtyTabsSentenceThrows() => RunSta(() =>
+    {
+        using var h = new Vault("bulk-reconcile-every-note", ("a.md", Note), ("b.md", Note));
+        WorkspaceTabViewModel a = h.OpenNow("a.md");
+        WorkspaceTabViewModel b = h.OpenNow("b.md");
+        a.Text = NoteEdited;
+        b.Text = NoteEdited;
+        Assert.True(a.IsDirty && b.IsDirty, "premise: the two tabs are not both dirty");
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int thrown = 0;
+        h.BeforeAnnounce = spoken =>
+        {
+            if (IsThePropertySentence(spoken))
+            {
+                thrown++;
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused");
+            h.PumpUntil(() => !sheet.WorkInFlight && h.Workspace.SavesIdle, "the apply's end");
+            Assert.Contains("state: draft", h.Read("a.md"), StringComparison.Ordinal);
+            Assert.Contains("state: draft", h.Read("b.md"), StringComparison.Ordinal);
+            Assert.True(a.IsExternallyStale, "a.md's dirty tab was not marked stale");
+            Assert.True(b.IsExternallyStale, "b.md's dirty tab was not marked stale: the reconcile stopped at a.md's throw");
+            Assert.Equal(2, thrown);
+            Assert.Equal(NoteEdited, a.Text);
+            Assert.Equal(NoteEdited, b.Text);
+            AssertALaterOperationRuns(h, "b.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            h.ReleaseAndDrain();
+        }
+    });
+
     // ---- A tag edit in the notes' chains (plan 47 CB-9b, Design 4) ------------
 
     /// <summary>Design 4 (CD5(a); M3). A save of an open note is admitted and
