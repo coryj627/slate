@@ -3446,6 +3446,42 @@ mod tests {
         assert!(differ.is_empty(), "{}", differ.join("\n"));
     }
 
+    /// #1629: a brace the source scan puts where the parse does not read a
+    /// script argument (after a `^` or `_` a macro took, so around a
+    /// script's base) moves no script: each formula reads as the same
+    /// formula written without that mark.
+    #[test]
+    fn a_brace_around_a_scripts_base_moves_no_script() {
+        let mut differ = Vec::new();
+        for (source, same) in [
+            (
+                r"\displaystyle\def\ignore#1{f}\ignore_\sum_n x",
+                r"\displaystyle f\sum_n x",
+            ),
+            (
+                r"\displaystyle\def\ignore#1{f}\ignore^\prod_n x",
+                r"\displaystyle f\prod_n x",
+            ),
+            (
+                r"\displaystyle\let\unused=_\sum_n x",
+                r"\displaystyle\sum_n x",
+            ),
+            (
+                r"\displaystyle\let\unused=^\lim_n x",
+                r"\displaystyle\lim_n x",
+            ),
+        ] {
+            let readings = every_reading(source);
+            let expected = every_reading(same);
+            if readings[0].starts_with("Math expression") || readings != expected {
+                differ.push(format!(
+                    "{source:?}: {readings:?}, written without it {expected:?}"
+                ));
+            }
+        }
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
+    }
+
     /// #1629 (the plan lead's second ruling): a function as an ungrouped
     /// argument of a fraction or a root reads exactly as its grouped form.
     #[test]
