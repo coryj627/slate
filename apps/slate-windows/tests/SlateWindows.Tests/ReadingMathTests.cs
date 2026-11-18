@@ -153,6 +153,50 @@ public sealed class ReadingMathTests
     }
 
     /// <summary>
+    /// #1629 and #1628 (plan 47 CB-30), the twin of core's facts: a scripted
+    /// function after a number is spoken and brailled as math, not as its
+    /// source, and three primes are spoken as primes on a function while the
+    /// braille and the exposed MathML stay the loose form's (CD21), under the
+    /// app's default math settings (ClearSpeak, Medium, Nemeth).
+    /// </summary>
+    [Fact]
+    public void AScriptedFunctionAndATriplePrimeSpeakAsMath()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-cb30");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Math\n\n$$2\\sin^2 x$$\n\n$$f'''(x)$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingMathElement[] elements = FindMathElements(surface.Document).ToArray();
+            Assert.Equal(2, elements.Length);
+            Assert.Equal(
+                "2 sine squared of x",
+                System.Windows.Automation.AutomationProperties.GetName(elements[0]));
+            Assert.False(string.IsNullOrEmpty(elements[0].Braille));
+            Assert.Equal(
+                "f triple prime, of x",
+                System.Windows.Automation.AutomationProperties.GetName(elements[1]));
+            Assert.Equal("⠋⠄⠄⠄⠷⠭⠾", elements[1].Braille);
+            Assert.DoesNotContain("<msup>", elements[1].MathMl, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
     /// The documented WPFMath coverage boundary: line reading speaks the
     /// speech, the source is visible as the element's content and spoken
     /// on request (#1595, #1591, plan 45 XB-9), the block stays a nav
