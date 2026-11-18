@@ -1723,6 +1723,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// read-back unreadable (the disk's hash unknown).</summary>
     internal Action? TaskToggleReadBackFaultForTests { get; set; }
 
+    /// <summary>Test seam (plan 47 CB-14): runs inside the toggle worker
+    /// after its outcome and read-back are settled and before its
+    /// publication is queued, so a fact can rename the note between the
+    /// read-back and the publication.</summary>
+    internal Action? TaskToggleBeforePublishForTests { get; set; }
+
     /// <summary>True from a task toggle's start until its dispatcher-side
     /// publish re-baselines the tab (W7-7 PR 7, round 24): a rescan's
     /// clean-tab reload waits for it, because a reload in between would
@@ -1847,6 +1853,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 null);
         }
 
+        TaskToggleBeforePublishForTests?.Invoke();
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
         {
             _ = published?.TrySetResult();

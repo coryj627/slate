@@ -915,8 +915,63 @@ public sealed class SaveChainAdmissionTests
         Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the landed write");
     });
 
-    /// <summary>Plan 47 CB-14 (codex round 2): the renamed tab of the fact
-    /// above speaks its reconcile sentence through an announcer that throws.
+    /// <summary>Plan 47 CB-14 (the judge's delta review): a panel toggle fails
+    /// after its write with an error that is not SavedButUnindexed, and the
+    /// note is renamed after the toggle read the disk back but before it
+    /// publishes. The completion reconciles the path the toggle wrote, where
+    /// no tab is left, so the renamed tab reconciles itself after the failure
+    /// sentence, as the landed arm does.</summary>
+    [Fact]
+    public void APanelToggleThatFailsAfterItsWriteStillReconcilesATabRenamedBeforeItPublishes() => RunSta(() =>
+    {
+        const string path = "cb14-failed-renamed.md";
+        const string renamed = "cb14-failed-renamed-after.md";
+        using var h = new Vault("cb14-failed-renamed", (path, TaskNote));
+        WorkspaceTabViewModel tab = h.Open(path);
+        h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+        h.Events.Clear();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        tab.TaskToggleFaultForTests = () => throw new IOException("a panic surfacing through the binding (test seam)");
+        tab.TaskToggleBeforePublishForTests = () =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        };
+        try
+        {
+            h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+            h.Wait(entered, "premise: the toggle's worker never reached its publication after the failed write");
+            _ = h.Session.RenameFile(path, renamed);
+            h.Workspace.RetargetPath(path, renamed);
+            Assert.Equal(renamed, tab.Path);
+            release.Set();
+            h.PumpUntil(
+                () => !tab.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                    && h.Events.Any(e => e is A11yEvent.TaskToggleFailed),
+                "the failed toggle's publication after the rename");
+        }
+        finally
+        {
+            release.Set();
+            tab.TaskToggleFaultForTests = null;
+            tab.TaskToggleBeforePublishForTests = null;
+        }
+        h.Settle();
+        Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+        A11yEvent.TaskToggleFailed failed = Assert.Single(h.Events.OfType<A11yEvent.TaskToggleFailed>());
+        Assert.DoesNotContain(h.Events, e => e is A11yEvent.TaskToggledUnindexed);
+        A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        Assert.True(
+            h.Events.IndexOf(failed) < h.Events.IndexOf(reconciled),
+            "the reconcile sentence came before the failure sentence");
+        Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the write that landed");
+    });
+
+    /// <summary>Plan 47 CB-14 (codex round 2): the renamed tab of
+    /// <c>APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab</c>
+    /// speaks its reconcile sentence through an announcer that throws.
     /// The completion still runs after the tab's publication: the index is
     /// repaired and the toggle says it landed.</summary>
     [Fact]
