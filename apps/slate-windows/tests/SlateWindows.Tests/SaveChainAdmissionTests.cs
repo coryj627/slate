@@ -5039,7 +5039,11 @@ public sealed class SaveChainAdmissionTests
     /// notes with an open tab only, in slices of core's bound. Red by
     /// mutation: one unsliced read over every checked note, which core
     /// refuses, so the open tabs are reconciled from the disk instead and the
-    /// skipped note's tab is reloaded.</summary>
+    /// skipped note's tab is reloaded. Codex round 3: three open tabs never
+    /// reach core's bound, so the slice is set to two through the
+    /// workspace's seam and every lookup is counted: each read of the three
+    /// open notes is two lookups, of two paths and one. Red by mutation: one
+    /// unsliced lookup over the open tabs.</summary>
     [Fact]
     public void ATagEditOverMoreNotesThanOneIndexLookupTakesStillReconcilesAndSpeaks() => RunSta(() =>
     {
@@ -5054,10 +5058,16 @@ public sealed class SaveChainAdmissionTests
         FilesSidebarViewModel sidebar = h.Sidebar();
         CheckForATagEdit(h, sidebar, [.. files.Select(file => file.Path)]);
         File.WriteAllText(Path.Combine(h.Root, "n0500.md"), Outside);
+        var lookups = new List<int>();
+        h.Workspace.IndexedHashSliceForTests = 2;
+        h.Workspace.IndexedHashLookupHookForTests = lookups.Add;
         try
         {
             sidebar.AddTagCommand.Execute(null);
             h.PumpUntil(() => h.Workspace.SavesIdle && TagSummaries(h) > 0, "the tag edit over every note");
+            Assert.True(
+                lookups.Take(4).SequenceEqual([2, 1, 2, 1]) && lookups.All(paths => paths <= 2),
+                $"the reads of the three open notes were not two lookups each of at most two paths: [{string.Join(", ", lookups)}]");
             foreach (WorkspaceTabViewModel tagged in new[] { first, last })
             {
                 string disk = h.Read(tagged.Path);
@@ -5072,6 +5082,8 @@ public sealed class SaveChainAdmissionTests
         }
         finally
         {
+            h.Workspace.IndexedHashSliceForTests = null;
+            h.Workspace.IndexedHashLookupHookForTests = null;
             h.ReleaseAndDrain();
         }
     });

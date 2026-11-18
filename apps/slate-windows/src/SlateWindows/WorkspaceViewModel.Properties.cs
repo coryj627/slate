@@ -993,17 +993,27 @@ internal sealed partial class WorkspaceViewModel
     private static bool CanCatchUp(WorkspaceTabViewModel tab) =>
         !tab.IsDirty && !tab.HasPendingSaves && !tab.IsMissingFromDisk;
 
+    /// <summary>Plan 47 CB-9b test seam (Codex round 3): the slice size of
+    /// <see cref="IndexedHashesInSlices"/>; null uses core's bound.</summary>
+    internal int? IndexedHashSliceForTests { get; set; }
+
+    /// <summary>Plan 47 CB-9b test seam (Codex round 3): told the path count
+    /// of each index lookup <see cref="IndexedHashesInSlices"/>
+    /// makes.</summary>
+    internal Action<int>? IndexedHashLookupHookForTests { get; set; }
+
     /// <summary>The index's content hash of each path, read in slices of
     /// core's bound on one lookup (the rescan's slicing,
     /// <c>VaultLifecycleViewModel.ReadIndexedPaths</c>).</summary>
     private Dictionary<string, string?> IndexedHashesInSlices(IReadOnlyList<string> paths)
     {
         var indexed = new Dictionary<string, string?>(StringComparer.Ordinal);
-        int slice = (int)Math.Max(1U, SlateUniffiMethods.MaxIndexedHashPaths());
+        int slice = IndexedHashSliceForTests ?? (int)Math.Max(1U, SlateUniffiMethods.MaxIndexedHashPaths());
         using var cancel = new CancelToken();
         for (int start = 0; start < paths.Count; start += slice)
         {
             string[] part = [.. paths.Skip(start).Take(slice)];
+            IndexedHashLookupHookForTests?.Invoke(part.Length);
             IReadOnlyList<string?> hashes = _session.IndexedContentHashes(part, cancel);
             for (int index = 0; index < part.Length; index++)
             {
