@@ -10,6 +10,24 @@ namespace SlateWindows.AccessibilityTests;
 
 public sealed partial class ShellAccessibilityTests
 {
+    /// <summary>#1849's class on the Files toolbar: Sort and group lands its checked order on
+    /// every open, and a pointer resting where its rows appear took the keys from it (step 0,
+    /// 4 of 4). With the keys on the button and the pointer resting on another row, Enter
+    /// leaves them on the checked order.</summary>
+    [Fact]
+    public void SortAndGroup_APointerRestingWhereItOpensLeavesTheKeysOnTheCheckedRow() =>
+        RunRestingPointerJourney("sort-and-group-resting-pointer", (process, window, automation, said) =>
+            AssertALandingRowStaysUnderARestingPointer(
+                window,
+                automation,
+                "SidebarSortAndGroup",
+                "Sort and group",
+                SortRowIdPrefix,
+                rows => rows.First(row => row.AutomationId.StartsWith(SortRowIdPrefix, StringComparison.Ordinal) && IsToggledOn(row)),
+                said));
+
+    private const string SortRowIdPrefix = "SidebarSort.";
+
     /// <summary>DS-17: opens the Files toolbar's Sort and group, as a reader does, and
     /// returns its row <paramref name="rowId"/> (a sort order's
     /// <c>SidebarSort.NameAscending</c>, or <c>SidebarGroupDates</c>,
