@@ -4,10 +4,10 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0 to C5 are delivered (CB-0 to CB-13, CB-19
-and CB-27, merged from 2026-11-16 to 18), and wave C6 (CB-14, CB-25
-and CB-30) is next. §12 keeps the delivery record. Written from the
-requirements brief the owner approved on 2026-11-13
+recommendation. Waves C0 to C6 are delivered (CB-0 to CB-14, CB-19,
+CB-25, CB-27 and CB-30, merged from 2026-11-16 to 18), and wave C7
+(CB-15a, CB-28 and CB-24) is next. §12 keeps the delivery record.
+Written from the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
 (#1926); the one commit between them adds `ExitWatch` and its tests and
@@ -401,7 +401,9 @@ the table above. No row remains pending, apart from the second steps of
 CD12(b), CD20, CD25, CD27 and CD29. The owner gave the answers in an
 interview on 2026-11-15 and 2026-11-16, and every decision row is dated
 2026-11-16. The Run process row is dated 2026-11-15, the day of the
-delivery instruction. CD1 is overtaken and has no answer.
+delivery instruction. The #1991 row is a later call, dated 2026-11-18,
+on an issue that CB-9b's spec work filed. CD1 is overtaken and has no
+answer.
 
 Some rows also carry a call the owner did not make. It is marked "the
 plan lead's call, 2026-11-16": how the answered work is cut into chunks
@@ -422,6 +424,14 @@ owner can change any of them.
 | CD2 to CD8, CD12 to CD14, CD16, CD18 to CD21, CD23, CD25, CD26, CD28 to CD33, CD35 to CD40 | 2026-11-16 | **Adopted as recommended.** The Recommended column stands exactly for CD2, CD3, CD4, CD5 (all four parts), CD6, CD7, CD8, CD12 (all four parts, CB-20b among them), CD13, CD14, CD16, CD18, CD19, CD20, CD21, CD23, CD25 (the target; its second step follows the diagnosis), CD26, CD28 (both, design first), CD29 (the method; its second step follows the probe), CD30, CD31, CD32, CD33, CD35 (with the tag `ds11-accent-contrast-gate` at 9edf4b6b, the repository's first pushed tag), CD36, CD37, CD38, CD39 and CD40. | Each chunk's spec as written for those rows |
 | CD41 | 2026-11-16 | **As recommended: the odd date is accepted.** A quarantined note lists with size 0 and no real modified time until the file reads again. A marked row is filed for Milestone W. | CB-8's PR writes `not delivered: VoiceOver pass` with its ledger line, and files the marked row |
 | Run process | 2026-11-15 | **How the chunks are delivered.** The owner's delivery instruction, as §2.6 and §4 rule 9 state it: one red team on a light PR; the red team and then Codex rounds until it approves on every other PR, with an independent judge at 14 rounds; Codoki at 3/5 or a recorded bypass, and every check green, before a merge; merges one at a time, pinned to the head; up to two principal engineers a wave, each directing up to three workers, and never more than eight agents at once. | §4 rule 9; §6's first paragraph; the Review line of each first-wave spec |
+| #1991 | 2026-11-18 | **A task toggle made through a tab counts as the reader's own edit.** It stays on the tab's undo stack and is undoable. An undo that takes it back is ordinary editor behaviour, and a save then writes what the reader sees. The call is read as covering every route through a tab (the editor, the reading view, and the Tasks panel and Tasks Review through an open tab), since the reader makes the toggle on each. | #1991 is closed as not planned, with no code change. CB-9b's no-undo rule (its Design 0) stays for the writes the reader did not make: property writes, the bulk rename, Bases cell edits, the tag edit and link rewrites. CB-14's landed-but-unindexed path splices no tab, rebaselines none and leaves every undo stack as it was. |
+
+Two adopted rows changed in delivery by the lead's rulings, and §12's
+Wave C6 record says how. CB-14 speaks CD8's tab sentence before the new
+event, not after it. CB-30 brailles an authored `‴` or `⁗` after a
+carrier as single primes, from a tree of its own, where CD21 has
+braille from the loose tree; and its upstream reports are drafted in
+its PR, with filing left to the owner.
 
 ## 4. Rules (every chunk)
 
@@ -856,7 +866,7 @@ next reader does not file it.
 | Whether the home host's cache commit should yield to a running slot | The owner, with the home pool (CD31) |
 | The catalogue of host-composed sentences core should own | Milestone W (CD38). Three of its families are delivered here by the owner's answers of 2026-11-16: the import sentences (CB-16, CD10), the two search and graph error copies (CB-15b, CD9) and the right-pane placeholder (CB-23, CD15) |
 | `ReadingSemantics.MarkEmbed(BlockUIContainer)` is never called, so one arm of the landmark walk never runs | CB-20 removes both, as a fix found on the way |
-| A script slot filled by a state change or a space (`x^\rm a`, `x^\, 2`) still falls back to source | CB-30 leaves it out and names it in its PR; it goes on the deferred list for CB-46's table |
+| A script slot filled by a state change (`x^\rm a`) still falls back to source; one filled by a space (`x^\, 2`) renders as TeX reads it, the space as the superscript | CB-30 leaves `x^\rm a` out, pins both in the golden, and puts `x^\rm a` on the deferred list for CB-46's table |
 
 ## 10. How an implementing agent works a chunk
 
@@ -906,13 +916,18 @@ started:
 | CB-11 | `specs/cb11_a_parked_citation_summary_press_follows_its_notes_rename.md` |
 | CB-12 | `specs/cb12_a_repair_announces_only_what_it_changed.md` |
 | CB-19 | `specs/cb19_every_open_combo_boxs_rows_report_their_place.md` |
+| CB-14 | `specs/cb14_a_toggle_that_landed_but_was_not_indexed_says_it_landed.md` |
+| CB-25 | `specs/cb25_a_layout_host_drops_a_removed_items_peer.md` |
+| CB-30 | `specs/cb30_a_scripted_function_and_three_primes_are_spoken_as_math.md` |
 
 CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
 each ends with the corrections its delivery made. Wave C5's specs were
 written on 2026-11-17: CB-11's, CB-12's and CB-19's cite `main` at
 3ae84200 (CB-12's and CB-19's were checked again at eea6e7a2), and
 CB-9b's cites eea6e7a2. Each has a step 0 measurement and a red team
-before code, and each ends with what its delivery changed.
+before code, and each ends with what its delivery changed. Wave C6's
+specs were written on 2026-11-18 and cite `main` at eeb99032, with the
+same step 0, red team and closing record.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1040,6 +1055,9 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-11 | #1997 | 2026-11-18 (6351c82b) | #1714 | 15 / 9 / 1 / 5 | Filed #1988, #1989, #1990, #1993 and #1994 (more shapes added as comments on #1990, #1993 and #1994). A line on #1955: NVDA cuts off the leaf's count under the sheet's sentence when both arrive in one turn. Not delivered: another session's rename read before this window's rescan (#1990); a rename made outside Slate. The read-window exposure (another session replacing the file between the check and the load's read) was declined on the lead's call and recorded on #1990. NVDA ran on 2d45fbea, before the review fixes. No Mac work owed |
 | CB-19 | #1998 | 2026-11-18 (69380c4e) | #1783, #1836 | 5 / 2 / 3 / 0 | Three lines on #1955: the stale `ChordTable.cs` sort-combo comment, a possible `OpenRailPanel` flake, and key lag under NVDA during an import on `main`. NVDA phrases for base and head are in the PR body. NVDA speaks no position on the popup copy on either build, so the gate scans and UIA reads are the evidence. Not delivered: a fact for the tracker's attach guard, and a red run for the stricter still-open check |
 | CB-9b | #2001 | 2026-11-18 (eeb99032) | #1889 | 21 / 12 / 5 / 4 | Filed #1991 and #1992 (from the spec), #1999 (the reading view's notice, ruled in at three new occasions) and #2000 (a throwing announcement in a posted publication ends the app). Lines on #1955: NVDA's #748 cancel in phrase 4, and a structured per-file failure kind to replace the `SavedButUnindexed` text match; the CB-9a items 1 and 3 clearing comment. Comments on #1866 (Apply moves the keys out of the sheet) and #1995. The undo defect (data loss on `main`) is fixed for every property write, the bulk rename, both Bases cell routes, the tag edit and the link rewrite. Census: four rows ended; five accepted rows (four link-rewrite members and `PublishBasesExport`) left for CB-46's table, beside one standing row (`ReplaceTabItem`, not this class). Not delivered: a VoiceOver pass (a #1954 line, owed the Mac fix); the apply's summary on the application close (NVDA drops it at exit, as on `main`); a fact that drives a vault switch. NVDA ran on ba0c1b64, before the Codex-round fixes, which add no sentence |
+| CB-25 | #2009 | 2026-11-18 (4b700172) | #1860 | 0 / 0 / 0 / 0 | Nothing. Fact 2 and the counter-fact ran on CI and passed (run 44314910379). Not delivered: an AT pass (AT none in the plan row) |
+| CB-30 | #2007 | 2026-11-18 (26d353ef) | #1629, #1628 (CD21) | 6 / 4 / 1 / 1 | Filed #2006. VoiceOver pass (#1954); upstream drafts await the owner; `x^\rm a` on #1955; Nemeth for a glyph in a superscript or after no carrier waits on MathCAT's cell (§8's #1628 watch row); §9 row corrected here |
+| CB-14 | #2008 | 2026-11-18 (CB14SHA) | #1660, #1395 (CD8) | 10 / 5 / 2 / 3 | Filed #2003, #2004 and #2005. On #1954: the Mac's adoption of `TaskToggledUnindexed`, a VoiceOver pass for it and for the create caveat, and a note for #1527 (the Mac's two copies of the save sentence still run on). On #1955: the other leads a `SavedButUnindexed` reaches, for CB-46, and two core defects (`base_apply_edits` keeps a stale handle; `undo_structural` reports a landed restore as failed). The order departs from CD8's literal "still follows": the reconcile sentence (High) comes first and the new event (Medium) after it, and NVDA was measured to play both. NVDA ran on bea36aa3, before the judge's minors |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1215,8 +1233,6 @@ yet; each waits for the owner's call, beside the five above:
   old spelling.
 - #1990: a citation load for a path the index no longer has says no
   citations.
-- #1991: after a task toggle through a tab, one undo and a save write
-  the old task state back to disk.
 - #1992: a cancelled bulk rename calls the files it never reached
   "failed".
 - #1993: a parked citation summary press survives leaving its note
@@ -1230,3 +1246,147 @@ yet; each waits for the owner's call, beside the five above:
   so a publication whose sentence throws ends the process (by reading).
 - #1995 (tooling): a field pass started by the launcher without `-Root`
   runs with no hot-exit store.
+
+#1991 has left that list: the owner's call of 2026-11-18 (§3.1) closed
+it as not planned.
+
+Wave C6, 2026-11-18. CB-25 (#2009) merged as 4b700172, CB-30 (#2007)
+as 26d353ef and CB-14 (#2008) as CB14SHA, in that order. Each spec had
+a step 0 measurement and a fresh Opus red team before code (blockers,
+medium and low: CB-25 0, 5 and 13; CB-30 1, 5 and 19; CB-14 0, 9 and
+12), and each diff a fresh Opus red team (CB-25 0, 2 and 10; CB-30 1, 3
+and 11; CB-14 0, 3 and 10). Codex ran at the configured effort, high,
+below the protocol's xhigh as in the earlier waves, to an approve:
+CB-25 in one round, CB-14 in two (rounds three and four, on later
+commits, approved as well), and CB-30 in four, then four more on the
+delta of its second ruling (below).
+
+Codoki reached its monthly limit on 2026-11-18 (500 of 500 reviews,
+reset on 2026-12-01) and reviewed none of the three. From #2007 on,
+each product PR had an independent Opus merge judge at effort xhigh in
+Codoki's place, and the lead recorded each verdict on its PR as the
+bypass §2.6 allows. Every verdict was Merge, with no blocker and no
+major. CB-25 had one judge. CB-30 and CB-14 had two each: the lead took
+minors of the first judge (both of CB-30's, three of CB-14's), red
+first, and the second judge read that delta. Until Codoki's limit
+resets on 2026-12-01, a docs PR's fresh Opus red team at effort xhigh
+on the diff stands as its independent review in Codoki's place, by the
+lead's call, recorded on the PR.
+
+The owner's call on #1991 (§3.1) came during the wave and bound CB-14.
+A toggle that succeeds through a tab stays on its undo stack, as on
+`main`. CB-14's landed-but-unindexed path splices no tab, rebaselines
+none and leaves every undo stack as it was, so an edit made before a
+landed toggle still undoes, on its tab and on a peer tab.
+
+CB-14's order departs from CD8's literal text, by which the tab's
+"Task toggled on disk, but the editor no longer matches it" still
+follows the new sentence. Under NVDA a High line raised after a
+sentence cancels that sentence's speech, and in CD8's order the new
+sentence was measured silent on the Tasks panel route, as `main`'s
+failure sentence is today. The lead's ruling on CB-14's Call 2 puts the
+reconcile sentence (High, unchanged) first and the new event (Medium)
+after it, and leaves the splice code CD8 left alone untouched. NVDA
+played both in full on the Tasks panel, editor and reading-view routes,
+and with two tabs on the Tasks panel route. Tasks Review through an
+open tab was not heard; its facts pin the order. NVDA ran on bea36aa3,
+before the judge's minors. Contract 38's new section records the order,
+and the lead reported the departure to the owner.
+
+The lead's first rulings on CB-30's spec deferred two finds to #1955,
+as Calls 4 and 5 recommended: `\frac x\sin` (a function as a
+fraction's argument) and MathCAT's stray full stop in the Nemeth of an
+authored `\trprime` or `\qprime`. The first merge judge pointed out
+that `AGENTS.md` sizes a find whose fix stays in files the PR already
+changes as small, to be fixed in the PR, and named three such finds in
+`math.rs`: those two, and an ungrouped operator argument that overwrote
+its base's script position (`\liminf\limits_{n}^\max x`), which the
+pulldown-latex draft had only named. The lead's second ruling reversed
+that sizing and took all three. They are cases of the scripted function
+and of the primes that #1629 and #1628 ask for, so they are the PR's
+own feature, not finds, and `AGENTS.md`'s rule that a defect in the
+PR's own feature is fixed on its branch governs them. §4 rule 5, which
+defers a found core change a Mac user hears, does not apply to them;
+#2006, outside the feature, stays filed under it. (#2007's body lists
+the three under "Found and fixed here", and its count includes them.)
+CB-30 fixed them red first, with a fourth case in its own feature
+(`\int_0^\max f` kept the writer's application mark after the element),
+and #1954 carries their VoiceOver lines. The judge also noted that the deep-nesting fact could
+not catch a recursive walk; a new fact does. #1955 keeps `x^\rm a`,
+which §9 names. An authored glyph in a superscript or after no carrier
+keeps the stray full stop: #1955's comment of 2026-11-18 took that line
+off its list, and it waits on MathCAT's cell, under §8's watch row for
+#1628 and in the MathCAT draft.
+
+Where the specs were wrong, each spec's closing section says so:
+
+- CB-25: Design 2's "no post without a peer" dropped a reset `main` ran,
+  for a peer made after an Add and read before the next layout. The
+  existing trigger now posts as on `main`, and only the new one checks
+  for a peer. Fact 2's premise checked only the connected-root list; a
+  UI Automation client's handlers already in WPF's event map, or a
+  WM_GETOBJECT, also connect a new window's root, so the fact skips
+  where either holds (on CI it ran and passed). Mutation D turned both
+  halves of fact 3 red, not one.
+- CB-30: Design 1's candidate rule, a thin space directly before an
+  `<mi>`, could not tell an ordinary character from a function name
+  (`\&` and `\operatorname{&}` are written alike); function identity now
+  comes from the parser. §9 said `x^\, 2` falls back; it renders, and
+  the row is corrected above. The spec put an accented function outside
+  the family, as falling back for its script; an accent over a function
+  is a script element of its own, so `2\hat\sin x`, with no script, fell
+  back on the accent alone. The spec held CD21's braille from the loose
+  tree right for every long run; for an authored `‴` or `⁗` it keeps
+  MathCAT's stray full stop, so the braille tree now spells such a glyph
+  after a carrier as single primes. Calls 4 and 5, and the lead's first
+  rulings on them, are above.
+
+The reading behind CB-25 was wrong in three places, as CB-25's spec
+records. `reading/04_focus_and_peers.md:355-384` named eight hosts;
+step 0 found eleven `LayoutItemsControl` sites, and two of them remove
+or replace an item (the builder's conditions and the split host). It
+asked for the shell gate because closing a pane removes an item from
+the split host, but no gate journey closes a split pane, and no gate
+step can be red for #1860, since a connected client heals it. It read
+#1861's lesson as a host reset inside a peer read; by reading WPF 10,
+#1861's crash was an item peer's reset re-entering its container peer's
+guarded `GetChildren()`, and step 0 could not make the host's reset
+recurse.
+
+CD37: waves C1 to C6 posted no comment on #480, #1493 or #1628; the
+last before wave C7 is wave C0's, of 2026-11-16. The lead read the
+crates.io lists at wave C7's start, on 2026-11-18, and commented on all
+three
+([#480](https://github.com/coryj627/slate/issues/480#issuecomment-6987018008),
+[#1493](https://github.com/coryj627/slate/issues/1493#issuecomment-6987018424),
+[#1628](https://github.com/coryj627/slate/issues/1628#issuecomment-6987018939)).
+`citationberg` 0.7.0, `hayagriva` 0.10.1 and `notify` 9.0.0-rc.9 are
+unchanged since wave C0. `mathcat` 0.7.8, published on 2026-11-16, is
+new; 0.7.7, the version `Cargo.lock` pins, is yanked; and 0.7.8 clears
+the cooldown on 2026-11-23. As #2007's body records, 0.7.8 does not
+correct the cell, so §8's watch row for #1628 is not met. #1628 closed
+with #2007; the watch row stays, for dropping the split render, and the
+bump regenerates the golden CB-30 pinned.
+
+Defects on `main` that wave C6 found and filed, none placed in a wave
+yet; each waits for the owner's call, beside #1974, #1976, #1977,
+#1980, #1981, #1988 to #1990, #1992 to #1995, #1999 and #2000 above:
+
+- #2003 (CB-14): a refused task toggle tells the reader to resolve in a
+  dialog Windows does not show (by reading).
+- #2004 (CB-14): a task toggled in Tasks Review moves focus to the
+  review's first row.
+- #2005 (CB-14): a sidebar create whose index commit failed speaks its
+  caveat at High, which silences "Created note".
+- #2006 (CB-30): a formula whose MathCAT-rejected element holds deeply
+  nested content (about 8,000 levels) overflows the MathCAT worker's
+  stack and ends the app.
+
+Two more questions wait for the owner. First, whether to file the
+MathCAT report on daisy/MathCAT: the triple and quadruple prime cells
+of its Nemeth table hold a literal full stop. #2007's body drafts it,
+beside a pulldown-latex draft, and no agent files either. CD21 put the
+report in the PR, but filing it is a public post on another project's
+tracker, so it waits for the owner's word. Second, whether Codex runs
+at effort xhigh, as the protocol's step 3 asks, or stays at the
+configured high that every wave so far has used.
