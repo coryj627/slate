@@ -467,13 +467,19 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     internal void RefuseApplyForDirtyDrafts(BulkRenameApply apply) =>
         AdmittedPublication.RunEvery(AnnounceDirtyDrafts, () => EndApplyUnrun(apply));
 
+    /// <summary>A run's failure: the error shown, the apply disarmed, then
+    /// RenameFailed, the publish and a requested close's settle as steps of
+    /// their own (plan 47 CB-9b, Codex round 1's sweep), so a throwing
+    /// announcement skips neither the publish nor the close; the first fault
+    /// is rethrown once every step has run.</summary>
     private void PublishFailure(string? error)
     {
         ErrorText = $"Error: {error}";
         Disarm();
-        _announce(new A11yEvent.RenameFailed(error ?? "unknown failure"));
-        RunPublished?.Invoke();
-        SettleCloseIfRequested();
+        AdmittedPublication.RunEvery(
+            () => _announce(new A11yEvent.RenameFailed(error ?? "unknown failure")),
+            () => RunPublished?.Invoke(),
+            SettleCloseIfRequested);
     }
 
     private void ShowRows(RenameReport report)
