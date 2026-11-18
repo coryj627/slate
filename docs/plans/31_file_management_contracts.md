@@ -210,7 +210,12 @@ caret kept on its line. A tab is taken only when it holds the bytes from
 before the rewrite and a read made then holds the bytes after it. A dirty
 tab, a tab on other bytes, and a note with a save or an operation admitted
 are left as they were, for the change event. The rewrite stays outside the
-save chain, and nothing more is spoken: the suffix already counts the notes.
+save chain, and no other sentence is spoken for a tab it brings up, since
+the suffix already counts the notes, with one exception: a reading-mode tab
+over the reading view's 2,000-block ceiling re-projects and re-speaks its
+notice, "Reading view shows the first 2,000 blocks of this note. Switch to
+the editor for the full text." (the plan lead's ruling on the red team's
+M1; the remedy is filed as #1999).
 
 **F10 — Structural undo (the Windows first).** Scope: mac's #871
 model, minus nothing the FFI supports:

@@ -99,7 +99,10 @@ them.
   clean tab takes the tagged bytes, a dirty tab hears "Properties changed on
   disk, but the editor no longer matches it. Save or reopen the note to
   reconcile.", and a clean tab whose re-read fails hears the same sentence.
-  The tag edit never speaks `RenameReloadFailed`. It finds the notes it
+  A clean tab in reading mode over the reading view's 2,000-block ceiling
+  re-speaks the reading view's notice when it takes the bytes, as it does
+  after a property write (the remedy is filed as #1999). The tag edit never
+  speaks `RenameReloadFailed`. It finds the notes it
   wrote by reading the index's hash of each checked note with an open tab
   before and after core's call (ruling 7), so a rescan that re-indexes one of
   those notes between the two reads makes it look written: its clean tab is

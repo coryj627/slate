@@ -952,7 +952,10 @@ and 5).
   either afterwards. So the apply's and the tag edit's publications bring
   every clean Markdown tab with no save pending on a note they held, whose
   saved hash is not the index's, up to the disk from a read made then. The
-  catch-up speaks nothing.
+  catch-up speaks no sentence of its own; a reading-mode tab it brings up
+  re-speaks the reading view's notice (below). A tab whose read fails is
+  left as it was: a stale one stays stale, and a clean one keeps its old
+  hash, so its next save is refused by the hash compare.
 - **The tag edit** is admitted over the checked notes and runs at its turn
   on the dispatcher, as it did, so on an idle chain it runs in the turn of
   the press. Core's report names no file it wrote, so the turn reads the
@@ -967,8 +970,10 @@ and 5).
   editor no longer matches it. Save or reopen the note to reconcile." before
   the summary (ruling 2(a)). A rescan that re-indexes a checked note between
   the two reads makes it look written: its clean tab is brought up to the
-  disk, and a dirty one hears the property sentence. A tag edit still queued
-  at teardown never runs.
+  disk, and a dirty one hears the property sentence. A tag edit queued
+  behind a save when Close Vault starts runs inside the close's settle and
+  speaks its summary before the close's sentence. A tag edit still queued
+  when the workspace is torn down never runs.
 - **Teardown.** `SettleSaves` cancels every admitted apply before it pumps,
   and an apply admitted inside its frame is cancelled at admission, so the
   settle waits for at most one file's write of each and its publication. The
@@ -988,9 +993,17 @@ and 5).
   before the rewrite takes a read made then, when the read holds the bytes
   after it. A note with a save or an operation admitted is left to it: the
   rebaseline asks `HasAdmittedSaveFor` first. A dirty tab and a tab on other
-  bytes are left to the change event, which marks them stale. Nothing is
-  spoken: the change's own sentence already counts the notes whose links it
-  updated.
+  bytes are left to the change event, which marks them stale. No sentence is
+  spoken for a tab it brings up, beyond the reading view's notice (below):
+  the change's own sentence already counts the notes whose links it updated.
+- **The reading view's notice** (the plan lead's ruling on the red team's
+  M1, option B). A reading-mode tab over the reading view's 2,000-block
+  ceiling re-projects when another writer's bytes land in it, and the reader
+  hears its notice again: "Reading view shows the first 2,000 blocks of this
+  note. Switch to the editor for the full text." Main already spoke it after
+  a property write, the bulk rename's reconcile and a Bases cell write.
+  CB-9b adds three occasions: after a tag edit, after a link rewrite, and at
+  the bulk rename's catch-up. The remedy is filed as #1999.
 - **No undo step back across another writer's bytes** (the plan lead's word
   of 2026-11-17; ruling 8). A property write, a bulk rename, a Bases cell
   write, a tag edit, a link rewrite and the catch-up put the new bytes into
@@ -1016,9 +1029,10 @@ and 5).
   file (accepted until the owner answers in CB-46's table). The navigation
   re-point stays in its own class.
 
-Facts: `SaveChainAdmissionTests` (thirty-two: the undo and caret theories;
-thirteen for the apply; four for teardown; nine for the tag edit; two
-theories for the link rewrite; two for #1955's items 1 and 3),
+Facts: `SaveChainAdmissionTests` (thirty-six: the undo, caret and
+transient-tab theories; fourteen for the apply, the catch-up whose read
+fails among them; four for teardown; nine for the tag edit; two theories
+for the link rewrite; four for #1955's items 1 and 3),
 `WorkspaceSaveCoordinatorTests` (the admission over several notes),
 `BulkRenameTests`,
 `BasesRedTeamRegressionTests.TheSavedQueryExportCannotNameANote`, core's
