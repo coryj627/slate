@@ -133,6 +133,9 @@ public sealed partial class ShellAccessibilityTests
     /// landing, every time.</summary>
     private static readonly TimeSpan RestingPointerKeysStay = TimeSpan.FromSeconds(1.5);
 
+    /// <summary>⋯'s rows.</summary>
+    private static readonly string[] MoreRowIds = ["NoteHeaderSplitRight", "NoteHeaderAddProperty", "NoteHeaderBulkRename"];
+
     /// <summary>#1849's steps: Lecture split right from ⋯, Alpha opened in the right pane, the
     /// keys in its editor. Then the left ⋯ opens with the pointer resting on its last row, by
     /// its Invoke pattern (a reader's object navigation), by Enter and by Shift+F10 on the
@@ -168,7 +171,7 @@ public sealed partial class ShellAccessibilityTests
                 window,
                 automation,
                 () => more.Patterns.Invoke.Pattern.Invoke(),
-                "NoteHeaderSplitRight",
+                MoreRowIds,
                 rows => rows.Single(row => row.AutomationId == "NoteHeaderBulkRename"));
 
             (string How, Action PutTheKeys, Action Open)[] opens =
@@ -207,7 +210,7 @@ public sealed partial class ShellAccessibilityTests
                 window,
                 automation,
                 () => more.Patterns.Invoke.Pattern.Invoke(),
-                "NoteHeaderSplitRight",
+                MoreRowIds,
                 rows => rows.Single(row => row.AutomationId == "NoteHeaderBulkRename"));
 
             // A move within the row under the pointer gives it the keys.
@@ -301,12 +304,12 @@ public sealed partial class ShellAccessibilityTests
     /// the screen and the place the pointer waited at is inside none of the rows. The menu is
     /// closed again.</summary>
     private static Point RestingPlaceOn(
-        Window window, UIA3Automation automation, Action open, string anyRowId, Func<AutomationElement[], AutomationElement> pick)
+        Window window, UIA3Automation automation, Action open, string[] rowIds, Func<AutomationElement[], AutomationElement> pick)
     {
         Mouse.Position = new Point(0, 0);
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
         open();
-        AutomationElement[] rows = OpenMenuRows(WaitForOpenMenuRow(window, automation, anyRowId), automation);
+        AutomationElement[] rows = OpenMenuRows(window, automation, rowIds);
         Rectangle[] bounds = [.. rows.Select(SettledBoundsOf)];
         AutomationElement target = pick(rows);
         Rectangle place = bounds[Array.FindIndex(rows, row => row.Equals(target))];
@@ -315,7 +318,7 @@ public sealed partial class ShellAccessibilityTests
             !target.IsOffscreen && screen.Contains(place),
             $"{DescribeForDiagnosis(target)} isn't whole on the screen: it is at {place} on a desktop at {screen}.");
         Assert.DoesNotContain(bounds, row => row.Contains(Mouse.Position));
-        CloseOpenMenu(window, automation, anyRowId);
+        CloseOpenMenu(window, automation, rowIds[0]);
         return place.Center();
     }
 
@@ -337,7 +340,33 @@ public sealed partial class ShellAccessibilityTests
     /// read for <see cref="RestingPointerKeysStay"/>.</summary>
     private static void AssertTheKeysStayOn(UIA3Automation automation, AutomationElement row, string context)
     {
-        AssertEventuallyFocused(row, $"The keys never landed on {DescribeForDiagnosis(row)}: {context}");
+        // Where the keys were at each read until they land, so a miss names the row that took them.
+        var held = new List<string>();
+        bool landed = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    string now = DescribeForDiagnosis(automation.FocusedElement());
+                    if (held.Count < 64 && (held.Count == 0 || held[^1] != now))
+                    {
+                        held.Add(now);
+                    }
+
+                    return row.Properties.HasKeyboardFocus.ValueOrDefault;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10));
+        if (!landed)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The keys never landed on {DescribeForDiagnosis(row)}; they were on {string.Join(" -> ", held)}: {context} {FocusDiagnosis()}");
+        }
+
         var clock = Stopwatch.StartNew();
         while (clock.Elapsed < RestingPointerKeysStay)
         {
@@ -406,22 +435,31 @@ public sealed partial class ShellAccessibilityTests
         UIA3Automation automation,
         string buttonId,
         string menuName,
-        string rowIdPrefix,
+        string[] rowIds,
         Func<AutomationElement[], AutomationElement> landing,
         string said)
     {
         AutomationElement button = WaitForElement(window, buttonId, TimeSpan.FromSeconds(10));
         Assert.False(button.IsOffscreen, $"{menuName}'s button is off the screen. {said}");
-        ConditionBase anyRow = automation.ConditionFactory.ByAutomationId(rowIdPrefix, PropertyConditionFlags.MatchSubstring);
-
         // Its rows, where they settle and their toggles, with the pointer away from them.
         Mouse.Position = new Point(0, 0);
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
         button.Patterns.Invoke.Pattern.Invoke();
-        AutomationElement[] rows = OpenMenuRows(WaitForOpenMenuRow(window, automation, anyRow, rowIdPrefix + "…"), automation);
+        AutomationElement[] rows = OpenMenuRows(window, automation, rowIds);
         Rectangle[] bounds = [.. rows.Select(SettledBoundsOf)];
         string[] before = ToggleStatesOf(rows);
-        AutomationElement land = landing(rows);
+        string table = string.Join("; ", rows.Select((row, index) => $"{DescribeForDiagnosis(row)} {before[index]} at {bounds[index]}"));
+        TestContext.Current.TestOutputHelper?.WriteLine($"{menuName}'s rows: {table}");
+        AutomationElement? land = null;
+        try
+        {
+            land = landing(rows);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert.True(land is not null, $"{menuName} has no row to land on among {table}. {said}");
         string landId = land.AutomationId;
         Rectangle screen = automation.GetDesktop().BoundingRectangle;
         int parked = -1;
@@ -462,7 +500,8 @@ public sealed partial class ShellAccessibilityTests
         Mouse.Position = new Point(0, 0);
         Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
         button.Patterns.Invoke.Pattern.Invoke();
-        string[] after = ToggleStatesOf(OpenMenuRows(WaitForOpenMenuRow(window, automation, landId), automation));
+        WaitForOpenMenuRow(window, automation, landId);
+        string[] after = ToggleStatesOf(OpenMenuRows(window, automation, rowIds));
         CloseOpenMenu(window, automation, landId);
         Assert.Equal(before, after);
     }
@@ -473,10 +512,37 @@ public sealed partial class ShellAccessibilityTests
     private static bool IsToggledOn(AutomationElement row) =>
         row.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault == ToggleState.On;
 
-    /// <summary>Every row of the menu that holds <paramref name="row"/>.</summary>
-    private static AutomationElement[] OpenMenuRows(AutomationElement row, UIA3Automation automation) =>
-        row.Parent?.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.MenuItem))
-            ?? throw new Xunit.Sdk.XunitException($"{DescribeForDiagnosis(row)} has no menu.");
+    /// <summary>The open menu's rows from top to bottom: every row in this process's windows
+    /// whose id starts with one of <paramref name="rowIds"/>. Asked of a row's parent, the
+    /// list left out the menu's first row (Sort and group's Name (A to Z), More panels'
+    /// Embeds).</summary>
+    private static AutomationElement[] OpenMenuRows(Window window, UIA3Automation automation, string[] rowIds)
+    {
+        AutomationElement[] rows = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        rows = [.. automation.GetDesktop()
+                            .FindAllChildren(automation.ConditionFactory.ByProcessId(window.Properties.ProcessId.Value))
+                            .SelectMany(top => top.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.MenuItem)))
+                            .Where(row => rowIds.Any(id => (row.Properties.AutomationId.ValueOrDefault ?? string.Empty).StartsWith(id, StringComparison.Ordinal)))
+                            .GroupBy(row => row.Properties.AutomationId.ValueOrDefault)
+                            .Select(same => same.First())
+                            .OrderBy(row => row.BoundingRectangle.Y)];
+                        return rows.Length > 0;
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10)),
+            $"No open menu has a row whose id starts with {string.Join(" or ", rowIds)}.");
+        return rows;
+    }
 
     /// <summary>Escape until the menu that holds <paramref name="rowId"/> is gone.</summary>
     private static void CloseOpenMenu(Window window, UIA3Automation automation, string rowId)

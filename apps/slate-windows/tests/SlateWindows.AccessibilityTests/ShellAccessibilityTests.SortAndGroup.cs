@@ -22,7 +22,7 @@ public sealed partial class ShellAccessibilityTests
                 automation,
                 "SidebarSortAndGroup",
                 "Sort and group",
-                SortRowIdPrefix,
+                [SortRowIdPrefix, "SidebarGroupDates", "SidebarShowTags", "SidebarDualPaneToggle"],
                 rows => rows.First(row => row.AutomationId.StartsWith(SortRowIdPrefix, StringComparison.Ordinal) && IsToggledOn(row)),
                 said));
 

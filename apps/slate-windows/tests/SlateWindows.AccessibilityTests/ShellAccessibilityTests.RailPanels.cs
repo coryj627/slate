@@ -21,7 +21,7 @@ public sealed partial class ShellAccessibilityTests
                 automation,
                 "RightPaneMorePanels",
                 "More panels",
-                "RightPaneMorePanels.",
+                ["RightPaneMorePanels."],
                 rows => rows.FirstOrDefault(IsToggledOn) ?? rows[0],
                 said));
 
