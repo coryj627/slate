@@ -461,12 +461,11 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
 
     /// <summary>Plan 47 CB-9b (Call 2(d)): the apply's turn found a header
     /// draft dirty. It is refused with the sentence the press gives, and ends
-    /// as one that did not run.</summary>
-    internal void RefuseApplyForDirtyDrafts(BulkRenameApply apply)
-    {
-        AnnounceDirtyDrafts();
-        EndApplyUnrun(apply);
-    }
+    /// as one that did not run, even when the sentence throws (Codex round 1):
+    /// both are steps of their own, and the first fault is rethrown once both
+    /// have run.</summary>
+    internal void RefuseApplyForDirtyDrafts(BulkRenameApply apply) =>
+        AdmittedPublication.RunEvery(AnnounceDirtyDrafts, () => EndApplyUnrun(apply));
 
     private void PublishFailure(string? error)
     {
