@@ -576,45 +576,53 @@ public sealed class TasksPanelTests : IDisposable
 
         _ = _session.SaveText("fault-tab-words.md", "- [ ] flip me\n", null);
         var failures = new List<A11yEvent>();
-        WorkspaceTabViewModel? faulted = null;
-        string? statusWhenSpoken = null;
         using var failing = new WorkspaceViewModel(
             _session,
             _fixture.Root,
             () => [],
-            spoken =>
-            {
-                failures.Add(spoken);
-                if (spoken is A11yEvent.TaskToggleFailed)
-                {
-                    statusWhenSpoken = faulted?.Status;
-                }
-            },
+            failures.Add,
             startInteractionBackgroundWork: false);
         failing.OpenPath("fault-tab-words.md");
-        faulted = Assert.IsType<WorkspaceTabViewModel>(failing.ActiveGroup.ActiveTab);
+        WorkspaceTabViewModel faulted = Assert.IsType<WorkspaceTabViewModel>(failing.ActiveGroup.ActiveTab);
         NoteTaskRowViewModel row = failing.Panels.OpenTasks.First(r => r.Task.Text == "flip me");
         Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "fault-tab-words");
         try
         {
             failing.Panels.ToggleTask(row);
             PumpDispatcherUntil(
-                () => failures.OfType<A11yEvent.TaskToggleFailed>().Any(),
+                () => failures.OfType<A11yEvent.TaskToggledUnindexed>().Any(),
                 () => "the injected failure never published; announced: " + AnnouncementDump(failures));
         }
         finally
         {
             Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
         }
-        A11yEvent.TaskToggleFailed failed = Assert.Single(failures.OfType<A11yEvent.TaskToggleFailed>());
-        string rendered = SlateUniffiMethods.A11yRender(failed).Text;
-        Assert.Equal(rendered, statusWhenSpoken);
-        // Core's detail of the landed-but-unindexed error, never the
-        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
-        Assert.StartsWith(
-            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
-        Assert.EndsWith(".", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
+        // Plan 47 CB-14 (#1660, CD8 as the lead ruled): the write landed but
+        // its index commit failed, so the toggle says it landed, in core's
+        // words, never the binding's field-labelled Message. The tab's
+        // reconcile sentence comes first, at High and unchanged; the landed
+        // sentence follows it at Medium, so a High raised after it cannot cut
+        // it under NVDA.
+        Assert.Empty(failures.OfType<A11yEvent.TaskToggleFailed>());
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(failures.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(landed.Completed);
+        RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(landed);
+        Assert.Equal(
+            "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+            + "before index commit. It will appear after the next scan.",
+            rendered.Text);
+        Assert.Equal(A11yPriority.Medium, rendered.Priority);
+        A11yEvent.HostComposed reconciled = Assert.Single(failures.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(
+            "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.",
+            reconciled.Text);
+        Assert.Equal(A11yPriority.High, reconciled.Priority);
+        Assert.True(
+            failures.IndexOf(reconciled) < failures.IndexOf(landed),
+            "the landed sentence came before the reconcile sentence that cuts it; announced: "
+                + AnnouncementDump(failures));
+        Assert.Equal(reconciled.Text, faulted.Status);
+        Assert.True(faulted.IsExternallyStale);
     }
 
     [Fact]
@@ -983,9 +991,10 @@ public sealed class TasksPanelTests : IDisposable
         try
         {
             workspace.Panels.ToggleTask(row);
+            // Plan 47 CB-14 (#1660): the write landed, so the toggle says so.
             PumpDispatcherUntil(
-                () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(failed =>
-                    failed.Detail.Contains("test fault")),
+                () => announced.OfType<A11yEvent.TaskToggledUnindexed>().Any(landed =>
+                    landed.Detail.Contains("test fault")),
                 () => "the injected failure never published; announced: "
                     + AnnouncementDump(announced));
         }
@@ -1014,6 +1023,130 @@ public sealed class TasksPanelTests : IDisposable
         workspace.Panels.ToggleTask(fresh);
         _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
         Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
+    }
+
+    private const string ReconcileSentence =
+        "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
+
+    private const string LandedSeamSentence =
+        "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+        + "before index commit. It will appear after the next scan.";
+
+    /// <summary>Plan 47 CB-14: <paramref name="path"/> open in two tabs side by
+    /// side (a split), the first one active again, and the panel's row for its
+    /// task.</summary>
+    private static (WorkspaceTabViewModel Source, WorkspaceTabViewModel Peer, NoteTaskRowViewModel Row) OpenInTwoTabs(
+        WorkspaceViewModel workspace, string path)
+    {
+        workspace.OpenPath(path);
+        WorkspaceTabViewModel source = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        WorkspaceGroupViewModel sourceGroup = workspace.ActiveGroup;
+        workspace.OpenPath(path, WorkspaceOpenTarget.SplitRight);
+        WorkspaceTabViewModel peer = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(source, peer);
+        Assert.Equal(path, peer.Path);
+        workspace.Activate(sourceGroup, source);
+        PumpDispatcherUntil(
+            () => workspace.Panels.OpenTasks.Any(r => r.Task.Text == "flip me"),
+            "the panel never listed the source tab's task");
+        return (source, peer, workspace.Panels.OpenTasks.First(r => r.Task.Text == "flip me"));
+    }
+
+    /// <summary>Plan 47 CB-14 (#1660, the lead's ruling on CD8): on the panel
+    /// route with the note open in two tabs, the completion reconciles each tab
+    /// (one High line per tab, as before; NVDA plays the last) and only then
+    /// says the toggle landed, at Medium, so no reconcile line cuts it.</summary>
+    [Fact]
+    public void TheNotesTabsAreReconciledBeforeTheLandedSentenceOnThePanelRoute()
+    {
+        using var _envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-split.md";
+        _ = _session.SaveText(path, "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        (WorkspaceTabViewModel source, WorkspaceTabViewModel peer, NoteTaskRowViewModel row) =
+            OpenInTwoTabs(workspace, path);
+        announced.Clear();
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-split");
+        try
+        {
+            workspace.Panels.ToggleTask(row);
+            PumpDispatcherUntil(
+                () => announced.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                () => "the toggle never published; announced: " + AnnouncementDump(announced));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleFailed>());
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(announced.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(landed.Completed);
+        Assert.Equal(LandedSeamSentence, SlateUniffiMethods.A11yRender(landed).Text);
+        A11yEvent.HostComposed[] reconciled = [.. announced.OfType<A11yEvent.HostComposed>()];
+        Assert.Equal(2, reconciled.Length);
+        Assert.All(reconciled, line =>
+        {
+            Assert.Equal(ReconcileSentence, line.Text);
+            Assert.Equal(A11yPriority.High, line.Priority);
+            Assert.True(
+                announced.IndexOf(line) < announced.IndexOf(landed),
+                "a reconcile line came after the landed sentence; announced: " + AnnouncementDump(announced));
+        });
+        Assert.True(source.IsExternallyStale);
+        Assert.True(peer.IsExternallyStale);
+    }
+
+    /// <summary>Plan 47 CB-14 (#1660): a panel toggle whose tab is closed while
+    /// the write runs has no tab to publish through, so the completion speaks:
+    /// the note's other tab is reconciled first, then the toggle says it landed.
+    /// On main the later High failure sentence cut the reconcile line.</summary>
+    [Fact]
+    public void AClosedTabsLandedUnindexedToggleSaysItLandedAfterThePeersReconcile()
+    {
+        using var _envLock = EnvFaultLock.Acquire();
+        const string path = "cb14-landed-closed.md";
+        _ = _session.SaveText(path, "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        (WorkspaceTabViewModel source, WorkspaceTabViewModel peer, NoteTaskRowViewModel row) =
+            OpenInTwoTabs(workspace, path);
+        announced.Clear();
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-closed");
+        try
+        {
+            workspace.Panels.ToggleTask(row);
+            workspace.CloseTabCommand.Execute(source);
+            PumpDispatcherUntil(
+                () => announced.Any(e => e is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed),
+                () => "the toggle never published; announced: " + AnnouncementDump(announced));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleFailed>());
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(announced.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(landed.Completed);
+        Assert.Equal(LandedSeamSentence, SlateUniffiMethods.A11yRender(landed).Text);
+        A11yEvent.HostComposed reconciled = Assert.Single(announced.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(ReconcileSentence, reconciled.Text);
+        Assert.True(
+            announced.IndexOf(reconciled) < announced.IndexOf(landed),
+            "the landed sentence came before the peer's reconcile line; announced: " + AnnouncementDump(announced));
+        Assert.True(peer.IsExternallyStale);
     }
 
     [Fact]
@@ -1049,8 +1182,9 @@ public sealed class TasksPanelTests : IDisposable
         try
         {
             workspace.Panels.ToggleTask(row);
+            // Plan 47 CB-14 (#1660): the write landed, so the toggle says so.
             PumpDispatcherUntil(
-                () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(),
+                () => announced.OfType<A11yEvent.TaskToggledUnindexed>().Any(),
                 () => "the injected failure never published; announced: "
                     + AnnouncementDump(announced));
 

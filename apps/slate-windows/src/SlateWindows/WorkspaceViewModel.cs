@@ -1718,6 +1718,17 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// delta.</summary>
     internal Action? TaskToggleBeforeWriteForTests { get; set; }
 
+    /// <summary>Test seam (plan 47 CB-14): runs inside the read-back
+    /// after a failed toggle, within its guard, so a fact can make that
+    /// read-back unreadable (the disk's hash unknown).</summary>
+    internal Action? TaskToggleReadBackFaultForTests { get; set; }
+
+    /// <summary>Test seam (plan 47 CB-14): runs inside the toggle worker
+    /// after its outcome and read-back are settled and before its
+    /// publication is queued, so a fact can rename the note between the
+    /// read-back and the publication.</summary>
+    internal Action? TaskToggleBeforePublishForTests { get; set; }
+
     /// <summary>True from a task toggle's start until its dispatcher-side
     /// publish re-baselines the tab (W7-7 PR 7, round 24): a rescan's
     /// clean-tab reload waits for it, because a reload in between would
@@ -1747,6 +1758,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         try
         {
+            TaskToggleReadBackFaultForTests?.Invoke();
             return _session.ReadNoteParts(path).ContentHash;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -1841,6 +1853,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 null);
         }
 
+        TaskToggleBeforePublishForTests?.Invoke();
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
         {
             _ = published?.TrySetResult();
@@ -1904,14 +1917,23 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // when disposal suppresses the tab-state publish. It fires
         // AFTER the tab publish so the source tab and its mirrored
         // peers are already re-baselined when the caller reconciles.
+        // Both are attempted though the tab's publication throws (plan 47
+        // CB-14, codex round 2; CB-9a's rule): a sentence the tab speaks may
+        // throw on its way to UIA, and the completion still repairs,
+        // reconciles and speaks its own sentence.
         bool tabPublished = !_disposed && generation == _taskToggleGeneration;
-        if (tabPublished)
-        {
-            PublishTaskToggleThroughTab(
-                path, expectedHash, revision, task, nextStatus, announce, outcome);
-        }
-        completion?.Invoke(
-            outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished);
+        AdmittedPublication.RunEvery(
+            () =>
+            {
+                if (tabPublished)
+                {
+                    PublishTaskToggleThroughTab(
+                        path, expectedHash, revision, task, nextStatus, announce, outcome,
+                        completionFollows: completion is not null);
+                }
+            },
+            () => completion?.Invoke(
+                outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished));
     }
 
     private void PublishTaskToggleThroughTab(
@@ -1921,12 +1943,55 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
-        TaskToggleOutcome outcome)
+        TaskToggleOutcome outcome,
+        bool completionFollows)
     {
         _taskToggleInFlight = false;
         if (outcome.Error is VaultException.WriteConflict)
         {
             announce(new A11yEvent.TaskToggleConflict(System.IO.Path.GetFileName(path)));
+            return;
+        }
+        // Plan 47 CB-14: the completion reconciles the tabs at the path the
+        // toggle wrote. A tab renamed or moved while the write ran is no longer
+        // there, so it reconciles itself, as a tab with no completion does.
+        bool completionReconcilesThisTab = completionFollows
+            && string.Equals(Path, path, StringComparison.Ordinal);
+        if (outcome.Error is VaultException.SavedButUnindexed unindexed)
+        {
+            // Plan 47 CB-14 (#1660; CD8 as the lead ruled): the write LANDED
+            // and only the index commit failed, so the toggle says it landed,
+            // in core's words (task.Completed is the state before the toggle).
+            // The buffer and the baseline stay as they are: no splice, no undo
+            // step, no rebaseline. The reconcile sentence is spoken FIRST (High,
+            // unchanged) and this one after it (Medium): under NVDA a High line
+            // cancels the speech raised just before it, so this is the order in
+            // which a reader hears both. With a completion behind this tab (the
+            // panel, the review through a tab) the completion reconciles every
+            // tab of the note and then speaks it. Without one (the editor's
+            // activate-at-cursor, the reading view) this tab reconciles itself,
+            // its peers mirror the stale state silently, and it speaks here;
+            // each step is attempted though a sentence before it throws (the
+            // CB-9a rule). A tab renamed or moved while the write ran (codex
+            // round 1) is no longer under the path the completion reconciles,
+            // so it reconciles itself and its peers here too, and the
+            // completion still speaks after it.
+            var landed = new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail);
+            Status = SlateUniffiMethods.A11yRender(landed).Text;
+            if (!completionReconcilesThisTab)
+            {
+                AdmittedPublication.RunEvery(
+                    () => ReconcileAfterExternalTaskWrite(
+                        outcome.PostFailureDiskHash ?? unindexed.newContentHash, announce),
+                    () => _documentChanged?.Invoke(this, null),
+                    () =>
+                    {
+                        if (!completionFollows)
+                        {
+                            announce(landed);
+                        }
+                    });
+            }
             return;
         }
         if (outcome.Error is VaultException error)
@@ -1936,14 +2001,47 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // field-labelled message ("@message=…").
             var failed = new A11yEvent.TaskToggleFailed(SlateUniffiMethods.VaultErrorDetail(error));
             Status = SlateUniffiMethods.A11yRender(failed).Text;
-            announce(failed);
+            // Plan 47 CB-14 (the judge's review): a failure whose read-back
+            // shows the write landed anyway leaves this tab over changed
+            // disk. With no completion behind it (the editor's activate-at-
+            // cursor, the reading view), or with one that reconciles another
+            // path (this tab was renamed or moved while the write ran), the
+            // tab reconciles itself and its peers by the completion's own
+            // rule (a moved read-back), after the failure sentence as on the
+            // panel route; otherwise the completion does.
+            bool landedAnyway = outcome.PostFailureDiskHash is { } readBack
+                && !string.Equals(readBack, _contentHash, StringComparison.Ordinal);
+            if (!completionReconcilesThisTab && landedAnyway)
+            {
+                AdmittedPublication.RunEvery(
+                    () => announce(failed),
+                    () => ReconcileAfterExternalTaskWrite(outcome.PostFailureDiskHash!, announce),
+                    () => _documentChanged?.Invoke(this, null));
+            }
+            else
+            {
+                announce(failed);
+            }
             return;
         }
 
         SaveReport report = outcome.Report!;
         string updatedText = outcome.UpdatedText!;
-        if (!string.Equals(Path, path, StringComparison.Ordinal)
-            || !string.Equals(_contentHash, expectedHash, StringComparison.Ordinal)
+        if (!string.Equals(Path, path, StringComparison.Ordinal))
+        {
+            // Plan 47 CB-14 (the judge's third review): the note was renamed
+            // or moved while the write ran. The completion reconciles the
+            // tabs at the path the toggle wrote, which no longer holds this
+            // tab, so this tab reconciles itself over the hash the toggle
+            // wrote (the stale mark and its sentence) and its peers mirror
+            // the stale state, as the failure arms do. Nothing touches the
+            // text, the saved hash or the undo stack.
+            AdmittedPublication.RunEvery(
+                () => ReconcileAfterExternalTaskWrite(report.NewContentHash, announce),
+                () => _documentChanged?.Invoke(this, null));
+            return;
+        }
+        if (!string.Equals(_contentHash, expectedHash, StringComparison.Ordinal)
             || _editorSession is null
             || _editorSession.Revision != revision
             || IsDirty)
@@ -2035,12 +2133,15 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
 
     /// <summary>A task toggle wrote this tab's file WITHOUT
-    /// publishing through it (adversarial round 3: the review's
+    /// splicing it into this tab (adversarial round 3: the review's
     /// tabless route decided before this tab raced open, or the
-    /// originating same-path tab was disposed mid-flight). A buffer
+    /// originating same-path tab was disposed mid-flight; plan 47
+    /// CB-14: or the write landed but its index commit failed, on
+    /// any route, this tab the toggle's own included). A buffer
     /// still holding pre-write content is a stale editor over
     /// changed disk — reuse the splice path's divergence honesty,
-    /// verbatim, and drop the interaction caches.</summary>
+    /// verbatim, and drop the interaction caches. Nothing here
+    /// touches the text, the saved hash or the undo stack.</summary>
     internal void ReconcileAfterExternalTaskWrite(
         string newContentHash, Action<A11yEvent> announce)
     {
@@ -4139,7 +4240,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// mid-flight must not eat the outcome. Failures disarm the
     /// review's pending refresh; successes announce when the tab
     /// could not, re-snapshot the panels and the review, and give
-    /// orphaned same-path tabs the divergence honesty.</summary>
+    /// orphaned same-path tabs the divergence honesty. A write that
+    /// landed but was not indexed (plan 47 CB-14) is announced here
+    /// after the note's tabs are reconciled, whether or not the tab
+    /// published.</summary>
     private Action<SaveReport?, VaultException?, string?, bool> TaskToggleCompletion(
         string path, TaskItem task, string? preToggleHash)
     {
@@ -4156,6 +4260,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // hash reconciles tabs and re-snapshots both task
                 // surfaces instead of retaining an obsolete clean
                 // editor over changed disk.
+                if (postFailureDiskHash is null
+                    && error is VaultException.SavedButUnindexed landedWrite)
+                {
+                    // Plan 47 CB-14: a landed write names the hash it
+                    // wrote, so an unreadable read-back still reconciles
+                    // the note's tabs over it (the tab route's own rule).
+                    postFailureDiskHash = landedWrite.newContentHash;
+                }
                 bool diskMoved = postFailureDiskHash is not null
                     && preToggleHash is not null
                     && !string.Equals(
@@ -4169,45 +4281,66 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // them.
                 bool outcomeUnknown = postFailureDiskHash is null
                     && error is not VaultException.WriteConflict;
-                if (diskMoved || outcomeUnknown)
-                {
-                    // Repair the INDEX first (adversarial round 12):
-                    // the real failure window is file-written /
-                    // index-uncommitted, so reloading before the
-                    // repair would re-query the stale index and
-                    // resurrect the pre-write state as ghost rows.
-                    // Tab reconciliation is hash-truth and runs when
-                    // the hash is known; the surface reloads are
-                    // GATED on the repair succeeding (rounds 14-15)
-                    // — a failed repair enters the SHARED
-                    // quarantine, which bars both surfaces' queries
-                    // until a retry lands.
-                    bool repaired = _taskIndexRepairs.TryRepairNow(path, out _);
-                    if (diskMoved)
+                // Repair the INDEX first (adversarial round 12): the
+                // real failure window is file-written / index-
+                // uncommitted, so reloading before the repair would
+                // re-query the stale index and resurrect the pre-write
+                // state as ghost rows. Tab reconciliation is hash-truth
+                // and runs when the hash is known; the surface reloads
+                // are GATED on the repair succeeding (rounds 14-15) — a
+                // failed repair enters the SHARED quarantine, which
+                // bars both surfaces' queries until a retry lands. Each
+                // step is attempted though a sentence before it throws
+                // (plan 47 CB-9a's rule; CB-14 put the landed sentence
+                // after the reconcile, so a throwing reconcile sentence
+                // must not take it down).
+                bool repaired = false;
+                AdmittedPublication.RunEvery(
+                    () => repaired = (diskMoved || outcomeUnknown)
+                        && _taskIndexRepairs.TryRepairNow(path, out _),
+                    () =>
                     {
-                        ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
-                    }
-                    if (repaired)
+                        if (diskMoved)
+                        {
+                            ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
+                        }
+                    },
+                    () =>
                     {
-                        NotePersisted(path);
-                        TasksReview.NoteRefreshed(path);
-                    }
-                }
-                // Idempotent after NoteRefreshed consumed the marker;
-                // disarms it when disk truly never changed.
-                TasksReview.ToggleAbandoned(path);
-                if (!publishedThroughTab)
-                {
-                    if (error is VaultException.WriteConflict)
+                        if (repaired)
+                        {
+                            NotePersisted(path);
+                            TasksReview.NoteRefreshed(path);
+                        }
+                    },
+                    // Idempotent after NoteRefreshed consumed the marker;
+                    // disarms it when disk truly never changed.
+                    () => TasksReview.ToggleAbandoned(path),
+                    () =>
                     {
-                        _announce(new A11yEvent.TaskToggleConflict(fileName));
-                    }
-                    else
-                    {
-                        _announce(new A11yEvent.TaskToggleFailed(
-                            SlateUniffiMethods.VaultErrorDetail(error!)));
-                    }
-                }
+                        if (error is VaultException.SavedButUnindexed unindexed)
+                        {
+                            // Plan 47 CB-14 (#1660; CD8 as the lead ruled):
+                            // the write landed, so the toggle says so, AFTER
+                            // the reconcile above (a High line raised after it
+                            // would cut it), whether or not the tab published:
+                            // a tab that published left the sentence to this
+                            // completion.
+                            _announce(new A11yEvent.TaskToggledUnindexed(!task.Completed, unindexed.detail));
+                        }
+                        else if (!publishedThroughTab)
+                        {
+                            if (error is VaultException.WriteConflict)
+                            {
+                                _announce(new A11yEvent.TaskToggleConflict(fileName));
+                            }
+                            else
+                            {
+                                _announce(new A11yEvent.TaskToggleFailed(
+                                    SlateUniffiMethods.VaultErrorDetail(error!)));
+                            }
+                        }
+                    });
                 return;
             }
             if (!publishedThroughTab)
@@ -4423,8 +4556,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
         // A null sync event on a CLEAN buffer is a whole-document
         // refresh — the task-toggle publish re-baselines saved
-        // (W4-3): the panels re-read what just changed on disk (the
-        // save command's own funnel covers ordinary saves).
+        // (W4-3), or a landed-but-unindexed toggle marked the note
+        // stale (plan 47 CB-14): the panels re-read what just changed
+        // on disk (the save command's own funnel covers ordinary
+        // saves).
         if (syncEvent is null && !source.IsDirty)
         {
             NotePersisted(source.Path);
