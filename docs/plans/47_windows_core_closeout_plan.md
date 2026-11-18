@@ -660,7 +660,8 @@ and CB-13 both edit `TryRenameSelected` in
 `WorkspaceViewModel*.cs` with CB-11 and runs after it in one slot, a
 fifth allowed pair. It also stands in the `session.rs` row with CB-12,
 in another slot: if CB-9b's spec edits `session.rs`, CB-9b branches only
-after CB-12 has merged, and if it does not, the row is corrected.
+after CB-12 has merged, and if it does not, the row is corrected. It
+did, and branched from CB-12's merge.
 
 Wave C3 was checked again on 2026-11-16, when the specs for CB-9a and
 CB-10 were written. CB-7 shares no file with either: it edits the gate
@@ -712,18 +713,18 @@ Sequenced on purpose, because they share files:
 | `38_notification_dispatcher_contracts.md` (the generated ledger, a lane gate after CB-3) | every chunk that adds or moves an `A11yEvent` construction, CB-9a among them (it moves up to four construction sites); same-wave pairs rebase and rerun `--write`, never hand-merging |
 | `TestWaitCensus.cs` | CB-4, CB-6, CB-7 |
 | `Censuses/SaveChainAdmissionCensus.cs` | CB-9a creates it; CB-9b deletes its rows. From CB-9a's merge, any chunk that adds a first Windows call to a `VaultSession` method classifies it there |
-| `docs/plans/40_nvda_matrix_remediation_contracts.md` (contract 40's R rows) | CB-10 (an addendum after R-5) and CB-9a (an addendum after R-9), same wave, different rows; the second to merge rebases and keeps both. Contract 40 is also in the palette row below, for CB-34, CB-38 and CB-38b |
+| `docs/plans/40_nvda_matrix_remediation_contracts.md` (contract 40's R rows) | CB-10 (an addendum after R-5) and CB-9a (an addendum after R-9), same wave, different rows; the second to merge rebases and keeps both. Then CB-11 (its R-8 addendum, #1997). Contract 40 is also in the palette row below, for CB-34, CB-38 and CB-38b |
 | `WorkspaceSaveCoordinator.cs` | CB-9a (`AdmittedForTests` and `INoteSaveChain`), then CB-9b |
 | `Panels/PanelWorkScheduler.cs` | CB-9a (`StartTrackedWork`), then any chunk that adds panel work; no later chunk is named for it yet |
 | `Support/StaThread.cs` | CB-1 only; CB-2's stall dump goes through the runtime's own dump path |
 | `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-26 (only if its design adds a journey), CB-40, CB-18; never two in a wave that edit the same partial file |
-| `crates/slate-core/src/session.rs` | CB-8, CB-9b, CB-12, CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
+| `crates/slate-core/src/session.rs` | CB-8, CB-12, CB-9b (branched from CB-12's merge, 6b098c1e), CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
 | `crates/slate-core/src/db.rs` | CB-32 (the fold's migration), then CB-45b (the reader connection) |
 | `a11y.rs`, the corpus and the variant count | CB-14, then CB-32 (only if the rebuild speaks), then CB-16 (the import events), then CB-20b, then CB-26 (only if folding announces); plan 44's WB-30 takes the next slot |
 | `crates/slate-uniffi/src/lib.rs` | CB-14 (a new event), CB-28 (one doc comment), CB-16 (the import events), CB-23 (the three panel lines), CB-20b (a new event), CB-26 (the callout), CB-45b (the first phase of the scan-lock design); never two in a wave |
 | `diagram.rs`, `EditorInteractions.cs` | CB-27, CB-28, CB-29, then CB-15c and CB-22 |
-| `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-9b, CB-11, CB-14, CB-15c, CB-22 |
-| `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-13 (one line in `TryRenameSelected`'s catch, merged), then CB-9b, CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
+| `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-11, CB-9b, CB-14, CB-15c, CB-22 |
+| `FilesSidebarViewModel*.cs` (`FilesSidebarViewModel.Trash.cs` among them) | CB-13 (one line in `TryRenameSelected`'s catch, merged), then CB-9b (merged), CB-15a, CB-17b (the Files and Trash self-disabling buttons), CB-16, CB-35 (the filter field), CB-39, CB-40, CB-41, CB-18 |
 | `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-10 (`OpenVaultAsync` in `VaultLifecycleViewModel.cs` only), then CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them. CB-9a's spec edits none of them |
 | `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-17a, CB-17b (the sheets, and the property-row and launcher buttons), CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
@@ -764,7 +765,7 @@ Plan 44 §7 applies. Per kind of chunk, what its PR body quotes:
 | The ruleset `PUT` from #1639, so #1565 can close | Any time; the week's watch is met | (audit) |
 | `/design-sync`, so #1756 can close | Any time | (audit) |
 | The four Studio steps for #1564 | Any time | (audit) |
-| Two Slate sessions on one vault for the field pass, if the launcher cannot start two | When CB-12's PR is up | CB-12 |
+| Two Slate sessions on one vault for the field pass, if the launcher cannot start two | Not needed: CB-12's pass started the second window by hand (#1996) | CB-12 |
 | One golden rebuild, then a `home-only` run and #1903's probe | After CB-43 merges (and after CB-44, if it changes what the image needs) | CB-43 |
 | The VoiceOver passes and Mac adoptions on the ledger | Plan 43's queue | (ledger) |
 
@@ -784,8 +785,8 @@ today:
   CD41); #1889 (the export's refusal: by reading uniffi 0.32.2's Swift
   error template, VoiceOver would hear "Saved query could not be
   exported: " and the error's type spelling, so the Mac's arm needs
-  `humanReadableVaultError`; moved here from the line below on
-  2026-11-17, CB-9b's Call 6).
+  `humanReadableVaultError`; moved here from the line below by CB-9b's
+  Call 6, ruled on 2026-11-17 and recorded on #1954 on 2026-11-18).
 - Behaviour, with nothing new to hear: #1683 (one event stops arriving);
   #1704 and #1705 (links that used to stay
   unresolved now resolve; #1705's new fold rebuilds each vault's index
@@ -801,7 +802,8 @@ today:
   draws edge-label chips, #371, CD24).
 
 The issue's body is the live text of these lines. It was brought into
-line with this list on 2026-11-16.
+line with this list on 2026-11-16, and #1889's line moved under "Speech
+or text" on 2026-11-18.
 
 **"Plan 47 deferred finds"** (#1955) is the second issue CB-0 opens (§4 rule 10).
 It starts with the finds §9 gives to CB-46.
@@ -907,8 +909,10 @@ started:
 
 CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
 each ends with the corrections its delivery made. Wave C5's specs were
-written on 2026-11-17 at eea6e7a2, each with a step 0 measurement and a
-red team before code, and each ends with what its delivery changed.
+written on 2026-11-17: CB-11's, CB-12's and CB-19's cite `main` at
+3ae84200 (CB-12's and CB-19's were checked again at eea6e7a2), and
+CB-9b's cites eea6e7a2. Each has a step 0 measurement and a red team
+before code, and each ends with what its delivery changed.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1029,13 +1033,13 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-27 | #1978 | 2026-11-17 (b127a84a) | #1631 | 3 / 0 / 2 / 1 | Two lines on #1955 (the "unsupported" classification; a sequence diagram's name counts `participant` lines as interactions). Filed #1979. VoiceOver on #1954. NVDA phrases are in the PR body; the diagram key is Ctrl+Alt+D |
 | #1975 (not a chunk: found by CB-13's step 0, merged first) | #1982 | 2026-11-17 (c84a08ef) | #1975 | 11 / 1 / 9 / 1 | Seven deferred lines and two possible flakes on #1955. Filed #1981 (a stopped rename's recovery loses the history binding). Nothing is notified for the alias path. The alias-row case is pinned in core only. A Mac check on #1954 |
 | #1979 (not a chunk: the math hook race that turned CB-27's lane red) | #1984 | 2026-11-17 (7d948eb3) | #1979 | 0 / 0 / 0 / 0 | Not delivered: the swap-first order under a forced interleaving, a pin on the lock's release, a census that every fact swaps through the helper |
-| CB-9a | #1983 | 2026-11-17 (3d56978f) | none (Refs #1889, open for CB-9b) | 11 / 5 / 5 / 1 | CB-9b ends four census rows (`BulkRenameViewModel.Run`, `FilesSidebarViewModel.EditTag`, `ExportSavedQueryAsBase`, the bulk-rename caller of `ReconcileTabsAfterPropertyWrite`). Filed #1980 (a tabless Bases cell edit names a path), pinned by a fact. Five lines on #1955. Not delivered: an NVDA hearing of the raced-tab sentence. The owner's ear on that sentence's new occasion |
+| CB-9a | #1983 | 2026-11-17 (3d56978f) | none (Refs #1889, open for CB-9b) | 11 / 5 / 5 / 1 | CB-9b ends four census rows (`BulkRenameViewModel.Run`, `FilesSidebarViewModel.EditTag`, `ExportSavedQueryAsBase`, the bulk-rename caller of `ReconcileTabsAfterPropertyWrite`). Filed #1980 (a tabless Bases cell edit names a path), pinned by a fact. Five lines on #1955. Not delivered: an NVDA hearing of the raced-tab sentence. The owner's ear on that sentence's new occasion. Delivered by #2001 (eeb99032). |
 | CB-7 | #1986 | 2026-11-17 (3ae84200) | #1788 (CD3) | 6 / 0 / 4 / 2 | Filed #1974 (every Windows writer makes the classic replacing rename; the spec's mechanism was wrong) and #1976 (the app menu pointer fact). Four lines on #1955. Codoki was bypassed on an independent judge's verdict: its one finding, that xunit has no `Assert.Fail`, is false. Not delivered: a failing test for #1788's own run. Three local reds never reproduced and never seen on a lane |
 | CB-13 | #1985 | 2026-11-17 (0a417b84) | #1727 | 7 / 1 / 4 / 2 | Filed #1975 (merged first, above) and #1977 (an outside edit made just before a rename is dropped as the rename's own echo). Three lines and a possible flake on #1955. A refusal records no echo. Run 43943403456: the read with the renamed handle still open equals the folder's listing in all twelve cases, and the watcher hears no event for either spelling around an ignored rename. Not delivered: an NVDA hearing on a real FAT32 or exFAT volume (an owner step); the read-back on an SMB share on the lane (it passed locally on a loopback share over NTFS); either read after a rename a FAT volume applied; the mixed folder outcome. The Mac's twin on #1954 |
 | CB-12 | #1996 | 2026-11-17 (6b098c1e) | #1683 (CD6) | 8 / 1 / 6 / 1 | Six lines on #1955: the Modified sibling, the launcher's second instance, the generation across sessions, the destination's re-read under a stale graph at `graph.rs:841`, the release DLL's reproducibility, and `delete_file`'s staging. Filed #1995 (a field pass started by the launcher without `-Root` runs with no hot-exit store). The Mac's line on #1954. NVDA two-session phrases for base and head are in the PR body. Not delivered: a VoiceOver or Mac run |
-| CB-11 | #1997 | 2026-11-17 (6351c82b) | #1714 | 15 / 9 / 1 / 5 | Filed #1988, #1989, #1990, #1993 and #1994 (more shapes added as comments on #1990, #1993 and #1994). A line on #1955: NVDA cuts off the leaf's count under the sheet's sentence when both arrive in one turn. Not delivered: another session's rename read before this window's rescan (#1990); a rename made outside Slate. The read-window exposure (another session replacing the file between the check and the load's read) was declined on the lead's call and recorded on #1990. NVDA ran on 2d45fbea, before the review fixes. No Mac work owed |
+| CB-11 | #1997 | 2026-11-18 (6351c82b) | #1714 | 15 / 9 / 1 / 5 | Filed #1988, #1989, #1990, #1993 and #1994 (more shapes added as comments on #1990, #1993 and #1994). A line on #1955: NVDA cuts off the leaf's count under the sheet's sentence when both arrive in one turn. Not delivered: another session's rename read before this window's rescan (#1990); a rename made outside Slate. The read-window exposure (another session replacing the file between the check and the load's read) was declined on the lead's call and recorded on #1990. NVDA ran on 2d45fbea, before the review fixes. No Mac work owed |
 | CB-19 | #1998 | 2026-11-18 (69380c4e) | #1783, #1836 | 5 / 2 / 3 / 0 | Three lines on #1955: the stale `ChordTable.cs` sort-combo comment, a possible `OpenRailPanel` flake, and key lag under NVDA during an import on `main`. NVDA phrases for base and head are in the PR body. NVDA speaks no position on the popup copy on either build, so the gate scans and UIA reads are the evidence. Not delivered: a fact for the tracker's attach guard, and a red run for the stricter still-open check |
-| CB-9b | #2001 | 2026-11-18 (eeb99032) | #1889 | 21 / 12 / 5 / 4 | Filed #1991 and #1992 (from the spec), #1999 (the reading view's notice, ruled in at three new occasions) and #2000 (a throwing announcement in a posted publication ends the app). Lines on #1955: NVDA's #748 cancel in phrase 4, and a structured per-file failure kind to replace the `SavedButUnindexed` text match; the CB-9a items 1 and 3 clearing comment. Comments on #1866 (Apply moves the keys out of the sheet) and #1995. The undo defect (data loss on `main`) is fixed for every property write, the bulk rename, both Bases cell routes, the tag edit and the link rewrite. Census: four rows ended; five accepted rows (four link-rewrite members and `PublishBasesExport`) and one standing row left for CB-46. Not delivered: a VoiceOver pass (a #1954 line, owed the Mac fix); the apply's summary on the application close (NVDA drops it at exit, as on `main`); a fact that drives a vault switch. NVDA ran on ba0c1b64, before the Codex-round fixes, which add no sentence |
+| CB-9b | #2001 | 2026-11-18 (eeb99032) | #1889 | 21 / 12 / 5 / 4 | Filed #1991 and #1992 (from the spec), #1999 (the reading view's notice, ruled in at three new occasions) and #2000 (a throwing announcement in a posted publication ends the app). Lines on #1955: NVDA's #748 cancel in phrase 4, and a structured per-file failure kind to replace the `SavedButUnindexed` text match; the CB-9a items 1 and 3 clearing comment. Comments on #1866 (Apply moves the keys out of the sheet) and #1995. The undo defect (data loss on `main`) is fixed for every property write, the bulk rename, both Bases cell routes, the tag edit and the link rewrite. Census: four rows ended; five accepted rows (four link-rewrite members and `PublishBasesExport`) left for CB-46's table, beside one standing row (`ReplaceTabItem`, not this class). Not delivered: a VoiceOver pass (a #1954 line, owed the Mac fix); the apply's summary on the application close (NVDA drops it at exit, as on `main`); a fact that drives a vault switch. NVDA ran on ba0c1b64, before the Codex-round fixes, which add no sentence |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1167,29 +1171,36 @@ that day, two new principals and their workers ran on Opus at xhigh
 from the saved specs and worktrees, until the limit resets on
 2026-11-21. Each spec had a step 0 measurement and an Opus red team
 before code, and each diff a fresh Opus red team. Codex ran at effort
-high to an approve: CB-12 two rounds, CB-19 four, CB-9b five and CB-11
-eight. Codoki reported Safe to merge on every PR: at 5/5 on CB-11's,
-CB-12's and CB-19's, and at 3/5 on CB-9b's, whose points were answered
-on the PR by reading.
+high, below the protocol's xhigh as in the earlier waves, to an
+approve: CB-12 two rounds, CB-19 four, CB-9b five and CB-11 eight.
+Codoki reported Safe to merge on every PR: at 5/5 on CB-11's, CB-12's
+and CB-19's, and at 3/5 on CB-9b's ("Needs work before merge", from 7
+of its 23 files), whose points were answered on the PR by reading.
 
-CB-11's rounds 1 to 7 each found a schedule in which the parked press
-answered for another note where `main` drops it, and each was fixed red
-first. The spec's rule, that the press follows the tab the leaf shows,
-was wrong where two tabs name one path. The press now follows the tab
-it was parked on, and only with proof that the moved file is that tab's
-version: the index at the new path for this window's renames, and the
-feed record's present hash for another session's. Round 7's second
-finding, another session replacing the file between the check and the
-load's read, has the same exposure on `main` for any parked press; the
-lead declined it as the residual risk of a read by path, recorded on
-#1990.
+CB-11's Codex rounds 1 to 7 each found a schedule the branch got
+wrong, and each fix in the chunk's own feature was seen red first. In
+rounds 1 and 4 to 7 the parked press could be answered for a file that
+was not its note, where `main` drops it; in rounds 2 and 3 a fix
+dropped a press that should have followed its note. Findings that
+`main` already has went to #1993 and #1994. The spec's rule, that the
+press follows the tab the leaf shows, was wrong where two tabs name one
+path. The press now follows the tab it was parked on, and only with
+proof that the moved file is that tab's version: the index at the new
+path for this window's renames, and, for another session's, the feed
+record's hash and the window's present hash for the destination. Round
+7's second finding, another session replacing the file between the
+check and the load's read, has the same exposure on `main` for any
+parked press; the lead declined it as the residual risk of a read by
+path, recorded on #1990.
 
-CB-19's spec priced its row tracker against lists of 3 to about 10
-rows. Its diff red team showed the dashboard editor's saved-query picker
-is unbounded and stays realized after its first open, so a refill cost
-grew with the square of the rows. The tracker now stamps only while a
-list is open, and a fact shows a closed combo box reports what it
-reports on `main`.
+CB-19's first build stamped closed lists too, on the reasoning that the
+lists hold 3 to about 10 rows. Its diff red team showed that the
+dashboard editor's saved-query picker binds every saved query and stays
+bound with the editor collapsed, and a refill (a `Clear()` and one
+`Add` for each query) restamped every realized row at each `Add`, so
+the writes grew with the square of the rows. The tracker now stamps
+only while a list is open, and a fact shows a closed combo box reports
+what it reports on `main`.
 
 CB-9b's spec put eight calls to the lead, all ruled as recommended on
 2026-11-17. The lead's undo rule (Design 0) made the fix of an undo
