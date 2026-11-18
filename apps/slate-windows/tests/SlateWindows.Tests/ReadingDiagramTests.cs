@@ -465,29 +465,7 @@ public sealed partial class ReadingDiagramTests
     {
         RunSta(() =>
         {
-            const string source = "flowchart LR\nA --> B\n";
-            const string markdown = "```mermaid\n" + source + "```\n";
-            ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(markdown);
-            ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
-                markdown,
-                Array.Empty<RenderedCitation>(),
-                Array.Empty<OutgoingLink>());
-            var model = new List<(ReadingBlock, ReadingBlockInlines)>();
-            for (int i = 0; i < blocks.Length; i++)
-            {
-                model.Add((blocks[i], inlines[i]));
-            }
-            var rendered = new DiagramBlock(
-                Source: source,
-                Dialect: DiagramDialect.Mermaid,
-                Svg: System.Text.Encoding.UTF8.GetBytes(
-                    "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
-                    + "<rect width='8' height='8' fill='red'/></svg>"),
-                PngFallback: null,
-                StructuredDescription: "Flowchart with 1 step.",
-                RenderStatus: new DiagramRenderStatus.Ok(),
-                Line: 1,
-                ByteOffset: (uint)markdown.IndexOf("```", StringComparison.Ordinal));
+            (List<(ReadingBlock, ReadingBlockInlines)> model, DiagramBlock rendered) = RenderedFlowchart();
 
             // The wait reports its budget spent while the decode is parked, so
             // it cannot finish first.
@@ -530,6 +508,86 @@ public sealed partial class ReadingDiagramTests
                     () => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)));
             }
         });
+    }
+
+    /// <summary>#1635 (CD19): a diagram whose SVG decode ran out its budget
+    /// is not decoded again. The next build of the same artifact shows the
+    /// same reason at once. The diagram stage has no deadline of its own;
+    /// the memory serves it as it serves embeds.</summary>
+    [Fact]
+    public void ADiagramWhoseDecodeRanPastItsBudgetIsNotDecodedAgain()
+    {
+        RunSta(() =>
+        {
+            (List<(ReadingBlock, ReadingBlockInlines)> model, DiagramBlock rendered) = RenderedFlowchart();
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            var decodes = new ParkedSvgDecodes();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = decodes.Parked;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+            try
+            {
+                for (int build = 1; build <= 2; build++)
+                {
+                    ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+                        model,
+                        new ReadingListBuildContext(),
+                        Array.Empty<CodeBlock>(),
+                        Array.Empty<MathBlock>(),
+                        new[] { rendered });
+
+                    Assert.Equal(1, decodes.Runs);
+                    string text = new System.Windows.Documents.TextRange(
+                        built.Document.ContentStart,
+                        built.Document.ContentEnd).Text;
+                    int header = text.IndexOf("Diagram could not be rendered", StringComparison.Ordinal);
+                    int said = text.IndexOf(
+                        "Image not shown: decoding took longer than 5 seconds.",
+                        StringComparison.Ordinal);
+                    Assert.True(header >= 0, text);
+                    Assert.True(said > header, text);
+                }
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                decodes.Release();
+                Assert.True(SpinWait.SpinUntil(
+                    () => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)));
+            }
+        });
+    }
+
+    /// <summary>A one-step flowchart's reading model and its rendered
+    /// diagram, an 8x8 SVG.</summary>
+    private static (List<(ReadingBlock, ReadingBlockInlines)> Model, DiagramBlock Rendered) RenderedFlowchart()
+    {
+        const string source = "flowchart LR\nA --> B\n";
+        const string markdown = "```mermaid\n" + source + "```\n";
+        ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(markdown);
+        ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+            markdown,
+            Array.Empty<RenderedCitation>(),
+            Array.Empty<OutgoingLink>());
+        var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            model.Add((blocks[i], inlines[i]));
+        }
+        var rendered = new DiagramBlock(
+            Source: source,
+            Dialect: DiagramDialect.Mermaid,
+            Svg: System.Text.Encoding.UTF8.GetBytes(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                + "<rect width='8' height='8' fill='red'/></svg>"),
+            PngFallback: null,
+            StructuredDescription: "Flowchart with 1 step.",
+            RenderStatus: new DiagramRenderStatus.Ok(),
+            Line: 1,
+            ByteOffset: (uint)markdown.IndexOf("```", StringComparison.Ordinal));
+        return (model, rendered);
     }
 
     /// <summary>The mac tooltip rule verbatim: three lines, spaces,

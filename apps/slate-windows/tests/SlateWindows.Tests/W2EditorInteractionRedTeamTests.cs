@@ -249,7 +249,8 @@ public sealed class W2EditorInteractionRedTeamTests
     /// <summary>#1581: while two abandoned decodes run, a new decode is
     /// refused with core's busy sentence (it never started, so it is not told
     /// it took too long) and starts no decoder; once they end, decoding works
-    /// again.</summary>
+    /// again. Four distinct SVGs: a repeat of a timed-out one would be
+    /// refused as remembered (#1635).</summary>
     [Fact]
     public void SvgPreview_RefusesANewDecodeWhileTwoAreAbandoned()
     {
@@ -257,7 +258,13 @@ public sealed class W2EditorInteractionRedTeamTests
         using var lines = new DiagnosticLines();
         var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
         int bodyRuns = 0;
-        byte[] svg = Encoding.UTF8.GetBytes(SmallSvg);
+        byte[][] svgs =
+        [
+            Encoding.UTF8.GetBytes(FilledSvg("red")),
+            Encoding.UTF8.GetBytes(FilledSvg("green")),
+            Encoding.UTF8.GetBytes(FilledSvg("blue")),
+            Encoding.UTF8.GetBytes(FilledSvg("black")),
+        ];
         WithSvgDecodeSeams(
             slots,
             budgetMilliseconds: 100,
@@ -269,14 +276,14 @@ public sealed class W2EditorInteractionRedTeamTests
             },
             () =>
             {
-                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _));
-                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _));
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svgs[0], "image/svg+xml", out _));
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svgs[1], "image/svg+xml", out _));
                 WaitUntil(() => Volatile.Read(ref bodyRuns) == 2);
                 Assert.Equal(
                     EditorInteractionCoordinator.MaxAbandonedSvgDecodes,
                     Volatile.Read(ref slots.Abandoned));
 
-                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? refused));
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svgs[2], "image/svg+xml", out string? refused));
                 Assert.Equal(
                     "Image not shown: earlier images are still decoding past their 5-second budget.",
                     refused);
@@ -293,7 +300,7 @@ public sealed class W2EditorInteractionRedTeamTests
             slots,
             budgetMilliseconds: null,
             body: null,
-            () => Assert.NotNull(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _)));
+            () => Assert.NotNull(EditorInteractionCoordinator.DecodeImage(svgs[3], "image/svg+xml", out _)));
     }
 
     /// <summary>#1581 (the plan 45 XB-10b review): decodes waited on from
@@ -529,6 +536,297 @@ public sealed class W2EditorInteractionRedTeamTests
             });
         Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
     }
+
+    private const string TookLonger = "Image not shown: decoding took longer than 5 seconds.";
+
+    private const string ProjectionSpent =
+        "Image not shown: this note's images used their 20-second decoding budget.";
+
+    /// <summary>The 8x8 test SVG in a fill of its own, so its bytes are its
+    /// own (#1635 remembers a decode by its bytes).</summary>
+    private static string FilledSvg(string fill) =>
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+        + $"<rect width='8' height='8' fill='{fill}'/></svg>";
+
+    /// <summary>#1635 (CD19): an SVG whose decode ran out its whole budget is
+    /// not decoded again. The repeat is refused at once, before a slot or a
+    /// decoder thread, with the sentence the first decode got.</summary>
+    [Fact]
+    public void SvgPreview_ARepeatOfATimedOutDecodeIsRefusedWithoutADecoderThread()
+    {
+        using var lines = new DiagnosticLines();
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = Encoding.UTF8.GetBytes(FilledSvg("teal"));
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: decodes.Parked,
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? first));
+                    Assert.Equal(TookLonger, first);
+                    Assert.Equal(1, decodes.Runs);
+                    Assert.Equal(1, Volatile.Read(ref slots.Live));
+
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? repeat));
+                    Assert.Equal(1, decodes.Runs);
+                    Assert.Equal(TookLonger, repeat);
+                    Assert.Equal(1, Volatile.Read(ref slots.Live));
+                    Assert.Equal(1, Volatile.Read(ref slots.Abandoned));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            decodes.Release();
+        }
+        Assert.Contains(
+            $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedRemembered} (bytes={svg.Length})",
+            lines.Snapshot);
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+    }
+
+    /// <summary>#1635: only a decode abandoned at its own whole budget is
+    /// remembered. An ordinary failure, a wait that fails, a decode that
+    /// finishes as its budget ends and a wait the projection's deadline cut
+    /// short each leave the same bytes free to reach the decoder again; the
+    /// cut one says the projection's sentence, since it never had its 5
+    /// seconds.</summary>
+    [Fact]
+    public void SvgPreview_OnlyATimeoutAtTheFullBudgetIsRemembered()
+    {
+        const uint waitFailed = 0xFFFFFFFF;
+        const string mime = "image/svg+xml";
+
+        // An ordinary failure: nothing and no reason.
+        var ordinary = new ParkedSvgDecodes();
+        byte[] unclosed = Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed");
+        WithSvgDecodeSeams(
+            new EditorInteractionCoordinator.SvgDecodeSlots(),
+            budgetMilliseconds: null,
+            body: ordinary.Ending,
+            () =>
+            {
+                for (int decode = 0; decode < 2; decode++)
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(unclosed, mime, out string? reason));
+                    Assert.Null(reason);
+                }
+                Assert.Equal(2, ordinary.RunsOf(unclosed));
+            });
+
+        // A wait that fails: logged, and the decode is joined.
+        var failedWait = new ParkedSvgDecodes();
+        byte[] joined = Encoding.UTF8.GetBytes(FilledSvg("silver"));
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => waitFailed;
+        try
+        {
+            WithSvgDecodeSeams(
+                new EditorInteractionCoordinator.SvgDecodeSlots(),
+                budgetMilliseconds: 100,
+                body: failedWait.Ending,
+                () =>
+                {
+                    for (int decode = 0; decode < 2; decode++)
+                    {
+                        Assert.Null(EditorInteractionCoordinator.DecodeImage(joined, mime, out string? reason));
+                        Assert.Null(reason);
+                    }
+                    Assert.Equal(2, failedWait.RunsOf(joined));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+        }
+
+        // A decode that finishes as its budget ends: an ordinary end.
+        var finishedFirst = new ParkedSvgDecodes();
+        var lateSlots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        byte[] late = Encoding.UTF8.GetBytes(FilledSvg("gold"));
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = handle =>
+        {
+            Assert.Equal(0u, WaitForSingleObject(handle, UnhurriedSvgDecodes.Milliseconds));
+            WaitUntil(() => Volatile.Read(ref lateSlots.Live) == 0);
+            return 0x102;
+        };
+        try
+        {
+            WithSvgDecodeSeams(
+                lateSlots,
+                budgetMilliseconds: 100,
+                body: finishedFirst.Ending,
+                () =>
+                {
+                    for (int decode = 0; decode < 2; decode++)
+                    {
+                        Assert.Null(EditorInteractionCoordinator.DecodeImage(late, mime, out string? reason));
+                        Assert.Null(reason);
+                    }
+                    Assert.Equal(2, finishedFirst.RunsOf(late));
+                    Assert.Equal(0, Volatile.Read(ref lateSlots.Abandoned));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+        }
+
+        // A wait the deadline cut to 50 ms of a 100 ms budget.
+        var cut = new ParkedSvgDecodes();
+        var cutSlots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        byte[] cutShort = Encoding.UTF8.GetBytes(FilledSvg("plum"));
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(50);
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = cut.TimeoutOnceEntered;
+        try
+        {
+            WithSvgDecodeSeams(
+                cutSlots,
+                budgetMilliseconds: 100,
+                body: cut.Parked,
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        cutShort, mime, null, deadline, out _, out string? reason));
+                    Assert.Equal(ProjectionSpent, reason);
+                    Assert.True(deadline.IsSpent);
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            cut.Release();
+        }
+        WaitUntil(() => Volatile.Read(ref cutSlots.Live) == 0);
+        WithSvgDecodeSeams(
+            cutSlots,
+            budgetMilliseconds: null,
+            body: cut.Ending,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(cutShort, mime, out string? reason));
+                Assert.Null(reason);
+                Assert.Equal(2, cut.RunsOf(cutShort));
+            });
+    }
+
+    /// <summary>#1635 (CD19): an embeds-leaf card's images share one decode
+    /// deadline. Each waits for its own budget or what is left, whichever is
+    /// shorter; once it is spent the rest say the projection's sentence
+    /// without entering the decoder. The wait the deadline cut short is not
+    /// remembered; the one that ran its whole budget is.</summary>
+    [Fact]
+    public void SvgPreview_ALeafCardsImagesShareOneDecodeDeadline()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[][] svgs = GallerySvgs("navy", "maroon", "purple");
+        EmbedResolution card = GalleryCard(svgs);
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: decodes.Parked,
+                () =>
+                {
+                    EditorEmbedPreviewNode root = EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                        card,
+                        reserveDecodedBytes: null,
+                        new EditorInteractionCoordinator.SvgDecodeDeadline(150));
+                    ParkedSvgDecodes.AssertSaid(ImageSentences(root), TookLonger, ProjectionSpent, ProjectionSpent);
+                    Assert.Equal(new[] { 1, 1, 0 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            decodes.Release();
+        }
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svgs[1], "image/svg+xml", out string? again));
+                Assert.Null(again);
+                Assert.Equal(2, decodes.RunsOf(svgs[1]));
+
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svgs[0], "image/svg+xml", out string? remembered));
+                Assert.Equal(TookLonger, remembered);
+                Assert.Equal(1, decodes.RunsOf(svgs[0]));
+            });
+    }
+
+    /// <summary>#1635 (CD19): the Ctrl+E popover's card makes its own
+    /// deadline, and its images share it as the leaf's do.</summary>
+    [Fact]
+    public void SvgPreview_APopoverCardsImagesShareOneDecodeDeadline()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[][] svgs = GallerySvgs("olive", "orange", "indigo");
+        EmbedResolution card = GalleryCard(svgs);
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+        EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = 150;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: decodes.Parked,
+                () =>
+                {
+                    EditorEmbedPreviewNode root = EditorInteractionCoordinator.BuildEmbedPreviewForTests(
+                        card, truncated: false);
+                    ParkedSvgDecodes.AssertSaid(ImageSentences(root), TookLonger, ProjectionSpent, ProjectionSpent);
+                    Assert.Equal(new[] { 1, 1, 0 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = null;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            decodes.Release();
+        }
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+    }
+
+    private static byte[][] GallerySvgs(params string[] fills) =>
+        [.. fills.Select(fill => Encoding.UTF8.GetBytes(FilledSvg(fill)))];
+
+    /// <summary>A note card embedding each SVG in turn, nested as core
+    /// resolves them.</summary>
+    private static EmbedResolution GalleryCard(byte[][] svgs)
+    {
+        var text = new StringBuilder();
+        var nested = new List<NestedEmbed>();
+        for (int index = 0; index < svgs.Length; index++)
+        {
+            string name = $"{(char)('a' + index)}.svg";
+            uint start = (uint)Encoding.UTF8.GetByteCount(text.ToString());
+            text.Append("![[").Append(name).Append("]]");
+            uint end = (uint)Encoding.UTF8.GetByteCount(text.ToString());
+            text.Append('\n');
+            nested.Add(new NestedEmbed(
+                name, start, end, new EmbedResolution.Image(name, svgs[index], "image/svg+xml", null)));
+        }
+        return new EmbedResolution.FullNote("gallery.md", text.ToString(), [.. nested]);
+    }
+
+    /// <summary>The sentence each nested image of a card says.</summary>
+    private static string?[] ImageSentences(EditorEmbedPreviewNode card) =>
+        [.. card.Parts
+            .Where(part => part.Nested is not null)
+            .Select(part => Assert.Single(part.Nested!.Parts).Text)];
 
     [DllImport("kernel32.dll")]
     private static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);

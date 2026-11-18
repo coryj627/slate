@@ -2456,7 +2456,7 @@ mod tests {
 
     /// The sentences both hosts show verbatim as the failed state's reason.
     #[test]
-    fn render_time_exceeded_message_has_its_four_forms() {
+    fn render_time_exceeded_message_has_its_forms() {
         assert_eq!(
             render_time_exceeded_message("diagram", 5),
             "Diagram not drawn: rendering took longer than 5 seconds. The source follows."
@@ -2478,6 +2478,10 @@ mod tests {
         assert_eq!(
             render_time_exceeded_message("image-busy", 5),
             "Image not shown: earlier images are still decoding past their 5-second budget."
+        );
+        assert_eq!(
+            render_time_exceeded_message("note-images", 20),
+            "Image not shown: this note's images used their 20-second decoding budget."
         );
         assert_eq!(
             render_time_exceeded_message("diagram", 1),
