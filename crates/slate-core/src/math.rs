@@ -847,22 +847,40 @@ fn latex_to_mathml_trees(latex: &str) -> MathTrees {
 /// after (#1557), and script elements given the children MathCAT takes
 /// (#1629, [`repair_script_children`]). Empty when the writer fails.
 fn write_mathml(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
-    let written = write_mathml_as_written(events);
+    let (written, functions) = write_mathml_marked(events);
     if written.is_empty() {
         written
     } else {
-        repair_script_children(&written)
+        repair_script_children(&written, &functions)
     }
 }
 
-/// [`write_mathml`] without the script repair: what the writer gives, with
-/// only its markup characters escaped.
-fn write_mathml_as_written(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
+/// Marks a function name for [`write_mathml_marked`]. A private-use
+/// character, so no source spells it by chance.
+const FUNCTION_MARK: char = '\u{E000}';
+
+/// What the writer gives, with only its markup characters escaped, and for
+/// each `<mi>` in it, in order, whether the writer wrote it for a function
+/// name. The two are byte for byte what pulldown-latex writes for an
+/// ordinary character and for a function name of one character after
+/// escaping (`\&` and `\operatorname{&}` are both `<mi>&amp;</mi>`), so
+/// each function name is handed to the writer behind [`FUNCTION_MARK`] and
+/// the mark is taken out again here, with the `mathvariant="normal"` the
+/// writer gives a name of one character put back as it would have written
+/// it. A source that already holds the mark has no function told apart,
+/// and is written as the writer writes it.
+fn write_mathml_marked(events: Vec<pulldown_latex::event::Event<'_>>) -> (String, Vec<bool>) {
     use pulldown_latex::event::{Content, Event};
     use pulldown_latex::{RenderConfig, mathml::push_mathml};
+    let mark = !events.iter().any(|event| {
+        matches!(event, Event::Content(Content::Function(name)) if name.contains(FUNCTION_MARK))
+    });
     let names: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
+            Event::Content(Content::Function(name)) if mark => {
+                Some(format!("{FUNCTION_MARK}{}", escape_xml_text(name)))
+            }
             Event::Content(Content::Function(name)) => Some(escape_xml_text(name)),
             _ => None,
         })
@@ -878,9 +896,55 @@ fn write_mathml_as_written(events: Vec<pulldown_latex::event::Event<'_>>) -> Str
     });
     let mut out = String::new();
     match push_mathml(&mut out, escaped, RenderConfig::default()) {
-        Ok(()) => escape_stray_markup(&out),
-        Err(_) => String::new(),
+        Ok(()) => unmark_functions(&escape_stray_markup(&out)),
+        Err(_) => (String::new(), Vec::new()),
     }
+}
+
+/// Takes [`FUNCTION_MARK`] out of the writer's output, and answers, for each
+/// `<mi>` in order, whether it held the mark. A marked name of one
+/// character gets back the `mathvariant="normal"` the writer gives such a
+/// name (`mathml.rs:651-655` in pulldown-latex), which the mark kept it
+/// from writing; the writer counts the name as it was handed over, escaped.
+fn unmark_functions(marked: &str) -> (String, Vec<bool>) {
+    let mut out = String::with_capacity(marked.len());
+    let mut functions = Vec::new();
+    let mut rest = marked;
+    while let Some(open) = rest.find("<mi") {
+        let after = &rest[open + 3..];
+        let Some(close) = after
+            .starts_with(['>', ' '])
+            .then(|| after.find('>'))
+            .flatten()
+        else {
+            out.push_str(&rest[..open + 3]);
+            rest = after;
+            continue;
+        };
+        let tag = &rest[open..open + 3 + close + 1];
+        out.push_str(&rest[..open]);
+        let text = &after[close + 1..];
+        match text.strip_prefix(FUNCTION_MARK) {
+            Some(name) => {
+                functions.push(true);
+                let length = name[..name.find('<').unwrap_or(name.len())].chars().count();
+                if length == 1 && !tag.contains("mathvariant=") {
+                    out.push_str(&tag[..tag.len() - 1]);
+                    out.push_str(" mathvariant=\"normal\">");
+                } else {
+                    out.push_str(tag);
+                }
+                rest = name;
+            }
+            None => {
+                functions.push(false);
+                out.push_str(tag);
+                rest = text;
+            }
+        }
+    }
+    out.push_str(rest);
+    (out, functions)
 }
 
 /// #1585: a prime after an element is that element's superscript, as in TeX
@@ -1169,8 +1233,9 @@ fn script_arity(name: &str) -> Option<usize> {
 /// source, with no braille.
 ///
 /// For a script element with more element children than its arity, the
-/// candidates are: a thin space directly before an `<mi>` (the function it
-/// spaced); a thin space this repair moved out from the front of one of
+/// candidates are: a thin space directly before a function name (the one
+/// it spaced; `functions` says, for each `<mi>` in order, whether the writer
+/// wrote it for a function name, [`write_mathml_marked`]); a thin space this repair moved out from the front of one of
 /// the element's children; an application mark; and a thin space directly
 /// after a candidate mark. Only when removing every candidate leaves
 /// exactly the arity is the element changed; otherwise it is left as
@@ -1194,7 +1259,7 @@ fn script_arity(name: &str) -> Option<usize> {
 /// before; its kept MathML has the repaired elements. The walk is one pass
 /// over the tags with an explicit stack, never recursing, however deep the
 /// formula nests.
-fn repair_script_children(mathml: &str) -> String {
+fn repair_script_children(mathml: &str, functions: &[bool]) -> String {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Kind {
         Space,
@@ -1315,6 +1380,7 @@ fn repair_script_children(mathml: &str) -> String {
         ..Edits::default()
     };
     let mut changed = false;
+    let mut mi_seen = 0;
     let mut stack = vec![Frame {
         open: 0,
         name: "",
@@ -1430,14 +1496,8 @@ fn repair_script_children(mathml: &str) -> String {
             for child in trailing {
                 push_child(parent, child, &mut edits);
             }
-            // The base is a function name when the writer wrote it as one: an
-            // `<mi>` of more than one character, or of one with
-            // `mathvariant="normal"` (`mathml.rs:651-655` in pulldown-latex).
-            let base_child = children[base];
-            let base_is_a_function = base_child.kind == Kind::Function
-                && base_child.end == base_child.start + 3
-                && (pieces[base_child.start].contains("mathvariant=\"normal\"")
-                    || pieces[base_child.start + 1].chars().count() > 1);
+            // Whether the writer wrote the base as a function name.
+            let base_is_a_function = children[base].kind == Kind::Function;
             // The element's own application mark, which the writer puts after
             // it, goes when it applies nothing: an argument function's mark on
             // an ordinary base (a function base keeps it, as
@@ -1457,7 +1517,14 @@ fn repair_script_children(mathml: &str) -> String {
             let kind = if *piece == WRITER_THIN_SPACE {
                 Kind::Space
             } else if name == "mi" {
-                Kind::Function
+                let function = functions.get(mi_seen).copied();
+                mi_seen += 1;
+                match function {
+                    Some(true) => Kind::Function,
+                    Some(false) => Kind::Other,
+                    // More `<mi>`s than the writer's account: leave it all.
+                    None => return mathml.to_string(),
+                }
             } else {
                 Kind::Other
             };
@@ -1480,7 +1547,7 @@ fn repair_script_children(mathml: &str) -> String {
             }
         }
     }
-    if !changed || stack.len() != 1 {
+    if !changed || stack.len() != 1 || mi_seen != functions.len() {
         return mathml.to_string();
     }
     let mut out = String::with_capacity(mathml.len());
@@ -2857,6 +2924,14 @@ mod tests {
         (r"\liminf_{n}^\max x", r"\liminf_{n}^{\max} x"),
         (r"\limsup_{n}^\min x", r"\limsup_{n}^{\min} x"),
         (r"x_{2}^\max y", r"x_{2}^{\max} y"),
+        // An escaped ordinary base is one character, not a function name;
+        // an escaped one-character function name keeps its mark.
+        (r"\&_{2}^\max x", r"\&_{2}^{\max} x"),
+        (r"\&^\max x", r"\&^{\max} x"),
+        (
+            r"\operatorname{&}_{2}^\max x",
+            r"\operatorname{&}_{2}^{\max} x",
+        ),
     ];
 
     /// #1629, the plan lead's ruling of 2026-11-18: an accented function as
@@ -3198,19 +3273,20 @@ mod tests {
         );
     }
 
-    /// The writer's MathML before the script repair, for the loose tree;
-    /// empty for a source pulldown-latex cannot parse.
-    fn as_written(latex: &str) -> String {
+    /// The writer's MathML before the script repair, for the loose tree,
+    /// and which of its `<mi>`s are function names; empty for a source
+    /// pulldown-latex cannot parse.
+    fn as_written(latex: &str) -> (String, Vec<bool>) {
         use pulldown_latex::Storage;
         use pulldown_latex::event::Event;
         let storage = Storage::new();
         let Ok(events) =
             pulldown_latex::Parser::new(latex, &storage).collect::<Result<Vec<Event<'_>>, _>>()
         else {
-            return String::new();
+            return (String::new(), Vec::new());
         };
         let (events, _) = fold_primes_into_superscripts(events, LongPrimeRuns::Loose);
-        write_mathml_as_written(events)
+        write_mathml_marked(events)
     }
 
     /// #1629: the repair changes only a script element with more children
@@ -3223,44 +3299,62 @@ mod tests {
     #[test]
     fn the_repair_changes_only_a_script_with_too_many_children() {
         let space = WRITER_THIN_SPACE;
-        let written = as_written(r"2\sin^2 x");
+        let (written, functions) = as_written(r"2\sin^2 x");
+        assert_eq!(functions, [true, false]);
         assert_eq!(
-            repair_script_children(&written),
+            repair_script_children(&written, &functions),
             format!(
                 "<math display=\"inline\"><mn>2</mn>{space}<msup><mi>sin</mi><mn>2</mn></msup>\
                  <mo>\u{2061}</mo>{space}<mi>x</mi></math>"
             ),
             "{written}"
         );
-        for mathml in [
-            format!("<math><msup><mi>x</mi>{space}</msup><mn>2</mn></math>"),
-            format!("<math><msubsup><mi>x</mi>{space}<mn>2</mn></msubsup></math>"),
-            format!("<math><munder><mi>max</mi>{space}</munder></math>"),
-            format!("<math><msub>{space}<mi>x</mi></msub></math>"),
+        for (mathml, functions) in [
+            (
+                format!("<math><msup><mi>x</mi>{space}</msup><mn>2</mn></math>"),
+                vec![false],
+            ),
+            (
+                format!("<math><msubsup><mi>x</mi>{space}<mn>2</mn></msubsup></math>"),
+                vec![false],
+            ),
+            (
+                format!("<math><munder><mi>max</mi>{space}</munder></math>"),
+                vec![true],
+            ),
+            // A space before an ordinary character is not the writer's.
+            (
+                format!("<math><msub>{space}<mi>x</mi><mi>y</mi></msub></math>"),
+                vec![false, false],
+            ),
         ] {
-            assert_eq!(repair_script_children(&mathml), mathml);
+            assert_eq!(repair_script_children(&mathml, &functions), mathml);
         }
         // An authored 0.1667em space after an accented function: the
         // writer's mark and that space are not all the element's extra
         // children it could lose, so the element is left as written.
-        let authored = as_written(r"\hat\sin^\hspace{0.1667em}(x)");
+        let (authored, functions) = as_written(r"\hat\sin^\hspace{0.1667em}(x)");
         assert!(authored.contains("<msup><mover>"), "{authored}");
-        assert_eq!(repair_script_children(&authored), authored);
-        let written = as_written(r"x^\hspace{0.1667em} 2");
-        assert_eq!(repair_script_children(&written), written);
+        assert_eq!(repair_script_children(&authored, &functions), authored);
+        let (written, functions) = as_written(r"x^\hspace{0.1667em} 2");
+        assert_eq!(repair_script_children(&written, &functions), written);
 
         let sources = golden_sources();
         let accepted = thread::spawn(move || {
             let mut accepted = 0;
             for source in sources {
-                let written = as_written(&source);
+                let (written, functions) = as_written(&source);
                 if written.is_empty()
                     || mathml_to_speech_and_braille(&written, MathPrefs::default()).is_err()
                 {
                     continue;
                 }
                 accepted += 1;
-                assert_eq!(repair_script_children(&written), written, "{source}");
+                assert_eq!(
+                    repair_script_children(&written, &functions),
+                    written,
+                    "{source}"
+                );
             }
             accepted
         })
@@ -3307,10 +3401,17 @@ mod tests {
     /// as it is today.
     #[test]
     fn a_speech_tree_mathcat_rejects_is_spoken_from_the_loose_tree() {
-        let loose = latex_to_mathml(r"f'''(x)");
+        let MathTrees { loose, speech } = latex_to_mathml_trees(r"f'''(x)");
+        let folded = speech.expect("a speech tree for a long run");
         thread::spawn(move || {
             let today = mathml_to_speech_and_braille(&loose, MathPrefs::default())
                 .expect("the loose tree renders");
+            // A speech tree MathCAT takes is the one spoken.
+            let (speech, braille) =
+                speech_and_braille_from_two_trees(&folded, &loose, MathPrefs::default())
+                    .expect("both trees render");
+            assert_eq!(speech, "f triple prime, of x");
+            assert_eq!(braille, today.1);
             let rejected = "<math><msup><mi>f</mi><mi>a</mi><mi>b</mi></msup></math>".to_string();
             let huge = "<math>".to_string() + &"x".repeat(2 * 1024 * 1024) + "</math>";
             for speech_tree in [rejected, huge] {
