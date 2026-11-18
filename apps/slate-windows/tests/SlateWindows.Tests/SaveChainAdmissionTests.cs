@@ -4088,6 +4088,56 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>Codex round 1, finding 1 (Call 2(d)). The apply waits behind an
+    /// operation admitted for its note, a header draft goes dirty, and the
+    /// announcer throws at the draft refusal its turn speaks. The apply still
+    /// ends as one that did not run: the notes' chains are free, the sheet is
+    /// no longer in flight, nothing is written, and a close asked afterwards
+    /// settles. Red today: the throw skips EndApplyUnrun, so the sheet stays
+    /// in flight for good and a close only cancels a token no worker
+    /// holds.</summary>
+    [Fact]
+    public void AnApplyRefusedForADirtyDraftAtItsTurnEndsEvenWhenTheRefusalThrows() => RunSta(() =>
+    {
+        using var h = new Vault("apply-draft-refusal-throws", ("a.md", Note));
+        _ = h.OpenNow("a.md");
+        NotePropertiesViewModel header = LoadedHeader(h);
+        BulkRenameViewModel sheet = ArmedBulkRename(h);
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = h.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        h.BeforeAnnounce = spoken =>
+        {
+            if (spoken is A11yEvent.HostComposed composed && composed.Text == PropertyPhrase.BulkRenameDirtyDraftsReason)
+            {
+                throw new InvalidOperationException("the announcer failed (test seam)");
+            }
+        };
+        try
+        {
+            Assert.True(sheet.Apply(), "premise: the apply was refused at the press");
+            Assert.Equal(2, h.Workspace.SavesForTests.AdmittedForTests);
+            header.Rows.Single(row => row.Key == "status").EditorText = "edited in the header";
+            Assert.True(header.AnyRowDirty, "premise: the header's draft is not dirty");
+
+            ahead.SetResult();
+            h.PumpUntil(() => h.Workspace.SavesIdle, "the apply's turn");
+            Assert.False(sheet.WorkInFlight, "the sheet stayed in flight after its refused apply's sentence threw");
+            sheet.RequestClose();
+            Assert.Equal(1, settled);
+            Assert.Equal(Note, h.Read("a.md"));
+            Assert.True(held.Result);
+            AssertALaterOperationRuns(h, "a.md");
+        }
+        finally
+        {
+            h.BeforeAnnounce = null;
+            _ = ahead.TrySetResult();
+            h.ReleaseAndDrain();
+        }
+    });
+
     /// <summary>Design 2 (CB-9a Design 8). The apply's turn throws before its
     /// worker starts: the reader hears the existing RenameFailed once, the
     /// sheet is no longer in flight, a close asked meanwhile settles, and the
