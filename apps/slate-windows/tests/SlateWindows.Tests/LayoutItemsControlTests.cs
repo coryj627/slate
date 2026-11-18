@@ -349,15 +349,7 @@ public sealed class LayoutItemsControlTests
     [Fact]
     public void AClientThatConnectsAfterARemovalSeesNoExtraElement() => RunSta(() =>
     {
-        string listening = ListeningEvents();
-        if (listening.Length > 0)
-        {
-            Assert.Skip($"WPF's event map in this process already has a listener ({listening}), left by a UI Automation "
-                + "client that advised an earlier window, so WPF connects every new window's root itself and #1860's "
-                + "schedule, a client that connects only after the removal, cannot occur here; facts 1 and 3, hosts in no "
-                + "window, carry the proof");
-        }
-
+        SkipWhereAClientListens(LateClientSchedule, LateClientProof);
         using var requests = new AccessibilityNotificationDispatcherTests.RootRequests();
         ObservableCollection<Row> rows = FiveRows();
         LayoutItemsControl host = ButtonRows(rows);
@@ -378,11 +370,11 @@ public sealed class LayoutItemsControlTests
             nint handle = new WindowInteropHelper(window).Handle;
             Drain();
             _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
-            SkipWhereAClientConnected(requests, handle, "the removal");
+            SkipWhereAClientConnected(requests, handle, "the removal", LateClientSchedule, LateClientProof);
 
             rows.Remove(rows[2]);
             Drain();
-            SkipWhereAClientConnected(requests, handle, "our client");
+            SkipWhereAClientConnected(requests, handle, "our client", LateClientSchedule, LateClientProof);
 
             Task<ClientView> read = Task.Run(() => ReadAsAClient(handle));
             PumpedDispatcher.PumpUntilDrained(read, TimeSpan.FromSeconds(30));
@@ -400,29 +392,106 @@ public sealed class LayoutItemsControlTests
 
     /// <summary>#1860: one reset serves a burst. A hundred removals queue one reset on a host
     /// whose peer a client read, not a hundred, and a list cleared and refilled (one
-    /// ContainersGenerated per change) queues one, not six. A host no client has read has
-    /// nothing cached and posts none, so the twin, whose peer was never made, counts every
-    /// Loaded post the same change makes besides the host's own: none, for hosts in no window.
-    /// The raw counts are asserted, host and twin, so a red run shows which defect it saw
-    /// (main posts none for the removals and six for each refill, the twin's too).</summary>
+    /// ContainersGenerated per change) queues one, not six. The twin, a plain ItemsControl with
+    /// the same rows and template, counts WPF's own Loaded posts for the same change: none, for
+    /// hosts in no window. A layout host whose peer was never made posts none of its own for
+    /// the removals (it has nothing cached to drop) and one for the refill (a peer made after
+    /// a generation and read before its layout needs that reset, as
+    /// AnItemAddedBeforeTheHostsPeerIsMadeShowsItsButtonAfterLayout shows). The raw counts are
+    /// asserted, so a red run shows which defect it saw (main posts none for the removals and
+    /// six for each layout host's refill).</summary>
     [Fact]
     public void ABurstOfRemovalsQueuesOneReset() => RunSta(() =>
     {
         ObservableCollection<Row> hostRows = HundredAndFiveRows();
         ObservableCollection<Row> twinRows = HundredAndFiveRows();
+        ObservableCollection<Row> unreadRows = HundredAndFiveRows();
         LayoutItemsControl host = LaidOutAlone(hostRows);
-        LayoutItemsControl twin = LaidOutAlone(twinRows);
+        ItemsControl twin = LaidOut(new ItemsControl { ItemsSource = twinRows, ItemTemplate = ButtonTemplate() });
+        LayoutItemsControl unread = LaidOutAlone(unreadRows);
         _ = ReadLikeAClient(UIElementAutomationPeer.CreatePeerForElement(host));
-        Assert.True(UIElementAutomationPeer.FromElement(twin) is null, "premise: the twin's peer was made");
+        Assert.True(UIElementAutomationPeer.FromElement(unread) is null, "premise: the unread host's peer was made");
 
         int hostRemovals = LoadedPostsDuring(() => RemoveAHundred(hostRows));
         int twinRemovals = LoadedPostsDuring(() => RemoveAHundred(twinRows));
+        int unreadRemovals = LoadedPostsDuring(() => RemoveAHundred(unreadRows));
         Drain();
         int hostRefill = LoadedPostsDuring(() => Refill(hostRows));
         int twinRefill = LoadedPostsDuring(() => Refill(twinRows));
+        int unreadRefill = LoadedPostsDuring(() => Refill(unreadRows));
 
-        Assert.Equal((1, 0, 1, 0), (hostRemovals, twinRemovals, hostRefill, twinRefill));
+        Assert.Equal(
+            (1, 0, 0, 1, 0, 1),
+            (hostRemovals, twinRemovals, unreadRemovals, hostRefill, twinRefill, unreadRefill));
     });
+
+    /// <summary>#1677 round 2's schedule with the host's peer made one step later (the CB-25
+    /// diff red team's medium 1): an Add generates the new item's container at once, and the
+    /// host's peer is first made and read before the layout that templates it, so the new
+    /// item's peer reads a container with no stop yet and caches no children. With no client
+    /// connected, only the reset queued for that generation reads it again after the window's
+    /// layout, so the generation queues it whether or not the host had a peer then, and the
+    /// reset finds the peer when it runs. In a shown window, fact 5's shape: a new container
+    /// there waits for layout (asserted), as in every app host. A client connected to the
+    /// window would have WPF rebuild the peers after layout and hide a missing reset, so the
+    /// fact skips on fact 2's two client routes; wherever it skips, fact 3's never-peered host
+    /// still pins the reset a generation posts.</summary>
+    [Fact]
+    public void AnItemAddedBeforeTheHostsPeerIsMadeShowsItsButtonAfterLayout() => RunSta(() =>
+    {
+        SkipWhereAClientListens(EarlyReadSchedule, EarlyReadProof);
+        using var requests = new AccessibilityNotificationDispatcherTests.RootRequests();
+        var rows = new ObservableCollection<Row> { new("Alpha") };
+        LayoutItemsControl host = ButtonRows(rows);
+        var window = new Window
+        {
+            Content = host,
+            Width = 300,
+            Height = 200,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        try
+        {
+            nint handle = new WindowInteropHelper(window).Handle;
+            Drain();
+            SkipWhereAClientConnected(requests, handle, "the Add", EarlyReadSchedule, EarlyReadProof);
+            Assert.True(UIElementAutomationPeer.FromElement(host) is null, "premise: the host's peer was made before the Add");
+
+            rows.Add(new Row("Beta"));
+            DependencyObject container = host.ItemContainerGenerator.ContainerFromItem(rows[1]);
+            Assert.False(
+                container is null || ((UIElement)container).IsArrangeValid,
+                "premise: Beta's new container isn't waiting for layout");
+            AutomationPeer hostPeer = UIElementAutomationPeer.CreatePeerForElement(host);
+            List<AutomationPeer> items = hostPeer.GetChildren() ?? [];
+            Assert.Equal("Alpha | Beta", string.Join(" | ", items.Select(LabelOf)));
+            AutomationPeer beta = items[1];
+            Assert.True((beta.GetChildren() ?? []).Count == 0, "premise: Beta's container had its template before the layout");
+            SkipWhereAClientConnected(requests, handle, "the layout", EarlyReadSchedule, EarlyReadProof);
+
+            Drain();
+            SkipWhereAClientConnected(requests, handle, "the check", EarlyReadSchedule, EarlyReadProof);
+            AutomationPeer stop = Assert.Single(beta.GetChildren() ?? []);
+            Assert.Equal(AutomationControlType.Button, stop.GetAutomationControlType());
+            Assert.Equal("Beta", stop.GetName());
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    private const string EarlyReadSchedule =
+        "#1677's schedule with the host's peer made after the generation (a new item read before its template)";
+
+    private const string EarlyReadProof = "fact 3's never-peered host still pins the reset a generation posts";
+
+    private const string LateClientSchedule = "#1860's schedule (a client that connects only after the removal)";
+
+    private const string LateClientProof = "facts 1 and 3, hosts in no window, carry the proof";
 
     private const string ClientHostId = "Cb25ClientHost";
 
@@ -479,15 +548,29 @@ public sealed class LayoutItemsControlTests
     private static string ListeningEvents() =>
         string.Join("+", Enum.GetValues<AutomationEvents>().Where(AutomationPeer.ListenerExists));
 
-    /// <summary>Fact 2's premise: no client connected the window's automation root before
-    /// <paramref name="what"/>. A desktop client connects it by one of two routes, and on
-    /// either #1860's schedule cannot occur, so the fact skips and names the route: a
-    /// WM_GETOBJECT sent to the window (counted from before the window existed), or a
+    /// <summary>A windowed fact's first premise, read before its window shows: no UI
+    /// Automation client's handler is advised into this process. Where one is, WPF connects
+    /// every new window's root itself, <paramref name="schedule"/> cannot occur, and the fact
+    /// skips, saying so and naming <paramref name="proof"/>.</summary>
+    private static void SkipWhereAClientListens(string schedule, string proof)
+    {
+        if (ListeningEvents() is { Length: > 0 } listening)
+        {
+            Assert.Skip($"WPF's event map in this process already has a listener ({listening}), left by a UI Automation "
+                + $"client that advised an earlier window, so WPF connects every new window's root itself and {schedule} "
+                + $"cannot occur here; {proof}");
+        }
+    }
+
+    /// <summary>A windowed fact's premise: no client connected the window's automation root
+    /// before <paramref name="what"/>. A desktop client connects it by one of two routes, and
+    /// on either <paramref name="schedule"/> cannot occur, so the fact skips and names the
+    /// route: a WM_GETOBJECT sent to the window (counted from before the window existed), or a
     /// listener a client advised into WPF's event map while the window showed. A root
     /// connected with neither can come only from code in this process, and fails the
     /// fact.</summary>
     private static void SkipWhereAClientConnected(
-        AccessibilityNotificationDispatcherTests.RootRequests requests, nint window, string what)
+        AccessibilityNotificationDispatcherTests.RootRequests requests, nint window, string what, string schedule, string proof)
     {
         if (ConnectedRoots() == 0)
         {
@@ -498,15 +581,14 @@ public sealed class LayoutItemsControlTests
         if (asked > 0)
         {
             Assert.Skip($"a desktop UI Automation client asked the window for its automation root ({asked} WM_GETOBJECT) "
-                + $"before {what}, so WPF connected it and #1860's schedule, a client that connects only after the removal, "
-                + "did not occur here; facts 1 and 3, hosts in no window, carry the proof");
+                + $"before {what}, so WPF connected it and {schedule} did not occur here; {proof}");
         }
 
         if (ListeningEvents() is { Length: > 0 } listening)
         {
             Assert.Skip($"WPF's event map in this process gained a listener ({listening}) while the window showed, left by "
-                + $"a UI Automation client, so WPF connected the window's root itself before {what} and #1860's schedule "
-                + "did not occur here; facts 1 and 3, hosts in no window, carry the proof");
+                + $"a UI Automation client, so WPF connected the window's root itself before {what} and {schedule} did "
+                + $"not occur here; {proof}");
         }
 
         Assert.Fail($"the window's automation root was connected before {what} with no WM_GETOBJECT to it and no listener "
@@ -561,24 +643,26 @@ public sealed class LayoutItemsControlTests
         }
     }
 
-    /// <summary>A host of one Button per row, named by the row's label (fact 5's
-    /// shape).</summary>
-    private static LayoutItemsControl ButtonRows(ObservableCollection<Row> rows)
+    /// <summary>One Button per row, named by the row's label (fact 5's shape).</summary>
+    private static DataTemplate ButtonTemplate()
     {
         var button = new FrameworkElementFactory(typeof(Button));
         button.SetBinding(AutomationProperties.NameProperty, new Binding(nameof(Row.Label)));
-        return new LayoutItemsControl
-        {
-            ItemsSource = rows,
-            ItemTemplate = new DataTemplate { VisualTree = button },
-        };
+        return new DataTemplate { VisualTree = button };
     }
 
-    /// <summary><see cref="ButtonRows"/> laid out in no window. A root built in code takes
-    /// its theme template, and so its items panel, only once initialized.</summary>
-    private static LayoutItemsControl LaidOutAlone(ObservableCollection<Row> rows)
+    /// <summary>A layout host of <see cref="ButtonTemplate"/> rows.</summary>
+    private static LayoutItemsControl ButtonRows(ObservableCollection<Row> rows) =>
+        new() { ItemsSource = rows, ItemTemplate = ButtonTemplate() };
+
+    /// <summary><see cref="ButtonRows"/> laid out in no window.</summary>
+    private static LayoutItemsControl LaidOutAlone(ObservableCollection<Row> rows) => LaidOut(ButtonRows(rows));
+
+    /// <summary><paramref name="host"/> laid out in no window. A root built in code takes its
+    /// theme template, and so its items panel, only once initialized.</summary>
+    private static T LaidOut<T>(T host)
+        where T : ItemsControl
     {
-        LayoutItemsControl host = ButtonRows(rows);
         host.BeginInit();
         host.EndInit();
         host.Measure(new Size(320, 400));
