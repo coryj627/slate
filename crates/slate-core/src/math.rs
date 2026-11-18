@@ -1129,13 +1129,18 @@ fn primes_in(event: &pulldown_latex::event::Event<'_>) -> Option<usize> {
     }
 }
 
-/// The thin space pulldown-latex 0.8 writes before a function name whose
-/// previous atom is ordinary, inner or closing (`mathml.rs:641-648` in the
-/// crate), byte for byte. An author's `\,` is written `0.16666667em`.
+/// The thin space pulldown-latex 0.8 writes, byte for byte: before a
+/// function name whose previous atom is ordinary, inner or closing
+/// (`mathml.rs:641-648` in the crate), and after an application mark that
+/// is not followed by an opening, punctuation or closing atom (`:665-668`,
+/// `:951-954`). An author's `\,` is written `0.16666667em`; an authored
+/// `\hspace{0.1667em}`, `\kern0.1667em` or `\hskip0.1667em` has these bytes.
 const WRITER_THIN_SPACE: &str = "<mspace width=\"0.1667em\" />";
 
-/// The writer's application mark, byte for byte: after a function, and
-/// after a script or accent whose base is a function.
+/// The writer's application mark, byte for byte: after a function written
+/// outside a script, and after a script element in which a function was
+/// written directly, as its base or as an argument (`mathml.rs:660-669`,
+/// `:947-956`), an accent included.
 const APPLICATION_MARK: &str = "<mo>\u{2061}</mo>";
 
 /// The number of children MathCAT takes for a script element, which it
@@ -1164,28 +1169,30 @@ fn script_arity(name: &str) -> Option<usize> {
 /// source, with no braille.
 ///
 /// For a script element with more element children than its arity, the
-/// candidates are: a writer's thin space directly before an `<mi>` (the
-/// function it spaced); a thin space this repair moved out of the
-/// element's first child; an application mark; and a thin space directly
+/// candidates are: a thin space directly before an `<mi>` (the function it
+/// spaced); a thin space this repair moved out from the front of one of
+/// the element's children; an application mark; and a thin space directly
 /// after a candidate mark. Only when removing every candidate leaves
 /// exactly the arity is the element changed; otherwise it is left as
-/// written, and falls back as before. Then, with the base the first child
-/// that is no candidate:
+/// written. Then, with the base the first child that is no candidate:
 /// - a candidate before the base moves to just before the element (the
 ///   function was the base, so `2\sin^2 x` reads as `2\sin x` does);
 /// - an application mark directly after the base, with its thin space,
 ///   moves to just after the element (the accented function, with its
-///   script, applies to what follows);
-/// - any other candidate is dropped, and when it was a thin space before a
-///   function name, so the function was a script's argument, the
-///   application mark the writer put after the element goes too, with its
-///   thin space (`x_\max y` reads as `x_{\max} y`).
+///   script, applies to what follows: `2\hat\sin^2 x`);
+/// - any other candidate is dropped. When it was the space before a
+///   function name in an argument slot (`x_\max y`), the function was
+///   written directly in the element, and the application mark the writer
+///   then puts after the element goes too, with its thin space, so
+///   `x_\max y` reads as `x_{\max} y`. After a moved mark, that mark of the
+///   element's own goes as well (`\hat\sin^\max x`), so one mark remains.
 ///
 /// An element MathCAT accepts has its arity, so it is never touched, and
 /// neither is a thin space that fills a slot (`x^\hspace{0.1667em} 2`).
-/// The walk is one pass over the tags with an explicit stack and no
-/// recursion: a formula may nest thousands of groups, which MathCAT refuses
-/// past 512 levels and the formula then falls back, as it does today.
+/// A formula with another element MathCAT still rejects falls back as
+/// before; its kept MathML has the repaired elements. The walk is one pass
+/// over the tags with an explicit stack, never recursing, however deep the
+/// formula nests.
 fn repair_script_children(mathml: &str) -> String {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Kind {
@@ -1400,7 +1407,17 @@ fn repair_script_children(mathml: &str) -> String {
                     edits.place(child, index, true);
                     trailing.push(child);
                 } else {
-                    argument_was_a_function |= child.kind == Kind::Space && !child.hoisted;
+                    // The writer's space before a function name that is an
+                    // argument here (not a space after an inner mark, nor
+                    // one moved out of a child): the function was written
+                    // directly in this element, so the writer puts the
+                    // element's application mark after it.
+                    argument_was_a_function |= child.kind == Kind::Space
+                        && !child.hoisted
+                        && children
+                            .get(i + 1)
+                            .is_some_and(|next| next.kind == Kind::Function)
+                        && !(children[i - 1].kind == Kind::Mark && candidate[i - 1]);
                     edits.drop_child(child);
                 }
             }
@@ -1408,10 +1425,14 @@ fn repair_script_children(mathml: &str) -> String {
                 push_child(parent, child, &mut edits);
             }
             push_child(parent, element, &mut edits);
+            let moved_a_mark = !trailing.is_empty();
             for child in trailing {
                 push_child(parent, child, &mut edits);
             }
-            if argument_was_a_function {
+            // The element's own application mark, which the writer puts after
+            // it, goes: for an argument there is nothing to apply, and after
+            // a mark moved out of the element it would be a second one.
+            if argument_was_a_function || moved_a_mark {
                 parent.dropping = Dropping::Mark;
             }
         } else {
@@ -2798,6 +2819,7 @@ mod tests {
         r"2\sin^2 x + 3\cos^2 x = 1",
         r"x\hspace{0.1667em}\sin^2 x",
         r"2\hat\sin x",
+        r"2\sin^{-1} x",
     ];
 
     /// #1629: a function as an ungrouped script argument, each beside its
@@ -2830,6 +2852,14 @@ mod tests {
         (r"2\vec\max_i a_i", r"2{\vec\max}_i a_i"),
         (r"2\hat\sin^2(x)", r"2{\hat\sin}^2(x)"),
         (r"x_\hat\max y", r"x_{\hat\max} y"),
+        // An accented function as the argument of a function's script: the
+        // base's own application mark after the element stays.
+        (r"\sin^\hat\cos x", r"\sin^{\hat\cos} x"),
+        (r"2\sin^\hat\cos x", r"2\sin^{\hat\cos} x"),
+        (
+            r"\operatorname{foo}^\hat\cos x",
+            r"\operatorname{foo}^{\hat\cos} x",
+        ),
     ];
 
     /// Every speech setting under Nemeth, then the braille of each code.
@@ -2958,6 +2988,26 @@ mod tests {
             );
             assert_eq!(readings, every_reading(grouped), "{ungrouped}");
         }
+        // The accent's application mark moves to after the element it was
+        // written inside, so the scripted, accented function applies to x.
+        assert_eq!(
+            latex_to_mathml(r"2\hat\sin^2 x"),
+            "<math display=\"inline\"><mn>2</mn><mspace width=\"0.1667em\" />\
+             <msup><mover><mi>sin</mi><mi>^</mi></mover><mn>2</mn></msup>\
+             <mo>\u{2061}</mo><mspace width=\"0.1667em\" /><mi>x</mi></math>"
+        );
+        // A function base keeps its own mark after the element when its
+        // argument is an accented function.
+        let base_mark = latex_to_mathml(r"\sin^\hat\cos x");
+        assert!(
+            base_mark.contains("</msup><mo>\u{2061}</mo>"),
+            "{base_mark}"
+        );
+        // An accented base with a function argument: one mark after the
+        // element, not the accent's and the element's own in a row.
+        let one_mark = latex_to_mathml(r"\hat\sin^\max x");
+        assert_eq!(one_mark.matches(APPLICATION_MARK).count(), 1, "{one_mark}");
+        assert!(one_mark.contains("</msup><mo>\u{2061}</mo>"), "{one_mark}");
     }
 
     /// #1629: no script element is written with more element children than
@@ -2975,18 +3025,23 @@ mod tests {
                     .chain(ACCENTED_FUNCTIONS_AS_SCRIPT_BASES)
                     .map(|(ungrouped, _)| (*ungrouped).to_string()),
             );
-        for source in family.chain(golden_sources()) {
-            let mathml = latex_to_mathml(&source);
-            for (name, children) in script_child_counts(&mathml) {
-                let arity = if matches!(name.as_str(), "msubsup" | "munderover") {
-                    3
-                } else {
-                    2
-                };
-                assert!(
-                    children <= arity,
-                    "{source}: {name} has {children} children: {mathml}"
-                );
+        let long_runs = [r"2\sin^2 x + f'''(x)", r"x_\max'''", r"n\log_2 n + y'''"]
+            .into_iter()
+            .map(str::to_string);
+        for source in family.chain(long_runs).chain(golden_sources()) {
+            let MathTrees { loose, speech } = latex_to_mathml_trees(&source);
+            for mathml in std::iter::once(loose).chain(speech) {
+                for (name, children) in script_child_counts(&mathml) {
+                    let arity = if matches!(name.as_str(), "msubsup" | "munderover") {
+                        3
+                    } else {
+                        2
+                    };
+                    assert!(
+                        children <= arity,
+                        "{source}: {name} has {children} children: {mathml}"
+                    );
+                }
             }
         }
     }
@@ -3086,7 +3141,17 @@ mod tests {
         }
         let block = render_with(r"\sin'''(x)", BrailleCode::Nemeth);
         assert_eq!(String::from_utf8_lossy(&block.braille), "⠎⠊⠝⠀⠄⠄⠄⠷⠭⠾");
-        assert!(!block.mathml.contains("<msup>"), "{}", block.mathml);
+        assert_eq!(
+            block.mathml,
+            "<math display=\"inline\"><mi>sin</mi><mo>\u{2061}</mo>\
+             <mspace width=\"0.1667em\" /><mi>′</mi><mi>′</mi><mi>′</mi>\
+             <mo symmetric=\"false\" stretchy=\"false\">(</mo><mi>x</mi>\
+             <mo symmetric=\"false\" stretchy=\"false\">)</mo></math>"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&render_with(r"\sin'''(x)", BrailleCode::Ueb).braille),
+            "⠰⠰⠎⠊⠝⠶⠶⠶⠐⠣⠭⠐⠜"
+        );
         let combined = render_with(r"2\sin^2 x + f'''(x)", BrailleCode::Nemeth);
         assert_eq!(
             String::from_utf8_lossy(&combined.braille),
@@ -3094,13 +3159,16 @@ mod tests {
         );
     }
 
-    /// A formula nested deeper than MathCAT reads (512 levels) falls back
-    /// to its source and ends nothing: every step that reads the writer's
-    /// output walks it without recursion, so 4,000 nested groups cannot
-    /// overflow the MathCAT worker's stack.
+    /// A script element under 8,000 nested groups, about as deep as a
+    /// formula under [`MAX_FORMULA_SOURCE_BYTES`] can nest, is repaired and
+    /// then refused by MathCAT's depth limit (512 levels), and the formula
+    /// falls back to its source with the process alive. The repair's walk
+    /// keeps its own stack on the heap, so its depth costs the MathCAT
+    /// worker's stack nothing.
     #[test]
     fn a_deeply_nested_formula_falls_back_without_ending_the_process() {
-        let source = format!("{}{}{}", "{".repeat(4000), r"2\sin^2 x", "}".repeat(4000));
+        let source = format!("{}{}{}", "{".repeat(8000), r"2\sin^2 x", "}".repeat(8000));
+        assert!(source.len() <= MAX_FORMULA_SOURCE_BYTES);
         let block = render_with(&source, BrailleCode::Nemeth);
         assert!(
             block.speech.starts_with("Math expression"),
