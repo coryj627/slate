@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows;
 
 /// <summary>#1890: the detail a failure sentence speaks: core's rendering
@@ -14,5 +16,6 @@ namespace SlateWindows;
 /// Neither reaches a caller of this helper on today's code.</remarks>
 internal static class FailureDetail
 {
-    internal static string Of(Exception failure) => failure.Message;
+    internal static string Of(Exception failure) =>
+        failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
 }

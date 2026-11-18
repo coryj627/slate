@@ -1537,7 +1537,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            return new TagLoadOutcome([], $"Could not load tags: {exception.Message}");
+            return new TagLoadOutcome([], $"Could not load tags: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1798,7 +1798,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder {attempted}: {exception.Message}");
+            ReportFailure($"Could not create folder {attempted}: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1878,7 +1878,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create note {attempted}: {exception.Message}");
+            ReportFailure($"Could not create note {attempted}: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1964,7 +1964,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure(CanvasCreateFailure($"{attempted}: {exception.Message}"));
+            ReportFailure(CanvasCreateFailure($"{attempted}: {FailureDetail.Of(exception)}"));
         }
     }
 
@@ -2055,7 +2055,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {exception.Message}"); }
+            if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {FailureDetail.Of(exception)}"); }
         }
         finally { EndTrash(owner, staged); }
     }
@@ -2096,7 +2096,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder note: {exception.Message}");
+            ReportFailure($"Could not create folder note: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2128,7 +2128,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not delete folder note: {exception.Message}");
+            ReportFailure($"Could not delete folder note: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2154,10 +2154,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 ReportResult($"Copied wikilink for {node.DisplayName}.");
                 _announce(new A11yEvent.SelectionCopied());
             }
+            else
+            {
+                // Plan 47 CB-15a: core makes no wikilink for a file that is
+                // not Markdown, has left the index, or is a case twin; the
+                // Mac's sentence says why nothing was copied
+                // (AppState.swift's copy wikilink).
+                ReportFailure("Could not create a wikilink for this file.");
+            }
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not copy wikilink: {exception.Message}");
+            ReportFailure($"Could not copy wikilink: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2382,7 +2390,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // No report: what committed is unknown, so the entry stays as
             // anticipated for the next open to verify.
             JournalStructuralOutcomeUnknown(journalEntry);
-            ReportFailure($"Move failed: {exception.Message}");
+            ReportFailure($"Move failed: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2450,7 +2458,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {exception.Message}"); }
+            if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {FailureDetail.Of(exception)}"); }
         }
         finally { EndTrash(owner, staged); }
     }
@@ -2623,7 +2631,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load folder files: {exception.Message}");
+            ReportFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2831,7 +2839,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ReportFailure($"Could not save sidebar organization: {exception.Message}");
+            ReportFailure($"Could not save sidebar organization: {FailureDetail.Of(exception)}");
             HostLog.Write(HostDiagnosticEvent.SidebarOrganizationPersistFailed, exception);
             NoteSettingsBlocked();
             return false;
@@ -2898,7 +2906,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _pinsBehindFile = true;
-            string message = $"Could not save pins: {exception.Message}";
+            string message = $"Could not save pins: {FailureDetail.Of(exception)}";
             if (reportFailure is null)
             {
                 ReportFailure(message);
@@ -2928,7 +2936,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _shortcutsBehindFile = true;
-            string message = $"Could not save shortcuts: {exception.Message}";
+            string message = $"Could not save shortcuts: {FailureDetail.Of(exception)}";
             if (reportFailure is null)
             {
                 ReportFailure(message);

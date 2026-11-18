@@ -38,7 +38,7 @@ internal sealed partial class FilesSidebarViewModel : ICanvasNoteCreator
         }
         catch (VaultException exception)
         {
-            return new CanvasNoteCreateResult.Failed(exception.Message);
+            return new CanvasNoteCreateResult.Failed(FailureDetail.Of(exception));
         }
     }
 

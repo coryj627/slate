@@ -60,20 +60,18 @@ internal static class ShellCompilation
             }
             sources.Add((relative, CSharpSource.LoadPath(file)));
         }
-        // The SDK's implicit usings live in a generated file under obj/;
-        // parsed with the sources' own options so the trees agree on a
+        // Parsed with the sources' own options so the trees agree on a
         // language version.
         var parseOptions = (CSharpParseOptions)sources[0].Source.Root.SyntaxTree.Options;
-        SyntaxTree globalUsings = CSharpSyntaxTree.ParseText(
-            "global using System;\nglobal using System.Collections.Generic;\nglobal using System.IO;\n"
-            + "global using System.Linq;\nglobal using System.Net.Http;\nglobal using System.Threading;\n"
-            + "global using System.Threading.Tasks;\n",
-            parseOptions,
-            path: "GlobalUsings.census.cs");
-        // The XAML-generated partials — the x:Name fields, InitializeComponent —
-        // live under obj/ after a build; the newest copy of each is added so
-        // a call through an x:Name field BINDS instead of failing closed
-        // (codex post-implementation pass 3, IPB-17).
+        // The generated sources under obj/ after a build: the SDK's implicit
+        // global usings (SlateWindows.GlobalUsings.g.cs), the shell's own and
+        // no others, and the XAML-generated partials (the x:Name fields,
+        // InitializeComponent), so a call through an x:Name field BINDS
+        // instead of failing closed (codex post-implementation pass 3,
+        // IPB-17). The newest copy of each is added. Plan 47 CB-15a (#1890):
+        // a census tree of global usings once added System.IO and
+        // System.Net.Http, which the app does not have, and made Path
+        // ambiguous with WPF's in three shell sources.
         var generated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         string objRoot = Path.Combine(shellRoot, "obj");
         if (Directory.Exists(objRoot))
@@ -87,6 +85,12 @@ internal static class ShellCompilation
                     generated[name] = file;
                 }
             }
+        }
+        if (!generated.ContainsKey("SlateWindows.GlobalUsings.g.cs"))
+        {
+            throw new InvalidOperationException(
+                $"No SlateWindows.GlobalUsings.g.cs under {objRoot}: the shell's generated global usings come from "
+                + "its build. Build the shell (SlateWindows.csproj, or SlateWindows.Tests.csproj, which builds it) first.");
         }
         IEnumerable<SyntaxTree> generatedTrees = generated.Values
             .OrderBy(path => path, StringComparer.Ordinal)
@@ -102,7 +106,7 @@ internal static class ShellCompilation
             .ToArray();
         var compilation = CSharpCompilation.Create(
             "shell-census",
-            sources.Select(s => s.Source.Root.SyntaxTree).Append(globalUsings).Concat(generatedTrees),
+            sources.Select(s => s.Source.Root.SyntaxTree).Concat(generatedTrees),
             references,
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
