@@ -1048,12 +1048,21 @@ fn brace_position_setting_arguments(latex: &str) -> Option<(String, usize)> {
 /// after (#1557), and script elements given the children MathCAT takes
 /// (#1629, [`repair_script_children`]). Empty when the writer fails.
 fn write_mathml(events: Vec<pulldown_latex::event::Event<'_>>) -> String {
+    #[cfg(test)]
+    TREES_WRITTEN.with(|written| written.set(written.get() + 1));
     let (written, functions) = write_mathml_marked(events);
     if written.is_empty() {
         written
     } else {
         repair_script_children(&written, &functions)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many trees [`write_mathml`] has written on this thread, for the
+    /// fact that counts a formula's trees.
+    static TREES_WRITTEN: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Marks a function name for [`write_mathml_marked`]. A private-use
@@ -3218,6 +3227,24 @@ mod tests {
             r"\displaystyle\lim\nolimits_n^\max x",
             r"\displaystyle\lim\nolimits_n^{\max} x",
         ),
+        // The parser skips a comment and any whitespace between the mark and
+        // its argument; a comment's own text is not a script.
+        (
+            "\\displaystyle x_% the subscript\n\\max y",
+            r"\displaystyle x_{\max} y",
+        ),
+        (
+            "\\displaystyle x_\u{a0}\\max y",
+            r"\displaystyle x_{\max} y",
+        ),
+        (
+            "\\liminf\\limits_{n}^ % the bound\n \\max x",
+            r"\liminf\limits_{n}^{\max} x",
+        ),
+        (
+            "\\liminf\\limits_{n}^\\max x % or y_\\max",
+            r"\liminf\limits_{n}^{\max} x",
+        ),
     ];
 
     /// #1629, the plan lead's second ruling of 2026-11-18: a function as an
@@ -3375,15 +3402,17 @@ mod tests {
     /// its grouped form, under every speech setting and both braille codes.
     #[test]
     fn a_function_as_a_script_argument_is_read_as_its_group() {
+        let mut differ = Vec::new();
         for &(ungrouped, grouped) in FUNCTIONS_AS_SCRIPT_ARGUMENTS {
             let readings = every_reading(ungrouped);
-            assert!(
-                !readings[0].starts_with("Math expression"),
-                "{ungrouped} fell back: {}",
-                readings[0]
-            );
-            assert_eq!(readings, every_reading(grouped), "{ungrouped}");
+            let expected = every_reading(grouped);
+            if readings[0].starts_with("Math expression") || readings != expected {
+                differ.push(format!(
+                    "{ungrouped:?}: {readings:?}, its group {expected:?}"
+                ));
+            }
         }
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
     }
 
     /// #1629 (the plan lead's second ruling): a function as an ungrouped
@@ -3857,6 +3886,26 @@ mod tests {
             accepted >= 190,
             "only {accepted} golden sources were checked"
         );
+    }
+
+    /// #1628: a formula is written once per tree it needs: twice for a run of
+    /// three or more primes after a carrier, and a third time only when that
+    /// run holds an authored `‴` or `⁗`.
+    #[test]
+    fn a_formula_is_written_once_per_tree_it_needs() {
+        for (source, trees) in [
+            (r"x^2", 1),
+            (r"f''(x)", 1),
+            (r"(fg)\trprime", 1),
+            (r"f'''(x)", 2),
+            (r"f^{\trprime}(x) + g'''(x)", 2),
+            (r"f\trprime(x)", 3),
+            (r"f'\trprime(x)", 3),
+        ] {
+            TREES_WRITTEN.with(|written| written.set(0));
+            let _ = latex_to_mathml_trees(source);
+            assert_eq!(TREES_WRITTEN.with(Cell::get), trees, "{source}");
+        }
     }
 
     /// #1628: a speech tree is built only for a run of three or more primes
