@@ -2363,9 +2363,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
             }
-            // #1634: the SVG decode's outcome is identity too. A decode past
-            // its budget or refused at the cap may succeed on the next
-            // refresh, and that refresh must rebuild to show the image.
+            // #1634: the SVG decode's outcome is identity too. A decode refused
+            // at the cap, or one the projection's deadline stopped, may succeed
+            // on the next refresh, and that refresh must rebuild to show the
+            // image. One past its whole budget is remembered (#1635) and says
+            // the same sentence at every refresh.
             DigestField(hash, embed.ImageDecode switch
             {
                 null => "svg-none",

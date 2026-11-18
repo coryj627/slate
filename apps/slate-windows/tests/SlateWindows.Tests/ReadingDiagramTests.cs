@@ -477,7 +477,7 @@ public sealed partial class ReadingDiagramTests
                 release.Wait(TimeSpan.FromSeconds(10));
                 return null;
             };
-            EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => 0x102;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = (_, _) => 0x102;
             try
             {
                 ReadingDocumentModel built = ReadingDocumentBuilder.Build(

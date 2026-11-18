@@ -361,7 +361,7 @@ public sealed class ReadingEmbedTests
                 release.Wait(TimeSpan.FromSeconds(10));
                 return null;
             };
-            EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => 0x102;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = (_, _) => 0x102;
             try
             {
                 using var tab = new WorkspaceTabViewModel(

@@ -21,8 +21,12 @@ namespace SlateWindows.Tests;
 /// timeout, so one slow decode of the 8x8 test SVG several files share does
 /// not refuse it in every later fact, and a projection's decode deadline is
 /// open, so two slow real decodes in one fact do not cut the second. The
-/// facts about them set their own slots or seams, and two put the app's own
-/// configuration back for one fact each (<c>UnhurriedSvgDecodesTests</c>).
+/// facts about them set their own slots or seams. Three reach the process's
+/// own configuration for one fact each: <c>UnhurriedSvgDecodesTests</c> pins
+/// these values and the app's 20 seconds, and turns the process's memory
+/// back on to show it remembers;
+/// <c>ReadingSvgEmbedDecodeTests.ABackgroundRefreshReadsTheProcessDeadline</c>
+/// spends the process's deadline to show a refresh's worker reads it.
 /// </summary>
 internal static class UnhurriedSvgDecodes
 {

@@ -65,6 +65,7 @@ public sealed class EmbedsLeafSvgDecodeDeadlineTests
                 ProjectionSpent,
                 ProjectionSpent);
             Assert.Equal(2, decodes.Runs);
+            Assert.Equal(new uint[] { 100, 50 }, decodes.Waits);
         }
         finally
         {

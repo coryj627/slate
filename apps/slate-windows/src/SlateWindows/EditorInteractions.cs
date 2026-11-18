@@ -3448,14 +3448,17 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
 
     [ThreadStatic]
-    private static Func<SafeWaitHandle, uint>? svgDecodeWaitForTests;
+    private static Func<SafeWaitHandle, uint, uint>? svgDecodeWaitForTests;
 
     /// <summary>Test seam: replaces the Win32 wait on the decode thread's
-    /// completion, so a test can make it fail or end its budget. Per thread:
-    /// the wait runs on the caller's thread, so a test's seam only reaches
-    /// the decodes that test makes. It returns <c>WaitObject0</c> only once
-    /// the handle is signalled: the caller then disposes the event.</summary>
-    internal static Func<SafeWaitHandle, uint>? SvgDecodeWaitForTests
+    /// completion, so a test can make it fail or end its budget. It is given
+    /// the handle and the milliseconds the app's wait would take, the same
+    /// arguments the real wait gets (#1635), so a fact sees each wait. Per
+    /// thread: the wait runs on the caller's thread, so a test's seam only
+    /// reaches the decodes that test makes. It returns <c>WaitObject0</c>
+    /// only once the handle is signalled: the caller then disposes the
+    /// event.</summary>
+    internal static Func<SafeWaitHandle, uint, uint>? SvgDecodeWaitForTests
     {
         get => svgDecodeWaitForTests;
         set => svgDecodeWaitForTests = value;
@@ -3617,8 +3620,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 ?? (SvgDecodeBudgetSeconds * 1000));
             uint wait = deadline?.WaitFor(budget) ?? budget;
             bool cut = wait < budget;
-            uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
-                ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, wait);
+            // One call for the seam and the real wait, so a fact sees the
+            // milliseconds the app waits.
+            Func<SafeWaitHandle, uint, uint> waitOn =
+                SvgDecodeWaitForTests ?? NativeMethods.WaitForSingleObject;
+            uint waited = waitOn(finished.SafeWaitHandle, wait);
             charge = System.Diagnostics.Stopwatch.GetElapsedTime(started);
             if (waited == NativeMethods.WaitTimeout)
             {

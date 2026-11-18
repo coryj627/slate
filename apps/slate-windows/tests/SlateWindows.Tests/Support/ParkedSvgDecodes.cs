@@ -20,6 +20,7 @@ namespace SlateWindows.Tests;
 internal sealed class ParkedSvgDecodes
 {
     private readonly ConcurrentDictionary<string, int> _runs = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<uint> _waits = new();
     private ManualResetEventSlim _release = new(false);
     private int _total;
     private int _entered;
@@ -61,11 +62,18 @@ internal sealed class ParkedSvgDecodes
         return null;
     }
 
-    /// <summary>The wait seam: it ends its budget only once the parked body
-    /// of the decode it serves has entered, so that body's run is counted
-    /// when the decode returns.</summary>
-    public uint TimeoutOnceEntered(SafeWaitHandle handle)
+    /// <summary>The milliseconds each decode served by
+    /// <see cref="TimeoutOnceEntered"/> was given to wait, in order: what the
+    /// app's own wait would have waited.</summary>
+    public uint[] Waits => [.. _waits];
+
+    /// <summary>The wait seam: it records the milliseconds the decode was
+    /// given, and ends its budget only once the parked body of the decode it
+    /// serves has entered, so that body's run is counted when the decode
+    /// returns.</summary>
+    public uint TimeoutOnceEntered(SafeWaitHandle handle, uint milliseconds)
     {
+        _waits.Enqueue(milliseconds);
         int served = Interlocked.Increment(ref _waited);
         Assert.True(
             SpinWait.SpinUntil(() => Volatile.Read(ref _entered) >= served, TimeSpan.FromSeconds(10)),

@@ -292,6 +292,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 ParkedSvgDecodes.AssertSaid(
                     CardSentences(opened, files), TookLonger, ProjectionSpent, ProjectionSpent);
                 Assert.Equal(new[] { 1, 1, 0 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                Assert.Equal(new uint[] { 100, 50 }, decodes.Waits);
 
                 decodes.Repark();
                 Assert.True(
@@ -302,6 +303,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 ParkedSvgDecodes.AssertSaid(
                     CardSentences(reading.Document!, files), TookLonger, TookLonger, ProjectionSpent);
                 Assert.Equal(new[] { 1, 2, 1 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                Assert.Equal(new uint[] { 100, 50, 100, 50 }, decodes.Waits);
                 Assert.NotSame(opened, reading.Document);
             }
             finally
