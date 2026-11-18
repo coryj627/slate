@@ -969,6 +969,64 @@ public sealed class SaveChainAdmissionTests
         Assert.True(tab.IsExternallyStale, "the renamed tab stayed clean over the write that landed");
     });
 
+    /// <summary>Plan 47 CB-14 (the judge's third review): a panel toggle
+    /// succeeds, and the note is renamed after the write but before the
+    /// toggle publishes. The completion reconciles the path the toggle wrote,
+    /// where no tab is left, so the renamed tab reconciles itself over the
+    /// toggle's hash (the stale mark and the reconcile sentence) and its split
+    /// peer mirrors the stale state; neither tab's text or undo stack
+    /// changes. Before, the tab said the editor changed and both tabs stayed
+    /// clean over the changed disk.</summary>
+    [Fact]
+    public void APanelToggleThatSucceedsStillReconcilesATabRenamedBeforeItPublishes() => RunSta(() =>
+    {
+        const string path = "cb14-toggled-renamed.md";
+        const string renamed = "cb14-toggled-renamed-after.md";
+        (Vault h, WorkspaceTabViewModel a, WorkspaceTabViewModel b) = TwoTabsOnATaskNote("cb14-toggled-renamed", path);
+        using (h)
+        {
+            h.PumpUntil(() => h.Workspace.Panels.OpenTasks.Any(row => row.Task.Text == "the task"), "the panel's row");
+            h.Events.Clear();
+            string textBefore = a.Text;
+            bool couldUndo = a.EditorDocument!.UndoStack.CanUndo;
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            a.TaskToggleBeforePublishForTests = () =>
+            {
+                entered.Set();
+                _ = release.Wait(TimeSpan.FromSeconds(30));
+            };
+            try
+            {
+                h.Workspace.Panels.ToggleTask(h.Workspace.Panels.OpenTasks.First(row => row.Task.Text == "the task"));
+                h.Wait(entered, "premise: the toggle's worker never reached its publication after the write");
+                _ = h.Session.RenameFile(path, renamed);
+                h.Workspace.RetargetPath(path, renamed);
+                Assert.Equal(renamed, a.Path);
+                Assert.Equal(renamed, b.Path);
+                release.Set();
+                h.PumpUntil(
+                    () => !a.IsTaskToggleInFlight && h.Workspace.SavesIdle
+                        && h.Events.Any(e => e is A11yEvent.HostComposed),
+                    "the toggle's publication after the rename");
+            }
+            finally
+            {
+                release.Set();
+                a.TaskToggleBeforePublishForTests = null;
+            }
+            h.Settle();
+            Assert.Contains("- [x] the task", h.Read(renamed), StringComparison.Ordinal);
+            Assert.True(a.IsExternallyStale, "the renamed tab stayed clean over the toggle's write");
+            Assert.True(b.IsExternallyStale, "the renamed tab's peer stayed clean over the toggle's write");
+            A11yEvent.HostComposed reconciled = Assert.Single(h.Events.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(ReconcileSentence, reconciled.Text);
+            Assert.Equal(textBefore, a.Text);
+            Assert.Equal(textBefore, b.Text);
+            Assert.Equal(couldUndo, a.EditorDocument.UndoStack.CanUndo);
+        }
+    });
+
     /// <summary>Plan 47 CB-14 (codex round 2): the renamed tab of
     /// <c>APanelToggleWhoseNoteIsRenamedBeforeItPublishesStillReconcilesTheRenamedTab</c>
     /// speaks its reconcile sentence through an announcer that throws.
