@@ -800,6 +800,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             if (value is null || value.IsPlaceholder || value.IsGroupHeader)
             {
+                // Plan 47 CB-15a: the selection's verbs re-query here too, or
+                // the File actions buttons keep the last row's state on a
+                // date-group header, a placeholder or nothing.
+                RaiseCommandStates();
                 return;
             }
 
