@@ -399,14 +399,15 @@ leaves it no second step (§3.1).
 
 Recorded 2026-11-16. An answer here supersedes the recommendation in
 the table above. No row remains pending, apart from the second steps of
-CD12(b), CD20, CD25, CD27 and CD29; CD8's order, which CB-14
-changed and which waits for the owner (§12, Wave C6); and two points of
-CD19 that CB-28's delivery left for the owner (§12, Wave C7). The owner
-gave the answers in an interview on 2026-11-15 and 2026-11-16, and every
-decision row is dated 2026-11-16. The Run process row is dated
-2026-11-15, the day of the delivery instruction. The #1991 row is a
-later call, dated 2026-11-18, on an issue that CB-9b's spec work filed.
-CD1 is overtaken and has no answer.
+CD12(b), CD20, CD25, CD27 and CD29; CD8's order, which CB-14 changed
+and which waits for the owner (§12, Wave C6); two points of CD19 that
+CB-28's delivery left for the owner (§12, Wave C7); and whether the
+#1991 call covers every route through a tab, as that row reads it
+(§12, Wave C7). The owner gave the answers in an interview on
+2026-11-15 and 2026-11-16, and every decision row is dated 2026-11-16.
+The Run process row is dated 2026-11-15, the day of the delivery
+instruction. The #1991 row is a later call, dated 2026-11-18, on an
+issue that CB-9b's spec work filed. CD1 is overtaken and has no answer.
 
 Some rows also carry a call the owner did not make. It is marked "the
 plan lead's call, 2026-11-16": how the answered work is cut into chunks
@@ -1045,8 +1046,9 @@ against that day's `main`.
 
 One row per chunk as it merges. Rows are batched into each wave's docs
 PR, so a row can trail its merge by a wave. The count is rule 8's, as
-the chunk's PR body ended. "Owed" is what the merge left for someone
-else: an owner's call, a second answer, a rebuild or a ledger line.
+the chunk's PR body ended, unless the wave's record names a find added
+after the merge. "Owed" is what the merge left for someone else: an
+owner's call, a second answer, a rebuild or a ledger line.
 
 | Chunk | PR | Merged | Closed | Found / fixed here / deferred / filed | Owed |
 |---|---|---|---|---|---|
@@ -1075,7 +1077,7 @@ else: an owner's call, a second answer, a rebuild or a ledger line.
 | CB-14 | #2008 | 2026-11-18 (834cbe31) | #1660 #1395 (CD8) | 15 / 10 / 2 / 3 | VoiceOver pass and the Mac's adoption of TaskToggledUnindexed (#1954, with the #1527 note); the other SavedButUnindexed sites and core defects A and B (#1955, one comment, for CB-46); #2003, #2004, #2005 filed; the third rename residual goes into contract 38 through the C6 docs PR |
 | CB-28 | #2011 | 2026-11-18 (9999cb68) | #1635 (CD19) | 5 / 2 / 3 / 0 | #1954: the Mac embed view decodes SVGs with no time budget (EmbedView.swift:161, by reading; needs a Mac). #1955: a deadline for the diagram stage's decodes; a bounded cache of successful decodes. Owner: departure 3, where slow successes spend the 20 s deadline at every refresh, and whether the diagram stage gets a deadline |
 | CB-24 | #2014 | 2026-11-18 (5b890dd9) | #1849; #1846 by comment (CD16) | 4 / 3 / 0 / 1 | Filed #2013: a context menu WPF's service opens from the keys lands no row, and a resting pointer gives the keys to the row under it (in the editor, Shift+F10 3 of 3 and the Apps key 1 of 1). The judge's two accepted minors: the two close-fade hosted facts pass vacuously where menus do not fade, and the gate grew (CI ran it in 25 min 25 s of its 35-minute limit). Not delivered: a run at 100 % scale (CI's DPI and animation setting are unknown; red on main was seen only at 200 % with animations on), touch and pen, a real mouse right-click during a close fade, and Shift+F10 on a row of the open menu. No Mac work owed |
-| CB-15a | #2015 | 2026-11-19 (cc16f7e3) | none (Refs #1890, open for CB-15b and CB-15c; CD9) | 8 / 5 / 1 / 1 | Filed #2012: a folder listing fails when another session commits during it (core refuses even a first page and the host never restarts), and some of core's details read as developer text. One line on #1955: the Copy link failure is spoken at High on Windows and at Medium on the Mac. One line on #1956: the Copy link sentence, which is host-composed and is the Mac's, plus leads that repeat the path an InvalidPath detail names. For the owner: whether Windows adopts the Mac's specific unavailable reason, "Select exactly one Markdown file to copy its wikilink."; today the palette gives its generic "This command is not available right now.". CB-15b and CB-15c inherit ShellFailureDetailCensus's 61 dated rows (73 reads) and its baseline. Not delivered: the synchronous tree refresh path has no fact (tests only); the Markdown refusal and the disabled buttons after a header selection were not heard under NVDA; the other three uniffi error types and an AggregateException still dump their fields if they ever reach the helper. No Mac work owed |
+| CB-15a | #2015 | 2026-11-19 (cc16f7e3) | none (Refs #1890, open for CB-15b and CB-15c; CD9) | 8 / 5 / 1 / 1 | Filed #2012: a folder listing fails when another session commits during it (core refuses even a first page and the host never restarts), and some of core's details read as developer text. One line on #1955: the Copy link failure is spoken at High on Windows and at Medium on the Mac. One line on #1956: the Copy link sentence, which is host-composed and is the Mac's, plus leads that repeat the path an InvalidPath detail names. For the owner: whether Windows adopts the Mac's specific unavailable reason, "Select exactly one Markdown file to copy its wikilink."; today the palette gives its generic "This command is not available right now.". CB-15b and CB-15c inherit ShellFailureDetailCensus's 61 dated rows (73 reads) and its baseline. Not delivered: the synchronous tree refresh path has no fact (a path only tests take; the census holds it); the Markdown refusal and the disabled buttons after a header selection were not heard under NVDA; the other three uniffi error types and an AggregateException still dump their fields if they ever reach the helper. No Mac work owed |
 ROW2016
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
@@ -1480,35 +1482,39 @@ red first: the branch spoke the new Copy link failure on a canvas or an
 image, where the Mac offers no action, so Copy link is now offered only
 for exactly one Markdown file. Its minor 2 is the #1956 line and its
 minor 3 the #1955 line in CB-15a's row. The second judge, on that
-change, gave a nit the lead took, red first: when the Files selection
-moved to a date-group header, a placeholder or nothing, the File
-actions buttons kept the last row's enabled state, as on `main`. The
-third judge, on that last change, found no blocker, major or minor.
+change, gave three nits, and the lead took two: the stale File actions
+states, red first (when the Files selection moved to a date-group
+header, a placeholder or nothing, the buttons kept the last row's
+enabled state, as on `main`), and a comment's list of core's refusal
+cases. The third judge, on that last change, found no blocker, major or
+minor.
 
 The lead ruled CB-28's eight calls on 2026-11-18. The reading view's
 refresh, the Ctrl+E popover's build and the embeds leaf's batch each
-get a 20-second deadline of their own (Call 1(b)); step 0 showed that
-the leaf decodes every embed of the active note on every activation,
-whether or not it is showing. The diagram stage gets the memory and no
-deadline, with a line on #1955 (Call 2(a)): a deadline there needs a
-transient outcome, so that the next refresh retries the diagram, a
-sentence of its own, and a change to WB-20's landing rule. The
-deadline counts decode time only, where core's twin counts the wall
-clock from the note's first render, and a wait the deadline cut short
-is not remembered, where core caches a render its note deadline cut;
-the PR names both as departures (Call 3). The unit-test host keeps the
-process memory off and the default deadline open, as #1950 did for the
-per-image budget, and three facts put the app's configuration back for
-one fact each (Call 4). The Mac twin at `EmbedView.swift:161` is one
-line on #1954, by reading, with no new issue (Call 5). The `lib.rs` doc
-comment, which now points at core's list of forms, landed after #2008
-merged (Call 6(a)). The form is `"note-images"` (Call 7), and the base
-NVDA pass ran on step 0's build of `main` (Call 8). The diff red team
-found a third departure, which the PR names and the lead puts to the
-owner: successful decodes count against the deadline and are not
-cached, so a note of many SVGs that each succeed in just under 5 s
-shows the deadline sentence for the later ones at every refresh, where
-`main` showed them all after N × 5 s.
+get a 20-second deadline of their own (Call 1(b)). The spec's red team
+found, by reading (its blocker 2), that the leaf decodes every embed of
+the active note on every activation, whether or not it is showing, and
+the base NVDA pass saw the hidden leaf decode all ten. The diagram
+stage gets the memory and no deadline, with a line on #1955 (Call
+2(a)): a deadline there needs a transient outcome, so that the next
+refresh retries the diagram, a sentence of its own, and a change to
+WB-20's landing rule. The deadline counts decode time only, where
+core's twin counts the wall clock from the note's first render, and a
+wait the deadline cut short is not remembered, where core caches a
+render its note deadline cut; the PR names both as departures (Call 3).
+The unit-test host keeps the process memory off and the default
+deadline open, as #1950 did for the per-image budget, and three facts
+put the app's configuration back for one fact each (Call 4). The Mac
+twin at `EmbedView.swift:161` is one line on #1954, by reading, with no
+new issue (Call 5). The `lib.rs` doc comment, which now points at
+core's list of forms, landed after #2008 merged (Call 6(a)). The form
+is `"note-images"` (Call 7), and the base NVDA pass ran on step 0's
+build of `main` (Call 8). The diff red team found a third departure,
+which the PR names and the lead puts to the owner: successful decodes
+count against the deadline and are not cached, so a note of many SVGs
+that each succeed in just under 5 s shows the deadline sentence for the
+later ones at every refresh, where `main` showed them all after
+N × 5 s.
 
 NVDA 2026.3.1 heard CB-28 on `slow.md`, which holds ten embedded SVGs
 of about 90 KB that each take about 7 s to decode here; each step
@@ -1535,14 +1541,17 @@ the Files toolbar's Sort and group menu and the rail's More panels
 menu, which failed 4 of 4 each on `main`, taken in the PR red first;
 the editor's Shift+F10 probed, and the class of context menus that
 WPF's ContextMenuService opens filed as one issue, #2013, once the
-probe reproduced it; and #1846 ended by comment after the merge. The
-header buttons' Shift+F10 and Apps-key route, which landed no row, was
-taken as a small find, red first. Under NVDA 2026.3.1, on #1849's
-steps with the pointer resting on the ⋯ menu's last row, base said
-"Split Right, Ctrl+backslash, 1 of 3" and then "Bulk Rename
-Properties…, Ctrl+Shift+R, 3 of 3" by Invoke and by Enter, and "menu"
-twice by Shift+F10. Head said "Split Right, Ctrl+backslash, 1 of 3" and
-nothing after, all three ways. #1846's run matched on base and head:
+probe reproduced it; and #1846 ending by comment after the merge
+(below). The header buttons' Shift+F10 and Apps-key route, which landed
+no row, was taken as a small find, red first. The app menu's
+regression fact, now on the shared hold, missed 5 of 10 runs on head,
+and 2 of 5 on base in an interleaved control, each miss with #1976's
+placement message. Under NVDA 2026.3.1, on #1849's steps with the
+pointer resting on the ⋯ menu's last row, base said "Split Right,
+Ctrl+backslash, 1 of 3" and then "Bulk Rename Properties…,
+Ctrl+Shift+R, 3 of 3" by Invoke and by Enter, and "menu" twice by
+Shift+F10. Head said "Split Right, Ctrl+backslash, 1 of 3" and nothing
+after, all three ways. #1846's run matched on base and head:
 one focus-changed event, on the editor, with NVDA naming the tab
 control and the tab as the editor's ancestors, which CD16 accepts.
 #1846 was ended by a comment after the merge
@@ -1550,10 +1559,10 @@ control and the tab as the editor's ancestors, which CD16 accepts.
 
 CB-15a's step 0 ran the census's trial over all 309 shell sources:
 rule 1 found 96 reads of an exception's `Message`, and rule 2 found 76
-hits of its own, none a binding dump that reaches text. CD9 put rule 2
-over the whole shell only if the trial showed few hits, so by the
-lead's ruling it stays on the Bases sources. The lead's other rulings:
-the tag edit's read, which CB-9b had moved into
+hits of its own, none, by reading, a binding dump that reaches text.
+CD9 put rule 2 over the whole shell only if the trial showed few hits,
+so by the lead's ruling it stays on the Bases sources. The lead's
+other rulings: the tag edit's read, which CB-9b had moved into
 `WorkspaceViewModel.Properties.cs`, joins this chunk; the listing that
 fails when another session commits during it is filed as #2012, with
 core's developer-text details in the same issue, since the owner wants
@@ -1569,16 +1578,20 @@ specific reason is a question for the owner (below).
 an exception's `Message`, `FailureDetail.Of`. The other 73 reads stand
 as 61 dated rows under a pinned baseline, which CB-15b and CB-15c
 inherit: each deletes its rows and lowers the ratchet as it routes its
-sites. CB-15a also edits two files that no §6 row names: one line of
+sites. Beside its new helper and its own tests, CB-15a edits two
+shared files that no §6 row names: one line of
 `Bases/BaseDocumentViewModel.cs`, where `BasePhrase.ErrorDetail`
 forwards to `FailureDetail.Of`, and the unit tests'
 `Support/ShellCompilation.cs`, which every binding census reads and
 which now binds with the app's own generated usings for the test
-configuration. Under NVDA 2026.3.1, Move To onto a folder that already
-holds the name said "Move failed: @path=sub/a.md" on base and "Move
-failed: Something named sub/a.md already exists there." on head; the
-tag edit with "#" said "Tag edit failed: @message="#" is not a valid
-tag." on base and "Tag edit failed: "#" is not a valid tag." on head.
+configuration. No §6 row names CB-28's
+`Panels/RightPanePanelsViewModel.cs` and `HostLog.cs` or CB-24's
+`NoteHeaderView.cs` either. Under NVDA 2026.3.1, Move To onto a folder
+that already holds the name said "Move failed: @path=sub/a.md" on base
+and "Move failed: Something named sub/a.md already exists there." on
+head; the tag edit with "#" said "Tag edit failed: @message="#" is not
+a valid tag." on base and "Tag edit failed: "#" is not a valid tag." on
+head.
 On head, Copy link on a canvas is a disabled button that object
 navigation reads as "Copy link, button, unavailable", and the palette
 says "Selected: Copy Wikilink. Unavailable: This command is not
@@ -1674,7 +1687,7 @@ its own and a change to WB-20's landing rule. Third, whether Windows
 adopts the Mac's specific reason when Copy link is unavailable,
 "Select exactly one Markdown file to copy its wikilink.", in place of
 the palette's generic "This command is not available right now.";
-adopting it adds a spoken sentence on Windows. Four questions from
-wave C6 are still open: the three above (CB-14's order, the MathCAT
-report and Codex's effort), and whether the owner's #1991 call covers
-every route through a tab, as §3.1 reads it.
+adopting it adds a spoken sentence on Windows. The three questions
+from wave C6 are still open: CB-14's order, the MathCAT report and
+Codex's effort. A fourth is open too: whether the owner's #1991 call
+covers every route through a tab, as §3.1's row reads it.
