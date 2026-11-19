@@ -838,7 +838,8 @@ public sealed class NoteHeaderTests
         host.Settle();
         menu.Opened -= Opened;
         Assert.True(menu.IsOpen);
-        Assert.True(!opened || heldWhenOpened, "⋯'s rows were not held yet when its popup opened.");
+        Assert.True(opened, "⋯'s popup never raised Opened, so whether its rows were held then wasn't measured.");
+        Assert.True(heldWhenOpened, "⋯'s rows were not held yet when its popup opened.");
         AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
         CloseAndAwait(host, menu, closes);
         AssertGivenBack(rows, "once ⋯ closed with no press");
@@ -936,8 +937,42 @@ public sealed class NoteHeaderTests
         AssertGivenBack(rows, "once the Apps key's menu closed");
     }));
 
-    /// <summary>Counts a menu's Closed events. With no theme in the hosted shell its popup fades
-    /// out (about 170 ms) before it raises Closed, which is when the hold ends.</summary>
+    /// <summary>#1849: a context menu's popup fades out and raises Closed only when the fade
+    /// ends, so a pointer can open ⋯ again while a keyboard open's close is still fading. That
+    /// open is a pointer's, and holds nothing: the earlier open's hold doesn't carry over to it.
+    /// (Where the popup doesn't fade, its Closed has already given the rows back.)</summary>
+    [Fact]
+    public void APointersOpenWhileAKeyboardOpenIsStillClosingHoldsNothing() => StaThread.RunPumped(() => WithPointerAt((40, 40), _ =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Button more = More(HeaderOf(host, "Lecture.md"));
+        ContextMenu menu = more.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
+        int before = closes.Count;
+        menu.IsOpen = false;
+        bool fading = closes.Count == before;
+        TestContext.Current.TestOutputHelper?.WriteLine($"the keyboard open's close was {(fading ? "still fading" : "done at once")} when the pointer opened ⋯");
+
+        more.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, "the pointer's click didn't open ⋯.");
+        AssertGivenBack(rows, $"with ⋯ opened by a pointer while the keyboard open's close was {(fading ? "still fading" : "done")}");
+        CloseAndAwait(host, menu, closes);
+    }));
+
+    /// <summary>Counts a menu's Closed events. A context menu's popup fades out (about 170 ms
+    /// here) before it raises Closed, which is when the hold ends.</summary>
     private sealed class Closes
     {
         internal Closes(ContextMenu menu) => menu.Closed += (_, _) => Count++;

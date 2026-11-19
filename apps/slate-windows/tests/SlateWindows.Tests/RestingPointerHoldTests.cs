@@ -96,6 +96,79 @@ public sealed class RestingPointerHoldTests
         AssertGivenBack(rows, "after a move and a release");
     });
 
+    /// <summary>Sort and group lands its checked order on every open, a pointer's click too, so
+    /// every open holds its rows: a pointer resting where they appear, or one they slide under,
+    /// can't take the keys. Its close gives them back.</summary>
+    [Fact]
+    public void SortAndGroupHoldsItsRowsOnAPointersOpen() => StaThread.RunPumped(() => WithPointerAt((40, 40), () =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        using FilesToolbarTests.Attached files = FilesToolbarTests.Attach(host);
+        ClickAsAPointer(host.Shell.SidebarSortButton);
+        host.Settle();
+        host.Settle();
+        ContextMenu menu = Assert.IsType<ContextMenu>(host.Shell.SidebarSortMenu);
+        AssertHeldThenGivenBackOnClose(host, menu, "Sort and group");
+    }));
+
+    /// <summary>More panels the same: it lands its open panel's row on every open.</summary>
+    [Fact]
+    public void MorePanelsHoldsItsRowsOnAPointersOpen() => StaThread.RunPumped(() => WithPointerAt((40, 40), () =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        ClickAsAPointer(host.Shell.RightPaneMorePanelsButton);
+        host.Settle();
+        host.Settle();
+        ContextMenu menu = Assert.IsType<ContextMenu>(host.Shell.MorePanelsMenu);
+        AssertHeldThenGivenBackOnClose(host, menu, "More panels");
+    }));
+
+    /// <summary>A pointer's click on <paramref name="button"/>: its mouse-up, then its Click.</summary>
+    private static void ClickAsAPointer(System.Windows.Controls.Primitives.ButtonBase button)
+    {
+        button.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+    }
+
+    /// <summary>Every row of the open <paramref name="menu"/> is held; once it closes (its popup
+    /// fades out before it raises Closed), every row is given back.</summary>
+    private static void AssertHeldThenGivenBackOnClose(ShownShell host, ContextMenu menu, string name)
+    {
+        Assert.True(menu.IsOpen, $"{name} didn't open.");
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        Assert.NotEmpty(rows);
+        AssertHeld(rows, $"with {name} opened by a pointer's click");
+        bool closed = false;
+        menu.Closed += (_, _) => closed = true;
+        menu.IsOpen = false;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    host.Settle();
+                    return closed;
+                },
+                TimeSpan.FromSeconds(5)),
+            $"{name} never raised Closed.");
+        AssertGivenBack(rows, $"once {name} closed");
+    }
+
+    /// <summary>Runs <paramref name="fact"/> with the hold reading <paramref name="at"/> as the
+    /// pointer, on the calling thread; the read is put back after.</summary>
+    private static void WithPointerAt((int X, int Y) at, Action fact)
+    {
+        Func<(int X, int Y)?> saved = RestingPointerHold.PointerForTests;
+        RestingPointerHold.PointerForTests = () => at;
+        try
+        {
+            fact();
+        }
+        finally
+        {
+            RestingPointerHold.PointerForTests = saved;
+        }
+    }
+
     /// <summary>The pointer the hold reads, which a fact moves.</summary>
     private sealed class FakePointer
     {

@@ -138,13 +138,19 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>#1849's steps: Lecture split right from ⋯, Alpha opened in the right pane, the
     /// keys in its editor. Then the left ⋯ opens with the pointer resting on its last row, by
-    /// its Invoke pattern (a reader's object navigation), by Enter and by Shift+F10 on the
-    /// button: each time the keys land on Split Right and stay, and Down goes on from there.
-    /// On main the row under the pointer took them every time (step 0, 5 of 5), and Shift+F10
-    /// landed no row at all.</summary>
-    [Fact]
-    public void NoteHeader_APointerRestingWhereItsMenuOpensLeavesTheKeysOnTheFirstRow() =>
-        RunRestingPointerJourney("note-header-resting-pointer", (process, window, automation, said) =>
+    /// one of four doors: its Invoke pattern (a reader's object navigation, with the keys in
+    /// the right pane's editor), or Enter, Shift+F10 or the Apps key with the keys on ⋯. The
+    /// keys land on Split Right and stay, while the row under the pointer is Bulk Rename
+    /// Properties… in the open being measured, and Down goes on from Split Right. On main the
+    /// row under the pointer took them (step 0, 5 of 5), and the two keys' opens landed no row
+    /// at all.</summary>
+    [Theory]
+    [InlineData("invoke")]
+    [InlineData("enter")]
+    [InlineData("shift-f10")]
+    [InlineData("apps")]
+    public void NoteHeader_APointerRestingWhereItsMenuOpensLeavesTheKeysOnTheFirstRow(string door) =>
+        RunRestingPointerJourney($"note-header-resting-pointer-{door}", (process, window, automation, said) =>
         {
             QuickOpen(window, automation, "Lecture", VirtualKeyShort.RETURN);
             AssertEventuallyFocused(WaitForEditor(window, automation, "Lecture.md editor", TimeSpan.FromSeconds(10)), "Quick Open didn't land in Lecture.");
@@ -174,34 +180,34 @@ public sealed partial class ShellAccessibilityTests
                 MoreRowIds,
                 rows => rows.Single(row => row.AutomationId == "NoteHeaderBulkRename"));
 
-            (string How, Action PutTheKeys, Action Open)[] opens =
-            [
-                ("its Invoke pattern, with the keys in the right pane's editor", () => FocusFor(alpha), () => more.Patterns.Invoke.Pattern.Invoke()),
-                ("Enter on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.RETURN)),
-                ("Shift+F10 on ⋯", () => FocusFor(more), () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
-            ];
-            bool named = false;
-            foreach ((string how, Action putTheKeys, Action open) in opens)
+            (string How, Action PutTheKeys, Action Open) chosen = door switch
             {
-                putTheKeys();
-                RestThePointerAt(resting);
-                open();
-                string context = $"⋯ opened by {how}, the pointer resting on Bulk Rename Properties… at {resting}. {said}";
-                AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, "NoteHeaderSplitRight"), context);
-                if (!named)
-                {
-                    // The census sees the open menu's rows, held, under the resting pointer.
-                    AssertItemNamesAreSpeakable(process, "note-header-resting-pointer");
-                    named = true;
-                }
+                "invoke" => ("its Invoke pattern, with the keys in the right pane's editor", () => FocusFor(alpha), () => more.Patterns.Invoke.Pattern.Invoke()),
+                "enter" => ("Enter on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.RETURN)),
+                "shift-f10" => ("Shift+F10 on ⋯", () => FocusFor(more), () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
+                "apps" => ("the Apps key on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.APPS)),
+                _ => throw new ArgumentOutOfRangeException(nameof(door), door, "no such door"),
+            };
+            (string how, Action putTheKeys, Action open) = chosen;
+            putTheKeys();
+            RestThePointerAt(resting);
+            open();
+            string context = $"⋯ opened by {how}, the pointer resting on Bulk Rename Properties… at {resting}. {said}";
+            AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, "NoteHeaderSplitRight"), context);
+            // The census sees the open menu's rows, held, under the resting pointer.
+            AssertItemNamesAreSpeakable(process, $"note-header-resting-pointer-{door}");
 
-                Assert.Equal(resting, Mouse.Position);
-                PressKey(VirtualKeyShort.DOWN);
-                AssertEventuallyFocused(WaitForOpenMenuRow(window, automation, "NoteHeaderAddProperty"), $"Down from Split Right didn't reach Add Property…: {context}");
-                CloseOpenMenu(window, automation, "NoteHeaderSplitRight");
-            }
+            // The pointer rests on Bulk Rename Properties… where it settled in this open, so the
+            // row under it had its chance to take the keys.
+            Rectangle settled = SettledBoundsOf(WaitForOpenMenuRow(window, automation, "NoteHeaderBulkRename"));
+            Assert.True(
+                settled.Contains(resting),
+                $"Bulk Rename Properties… settled at {settled} in this open, not under the pointer resting at {resting}: {context}");
+            Assert.Equal(resting, Mouse.Position);
+            PressKey(VirtualKeyShort.DOWN);
+            AssertEventuallyFocused(WaitForOpenMenuRow(window, automation, "NoteHeaderAddProperty"), $"Down from Split Right didn't reach Add Property…: {context}");
+            CloseOpenMenu(window, automation, "NoteHeaderSplitRight");
         });
-
     /// <summary>#1849's hold gives the rows back to the pointer: with ⋯ open over a resting
     /// pointer, a move within the row under it gives that row the keys, and a click with the
     /// pointer still resting works the row (Bulk Rename's sheet opens). Nothing is held on
