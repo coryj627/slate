@@ -13,9 +13,9 @@ namespace SlateWindows.Tests;
 /// #2016: Tab on the window's last stop wraps to its first, as Shift+Tab on the first
 /// wraps to the last. The welcome view, collapsed under an open vault, named its Open
 /// Vault button as its focused element; WPF's search for the window's first stop took
-/// that hidden button and never reached the workspace, so Tab stayed where it was. The
-/// welcome view still gives Open Vault the keys at a launch with no vault, and on a
-/// return to it.
+/// that hidden button and never reached the workspace, so Tab stayed where it was. A
+/// launch with no vault still puts the keys on Open Vault, and so does a return to the
+/// welcome view.
 /// </summary>
 public sealed class WindowTabWrapTests
 {
@@ -53,8 +53,8 @@ public sealed class WindowTabWrapTests
     });
 
     /// <summary>A launch with no vault opens on the welcome view with the keys on Open
-    /// Vault, and the window keeps Open Vault as its focused element, which WPF restores
-    /// when the window is activated.</summary>
+    /// Vault, and Open Vault is the window's own focused element, where WPF sends the keys
+    /// when it focuses the window itself (a first activation, a menu's dismissal).</summary>
     [Fact]
     public void ALaunchWithNoVaultPutsTheKeysOnOpenVault() => RunSta(() =>
     {
