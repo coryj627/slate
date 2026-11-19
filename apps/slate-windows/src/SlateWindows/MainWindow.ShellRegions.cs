@@ -1076,10 +1076,10 @@ public partial class MainWindow : IShellRegionHost
     /// pane, and Left on the logo reached the rail. An arrow nothing else took
     /// stays on the stop while the stop itself holds the keys, whatever its
     /// modifiers, since WPF's navigation takes those too. An arrow chord one of
-    /// the window's key bindings matches is left to the binding: the pane chords
+    /// the window's key bindings takes is left to the binding: the pane chords
     /// (Ctrl+Alt+arrows) and Move Tab (Ctrl+Alt+Shift+Left and Right) (Codex
-    /// round 2). An arrow from inside the pane or from the logo's menu is theirs
-    /// to move.
+    /// round 2), while a workspace gives them their commands. An arrow from
+    /// inside the pane or from the logo's menu is theirs to move.
     /// </summary>
     private void KeepTheLoneStopsArrows()
     {
@@ -1091,17 +1091,24 @@ public partial class MainWindow : IShellRegionHost
     {
         if (ReferenceEquals(e.OriginalSource, stop)
             && e.Key is Key.Left or Key.Right or Key.Up or Key.Down
-            && !AWindowKeyBindingMatches(e))
+            && !AWindowKeyBindingTakes(e))
         {
             e.Handled = true;
         }
     }
 
-    /// <summary>Whether one of the window's key bindings matches the press. WPF's
-    /// CommandManager marks a matched press handled whether or not the binding's
-    /// command can run, so the binding takes it when it reaches the window.</summary>
-    private bool AWindowKeyBindingMatches(KeyEventArgs e) =>
-        InputBindings.OfType<KeyBinding>().Any(binding => binding.Gesture.Matches(this, e));
+    /// <summary>Whether one of the window's key bindings takes the press when it
+    /// reaches the window, as WPF's CommandManager decides: a binding counts only
+    /// with a command (InputBindingCollection.FindMatch skips one without, as
+    /// every arrow binding is with no vault open, Workspace being null) that is
+    /// not NotACommand, and its gesture matches. A matched press is handled
+    /// whether or not the command can run (CommandManager.TranslateInput), so
+    /// CanExecute is not asked (merge judge 1).</summary>
+    private bool AWindowKeyBindingTakes(KeyEventArgs e) =>
+        InputBindings.OfType<KeyBinding>().Any(binding =>
+            binding.Command is not null
+            && binding.Command != ApplicationCommands.NotACommand
+            && binding.Gesture?.Matches(this, e) == true);
 
     private bool LandAfterLoadMore()
     {

@@ -251,6 +251,31 @@ public sealed class WindowTabWrapTests
             $"Left on the logo moved the keys to {Describe(Keyboard.FocusedElement)}");
     });
 
+    /// <summary>Merge judge 1: with no vault open, the window's arrow chords (the pane chords,
+    /// Move Tab) are bound to the workspace's commands, which are null, so WPF skips their
+    /// bindings and would navigate. The logo keeps them as it keeps a bare Left.</summary>
+    [Theory]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Alt)]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)]
+    public void OnTheWelcomeViewTheLogoKeepsTheWorkspacesChords(ModifierKeys modifiers) => RunSta(() =>
+    {
+        using var shell = new WelcomeShell(WelcomeShell.TheFixtureVault);
+        Assert.True(shell.Shell.WelcomeRoot.IsVisible, "premise: the welcome view is not shown");
+        Assert.Null(shell.Lifecycle.Workspace);
+        if (!shell.Shell.AppMenuItem.Focus())
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's chords weren't measured on it");
+        }
+
+        shell.Settle();
+
+        CommandPaletteTests.ThreadModifiers.Hold(modifiers, () => Press(shell.Shell, shell.Settle, Key.Left));
+
+        Assert.True(
+            ReferenceEquals(shell.Shell.AppMenuItem, Keyboard.FocusedElement),
+            $"{modifiers}+Left on the logo moved the keys to {Describe(Keyboard.FocusedElement)}");
+    });
+
     /// <summary>Codex round 3, the lead's ruling: Shift+Tab from the logo over the welcome view
     /// enters it at its last stop, the last recent vault, as WelcomeTabRingTests' ring runs
     /// backwards; with no recent vault, that is Open Vault. Main's welcome view sent backward
