@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows.Input;
 using SlateWindows.Canvas;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
@@ -25,8 +26,9 @@ namespace SlateWindows.Tests;
 /// prefix. ShellFailureDetailCensus holds all four to FailureDetail.Of.
 /// Also here: Copy link is for exactly one Markdown file, as on the Mac; on a
 /// Markdown file core makes no wikilink for it says the Mac's sentence
-/// instead of nothing; and Copy link, Pin and Unpin do nothing on a row that
-/// is not a file.
+/// instead of nothing; Copy link, Pin and Unpin do nothing on a row that is
+/// not a file; and the selection leaving a note for a row that is not a file
+/// tells the selection's verbs to re-query.
 /// </summary>
 public sealed class FilesSidebarFailureDetailTests
 {
@@ -603,6 +605,63 @@ public sealed class FilesSidebarFailureDetailTests
         Assert.DoesNotContain(string.Empty, rig.Sidebar.PinnedForTests);
         Assert.Equal(status, rig.Sidebar.Status);
         Assert.Empty(rig.Spoken.OfType<A11yEvent.HostComposed>());
+    }
+
+    /// <summary>The second merge judge's nit 1: the selection moving from a
+    /// note to a row that is not a file (its date-group header, a
+    /// placeholder) or to nothing tells the selection's verbs to re-query.
+    /// The setter returned before it raised their states, so the File actions
+    /// buttons kept the note's: NVDA read Copy link and the rest as
+    /// available, and pressing one did nothing.</summary>
+    [Theory]
+    [InlineData("its date-group header")]
+    [InlineData("a placeholder")]
+    [InlineData("nothing")]
+    public async Task TheSelectionLeavingANoteRequeriesItsVerbs(string target)
+    {
+        using Rig rig = await Rig.Open("cb15a-selection-requery", vault => vault.Write("a.md", "# A\n"));
+        rig.Sidebar.GroupByDate = true;
+        await rig.Settle();
+        FileTreeNodeViewModel header = Assert.Single(rig.Sidebar.RootNodes, node => node.IsGroupHeader);
+        rig.Sidebar.SelectedNode = Assert.Single(header.Children, node => node.Path == "a.md");
+        (string Name, ICommand Command)[] verbs =
+        [
+            ("Copy link", rig.Sidebar.CopyWikilinkCommand),
+            ("Pin", rig.Sidebar.PinCommand),
+            ("Unpin", rig.Sidebar.UnpinCommand),
+            ("Copy path", rig.Sidebar.CopyPathCommand),
+            ("Duplicate", rig.Sidebar.DuplicateCommand),
+            ("Reveal", rig.Sidebar.RevealCommand),
+            ("Rename", rig.Sidebar.RenameCommand),
+        ];
+        Assert.All(verbs, verb => Assert.True(verb.Command.CanExecute(null), $"premise: {verb.Name} is available on the note."));
+        var requeried = new HashSet<string>();
+        foreach ((string name, ICommand command) in verbs)
+        {
+            command.CanExecuteChanged += (_, _) =>
+            {
+                lock (requeried)
+                {
+                    requeried.Add(name);
+                }
+            };
+        }
+
+        rig.Sidebar.SelectedNode = target switch
+        {
+            "its date-group header" => header,
+            "a placeholder" => FileTreeNodeViewModel.Loading(),
+            _ => null,
+        };
+
+        Assert.All(verbs, verb =>
+        {
+            Assert.False(verb.Command.CanExecute(null), $"{verb.Name} is available on {target}.");
+            lock (requeried)
+            {
+                Assert.True(requeried.Contains(verb.Name), $"{verb.Name} kept the note's state: no CanExecuteChanged on {target}.");
+            }
+        });
     }
 
     // ================================================================ helpers
