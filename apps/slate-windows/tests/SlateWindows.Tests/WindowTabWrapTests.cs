@@ -15,7 +15,8 @@ namespace SlateWindows.Tests;
 /// Vault button as its focused element; WPF's search for the window's first stop took
 /// that hidden button and never reached the workspace, so Tab stayed where it was. A
 /// launch with no vault still puts the keys on Open Vault, and so does a return to the
-/// welcome view.
+/// welcome view. The same dead end had kept the empty pane's arrows on its stop, which
+/// WPF judges in the window's group; the stop keeps them on purpose now.
 /// </summary>
 public sealed class WindowTabWrapTests
 {
@@ -89,6 +90,69 @@ public sealed class WindowTabWrapTests
             $"the return left the keys on {Describe(Keyboard.FocusedElement)}");
     });
 
+    /// <summary>The empty pane's stop is the content pane's border itself, and WPF judges a
+    /// stop's arrows in its parent's directional group, which for the border is the
+    /// window's. While the hidden Open Vault button ended WPF's search, no arrow found a
+    /// target; without it Left reached the Files pane and Right the right pane (the shell
+    /// gate's RegionStops_ArrowsStayInRegion). Every arrow stays on the stop.</summary>
+    [Theory]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Right)]
+    [InlineData(Key.Up)]
+    [InlineData(Key.Down)]
+    public void TheEmptyPanesStopKeepsItsArrows(Key key) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        Assert.Empty(host.Workspace.ActiveGroup.Tabs);
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor), "premise: the empty pane's stop took no keys");
+        Assert.Same(host.Shell.ContentPaneBorder, Keyboard.FocusedElement);
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        Press(host, key);
+
+        Assert.True(
+            ReferenceEquals(host.Shell.ContentPaneBorder, Keyboard.FocusedElement),
+            $"{key} on the empty pane's stop moved the keys to {Describe(Keyboard.FocusedElement)}");
+        Assert.Empty(changes);
+    });
+
+    /// <summary>Ctrl+Alt+arrows on the empty pane's stop are still the window's pane chords
+    /// (its preview route takes them before the stop's own key handler): Ctrl+Alt+Left asks
+    /// for the Files pane, the edge to its left.</summary>
+    [Fact]
+    public void ThePaneChordsStillRunFromTheEmptyPanesStop() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor), "premise: the empty pane's stop took no keys");
+        WorkspaceFocusBoundary? boundary = null;
+        host.Workspace.FocusBoundaryRequested += (_, requested) => boundary = requested;
+
+        CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Control | ModifierKeys.Alt, () => Press(host, Key.Left));
+
+        Assert.Equal(WorkspaceFocusBoundary.Files, boundary);
+    });
+
+    /// <summary>An arrow from inside the content pane that no element takes is still WPF's
+    /// to move within the pane: Down from an empty canvas's onboarding line reaches the
+    /// canvas outline.</summary>
+    [Fact]
+    public void AnArrowFromInsideThePaneStillMovesWithinIt() => RunSta(() =>
+    {
+        using var host = new ShownShell(("board.canvas", "{\"nodes\":[],\"edges\":[]}\n"));
+        OpenTheBoard(host);
+        FrameworkElement onboarding = ShownShell.Descendants(host.Shell.ContentPaneBorder).OfType<FrameworkElement>()
+            .Single(element => AutomationProperties.GetAutomationId(element) == "CanvasEmptyOnboarding" && element.IsVisible);
+        Assert.True(onboarding.Focus(), "premise: the onboarding line refused the keys");
+        host.Settle();
+
+        Press(host, Key.Down);
+
+        var landed = Assert.IsAssignableFrom<FrameworkElement>(Keyboard.FocusedElement);
+        Assert.True(
+            AutomationProperties.GetAutomationId(landed) == "CanvasOutlineTree",
+            $"Down on the onboarding line left the keys on {Describe(landed)}");
+    });
+
     private static void OpenTheBoard(ShownShell host)
     {
         host.Workspace.OpenPath("board.canvas");
@@ -105,10 +169,12 @@ public sealed class WindowTabWrapTests
             ShownShell.Descendants(host.Shell).OfType<Button>(),
             button => AutomationProperties.GetAutomationId(button) == "SidebarNewNote");
 
-    private static void PressTab(ShownShell host)
+    private static void PressTab(ShownShell host) => Press(host, Key.Tab);
+
+    private static void Press(ShownShell host, Key key)
     {
         InputManager.Current.ProcessInput(new KeyEventArgs(
-            Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, Key.Tab)
+            Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, key)
         {
             RoutedEvent = Keyboard.PreviewKeyDownEvent,
         });

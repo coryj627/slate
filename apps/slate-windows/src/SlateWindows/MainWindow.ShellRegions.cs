@@ -1063,6 +1063,28 @@ public partial class MainWindow : IShellRegionHost
     private static bool IsRailArrow(Key key) =>
         key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown;
 
+    /// <summary>
+    /// #2016: the empty pane's stop is the content pane's border itself, and WPF
+    /// judges a stop's arrows in its parent's directional group, which for the
+    /// border is the window's (the status bar has a Contained border around it
+    /// for the same reason). Until #2016, the welcome view's hidden Open Vault
+    /// button ended WPF's search through the window, so no arrow found a target;
+    /// once it did not, Left reached the Files pane and Right the right pane. An
+    /// arrow stays on the border while the border itself holds the keys. The
+    /// window's preview route runs first: the seal, and the pane chords
+    /// (Ctrl+Alt+arrows), which it takes anywhere in the workspace. An arrow
+    /// from inside the pane is the pane's to move.
+    /// </summary>
+    private void KeepTheEmptyPaneStopsArrows() =>
+        ContentPaneBorder.KeyDown += (_, e) =>
+        {
+            if (ReferenceEquals(e.OriginalSource, ContentPaneBorder)
+                && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+            {
+                e.Handled = true;
+            }
+        };
+
     private bool LandAfterLoadMore()
     {
         if (!PanelReviewList.IsVisible || !PanelReviewList.HasItems || _viewModel.Workspace is not { } workspace)
