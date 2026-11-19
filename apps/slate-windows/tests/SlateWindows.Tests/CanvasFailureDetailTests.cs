@@ -309,11 +309,13 @@ public sealed class CanvasFailureDetailTests : IDisposable
             using var release = new System.Threading.Timer(
                 _ =>
                 {
+                    // A callback queued as the stream closes meets a disposed
+                    // stream; on a pool thread that must not end the run.
                     try
                     {
                         held.Unlock(123, 5);
                     }
-                    catch (IOException)
+                    catch (Exception unlock) when (unlock is IOException or ObjectDisposedException)
                     {
                     }
                 },
@@ -330,7 +332,7 @@ public sealed class CanvasFailureDetailTests : IDisposable
                 {
                     held.Unlock(123, 5);
                 }
-                catch (IOException)
+                catch (Exception unlock) when (unlock is IOException or ObjectDisposedException)
                 {
                 }
             }

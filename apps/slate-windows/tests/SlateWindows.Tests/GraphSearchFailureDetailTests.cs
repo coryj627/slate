@@ -245,6 +245,11 @@ public sealed class GraphSearchFailureDetailTests
     private static void DamageTheLinksTable(string root)
     {
         string db = Path.Combine(root, ".slate", "cache.sqlite");
+        var wal = new FileInfo(db + "-wal");
+        long walBytes = wal.Exists ? wal.Length : 0;
+        Assert.True(
+            walBytes == 0,
+            $"premise: the closed session checkpointed its WAL ({walBytes} bytes left), so the page patched is the live one");
         byte[] bytes = File.ReadAllBytes(db);
         int pageSize = (bytes[16] << 8) | bytes[17];
         if (pageSize == 1)
@@ -262,8 +267,12 @@ public sealed class GraphSearchFailureDetailTests
             page = (page << 8) | bytes[at + name.Length + i];
         }
         Assert.True(page > 1, $"premise: a root page past the schema ({page})");
+        long offset = (long)(page - 1) * pageSize;
+        Assert.True(
+            bytes[offset] is 0x02 or 0x05 or 0x0A or 0x0D,
+            $"premise: page {page} starts with a b-tree page type, not 0x{bytes[offset]:X2}");
         using var stream = new FileStream(db, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-        stream.Position = (long)(page - 1) * pageSize;
+        stream.Position = offset;
         stream.WriteByte(0x00);
     }
 
@@ -350,27 +359,48 @@ public sealed class GraphSearchFailureDetailTests
 
     // ---- The graph config ------------------------------------------------------
 
-    /// <summary>The graph inspector's read-only notice for each refusal of
-    /// core's codec: the FFI crate's words for the two variants, never the
-    /// binding's "@version=" or "@reason=" (the lead's ruling on Call 3).
-    /// The notice is the preferences' load failure under the inspector's
-    /// prefix.</summary>
-    [Theory]
-    [InlineData("{\"version\": 999}", "graph.json is a newer version (999); not downgrading")]
-    [InlineData("not json", "graph.json is unparseable: invalid JSON: expected ident at line 1 column 2")]
-    [InlineData("{\"version\": \"x\"}", "graph.json is unparseable: version \"x\" is not a number")]
-    [InlineData("[1, 2]", "graph.json is unparseable: expected a JSON object at the top level")]
-    public void ARefusedGraphConfigSaysTheCratesWords(string text, string reason)
+    /// <summary>The graph inspector's read-only notice for a file from a
+    /// newer Slate: the FFI crate's words for the variant, the version in
+    /// parentheses before "not downgrading", never the binding's "@version="
+    /// (the lead's ruling on Call 3). The notice is the preferences' load
+    /// failure under the inspector's prefix.</summary>
+    [Fact]
+    public void AGraphConfigFromANewerSlateSaysTheCratesWords()
     {
         string root = NewConfigRoot();
         try
         {
-            File.WriteAllText(
-                Path.Combine(root, ".slate", GraphConfigStore.FileName), text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            WriteConfig(root, "{\"version\": 999}");
 
             string? failure = LoadFailureOf(root);
 
-            Assert.Equal(reason, failure);
+            Assert.Equal("graph.json is a newer version (999); not downgrading", failure);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    /// <summary>A file core's codec cannot parse: the FFI crate's lead
+    /// before the parser's own reason, never the binding's "@reason=". The
+    /// reason comes from core's codec called directly, so a parser
+    /// wording change upstream does not fail this fact.</summary>
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("{\"version\": \"x\"}")]
+    [InlineData("[1, 2]")]
+    public void AnUnparseableGraphConfigSaysTheCratesWords(string text)
+    {
+        string root = NewConfigRoot();
+        try
+        {
+            WriteConfig(root, text);
+            string reason = Assert.Throws<GraphConfigException.Unparseable>(() => SlateUniffiMethods.GraphConfigDecode(text)).@reason;
+
+            string? failure = LoadFailureOf(root);
+
+            Assert.Equal("graph.json is unparseable: " + reason, failure);
             Assert.DoesNotMatch(FieldToken, failure!);
         }
         finally
@@ -378,6 +408,10 @@ public sealed class GraphSearchFailureDetailTests
             TryDelete(root);
         }
     }
+
+    private static void WriteConfig(string root, string text) =>
+        File.WriteAllText(
+            Path.Combine(root, ".slate", GraphConfigStore.FileName), text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
     /// <summary>A file the store cannot read keeps its own message: the read
     /// arm's ordinary exceptions are not uniffi errors.</summary>

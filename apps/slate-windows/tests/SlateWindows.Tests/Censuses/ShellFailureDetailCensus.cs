@@ -45,9 +45,13 @@
 // CB-15b (CD9, 2026-11-19) routed the 26 reads in Canvas/, Graph/ and Search/
 // (22 rows) and removed the search's and the graph's own error arms; 39 rows
 // and 47 reads stand, all CB-15c's. Its trial of rule 2 over those three
-// folders had 20 hits of its own, none an exception reaching text. One of its
-// reads has no fact of its own and is held here alone:
-// CanvasDocumentViewModel.CanvasRemoveFromGroup's catch wraps only
+// folders had 20 hits of its own, none an exception reaching text. Five of its
+// reads are held here alone. Four take only an ordinary exception, whose
+// message FailureDetail.Of returns unchanged, so no fact can tell the helper
+// from a direct read: GraphConfigStore.Read, the two non-vault catches of
+// ConnectionsLeafViewModel.FetchUnder, and the one of
+// GraphDocumentViewModel.FetchUnder. The fifth has
+// no fact: CanvasDocumentViewModel.CanvasRemoveFromGroup's catch wraps only
 // CanvasPlaceNew, which refuses nothing but a closed handle, after
 // CanvasParentOf has asked the same handle in the same lease hold, so only a
 // close that bypasses the lease's lock in the middle of that hold reaches it:

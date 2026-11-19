@@ -12,7 +12,8 @@ namespace SlateWindows;
 /// reads that stood before it are that census's dated rows.</summary>
 /// <remarks>Limits: CommandException, GraphConfigException and
 /// HotExitException dump their fields too, and core renders none of them;
-/// each is read by its typed fields where it is spoken. An AggregateException
+/// each is read by its typed fields where it is spoken (the graph config's
+/// in GraphConfigStore.Reason). An AggregateException
 /// that holds a vault error embeds that error's dump in its own Message.
 /// Neither reaches a caller of this helper on today's code.</remarks>
 internal static class FailureDetail

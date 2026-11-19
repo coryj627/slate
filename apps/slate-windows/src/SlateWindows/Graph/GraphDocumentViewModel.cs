@@ -738,8 +738,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         private set => SetField(ref _diagramLoading, value);
     }
 
-    /// <summary>Term G2: a failed build's humanised message; the state host
-    /// reads "Graph diagram error: ⟨e⟩" (T19).</summary>
+    /// <summary>Term G2: a failed build's detail (FailureDetail.Of, core's
+    /// words for a vault error); the state host reads "Graph diagram
+    /// error: ⟨e⟩" (T19).</summary>
     public string? DiagramError
     {
         get => _diagramError;
@@ -908,7 +909,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>The build's carrier from the compute to the apply: the
     /// sequence and the filter captured, the forces the layout was seeded
     /// with, the model (null on a failure or a retirement at registration)
-    /// and the failure's humanised message.</summary>
+    /// and the failure's detail (FailureDetail.Of).</summary>
     private sealed record GraphDiagramBuild(ulong Sequence, GraphFilter Filter, LayoutForces Forces, GraphDiagramModel? Model, string? Error);
 
     /// <summary>The refresh's answer (Term G6): null when the gate refused;
@@ -938,7 +939,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// POOL around the fresh handle, so the gate is born with it (IGT-1,
     /// IGT-2) — and REGISTERED in the unseated set under the document's lock,
     /// or retired at once when the document is already retired under it; a
-    /// failure returns the humanised message and no model.
+    /// failure returns its detail (FailureDetail.Of) and no model.
     /// </summary>
     private void BuildDiagram()
     {
@@ -984,12 +985,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 catch (VaultException exception)
                 {
                     model?.Retire();
-                    return new GraphDiagramBuild(sequence, filter, forces, null, HumanReadable(exception));
+                    return new GraphDiagramBuild(sequence, filter, forces, null, FailureDetail.Of(exception));
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
                 {
                     model?.Retire();
-                    return new GraphDiagramBuild(sequence, filter, forces, null, HumanReadable(exception));
+                    return new GraphDiagramBuild(sequence, filter, forces, null, FailureDetail.Of(exception));
                 }
                 lock (_diagramLock)
                 {
@@ -1504,17 +1505,6 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
-    /// <summary>The mac's <c>humanReadable</c> arms reachable from the build
-    /// (the search overlay's twin): the vault messages pass through.</summary>
-    private static string HumanReadable(Exception failure) => failure switch
-    {
-        VaultException.Io io => io.message,
-        VaultException.Db db => db.message,
-        VaultException.InvalidQuery invalid => $"Search query is invalid: {invalid.message}",
-        VaultException.Unsupported unsupported => $"{unsupported.feature} is not implemented yet.",
-        _ => failure.Message,
-    };
-
     // --- The six announcement seams of the diagram (D-1): each rides the
     // effective-gated boundary AnnounceIfEffective ------------------------------
 
@@ -1852,11 +1842,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         catch (VaultException exception)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, FailureDetail.Of(exception), observed);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, FailureDetail.Of(exception), observed);
         }
     }
 
