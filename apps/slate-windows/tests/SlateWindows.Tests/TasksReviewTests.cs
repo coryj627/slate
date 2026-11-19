@@ -693,14 +693,18 @@ public sealed class TasksReviewTests : IDisposable
         {
             Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
         }
-        A11yEvent.TaskToggleFailed vault = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
-        string rendered = SlateUniffiMethods.A11yRender(vault).Text;
-        // Core's detail of the landed-but-unindexed error, never the
-        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
-        Assert.StartsWith(
-            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
-        Assert.EndsWith(".", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
+        // Plan 47 CB-14 (#1660, CD8): the write landed but its index commit
+        // failed, so the toggle says it landed, in core's words with core's
+        // detail, never the binding's field-labelled Message.
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleFailed>());
+        A11yEvent.TaskToggledUnindexed landed = Assert.Single(announced.OfType<A11yEvent.TaskToggledUnindexed>());
+        Assert.True(landed.Completed);
+        RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(landed);
+        Assert.Equal(
+            "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+            + "before index commit. It will appear after the next scan.",
+            rendered.Text);
+        Assert.Equal(A11yPriority.Medium, rendered.Priority);
         Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
         Assert.DoesNotContain(announced, e => e is A11yEvent.HostComposed);
     }
@@ -737,8 +741,10 @@ public sealed class TasksReviewTests : IDisposable
         // Disk flipped, the failure spoke with no success verb…
         string diskPath = Path.Combine(_fixture.Root, "fault-pre-commit.md");
         Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
-        _ = announced.OfType<A11yEvent.TaskToggleFailed>().Single(failed =>
-            failed.Detail.Contains("test fault"));
+        // Plan 47 CB-14 (#1660): the write landed, so the toggle says so.
+        _ = announced.OfType<A11yEvent.TaskToggledUnindexed>().Single(landed =>
+            landed.Detail.Contains("test fault"));
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleFailed>());
         Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
 
         // …and the reload shows DISK truth, not the rolled-back

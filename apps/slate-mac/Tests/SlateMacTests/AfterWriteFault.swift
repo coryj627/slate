@@ -18,7 +18,8 @@ import Foundation
 /// so no other test's write can trip it.
 enum AfterWriteFault {
     /// The `errorMessage` core reports for the injected failure (the
-    /// error's display text), which the caveat splices verbatim.
+    /// error's display text), which the caveat closes as a sentence once
+    /// (plan 47 CB-14, #1395).
     static let reason =
         "invalid argument: test fault: injected failure after write, before index commit"
 
