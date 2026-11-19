@@ -2060,6 +2060,72 @@ public sealed partial class ReadingViewTests
     }
 
     /// <summary>
+    /// Plan 47 CB-14 (#1660, the lead's ruling on CD8): a reading-view
+    /// checkbox toggle whose write lands but whose index commit fails has no
+    /// completion behind it, so the tab reconciles itself: it is marked stale
+    /// and says the editor no longer matches, and then the toggle says it
+    /// landed. The note's name is this fact's own, so the after-write seam
+    /// trips no other fact's save.
+    /// </summary>
+    [Fact]
+    public void ATaskCheckboxThatLandedUnindexedSaysItLanded()
+    {
+        RunSta(() =>
+        {
+            using IDisposable envLock = EnvFaultLock.Acquire();
+            using var fixture = FixtureVault.Create(0, "cb14-landed-reading");
+            const string note = "cb14-landed-reading.md";
+            string notePath = Path.Combine(fixture.Root, note);
+            File.WriteAllText(notePath, "# Tasks\n\n- [ ] task one\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, note)),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
+            Assert.True(ReadingSemantics.TryDecodeTaskRange(
+                CollectCheckBoxes(reading.Document!).Single().Tag, out ulong start, out ulong end));
+
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "cb14-landed-reading");
+            try
+            {
+                reading.ToggleTaskAt(start, end);
+                WaitForUi(() => !tab.IsTaskToggleInFlight
+                    && announced.Any(item => item is A11yEvent.TaskToggledUnindexed or A11yEvent.TaskToggleFailed));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+            }
+
+            Assert.Contains("- [x] task one", File.ReadAllText(notePath), StringComparison.Ordinal);
+            Assert.Empty(announced.OfType<A11yEvent.TaskToggleFailed>());
+            A11yEvent.HostComposed reconciled = Assert.Single(announced.OfType<A11yEvent.HostComposed>());
+            Assert.Equal(
+                "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.",
+                reconciled.Text);
+            A11yEvent.TaskToggledUnindexed landed = Assert.Single(announced.OfType<A11yEvent.TaskToggledUnindexed>());
+            Assert.True(landed.Completed);
+            Assert.Equal(
+                "Task completed. Saved, but not indexed yet: test fault: injected failure after write, "
+                + "before index commit. It will appear after the next scan.",
+                SlateUniffiMethods.A11yRender(landed).Text);
+            Assert.True(announced.IndexOf(reconciled) < announced.IndexOf(landed));
+            Assert.True(tab.IsExternallyStale);
+            Assert.False(tab.IsDirty);
+            Assert.Contains("- [ ] task one", tab.Text, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
     /// The #158 rule holds in reading mode: a dirty buffer refuses the
     /// toggle with the editor's canonical announcement, and nothing is
     /// written anywhere.

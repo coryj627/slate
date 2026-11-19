@@ -10100,6 +10100,13 @@ pub enum A11yEvent {
     TaskToggleFailed {
         detail: String,
     },
+    /// Plan 47 CB-14 (#1660, CD8): a toggle whose bytes landed but whose
+    /// index commit failed. `detail` is the `SavedButUnindexed` error's own
+    /// `detail` field, not `vault_error_detail` of it.
+    TaskToggledUnindexed {
+        completed: bool,
+        detail: String,
+    },
     TasksReviewShown {
         filter_name: String,
     },
@@ -12030,6 +12037,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
             F::TaskToggled { completed } => C::TaskToggled { completed },
             F::TaskToggleFailed { detail } => C::TaskToggleFailed { detail },
+            F::TaskToggledUnindexed { completed, detail } => {
+                C::TaskToggledUnindexed { completed, detail }
+            }
             F::TasksReviewShown { filter_name } => C::TasksReviewShown { filter_name },
             F::TasksFilterSet { filter_name } => C::TasksFilterSet { filter_name },
             F::NoteSaved { filename } => C::NoteSaved { filename },

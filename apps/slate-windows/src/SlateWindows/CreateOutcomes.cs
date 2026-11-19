@@ -23,8 +23,9 @@ internal static class CreateOutcomes
     /// never a vault-relative path (every caller passes one;
     /// <c>EveryFunnelPassesALeafNameToTheCaveat</c>). Non-null.</param>
     /// <param name="reason">The <c>PublishedUnindexed</c> arm's
-    /// <c>ErrorMessage</c>, spliced verbatim; core renders an empty or
-    /// blank one without the colon. Non-null.</param>
+    /// <c>ErrorMessage</c>; core closes it as a sentence once (plan 47 CB-14,
+    /// #1395) and renders an empty or blank one without the colon.
+    /// Non-null.</param>
     internal static string PublishedUnindexedCaveat(string name, string reason) =>
         SlateUniffiMethods.A11yRender(
             new A11yEvent.CreatePublishedUnindexed(Name: name, Reason: reason)).Text;
