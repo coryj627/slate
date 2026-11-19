@@ -17,12 +17,20 @@
 //
 // The reads that stand today are dated rows (plan 47 §4 rule 4), each owned
 // by the chunk that ends it: CB-15b for Canvas/, Graph/ and Search/, CB-15c
-// for the rest. A row names its file, its type, its member and how many reads
-// the member holds. A read with no row, or a member holding more reads than
-// its row, fails and prints a ready row; a row holding more than the member
-// reads, or matching no read, fails as stale, so each later PR deletes or
-// lowers the rows it ends. No row may name a Files sidebar file or the tag
-// edit's EditTagAtItsTurn, which CB-15a routed.
+// for the rest. A row names its file, its type by its full name (namespace,
+// nesting and arity), its member as SaveChainAdmissionCensus names one, and
+// how many reads the member holds. A read with no row, or a member holding
+// more reads than its row, fails and prints a ready row; a row holding more
+// than the member reads, or matching no read, fails as stale, so each later
+// PR deletes or lowers the rows it ends. No row may name a Files sidebar
+// file or the tag edit's EditTagAtItsTurn, which CB-15a routed.
+//
+// The table only shrinks. A baseline, kept apart from it, holds each
+// member's allowance as it stood on 2026-11-18: a row names a member the
+// baseline names, with no more reads than its allowance, so an allowance
+// never moves to another member or from one row to another. The table's
+// row and read totals must equal its ceilings, which a PR lowers as it
+// routes reads, so a row once deleted cannot come back.
 //
 // The trial (step 0, main 26d353ef, 2026-11-18): rule 1 found 96 reads in 32
 // files. CB-15a ended 23 (22 in the sidebar's files, one in
@@ -36,6 +44,9 @@
 // What this census cannot see:
 // - A count is the key: one read routed and another added in the same member
 //   keeps the count, and passes.
+// - A row a PR lowered may rise again to its allowance while another row
+//   falls by as much, with the ceilings held; the raised count shows in the
+//   table's diff.
 // - Code under an inactive #if: the shell is parsed with no preprocessor
 //   symbols (CSharpSource).
 // - A XAML binding path ({Binding Exception.Message}): XAML is not bound here.
@@ -142,6 +153,77 @@ public sealed class ShellFailureDetailCensus
         new("WorkspaceViewModel.Templates.cs", "SlateWindows.WorkspaceViewModel", "CreateFromTemplate", 1, CB15c, Dated, "the template prompt's create refusal, shown inline"),
         new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "PerformTaskToggle", 2, CB15c, Dated, "TaskToggleFailed, a toggle's other fault"),
         new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "StartAdmittedTaskToggle", 1, CB15c, Dated, "TaskToggleFailed, a faulted toggle"),
+    ];
+
+    /// <summary>The allowances as they stood on 2026-11-18, kept apart from
+    /// the table: 61 members and 73 reads, the census's own ready rows that
+    /// day. A row stands only for a member here, with no more reads than its
+    /// allowance, so an allowance never moves to another member or from one
+    /// row to another. Nothing is ever added here; a PR that routes reads
+    /// lowers or deletes rows in the table, not entries here.</summary>
+    internal static readonly Allowance[] Baseline =
+    [
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddFileCard", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddLinkCard", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasConvertToNote", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasCreateConnectedCard", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasDuplicate", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasMoveIntoGroup", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewCard", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewGroup", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasRemoveFromGroup", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "RequestVaultPick", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitBulkMarked", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitGroupMarked", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "TryWhereAmI", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "OpenFailed", 1),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "RetargetAbsent", 1),
+        new("Canvas/CanvasMutationFunnel.cs", "SlateWindows.Canvas.CanvasMutationFunnel", "Transact", 1),
+        new("Graph/ConnectionsLeafViewModel.cs", "SlateWindows.Graph.ConnectionsLeafViewModel", "FetchUnder", 3),
+        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Read", 1),
+        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Reason", 2),
+        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "FetchUnder", 2),
+        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "HumanReadable", 1),
+        new("Search/SearchOverlayViewModel.cs", "SlateWindows.Search.SearchOverlayViewModel", "HumanReadable", 1),
+        new("Commands/SlateCommandRegistrar.cs", "SlateWindows.Commands.DispatcherCommandAction", "Invoke", 1),
+        new("EditorInteractions.cs", "SlateWindows.EditorInteractionCoordinator", "ResolveEmbedPreview", 1),
+        new("FindInNoteViewModel.cs", "SlateWindows.FindInNoteViewModel", "CreateStrategy", 1),
+        new("Panels/BibliographyViewModel.cs", "SlateWindows.Panels.BibliographyViewModel", "LoadEntries", 1),
+        new("Panels/BibliographyViewModel.cs", "SlateWindows.Panels.BibliographyViewModel", "LoadUnresolved", 1),
+        new("Panels/BulkRenameViewModel.cs", "SlateWindows.Panels.BulkRenameViewModel", "RunPreview", 1),
+        new("Panels/BulkRenameViewModel.cs", "SlateWindows.Panels.BulkRenameViewModel", "StartApplyWork", 1),
+        new("Panels/CitationsPanelViewModel.cs", "SlateWindows.Panels.CitationsPanelViewModel", "Refresh", 1),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadDeletedFiles", 1),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadFirstPageBody", 1),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadOlder", 1),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "RunDiff", 1),
+        new("Panels/NotePropertiesViewModel.cs", "SlateWindows.Panels.NotePropertiesViewModel", "RefreshProperties", 1),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadLinks", 1),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadOutline", 1),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadTasks", 1),
+        new("Panels/SyncDiagnosticsViewModel.cs", "SlateWindows.Panels.SyncDiagnosticsViewModel", "LoadBody", 1),
+        new("Panels/TaskIndexRepairCoordinator.cs", "SlateWindows.Panels.TaskIndexRepairCoordinator", "Retry", 1),
+        new("Panels/TaskIndexRepairCoordinator.cs", "SlateWindows.Panels.TaskIndexRepairCoordinator", "TryRepairNow", 1),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "DirectToggleAtItsTurn", 2),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "LoadFirstPage", 1),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "LoadMore", 1),
+        new("Reading/MathMlUiaProperty.cs", "SlateWindows.Reading.MathMlUiaProperty", "Initialize", 1),
+        new("Reading/ReadingContentViewModel.cs", "SlateWindows.Reading.ReadingContentViewModel", "ProjectBaseEmbed", 1),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "OpenVaultAsync", 2),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "RecordRecentVault", 1),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "RemoveRecentVault", 1),
+        new("WorkspaceTabViewModel.Properties.cs", "SlateWindows.WorkspaceTabViewModel", "WriteProperty", 1),
+        new("WorkspaceViewModel.Citations.cs", "SlateWindows.WorkspaceViewModel", "ReadAndSeedSources", 1),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "CommitRestoreAsDeleted", 2),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "CommitRestoreAsVersion", 2),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "RecoverAdmitted", 3),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "RestoreAdmitted", 2),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "AddWriteCompletion", 1),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "BulkRenameApplyAtItsTurn", 1),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "PropertyWriteCompletion", 1),
+        new("WorkspaceViewModel.Templates.cs", "SlateWindows.WorkspaceViewModel", "CreateFromTemplate", 1),
+        new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "PerformTaskToggle", 2),
+        new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "StartAdmittedTaskToggle", 1),
     ];
 
     private static readonly Lazy<IReadOnlyList<Read>> Shell = new(() =>
@@ -254,17 +336,46 @@ public sealed class ShellFailureDetailCensus
 
     internal const int ReadCeiling = 73;
 
+    /// <summary>The baseline itself never grows: it holds the 61 members and
+    /// 73 reads that stood on 2026-11-18, each once.</summary>
+    [Fact]
+    public void TheBaselineHoldsTheAllowancesOf20261118()
+    {
+        Assert.Equal(61, Baseline.Length);
+        Assert.Equal(73, Baseline.Sum(entry => entry.Reads));
+        Assert.Equal(Baseline.Length, Baseline.Select(entry => (entry.File, entry.Type, entry.Member)).Distinct().Count());
+        Assert.All(Baseline, entry => Assert.True(entry.Reads >= 1, $"{entry.File} ({entry.Type}.{entry.Member}) allows no read."));
+    }
+
     /// <summary>The table against its baseline and ceilings.</summary>
     internal static IReadOnlyList<string> TableProblems(IReadOnlyList<Row> rows) =>
-        TableProblems(rows, [], RowCeiling, ReadCeiling);
+        TableProblems(rows, Baseline, RowCeiling, ReadCeiling);
 
-    /// <summary>What the table itself may not do: grow past its ceilings,
-    /// fall below them without lowering them, hold a row dated another day,
-    /// or give a row to another chunk than its folder's.</summary>
+    /// <summary>What the table itself may not do: hold a row for a member the
+    /// baseline does not name, or more reads in a row than its allowance (so
+    /// an allowance never moves to another member or between rows); grow past
+    /// its ceilings, or fall below them without lowering them; hold a row
+    /// dated another day; or give a row to another chunk than its
+    /// folder's.</summary>
     internal static IReadOnlyList<string> TableProblems(
         IReadOnlyList<Row> rows, IReadOnlyList<Allowance> baseline, int rowCeiling, int readCeiling)
     {
         List<string> problems = [];
+        foreach (Row row in rows)
+        {
+            Allowance? allowed = baseline.FirstOrDefault(entry =>
+                (entry.File, entry.Type, entry.Member) == (row.File, row.Type, row.Member));
+            if (allowed is null)
+            {
+                problems.Add($"{Named(row)}: no allowance in the baseline names this member. A row stands only for a "
+                    + $"read that stood on {Dated} in the member it stood in; an allowance never moves.");
+            }
+            else if (row.Reads > allowed.Reads)
+            {
+                problems.Add($"{Named(row)}: the row names {row.Reads} reads and its baseline allows {allowed.Reads}. "
+                    + "An allowance never moves from one row to another.");
+            }
+        }
         int reads = rows.Sum(row => row.Reads);
         if (rows.Count > rowCeiling)
         {
@@ -701,55 +812,61 @@ public sealed class ShellFailureDetailCensus
                 return new Read(file, type, member, read.Line, read.Context);
             });
 
-    /// <summary>The declaration that holds a read's operation tree, named as
-    /// SaveChainAdmissionCensus names one (HoldsAnOperationTree and MemberOf):
-    /// a method by its name; a constructor, static or not, by its type's
-    /// name; an operator or conversion by its metadata name (op_Addition,
-    /// op_Implicit); a finalizer as Finalize; every accessor (get, set, init,
-    /// add, remove), an expression-bodied property or indexer and a property
-    /// initializer by their property, event or indexer (this[]); a field
-    /// initializer by its field; and a primary constructor's base arguments
-    /// by the type's name. A lambda or local function counts to the member
-    /// around it. The type is the one that declares the member. One
-    /// departure: a method is named by its identifier, so an explicit
-    /// interface implementation is TryCreateNote, not its qualified metadata
-    /// name.</summary>
+    /// <summary>The declaration that holds a read's operation tree, keyed as
+    /// SaveChainAdmissionCensus keys one (HoldsAnOperationTree and MemberOf),
+    /// by its declared symbol: the member is the symbol's name (a method's,
+    /// an explicit interface implementation's qualified name included; a
+    /// finalizer's Finalize; an operator's or conversion's metadata name), a
+    /// constructor, static or not, is its type's name, and an accessor, an
+    /// expression-bodied property or indexer and a property initializer are
+    /// their property, event or indexer (this[]). A field initializer is its
+    /// field, and a primary constructor's base arguments are the type's name.
+    /// A lambda or local function counts to the member around it. The type is
+    /// the one that declares the member, by its full name (TypeKey).</summary>
     internal static (string Type, string Member) Holder(SemanticModel model, SyntaxNode node)
     {
         for (SyntaxNode? current = node.Parent; current is not null; current = current.Parent)
         {
-            string? member = current switch
+            ISymbol? symbol = current switch
             {
-                ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
-                DestructorDeclarationSyntax => "Finalize",
-                MethodDeclarationSyntax method => method.Identifier.ValueText,
-                OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax =>
-                    model.GetDeclaredSymbol(current)?.Name ?? "(an operator)",
-                // An accessor, an arrow body or an initializer: the property.
-                BasePropertyDeclarationSyntax property => PropertyName(property),
-                VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax } field => field.Identifier.ValueText,
-                PrimaryConstructorBaseTypeSyntax => TypeName(current),
-                BaseTypeDeclarationSyntax type => type.Identifier.ValueText,
+                BaseMethodDeclarationSyntax or AccessorDeclarationSyntax => model.GetDeclaredSymbol(current),
+                ArrowExpressionClauseSyntax { Parent: BasePropertyDeclarationSyntax property } => model.GetDeclaredSymbol(property),
+                VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax } => model.GetDeclaredSymbol(current),
+                BasePropertyDeclarationSyntax or BaseTypeDeclarationSyntax => model.GetDeclaredSymbol(current),
                 _ => null,
             };
-            if (member is not null)
+            if (symbol is null)
             {
-                return (TypeName(current), member);
+                continue;
             }
+            INamedTypeSymbol? type = symbol as INamedTypeSymbol ?? symbol.ContainingType;
+            string member = symbol switch
+            {
+                IMethodSymbol { MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor } constructor =>
+                    constructor.ContainingType.Name,
+                IMethodSymbol { AssociatedSymbol: { } owner } => owner.Name,
+                _ => symbol.Name,
+            };
+            return (type is null ? "(no type)" : TypeKey(type), member);
         }
         return ("(no type)", "(no member)");
     }
 
-    private static string PropertyName(BasePropertyDeclarationSyntax property) => property switch
+    /// <summary>A type's full name as metadata spells it: its namespace, each
+    /// type it is nested in (joined by +) and its arity (Pair`2), so a type
+    /// of the same name in another namespace or another type, or with
+    /// another number of type parameters, keys apart.</summary>
+    internal static string TypeKey(INamedTypeSymbol type)
     {
-        PropertyDeclarationSyntax named => named.Identifier.ValueText,
-        EventDeclarationSyntax named => named.Identifier.ValueText,
-        IndexerDeclarationSyntax => "this[]",
-        _ => "(a property)",
-    };
-
-    private static string TypeName(SyntaxNode node) =>
-        node.FirstAncestorOrSelf<BaseTypeDeclarationSyntax>()?.Identifier.ValueText ?? "(no type)";
+        string name = type.MetadataName;
+        for (INamedTypeSymbol? outer = type.ContainingType; outer is not null; outer = outer.ContainingType)
+        {
+            name = outer.MetadataName + "+" + name;
+        }
+        return type.ContainingNamespace is { IsGlobalNamespace: false } space
+            ? space.ToDisplayString() + "." + name
+            : name;
+    }
 
     /// <summary>What the rows do not answer: a read in a member no row names,
     /// or in a member holding more reads than its row (each printed with a
