@@ -97,6 +97,7 @@ public partial class MainWindow
         // workspace weakly, so nothing outlives it.
         menu.Closed += (_, _) =>
         {
+            RestingPointerHold.Release(menu);
             if (ReferenceEquals(MorePanelsMenu, menu))
             {
                 MorePanelsMenu = null;
@@ -106,6 +107,10 @@ public partial class MainWindow
             // do (PickingFromMoreSwitchesThePanelOnceAndReturnsFocus).
         };
         MorePanelsMenu = menu;
+        // Every open lands the open panel's row, a pointer's click too, so every open holds
+        // the rows from a pointer resting where they appear (#1849); the first move gives
+        // them back.
+        RestingPointerHold.Begin(menu, menu.Items.OfType<MenuItem>());
         menu.IsOpen = true;
     }
 
