@@ -8969,7 +8969,8 @@ impl VaultSession {
             self.bump_bases_generation();
             // NOTHING is sent for the alias path, with a row under it or
             // without. The repair that follows sends the stored spelling's
-            // `Modified`, and that is all a host hears.
+            // `Modified`, or `Created` when no row stood under the stored
+            // spelling (#1704), and that is all a host hears.
             //
             // Not `Deleted`: the Windows host marks a tab held under that
             // path missing and gives it the line "... no longer exists on
