@@ -196,8 +196,15 @@ internal static class SvgPreviewGuard
         "@import",
     ];
 
-    internal static SvgRefusal Check(string source, int maxCharacters)
+    internal static SvgRefusal Check(string source, int maxCharacters) =>
+        Check(source, maxCharacters, out _);
+
+    /// <summary>The verdict, and for a document every other check admits,
+    /// the decode time it is estimated at (#1610): the caps are checked
+    /// first, so a document past one still says which.</summary>
+    internal static SvgRefusal Check(string source, int maxCharacters, out SvgDecodeEstimate estimate)
     {
+        estimate = default;
         if (ForbiddenTokens.Any(token =>
                 source.Contains(token, StringComparison.OrdinalIgnoreCase)))
         {
@@ -227,13 +234,25 @@ internal static class SvgPreviewGuard
         {
             return SvgRefusal.Malformed;
         }
-        return document.Measure();
+        SvgRefusal measured = document.Measure();
+        if (measured != SvgRefusal.None)
+        {
+            return measured;
+        }
+        estimate = new DecodeCostEstimator(document, source, settings).Estimate();
+        return estimate.Milliseconds > MaxEstimatedDecodeMilliseconds
+            ? SvgRefusal.DecodeCost
+            : SvgRefusal.None;
     }
 
     /// <summary>#1610 (CB-29): the decode time <see cref="Check"/> compares
     /// with <see cref="MaxEstimatedDecodeMilliseconds"/>, for a document every
     /// other check admits; zero for any other.</summary>
-    internal static SvgDecodeEstimate Estimate(string source, int maxCharacters) => default;
+    internal static SvgDecodeEstimate Estimate(string source, int maxCharacters)
+    {
+        Check(source, maxCharacters, out SvgDecodeEstimate estimate);
+        return estimate;
+    }
 
     /// <summary>The elements of a document and the edges a render can
     /// follow between them, collected in one pass.</summary>
@@ -250,6 +269,60 @@ internal static class SvgPreviewGuard
         private readonly List<FilterInputs?> openFilters = [];
         private readonly StringBuilder styleText = new();
         private int styleDepth = -1;
+
+        // #1610 (CB-29): what the decode estimate reads, collected in the
+        // same pass, and Measure's graph, kept for it.
+        private readonly List<int> vertices = [];
+        private readonly List<MarkerDeclaration> elementMarkers = [];
+        private readonly List<(string Name, string Value)> customDefinitions = [];
+        private readonly List<string> attributeVarUses = [];
+        private readonly List<(int Element, string? Target)> uses = [];
+        private readonly List<int> order = [];
+
+        internal IReadOnlyList<string> Names => names;
+
+        internal IReadOnlyList<int> Parents => parents;
+
+        internal IReadOnlyList<string?> Ids => ids;
+
+        internal IReadOnlyList<string?> ClassLists => classLists;
+
+        /// <summary>Each element's marker vertices: what its points or path
+        /// data give, 2 for a line, 5 for a rect, circle or ellipse, 0 for
+        /// anything that takes no markers.</summary>
+        internal IReadOnlyList<int> Vertices => vertices;
+
+        /// <summary>The marker properties elements set in attributes and
+        /// style attributes, in document order.</summary>
+        internal IReadOnlyList<MarkerDeclaration> ElementMarkers => elementMarkers;
+
+        /// <summary>The custom properties style attributes define.</summary>
+        internal IReadOnlyList<(string Name, string Value)> CustomDefinitions => customDefinitions;
+
+        /// <summary>Attribute and style declaration values holding var(),
+        /// custom-property definitions aside.</summary>
+        internal IReadOnlyList<string> AttributeVarUses => attributeVarUses;
+
+        /// <summary>Every use element and the id its href names.</summary>
+        internal IReadOnlyList<(int Element, string? Target)> Uses => uses;
+
+        internal bool HasStyleElement { get; private set; }
+
+        /// <summary>The joined stylesheet, as Svg.Custom reads it.</summary>
+        internal string Stylesheet { get; private set; } = string.Empty;
+
+        /// <summary>Measure's graph: the elements, then one node per rule
+        /// key, and each node's edges.</summary>
+        internal List<int>?[] Next { get; private set; } = [];
+
+        /// <summary>Each node's render count, as Measure counts it.</summary>
+        internal long[] Paths { get; private set; } = [];
+
+        /// <summary>The nodes in the order Measure reached them: each before
+        /// every node it has an edge to.</summary>
+        internal IReadOnlyList<int> Order => order;
+
+        internal Dictionary<string, List<int>> ElementsById { get; private set; } = new(StringComparer.Ordinal);
 
         internal SvgRefusal Read(XmlReader reader)
         {
@@ -275,7 +348,8 @@ internal static class SvgPreviewGuard
             // before ExCSS parses it, so a block one element leaves open
             // nests what the next one holds: the joined text is the one
             // that is checked.
-            return ReadStylesheet(styleText.ToString());
+            Stylesheet = styleText.ToString();
+            return ReadStylesheet(Stylesheet);
         }
 
         private SvgRefusal AppendStyle(string text)
@@ -328,6 +402,13 @@ internal static class SvgPreviewGuard
             string? input = null;
             string? input2 = null;
             string? result = null;
+            string? useTarget = null;
+            int vertexCount = name switch
+            {
+                "line" => 2,
+                "rect" or "circle" or "ellipse" => 5,
+                _ => 0,
+            };
             if (reader.MoveToFirstAttribute())
             {
                 do
@@ -357,6 +438,7 @@ internal static class SvgPreviewGuard
                             result = value;
                             break;
                     }
+                    ReadCostAttribute(index, name, attribute, value, ref vertexCount, ref useTarget);
                     SvgRefusal refusal = attribute.Equals("href", StringComparison.OrdinalIgnoreCase)
                         ? ReadHref(index, name, value)
                         : SvgRefusal.None;
@@ -383,6 +465,15 @@ internal static class SvgPreviewGuard
             parents.Add(parent);
             ids.Add(id);
             classLists.Add(classList);
+            vertices.Add(vertexCount);
+            if (name == "use")
+            {
+                uses.Add((index, useTarget));
+            }
+            if (name.Equals("style", StringComparison.OrdinalIgnoreCase))
+            {
+                HasStyleElement = true;
+            }
             AddFilterInputs(index, parent, enclosing, input, input2, result);
 
             if (styleDepth < 0
@@ -416,6 +507,76 @@ internal static class SvgPreviewGuard
             return target.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)
                 ? SvgRefusal.None
                 : SvgRefusal.ExternalReference;
+        }
+
+        /// <summary>#1610 (CB-29): what one attribute adds to the decode
+        /// estimate: a shape's marker vertices, a marker property, a style
+        /// attribute's custom properties, markers and var() uses, a var()
+        /// use in any other attribute, and the id a use draws.</summary>
+        private void ReadCostAttribute(
+            int index, string element, string attribute, string value, ref int vertexCount, ref string? useTarget)
+        {
+            if (attribute == "points" && element is "polyline" or "polygon")
+            {
+                int points = NumberCount(value, 0, value.Length) / 2;
+                vertexCount = points + (element == "polygon" && points >= 1 ? 1 : 0);
+            }
+            else if (attribute == "d" && element == "path")
+            {
+                vertexCount = PathVertices(value);
+            }
+            if (attribute == "style")
+            {
+                ReadStyleAttribute(index, value);
+                return;
+            }
+            if (MarkerSlots(attribute) is { } slots)
+            {
+                AddMarker(index, slots, value);
+            }
+            if (value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+            {
+                attributeVarUses.Add(value);
+            }
+            if (element == "use" && attribute.Equals("href", StringComparison.OrdinalIgnoreCase)
+                && value.Trim() is { Length: > 1 } target && target[0] == '#')
+            {
+                useTarget = target[1..];
+            }
+        }
+
+        private void ReadStyleAttribute(int index, string value)
+        {
+            if (!value.Contains("--", StringComparison.Ordinal)
+                && !value.Contains("var(", StringComparison.OrdinalIgnoreCase)
+                && !value.Contains("marker", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+            foreach ((string property, string declared) in Declarations(Unescape(value)))
+            {
+                if (property.StartsWith("--", StringComparison.Ordinal))
+                {
+                    customDefinitions.Add((property, declared));
+                    continue;
+                }
+                if (MarkerSlots(property) is { } slots)
+                {
+                    AddMarker(index, slots, declared);
+                }
+                if (declared.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                {
+                    attributeVarUses.Add(declared);
+                }
+            }
+        }
+
+        private void AddMarker(int index, int slots, string value)
+        {
+            if (ReadMarkerValue(value, out string? target, out bool throughVar))
+            {
+                elementMarkers.Add(new MarkerDeclaration(index, slots, target, throughVar));
+            }
         }
 
         /// <summary>A filter primitive draws its inputs: the results it
@@ -719,11 +880,15 @@ internal static class SvgPreviewGuard
                     }
                 }
             }
+            Next = next;
+            Paths = paths;
+            ElementsById = byId;
             int reached = 0;
             long rendered = 0;
             while (ready.TryDequeue(out int node))
             {
                 reached++;
+                order.Add(node);
                 if (node < elements)
                 {
                     if (longest[node] > MaxRenderDepth)
@@ -761,6 +926,1343 @@ internal static class SvgPreviewGuard
 
             internal int Last { get; set; } = -1;
         }
+    }
+
+    /// <summary>#1610 (CB-29): a marker property an element or a rule sets:
+    /// its slots (1 start, 2 mid, 4 end), the marker id it names, or
+    /// neither for <c>none</c>, or a value read through <c>var()</c>.</summary>
+    private readonly record struct MarkerDeclaration(int Element, int Slots, string? Target, bool ThroughVar);
+
+    /// <summary>The slots a marker property sets, or null for any other
+    /// property.</summary>
+    private static int? MarkerSlots(string property) =>
+        property.Equals("marker", StringComparison.OrdinalIgnoreCase) ? 7
+        : property.Equals("marker-start", StringComparison.OrdinalIgnoreCase) ? 1
+        : property.Equals("marker-mid", StringComparison.OrdinalIgnoreCase) ? 2
+        : property.Equals("marker-end", StringComparison.OrdinalIgnoreCase) ? 4
+        : null;
+
+    /// <summary>Whether a marker property's value places or clears a
+    /// marker: <c>none</c>, a <c>url(#id)</c>, or anything through
+    /// <c>var()</c>, which Svg.Custom resolves. Any other value is
+    /// ignored.</summary>
+    private static bool ReadMarkerValue(string value, out string? target, out bool throughVar)
+    {
+        target = null;
+        throughVar = false;
+        string text = value.Trim();
+        if (text.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (text.Contains("var(", StringComparison.OrdinalIgnoreCase))
+        {
+            throughVar = true;
+            return true;
+        }
+        int url = text.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
+        if (url < 0)
+        {
+            return false;
+        }
+        int end = UrlArgumentEnd(text, url + 4);
+        target = Fragment(text, url + 4, end < text.Length && text[end] == ')' ? end : text.Length);
+        return target is not null;
+    }
+
+    /// <summary>The numbers in <paramref name="text"/>[start, end), as an
+    /// SVG number list or path data writes them: a sign, digits, a point,
+    /// digits and an exponent, with "1.5.5" two numbers.</summary>
+    private static int NumberCount(string text, int start, int end)
+    {
+        int count = 0;
+        int i = start;
+        while (i < end)
+        {
+            char c = text[i];
+            bool signed = (c == '+' || c == '-')
+                && i + 1 < end
+                && (char.IsAsciiDigit(text[i + 1])
+                    || (text[i + 1] == '.' && i + 2 < end && char.IsAsciiDigit(text[i + 2])));
+            bool unsigned = char.IsAsciiDigit(c)
+                || (c == '.' && i + 1 < end && char.IsAsciiDigit(text[i + 1]));
+            if (!signed && !unsigned)
+            {
+                i++;
+                continue;
+            }
+            if (signed)
+            {
+                i++;
+            }
+            if (char.IsAsciiDigit(text[i]))
+            {
+                while (i < end && char.IsAsciiDigit(text[i]))
+                {
+                    i++;
+                }
+                if (i < end && text[i] == '.')
+                {
+                    i++;
+                }
+            }
+            else
+            {
+                i++;
+            }
+            while (i < end && char.IsAsciiDigit(text[i]))
+            {
+                i++;
+            }
+            if (i < end && text[i] is 'e' or 'E')
+            {
+                int exponent = i + 1;
+                if (exponent < end && text[exponent] is '+' or '-')
+                {
+                    exponent++;
+                }
+                if (exponent < end && char.IsAsciiDigit(text[exponent]))
+                {
+                    i = exponent;
+                    while (i < end && char.IsAsciiDigit(text[i]))
+                    {
+                        i++;
+                    }
+                }
+            }
+            count++;
+        }
+        return count;
+    }
+
+    /// <summary>The marker vertices of path data: per command, its numbers
+    /// over the numbers one segment takes (M, L, T 2; H, V 1; C 6; S, Q 4;
+    /// A 7, counting 4 vertices, since Svg.Skia may cut an arc into several
+    /// segments), and a vertex per Z.</summary>
+    private static int PathVertices(string data)
+    {
+        long total = 0;
+        int i = 0;
+        while (i < data.Length)
+        {
+            char command = char.ToUpperInvariant(data[i]);
+            int per = command switch
+            {
+                'M' or 'L' or 'T' => 2,
+                'H' or 'V' => 1,
+                'C' => 6,
+                'S' or 'Q' => 4,
+                'A' => 7,
+                'Z' => 0,
+                _ => -1,
+            };
+            if (per < 0)
+            {
+                i++;
+                continue;
+            }
+            int start = ++i;
+            while (i < data.Length && !IsPathCommand(data[i]))
+            {
+                i++;
+            }
+            total += per == 0 ? 1 : NumberCount(data, start, i) / per * (command == 'A' ? 4 : 1);
+        }
+        return (int)Math.Min(total, int.MaxValue);
+    }
+
+    private static bool IsPathCommand(char c) =>
+        char.ToUpperInvariant(c) is 'M' or 'L' or 'T' or 'H' or 'V' or 'C' or 'S' or 'Q' or 'A' or 'Z';
+
+    /// <summary>The <c>name: value</c> declarations of a declaration block,
+    /// split at the semicolons outside strings and brackets.</summary>
+    private static List<(string Name, string Value)> Declarations(string block)
+    {
+        var declarations = new List<(string Name, string Value)>();
+        foreach (string declaration in SplitTop(block, ';'))
+        {
+            int colon = declaration.IndexOf(':', StringComparison.Ordinal);
+            if (colon > 0)
+            {
+                declarations.Add((declaration[..colon].Trim(), declaration[(colon + 1)..].Trim()));
+            }
+        }
+        return declarations;
+    }
+
+    /// <summary>The trimmed, non-empty pieces of <paramref name="text"/>
+    /// between the separators outside strings and brackets.</summary>
+    private static List<string> SplitTop(string text, char separator)
+    {
+        var pieces = new List<string>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c is '"' or '\'')
+            {
+                i = CssStringEnd(text, i) - 1;
+            }
+            else if (c is '(' or '[')
+            {
+                depth++;
+            }
+            else if (c is ')' or ']')
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+            else if (c == separator && depth == 0)
+            {
+                AddPiece(text, start, i, pieces);
+                start = i + 1;
+            }
+        }
+        AddPiece(text, start, text.Length, pieces);
+        return pieces;
+    }
+
+    private static void AddPiece(string text, int start, int end, List<string> pieces)
+    {
+        string piece = text[start..end].Trim();
+        if (piece.Length > 0)
+        {
+            pieces.Add(piece);
+        }
+    }
+
+    /// <summary>Just past the CSS string opening at <paramref name="open"/>:
+    /// past its closing quote, or at the line or text end that leaves it
+    /// open.</summary>
+    private static int CssStringEnd(string text, int open)
+    {
+        int end = StringEnd(text, open);
+        return end < text.Length && text[end] == text[open] ? end + 1 : end;
+    }
+
+    /// <summary>
+    /// #1610 (CB-29): the time Svg.Custom and Svg.Skia would take to decode a
+    /// document every other check admits, from its shape and Measure's graph,
+    /// summed from the four costs CB-29's step 0 measured, at
+    /// <see cref="SvgDecodeRates"/>:
+    /// <list type="bullet">
+    /// <item>the stylesheet: each selector branch queries every element
+    /// once per pass (more for combinators and of-type pseudo-classes), each
+    /// declaration lands on every element its rule is filed under, and each
+    /// rule is parsed on its own;</item>
+    /// <item>under any <c>&lt;style&gt;</c>, each use render re-applies the
+    /// stylesheet to the whole document and to its instance;</item>
+    /// <item>each lookup a <c>var()</c> resolution makes, which Svg.Custom
+    /// does not memoise;</item>
+    /// <item>each marker placement, which compiles the marker's subtree
+    /// again.</item>
+    /// </list>
+    /// Every count errs wide where the guard cannot know what applies. It is
+    /// computed iteratively and saturates; nothing recurses, and the guard's
+    /// own time stays linear in the document, but for the <c>var()</c> table,
+    /// 17 lookup depths per custom property.
+    /// </summary>
+    private sealed class DecodeCostEstimator(DocumentShape document, string source, XmlReaderSettings settings)
+    {
+        /// <summary>Where every count stops growing.</summary>
+        private const double Saturated = 1e18;
+
+        /// <summary>The deepest lookup Svg.Custom makes: it resolves a
+        /// property's value at twice its depth and gives up past 32.</summary>
+        private const int VarLevels = 16;
+
+        private const int Slots = 3;
+
+        private static readonly HashSet<string> GeometryProperties = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "cx", "cy", "d", "height", "r", "rx", "ry", "transform-box", "transform-origin",
+            "width", "x", "x1", "x2", "y", "y1", "y2",
+        };
+
+        /// <summary>A branch with no combinator's steps; never added to.</summary>
+        private static readonly List<(char Combinator, KeyStats Left)> NoSteps = [];
+
+        private readonly Dictionary<string, KeyStats> keys = new(StringComparer.Ordinal);
+        private readonly List<DeferredBranch> deferredBranches = [];
+        private readonly List<(string Value, List<KeyStats> Subjects)> ruleVarUses = [];
+        private readonly List<(string Name, string Value)> ruleDefinitions = [];
+        private readonly HashSet<string> attributeNames = new(StringComparer.Ordinal);
+        private double simpleBranchPasses;
+        private int rules;
+        private double[] renders = [];
+
+        internal SvgDecodeEstimate Estimate()
+        {
+            int elements = document.Names.Count;
+            ReadRules(Unescape(document.Stylesheet));
+            renders = Renders();
+            (double[] subtree, double[] later, int largestFamily) = Families(elements);
+            double markerUnits = VisitElements(subtree, later, ReadAttributeKeys());
+            return new SvgDecodeEstimate(
+                Cap(StylesheetMicroseconds(elements, largestFamily)),
+                Cap(UseMicroseconds(elements)),
+                Cap(SvgDecodeRates.VarCopy * VarLookups()),
+                Cap(SvgDecodeRates.MarkerUnit * markerUnits));
+        }
+
+        private static double Cap(double value) => value < Saturated ? value : Saturated;
+
+        private KeyStats KeyOf(string key)
+        {
+            if (!keys.TryGetValue(key, out KeyStats? stats))
+            {
+                keys[key] = stats = new KeyStats();
+            }
+            return stats;
+        }
+
+        // ------------------------------------------------------------------
+        // The stylesheet
+        // ------------------------------------------------------------------
+
+        /// <summary>Reads every qualified rule of the joined stylesheet, in
+        /// <c>@media</c> and every other block at-rule too (Svg.Custom reads
+        /// <c>@media</c> only; counting the rest errs wide).</summary>
+        private void ReadRules(string stylesheet)
+        {
+            string text = StripComments(stylesheet);
+            var blocks = new Stack<(int Start, int End)>();
+            blocks.Push((0, text.Length));
+            while (blocks.TryPop(out (int Start, int End) block))
+            {
+                int i = block.Start;
+                while (i < block.End)
+                {
+                    int open = i;
+                    while (open < block.End && text[open] != '{')
+                    {
+                        open = text[open] is '"' or '\'' ? CssStringEnd(text, open) : open + 1;
+                    }
+                    if (open >= block.End)
+                    {
+                        break;
+                    }
+                    int depth = 1;
+                    int k = open + 1;
+                    while (k < block.End && depth > 0)
+                    {
+                        char c = text[k];
+                        if (c is '"' or '\'')
+                        {
+                            k = CssStringEnd(text, k);
+                            continue;
+                        }
+                        depth += c == '{' ? 1 : c == '}' ? -1 : 0;
+                        k++;
+                    }
+                    string prelude = text[i..open];
+                    int semicolon = prelude.LastIndexOf(';');
+                    prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
+                    int bodyEnd = Math.Max(open + 1, k - 1);
+                    if (prelude.StartsWith('@'))
+                    {
+                        if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
+                        {
+                            blocks.Push((open + 1, bodyEnd));
+                        }
+                    }
+                    else
+                    {
+                        ReadRule(prelude, text[(open + 1)..bodyEnd]);
+                    }
+                    i = k;
+                }
+            }
+        }
+
+        private void ReadRule(string prelude, string body)
+        {
+            rules++;
+            List<(string Name, string Value)> declarations = Distinct(Declarations(body));
+            List<string> branches = SplitTop(prelude, ',');
+            if (declarations.Count == 0 || branches.Count == 0)
+            {
+                return;
+            }
+            bool custom = false;
+            bool geometry = false;
+            double landing = 0;
+            bool holdsVarUse = false;
+            List<MarkerDeclaration>? markers = null;
+            foreach ((string name, string value) in declarations)
+            {
+                bool definition = name.StartsWith("--", StringComparison.Ordinal);
+                bool usesVar = value.Contains("var(", StringComparison.OrdinalIgnoreCase);
+                custom |= definition;
+                geometry |= GeometryProperties.Contains(name);
+                landing += definition || usesVar
+                    ? SvgDecodeRates.MatchedCustomDeclaration
+                    : SvgDecodeRates.MatchedDeclaration;
+                if (definition)
+                {
+                    ruleDefinitions.Add((name, value));
+                    continue;
+                }
+                holdsVarUse |= usesVar;
+                if (MarkerSlots(name) is { } slots
+                    && ReadMarkerValue(value, out string? target, out bool throughVar))
+                {
+                    (markers ??= []).Add(new MarkerDeclaration(-1, slots, target, throughVar));
+                }
+            }
+            double passes = 1 + (custom ? 1 : 0) + (geometry ? 1 : 0);
+            List<KeyStats>? subjects = holdsVarUse ? new(branches.Count) : null;
+            foreach (string branch in branches)
+            {
+                (KeyStats subject, List<(char Combinator, KeyStats Left)> steps, bool ofType) = ReadBranch(branch);
+                subject.DeclarationMicroseconds += landing;
+                if (markers is not null)
+                {
+                    (subject.Markers ??= []).AddRange(markers);
+                }
+                subjects?.Add(subject);
+                if (steps.Count == 0 && !ofType)
+                {
+                    simpleBranchPasses += passes;
+                }
+                else
+                {
+                    deferredBranches.Add(new DeferredBranch(passes, steps, ofType));
+                }
+            }
+            if (subjects is not null)
+            {
+                foreach ((string name, string value) in declarations)
+                {
+                    if (!name.StartsWith("--", StringComparison.Ordinal)
+                        && value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ruleVarUses.Add((value, subjects));
+                    }
+                }
+            }
+        }
+
+        /// <summary>A declaration block keeps one declaration of each
+        /// property, the last (the follow-up measured 1,000 fills in one rule
+        /// over 10,000 elements at 70 ms).</summary>
+        private static List<(string Name, string Value)> Distinct(List<(string Name, string Value)> declarations)
+        {
+            if (declarations.Count < 2)
+            {
+                return declarations;
+            }
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var kept = new List<(string Name, string Value)>(declarations.Count);
+            for (int i = declarations.Count - 1; i >= 0; i--)
+            {
+                string name = declarations[i].Name;
+                if (seen.Add(name.StartsWith("--", StringComparison.Ordinal) ? name : name.ToLowerInvariant()))
+                {
+                    kept.Add(declarations[i]);
+                }
+            }
+            return kept;
+        }
+
+        /// <summary>
+        /// A selector branch: the key its subject (the rightmost compound) is
+        /// filed under, each combinator step with the key of the compound on
+        /// its left, and whether an of-type pseudo-class (or one whose
+        /// position counts from the end) recomputes the parent's children
+        /// per element.
+        /// </summary>
+        private (KeyStats Subject, List<(char Combinator, KeyStats Left)> Steps, bool OfType) ReadBranch(string branch)
+        {
+            List<(char Combinator, KeyStats Left)>? steps = null;
+            string? previous = null;
+            char combinator = '\0';
+            int depth = 0;
+            int start = -1;
+            for (int i = 0; i <= branch.Length; i++)
+            {
+                char c = i < branch.Length ? branch[i] : ' ';
+                if (start >= 0
+                    && (i == branch.Length || (depth == 0 && (char.IsWhiteSpace(c) || c is '>' or '+' or '~'))))
+                {
+                    string compound = branch[start..i];
+                    if (previous is not null)
+                    {
+                        (steps ??= []).Add((combinator == '\0' ? ' ' : combinator, KeyOf(CompoundKey(previous))));
+                    }
+                    previous = compound;
+                    combinator = '\0';
+                    start = -1;
+                }
+                if (i == branch.Length)
+                {
+                    break;
+                }
+                if (start < 0 && depth == 0)
+                {
+                    if (c is '>' or '+' or '~')
+                    {
+                        combinator = c;
+                        continue;
+                    }
+                    if (char.IsWhiteSpace(c))
+                    {
+                        continue;
+                    }
+                    start = i;
+                }
+                if (c is '"' or '\'')
+                {
+                    i = CssStringEnd(branch, i) - 1;
+                }
+                else if (c is '(' or '[')
+                {
+                    depth++;
+                }
+                else if (c is ')' or ']')
+                {
+                    depth = Math.Max(0, depth - 1);
+                }
+            }
+            bool ofType = branch.Contains(':', StringComparison.Ordinal)
+                && (branch.Contains("of-type", StringComparison.OrdinalIgnoreCase)
+                    || branch.Contains(":nth-last-", StringComparison.OrdinalIgnoreCase)
+                    || branch.Contains(":last-child", StringComparison.OrdinalIgnoreCase)
+                    || branch.Contains(":only-child", StringComparison.OrdinalIgnoreCase));
+            return (KeyOf(CompoundKey(previous ?? AnyElementKey)), steps ?? NoSteps, ofType);
+        }
+
+        /// <summary>
+        /// The key a compound selector is filed under: its id, else its first
+        /// class, else its type, else its first attribute (<c>[name=value]</c>
+        /// for an exact match, <c>[name]</c> for any other), else
+        /// <c>*</c>; lower-cased but for an attribute's value, so a match
+        /// only ever widens. Anything the guard cannot read files it under
+        /// <c>*</c>.
+        /// </summary>
+        private string CompoundKey(string compound)
+        {
+            int i = 0;
+            string? type = null;
+            string? firstClass = null;
+            string? id = null;
+            string? attribute = null;
+            if (compound.StartsWith('*'))
+            {
+                i = 1;
+            }
+            else if (compound.Length > 0 && IsNameCharacter(compound[0]))
+            {
+                type = ReadName(compound, ref i);
+            }
+            while (i < compound.Length)
+            {
+                char marker = compound[i++];
+                switch (marker)
+                {
+                    case '.' or '#':
+                        {
+                            string name = ReadName(compound, ref i);
+                            if (name.Length == 0)
+                            {
+                                return AnyElementKey;
+                            }
+                            if (marker == '.')
+                            {
+                                firstClass ??= name;
+                            }
+                            else
+                            {
+                                id = name;
+                            }
+                            break;
+                        }
+                    case '[':
+                        {
+                            int close = i;
+                            while (close < compound.Length && compound[close] != ']')
+                            {
+                                close = compound[close] is '"' or '\'' ? CssStringEnd(compound, close) : close + 1;
+                            }
+                            attribute ??= AttributeKey(compound[i..Math.Min(close, compound.Length)]);
+                            i = close + 1;
+                            break;
+                        }
+                    case ':':
+                        {
+                            if (i < compound.Length && compound[i] == ':')
+                            {
+                                i++;
+                            }
+                            ReadName(compound, ref i);
+                            if (i < compound.Length && compound[i] == '(')
+                            {
+                                int nesting = 0;
+                                do
+                                {
+                                    if (compound[i] is '"' or '\'')
+                                    {
+                                        i = CssStringEnd(compound, i);
+                                        continue;
+                                    }
+                                    nesting += compound[i] == '(' ? 1 : compound[i] == ')' ? -1 : 0;
+                                    i++;
+                                }
+                                while (i < compound.Length && nesting > 0);
+                            }
+                            break;
+                        }
+                    default:
+                        return AnyElementKey;
+                }
+            }
+            string? attributeName = attribute is null ? null : AttributeName(attribute);
+            string key = id is not null ? "#" + id.ToLowerInvariant()
+                : firstClass is not null ? "." + firstClass.ToLowerInvariant()
+                : type is not null ? type.ToLowerInvariant()
+                : attribute ?? AnyElementKey;
+            if (key == attribute && attributeName is not null)
+            {
+                attributeNames.Add(attributeName);
+            }
+            return key;
+        }
+
+        /// <summary><c>[name=value]</c> for an exact match, <c>[name]</c>
+        /// for any other, or null when the name cannot be read.</summary>
+        private static string? AttributeKey(string inside)
+        {
+            string text = inside.Trim();
+            int i = 0;
+            while (i < text.Length && (IsNameCharacter(text[i]) || text[i] is ':' or '.'))
+            {
+                i++;
+            }
+            if (i == 0)
+            {
+                return null;
+            }
+            string name = text[..i].ToLowerInvariant();
+            string rest = text[i..].TrimStart();
+            if (rest.Length == 0)
+            {
+                return "[" + name + "]";
+            }
+            if (rest[0] != '=')
+            {
+                return rest.Length > 1 && rest[0] is '~' or '|' or '^' or '$' or '*' && rest[1] == '='
+                    ? "[" + name + "]"
+                    : null;
+            }
+            // Anything after the value (a case flag) files it under the
+            // attribute alone: errs wide.
+            string value = rest[1..].Trim();
+            if (value.Length > 0 && value[0] is '"' or '\'')
+            {
+                int close = value.IndexOf(value[0], 1);
+                return close > 0 && value[(close + 1)..].Trim().Length == 0
+                    ? "[" + name + "=" + value[1..close] + "]"
+                    : "[" + name + "]";
+            }
+            return value.Length == 0 || value.Any(char.IsWhiteSpace)
+                ? "[" + name + "]"
+                : "[" + name + "=" + value + "]";
+        }
+
+        private static string? AttributeName(string key)
+        {
+            int end = key.IndexOf('=', StringComparison.Ordinal);
+            return key[1..(end < 0 ? key.Length - 1 : end)];
+        }
+
+        private double StylesheetMicroseconds(int elements, int largestFamily)
+        {
+            double queried = simpleBranchPasses;
+            foreach (DeferredBranch branch in deferredBranches)
+            {
+                double weight = 1;
+                double prefix = 1;
+                foreach ((char combinator, KeyStats left) in branch.Steps)
+                {
+                    double factor = combinator switch
+                    {
+                        ' ' => Math.Max(1, left.SubtreeSum / elements),
+                        '~' => Math.Max(1, left.LaterSiblingSum / elements),
+                        _ => 1,
+                    };
+                    prefix = Cap(prefix * factor);
+                    weight = Cap(weight + prefix);
+                }
+                if (branch.OfType)
+                {
+                    weight = Cap(weight * largestFamily);
+                }
+                queried = Cap(queried + (branch.Passes * weight));
+            }
+            double matched = 0;
+            foreach (KeyStats key in keys.Values)
+            {
+                matched = Cap(matched + (key.Count * key.DeclarationMicroseconds));
+            }
+            return Cap(SvgDecodeRates.QueryPerBranchElement * queried * elements)
+                + matched
+                + (SvgDecodeRates.Rule * rules);
+        }
+
+        /// <summary>The element counts the stylesheet's combinators read:
+        /// each element's subtree (itself and every descendant) and its
+        /// later siblings, and the largest family of siblings.</summary>
+        private (double[] Subtree, double[] Later, int LargestFamily) Families(int elements)
+        {
+            IReadOnlyList<int> parents = document.Parents;
+            var subtree = new double[elements];
+            var later = new double[elements];
+            var children = new int[elements];
+            var ordinal = new int[elements];
+            for (int i = 0; i < elements; i++)
+            {
+                subtree[i] = 1;
+                if (parents[i] >= 0)
+                {
+                    ordinal[i] = children[parents[i]]++;
+                }
+            }
+            int largest = 1;
+            for (int i = elements - 1; i >= 0; i--)
+            {
+                int parent = parents[i];
+                if (parent >= 0)
+                {
+                    subtree[parent] += subtree[i];
+                    later[i] = children[parent] - ordinal[i] - 1;
+                }
+                largest = Math.Max(largest, children[i]);
+            }
+            return (subtree, later, largest);
+        }
+
+        // ------------------------------------------------------------------
+        // Elements: their keys, and the markers they place
+        // ------------------------------------------------------------------
+
+        /// <summary>The second read (#1610, Design 2): when a rule is filed
+        /// under an attribute, the elements that carry the attributes those
+        /// keys name, in document order.</summary>
+        private List<(int Element, KeyStats Key)> ReadAttributeKeys()
+        {
+            var found = new List<(int Element, KeyStats Key)>();
+            if (attributeNames.Count == 0)
+            {
+                return found;
+            }
+            using var textReader = new StringReader(source);
+            using XmlReader reader = XmlReader.Create(textReader, settings);
+            int index = -1;
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element)
+                {
+                    continue;
+                }
+                index++;
+                if (!reader.MoveToFirstAttribute())
+                {
+                    continue;
+                }
+                do
+                {
+                    string name = reader.LocalName.ToLowerInvariant();
+                    if (!attributeNames.Contains(name))
+                    {
+                        continue;
+                    }
+                    if (keys.TryGetValue("[" + name + "]", out KeyStats? present))
+                    {
+                        found.Add((index, present));
+                    }
+                    if (keys.TryGetValue("[" + name + "=" + reader.Value + "]", out KeyStats? exact))
+                    {
+                        found.Add((index, exact));
+                    }
+                }
+                while (reader.MoveToNextAttribute());
+                reader.MoveToElement();
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// One walk in document order, parents first: each element is
+        /// counted under each key it carries (every element, the descriptive
+        /// ones too: a rule's query walks them all and applies its
+        /// declarations to each match), and each marked shape adds its
+        /// placements. An element's marker in each slot is its own (from its
+        /// attributes, its style attribute or the rules filed under its keys,
+        /// the one with the most renders), else its parent's.
+        /// </summary>
+        private double VisitElements(double[] subtree, double[] later, List<(int Element, KeyStats Key)> attributeKeys)
+        {
+            int elements = document.Names.Count;
+            int throughVar = WidestVarMarker();
+            foreach (KeyStats key in keys.Values)
+            {
+                key.ResolveMarkers(this, throughVar);
+            }
+            var effective = new int[elements * Slots];
+            var best = new int[Slots];
+            var bestRenders = new double[Slots];
+            var set = new bool[Slots];
+            IReadOnlyList<MarkerDeclaration> declared = document.ElementMarkers;
+            int nextDeclaration = 0;
+            int nextAttributeKey = 0;
+            bool anyKey = keys.Count > 0;
+            double units = 0;
+            for (int i = 0; i < elements; i++)
+            {
+                Array.Fill(best, -1);
+                Array.Fill(bestRenders, -1);
+                Array.Clear(set);
+                void Candidate(int slot, int marker)
+                {
+                    set[slot] = true;
+                    double markerRenders = marker >= 0 ? renders[marker] : 0;
+                    if (markerRenders > bestRenders[slot])
+                    {
+                        bestRenders[slot] = markerRenders;
+                        best[slot] = marker;
+                    }
+                }
+                void Visit(string key)
+                {
+                    if (keys.TryGetValue(key, out KeyStats? stats))
+                    {
+                        VisitStats(stats);
+                    }
+                }
+                void VisitStats(KeyStats stats)
+                {
+                    stats.Count++;
+                    stats.SubtreeSum += subtree[i];
+                    stats.LaterSiblingSum += later[i];
+                    if (stats.MarkerSet is { } markerSet)
+                    {
+                        for (int slot = 0; slot < Slots; slot++)
+                        {
+                            if (markerSet[slot])
+                            {
+                                Candidate(slot, stats.MarkerBest![slot]);
+                            }
+                        }
+                    }
+                }
+                while (nextDeclaration < declared.Count && declared[nextDeclaration].Element == i)
+                {
+                    MarkerDeclaration declaration = declared[nextDeclaration++];
+                    int marker = Resolve(declaration, throughVar);
+                    for (int slot = 0; slot < Slots; slot++)
+                    {
+                        if ((declaration.Slots & (1 << slot)) != 0)
+                        {
+                            Candidate(slot, marker);
+                        }
+                    }
+                }
+                if (anyKey)
+                {
+                    Visit(AnyElementKey);
+                    Visit(document.Names[i].ToLowerInvariant());
+                    if (document.Ids[i] is { } id)
+                    {
+                        Visit("#" + id.ToLowerInvariant());
+                    }
+                    if (document.ClassLists[i] is { } classList)
+                    {
+                        foreach (string name in classList
+                            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                            .Distinct(StringComparer.OrdinalIgnoreCase))
+                        {
+                            Visit("." + name.ToLowerInvariant());
+                        }
+                    }
+                    while (nextAttributeKey < attributeKeys.Count && attributeKeys[nextAttributeKey].Element == i)
+                    {
+                        VisitStats(attributeKeys[nextAttributeKey++].Key);
+                    }
+                }
+                int parent = document.Parents[i];
+                for (int slot = 0; slot < Slots; slot++)
+                {
+                    effective[(i * Slots) + slot] = set[slot]
+                        ? (bestRenders[slot] > 0 ? best[slot] : -1)
+                        : parent >= 0 ? effective[(parent * Slots) + slot] : -1;
+                }
+                units = Cap(units + Placements(i, effective));
+            }
+            return units;
+        }
+
+        /// <summary>What a marked shape's placements weigh, times the
+        /// shape's own renders: each placement its marker's renders and
+        /// <see cref="SvgDecodeRates.MarkerPlacementWeight"/>, and the widest
+        /// marker once more. Start and end are one placement each, mid every
+        /// vertex between.</summary>
+        private double Placements(int element, int[] effective)
+        {
+            int vertexCount = document.Vertices[element];
+            if (vertexCount <= 0)
+            {
+                return 0;
+            }
+            double placed = 0;
+            double widest = 0;
+            for (int slot = 0; slot < Slots; slot++)
+            {
+                int marker = effective[(element * Slots) + slot];
+                if (marker < 0)
+                {
+                    continue;
+                }
+                double markerRenders = renders[marker];
+                double positions = slot == 1 ? Math.Max(0, vertexCount - 2) : 1;
+                placed += positions * (markerRenders + SvgDecodeRates.MarkerPlacementWeight);
+                widest = Math.Max(widest, markerRenders);
+            }
+            return widest == 0 ? 0 : Cap((placed + widest) * document.Paths[element]);
+        }
+
+        /// <summary>The element a marker declaration places: the first
+        /// element with its id, the widest marker any custom property names
+        /// when it is read through <c>var()</c>, or none.</summary>
+        private int Resolve(MarkerDeclaration declaration, int throughVar) =>
+            declaration.ThroughVar ? throughVar
+            : declaration.Target is { } target ? FirstWithId(target)
+            : -1;
+
+        private int FirstWithId(string id) =>
+            document.ElementsById.TryGetValue(id, out List<int>? named) ? named[0] : -1;
+
+        /// <summary>The widest marker a custom property's value names, which
+        /// a marker property read through <c>var()</c> may resolve to
+        /// (#1610, the red team's M7).</summary>
+        private int WidestVarMarker()
+        {
+            int widest = -1;
+            foreach ((string _, string value) in document.CustomDefinitions.Concat(ruleDefinitions))
+            {
+                for (int url = value.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
+                    url >= 0;
+                    url = value.IndexOf("url(", url + 4, StringComparison.OrdinalIgnoreCase))
+                {
+                    int end = UrlArgumentEnd(value, url + 4);
+                    if (Fragment(value, url + 4, end < value.Length && value[end] == ')' ? end : value.Length) is { } id
+                        && FirstWithId(id) is var marker and >= 0
+                        && (widest < 0 || renders[marker] > renders[widest]))
+                    {
+                        widest = marker;
+                    }
+                }
+            }
+            return widest;
+        }
+
+        /// <summary>Each node's renders: itself (a key node is not drawn)
+        /// and everything its edges reach, a node once per path, counted in
+        /// the reverse of Measure's order.</summary>
+        private double[] Renders()
+        {
+            int elements = document.Names.Count;
+            List<int>?[] next = document.Next;
+            var counts = new double[next.Length];
+            IReadOnlyList<int> order = document.Order;
+            for (int k = order.Count - 1; k >= 0; k--)
+            {
+                int node = order[k];
+                double total = node < elements ? 1 : 0;
+                if (next[node] is { } outgoing)
+                {
+                    foreach (int to in outgoing)
+                    {
+                        total = Cap(total + counts[to]);
+                    }
+                }
+                counts[node] = total;
+            }
+            return counts;
+        }
+
+        // ------------------------------------------------------------------
+        // Uses
+        // ------------------------------------------------------------------
+
+        /// <summary>Under any <c>&lt;style&gt;</c>, each use render
+        /// re-applies the stylesheet to the document and to its instance's
+        /// elements.</summary>
+        private double UseMicroseconds(int elements)
+        {
+            if (!document.HasStyleElement)
+            {
+                return 0;
+            }
+            double useRenders = 0;
+            double instanceElements = 0;
+            foreach ((int element, string? target) in document.Uses)
+            {
+                double paths = document.Paths[element];
+                useRenders = Cap(useRenders + paths);
+                if (target is not null && FirstWithId(target) is var instance and >= 0)
+                {
+                    instanceElements = Cap(instanceElements + (paths * renders[instance]));
+                }
+            }
+            return Cap(SvgDecodeRates.UseRenderElement * useRenders
+                    * (elements + (SvgDecodeRates.UseRenderRuleWeight * rules)))
+                + Cap(instanceElements
+                    * (SvgDecodeRates.UseInstanceElement + (SvgDecodeRates.UseInstanceElementRule * rules)));
+        }
+
+        // ------------------------------------------------------------------
+        // var()
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The lookups Svg.Custom makes resolving every <c>var()</c> use: an
+        /// attribute's or a style attribute's once, a rule's on each element
+        /// it is filed under. A property's value is resolved from left to
+        /// right, each reference one level deeper; a lookup past
+        /// <see cref="VarLevels"/> levels, or of a name nothing defines, costs
+        /// one and fails, and a failed reference with a fallback resolves the
+        /// fallback one level deeper (Svg.Custom does, after any failure),
+        /// without one fails its value. A name defined more than once takes
+        /// its widest definition. The table holds each property at each level,
+        /// filled from the deepest level up, so nothing recurses and each
+        /// value is resolved once per level.
+        /// </summary>
+        private double VarLookups()
+        {
+            if (document.AttributeVarUses.Count == 0 && ruleVarUses.Count == 0)
+            {
+                return 0;
+            }
+            var table = new VarTable(document.CustomDefinitions.Concat(ruleDefinitions));
+            double lookups = 0;
+            foreach (string value in document.AttributeVarUses)
+            {
+                lookups = Cap(lookups + table.Resolve(value));
+            }
+            foreach ((string value, List<KeyStats> subjects) in ruleVarUses)
+            {
+                double landed = subjects.Sum(subject => subject.Count);
+                lookups = Cap(lookups + (table.Resolve(value) * landed));
+            }
+            return lookups;
+        }
+
+        private sealed record DeferredBranch(double Passes, List<(char Combinator, KeyStats Left)> Steps, bool OfType);
+
+        /// <summary>What the elements filed under one key add up to, and
+        /// what the rules filed there apply to each.</summary>
+        private sealed class KeyStats
+        {
+            internal double Count;
+            internal double SubtreeSum;
+            internal double LaterSiblingSum;
+            internal double DeclarationMicroseconds;
+            internal List<MarkerDeclaration>? Markers;
+            internal bool[]? MarkerSet;
+            internal int[]? MarkerBest;
+
+            /// <summary>Each slot's widest marker among the rules filed
+            /// here.</summary>
+            internal void ResolveMarkers(DecodeCostEstimator estimator, int throughVar)
+            {
+                if (Markers is null)
+                {
+                    return;
+                }
+                MarkerSet = new bool[Slots];
+                MarkerBest = [-1, -1, -1];
+                var widest = new double[] { -1, -1, -1 };
+                foreach (MarkerDeclaration declaration in Markers)
+                {
+                    int marker = estimator.Resolve(declaration, throughVar);
+                    double markerRenders = marker >= 0 ? estimator.renders[marker] : 0;
+                    for (int slot = 0; slot < Slots; slot++)
+                    {
+                        if ((declaration.Slots & (1 << slot)) == 0)
+                        {
+                            continue;
+                        }
+                        MarkerSet[slot] = true;
+                        if (markerRenders > widest[slot])
+                        {
+                            widest[slot] = markerRenders;
+                            MarkerBest[slot] = marker;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// #1610 (CB-29): the custom properties of a document, each resolved at
+    /// each of Svg.Custom's lookup levels: whether its value resolves there,
+    /// and the lookups that takes.
+    /// </summary>
+    private sealed class VarTable
+    {
+        private const int Levels = 16;
+
+        private readonly Dictionary<string, int> names = new(StringComparer.Ordinal);
+        private readonly List<int> tableRow = [];
+        private readonly float[] lookups;
+        private readonly bool[] resolves;
+        private readonly List<Frame> frames = [];
+
+        internal VarTable(IEnumerable<(string Name, string Value)> definitions)
+        {
+            List<(string Name, string Value)> all = [.. definitions];
+            foreach ((string name, string _) in all)
+            {
+                names.TryAdd(name, names.Count);
+            }
+            // Parsed once every name has its id, since a value may name a
+            // property defined after it. A row of the table per property
+            // whose value holds var(); one defined only by literals resolves
+            // in one lookup at every level.
+            var parsed = new List<VarReference[]>[names.Count];
+            for (int id = 0; id < parsed.Length; id++)
+            {
+                parsed[id] = [];
+                tableRow.Add(-1);
+            }
+            int rows = 0;
+            foreach ((string name, string value) in all)
+            {
+                int id = names[name];
+                if (!value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                {
+                    parsed[id].Add(Literal);
+                    continue;
+                }
+                parsed[id].Add(Parse(value));
+                if (tableRow[id] < 0)
+                {
+                    tableRow[id] = rows++;
+                }
+            }
+            lookups = new float[rows * (Levels + 1)];
+            resolves = new bool[rows * (Levels + 1)];
+            for (int level = Levels; level >= 1; level--)
+            {
+                for (int id = 0; id < parsed.Length; id++)
+                {
+                    int row = tableRow[id];
+                    if (row < 0)
+                    {
+                        continue;
+                    }
+                    double widest = 0;
+                    bool any = false;
+                    foreach (VarReference[] references in parsed[id])
+                    {
+                        (bool ok, double count) = Evaluate(references, level);
+                        widest = Math.Max(widest, count);
+                        any |= ok;
+                    }
+                    lookups[(row * (Levels + 1)) + level] = (float)Math.Min(widest, 1e18);
+                    resolves[(row * (Levels + 1)) + level] = any;
+                }
+            }
+        }
+
+        private static readonly VarReference[] Literal = [];
+
+        /// <summary>The lookups resolving a declaration's value
+        /// takes.</summary>
+        internal double Resolve(string value) => Evaluate(Parse(value), 0).Lookups;
+
+        /// <summary>A name's lookup at <paramref name="level"/>: past the
+        /// deepest level, or for a name nothing defines, one lookup that
+        /// fails; for a name defined only by literals, one that
+        /// resolves.</summary>
+        private (bool Resolves, double Lookups) Lookup(int name, int level)
+        {
+            if (name < 0 || level > Levels)
+            {
+                return (false, 1);
+            }
+            int row = tableRow[name];
+            return row < 0
+                ? (true, 1)
+                : (resolves[(row * (Levels + 1)) + level], lookups[(row * (Levels + 1)) + level]);
+        }
+
+        /// <summary>A value's references resolved at
+        /// <paramref name="level"/>, from left to right, with an explicit
+        /// stack for the fallbacks: a value with none is one
+        /// lookup.</summary>
+        private (bool Resolves, double Lookups) Evaluate(VarReference[] references, int level)
+        {
+            if (references.Length == 0)
+            {
+                return (true, 1);
+            }
+            frames.Clear();
+            frames.Add(new Frame(0, references.Length, level, 0));
+            (bool Resolves, double Lookups)? delivered = null;
+            while (true)
+            {
+                int top = frames.Count - 1;
+                Frame frame = frames[top];
+                bool? ended = null;
+                if (delivered is { } fallback)
+                {
+                    // A fallback ended; it served the reference at Position.
+                    delivered = null;
+                    frame.Lookups = Math.Min(frame.Lookups + fallback.Lookups, 1e18);
+                    if (fallback.Resolves)
+                    {
+                        frame.Position = references[frame.Position].End;
+                    }
+                    else
+                    {
+                        ended = false;
+                    }
+                }
+                else if (frame.Position >= frame.End)
+                {
+                    ended = true;
+                }
+                else
+                {
+                    VarReference reference = references[frame.Position];
+                    (bool resolves, double count) = Lookup(reference.Name, frame.Level + 1);
+                    frame.Lookups = Math.Min(frame.Lookups + count, 1e18);
+                    if (resolves)
+                    {
+                        frame.Position = reference.End;
+                    }
+                    else if (!reference.HasFallback)
+                    {
+                        ended = false;
+                    }
+                    else if (frame.Position + 1 == reference.End)
+                    {
+                        // A fallback with no reference is a literal.
+                        frame.Lookups = Math.Min(frame.Lookups + 1, 1e18);
+                        frame.Position = reference.End;
+                    }
+                    else
+                    {
+                        frames[top] = frame;
+                        frames.Add(new Frame(frame.Position + 1, reference.End, frame.Level + 1, 0));
+                        continue;
+                    }
+                }
+                if (ended is not { } resolved)
+                {
+                    frames[top] = frame;
+                    continue;
+                }
+                frames.RemoveAt(top);
+                if (frames.Count == 0)
+                {
+                    return (resolved, frame.Lookups);
+                }
+                delivered = (resolved, frame.Lookups);
+            }
+        }
+
+        /// <summary>The <c>var()</c> references of a value in document
+        /// order, each with the end of the references its fallback
+        /// holds.</summary>
+        private VarReference[] Parse(string value)
+        {
+            var references = new List<VarReference>();
+            var open = new Stack<(int Reference, int Depth)>();
+            int depth = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (i + 4 <= value.Length && value.AsSpan(i, 4).Equals("var(", StringComparison.OrdinalIgnoreCase))
+                {
+                    depth++;
+                    int start = i + 4;
+                    while (start < value.Length && char.IsWhiteSpace(value[start]))
+                    {
+                        start++;
+                    }
+                    int end = start;
+                    if (end + 1 < value.Length && value[end] == '-' && value[end + 1] == '-')
+                    {
+                        end += 2;
+                        while (end < value.Length && IsNameCharacter(value[end]))
+                        {
+                            end++;
+                        }
+                    }
+                    int name = end > start && names.TryGetValue(value[start..end], out int id) ? id : -1;
+                    int after = end;
+                    while (after < value.Length && char.IsWhiteSpace(value[after]))
+                    {
+                        after++;
+                    }
+                    bool fallback = after < value.Length && value[after] == ',';
+                    references.Add(new VarReference(name, fallback, references.Count + 1));
+                    open.Push((references.Count - 1, depth));
+                    i = fallback ? after : end - 1;
+                    continue;
+                }
+                if (value[i] == '(')
+                {
+                    depth++;
+                }
+                else if (value[i] == ')')
+                {
+                    if (open.TryPeek(out (int Reference, int Depth) top) && top.Depth == depth)
+                    {
+                        open.Pop();
+                        references[top.Reference] = references[top.Reference] with { End = references.Count };
+                    }
+                    depth = Math.Max(0, depth - 1);
+                }
+            }
+            while (open.TryPop(out (int Reference, int Depth) unclosed))
+            {
+                references[unclosed.Reference] = references[unclosed.Reference] with { End = references.Count };
+            }
+            return [.. references];
+        }
+
+        /// <summary>A <c>var()</c> reference: the name's id (-1 for one
+        /// nothing defines), whether a fallback follows it, and the index
+        /// past the references its fallback holds.</summary>
+        private readonly record struct VarReference(int Name, bool HasFallback, int End);
+
+        private record struct Frame(int Position, int End, int Level, double Lookups);
+    }
+
+    /// <summary>A stylesheet without its comments, which count for
+    /// nothing; an unclosed one runs to the end.</summary>
+    private static string StripComments(string css)
+    {
+        if (!css.Contains("/*", StringComparison.Ordinal))
+        {
+            return css;
+        }
+        var text = new StringBuilder(css.Length);
+        int i = 0;
+        while (i < css.Length)
+        {
+            if (css[i] == '/' && i + 1 < css.Length && css[i + 1] == '*')
+            {
+                int close = css.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = close < 0 ? css.Length : close + 2;
+                continue;
+            }
+            text.Append(css[i++]);
+        }
+        return text.ToString();
     }
 
     /// <summary>Links and animations name an element without drawing it.</summary>

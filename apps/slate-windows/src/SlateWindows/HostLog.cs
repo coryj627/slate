@@ -79,6 +79,7 @@ internal enum HostDiagnosticEvent
     SingleInstanceActivationFailed,
     SingleInstanceActivationTimedOut,
     SvgDecodeAbandoned,
+    SvgDecodeCheckFailed,
     SvgDecodeRefusedAtCap,
     SvgDecodeRefusedForCost,
     SvgDecodeRefusedPastDeadline,

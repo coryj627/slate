@@ -1155,8 +1155,8 @@ internal static class ReadingDocumentBuilder
             svg, "image/svg+xml", out string? decodeFailure);
         if (visual is null)
         {
-            // A decode past its budget, or refused at the cap, says so in
-            // core's sentence (#1581).
+            // A decode past its budget, refused at the cap, or refused for
+            // its cost, says so in core's sentence (#1581, #1610).
             return new DiagramOutcome.Failed(
                 description, landing, "Diagram could not be rendered",
                 decodeFailure ?? "diagram rendered but image could not be decoded",

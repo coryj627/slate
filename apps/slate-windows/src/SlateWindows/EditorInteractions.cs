@@ -3503,22 +3503,28 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// <summary>#1635: the sentence an SVG decode would refuse these bytes
     /// with before it decodes anything, or null. The memory first, so a
     /// remembered image says what it said the first time whatever was decoded
-    /// before it; then the projection's spent deadline. It takes no slot,
-    /// starts no thread, reserves no pixels and charges no deadline. A caller
-    /// that refuses an SVG for its own reason, as the reading view does once
-    /// its pixel pool is spent, asks it first, so the image still says these
-    /// sentences (Codex round 2).</summary>
+    /// before it; then the projection's spent deadline; then the guard's
+    /// cost refusal (#1610). It takes no slot, starts no thread, reserves no
+    /// pixels and charges no deadline. A caller that refuses an SVG for its
+    /// own reason, as the reading view does once its pixel pool is spent,
+    /// asks it first, so the image still says these sentences (Codex round
+    /// 2).</summary>
     internal static string? SvgDecodeRefusalBeforeDecoding(byte[] bytes, SvgDecodeDeadline? deadline) =>
         SvgDecodeRefusalBeforeDecoding(
-            bytes, deadline, SvgDecodeSlotsForTests ?? s_svgDecodeSlots, out _, out _);
+            bytes, deadline, SvgDecodeSlotsForTests ?? s_svgDecodeSlots, out _, out _, out _);
 
+    /// <summary>The checks before decoding. <paramref name="source"/> is
+    /// the document as text once the guard admits it, and null when it is
+    /// refused, with or without a sentence: then nothing decodes it.</summary>
     private static string? SvgDecodeRefusalBeforeDecoding(
         byte[] bytes,
         SvgDecodeDeadline? deadline,
         SvgDecodeSlots slots,
         out SvgDecodeTimeoutMemory? memory,
-        out string? key)
+        out string? key,
+        out string? source)
     {
+        source = null;
         memory = SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
             ? null
             : slots.TimeoutMemory;
@@ -3533,7 +3539,59 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
             return SvgProjectionDecodeDeadlineMessage;
         }
-        return null;
+        return CheckSvgBeforeDecoding(bytes, out source);
+    }
+
+    /// <summary>
+    /// #1610 (CB-29): <see cref="SvgPreviewGuard"/>'s verdict, on the
+    /// caller, before any slot or thread. A document it refuses for what it
+    /// would cost to decode, or for more renders than its cap (which bounds
+    /// the same work), says core's cost sentence; it is not remembered, since
+    /// the guard says the same again for at most its own time. Any other
+    /// refusal, and bytes the guard cannot read, give no sentence, so the
+    /// caller says its own. The text is decoded from UTF-8 once, here, and
+    /// handed to the decoder. An exception keeps the decode's own filter: a
+    /// fatal one is not caught, any other is logged by its type and gives
+    /// nothing, never a failed projection.
+    /// </summary>
+    private static string? CheckSvgBeforeDecoding(byte[] bytes, out string? source)
+    {
+        source = null;
+        string text;
+        SvgRefusal refusal;
+        SvgDecodeEstimate estimate;
+        try
+        {
+            text = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(bytes);
+            refusal = SvgPreviewGuard.Check(text, MaxPreviewImageBytes, out estimate);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeCheckFailed, exception);
+            return null;
+        }
+        switch (refusal)
+        {
+            case SvgRefusal.None:
+                source = text;
+                return null;
+            case SvgRefusal.DecodeCost:
+                HostLog.WriteDetail(
+                    HostDiagnosticEvent.SvgDecodeRefusedForCost,
+                    "estimateMs=" + estimate.Milliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)
+                        + ", term=" + estimate.LargestTerm);
+                return SvgDecodeCostRefusedMessage;
+            case SvgRefusal.RenderedElements:
+                HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedForCost, "term=renders");
+                return SvgDecodeCostRefusedMessage;
+            default:
+                return null;
+        }
     }
 
     private static ImageSource? DecodeSvgImage(
@@ -3545,11 +3603,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     {
         SvgDecodeSlots slots = SvgDecodeSlotsForTests ?? s_svgDecodeSlots;
         // #1635 (CD19): the memory, then the projection's deadline, then the
-        // cap: core's order after the memory. The memory and its key come
-        // back, so the bytes are hashed once.
+        // guard (#1610), then the cap: core's order after the memory. The
+        // memory and its key come back, so the bytes are hashed once, and so
+        // does the text the guard admitted, so they are decoded once.
         failureReason = SvgDecodeRefusalBeforeDecoding(
-            bytes, deadline, slots, out SvgDecodeTimeoutMemory? memory, out string? key);
-        if (failureReason is not null)
+            bytes, deadline, slots, out SvgDecodeTimeoutMemory? memory, out string? key, out string? source);
+        if (failureReason is not null || source is null)
         {
             return null;
         }
@@ -3604,7 +3663,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 try
                 {
                     png = bodyForTests is null
-                        ? RenderSvgToPng(bytes, reserve, out spent)
+                        ? RenderSvgToPng(source, reserve, out spent)
                         : bodyForTests(bytes, reserve);
                 }
                 catch (Exception exception)
@@ -3776,25 +3835,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
 
     /// <summary>The Skia half of the SVG decode, on the decode thread: the
-    /// guard, the parse, the raster and the PNG the WPF half decodes.
+    /// parse, the raster and the PNG the WPF half decodes, of a document the
+    /// guard admitted on the caller (#1610).
     /// <paramref name="reserveDecodedBytes"/> runs here while the caller
     /// waits.</summary>
     private static byte[]? RenderSvgToPng(
-        byte[] bytes,
+        string source,
         Func<long, bool>? reserveDecodedBytes,
         out bool budgetSpent)
     {
         budgetSpent = false;
         try
         {
-            string source = new UTF8Encoding(
-                encoderShouldEmitUTF8Identifier: false,
-                throwOnInvalidBytes: true).GetString(bytes);
-            if (!IsSafeSvg(source))
-            {
-                return null;
-            }
-
             var document = ParseSecureSvg(source);
             if (document is null)
             {
