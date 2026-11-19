@@ -39,11 +39,11 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         }
         catch (VaultException.DestinationExists exception)
         {
-            return new NoteCreateResult.Exists(exception.Message);
+            return new NoteCreateResult.Exists(FailureDetail.Of(exception));
         }
         catch (VaultException exception)
         {
-            return new NoteCreateResult.Failed(exception.Message);
+            return new NoteCreateResult.Failed(FailureDetail.Of(exception));
         }
     }
 

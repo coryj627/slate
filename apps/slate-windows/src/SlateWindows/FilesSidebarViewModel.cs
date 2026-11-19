@@ -634,7 +634,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => StructuralMutationBlocked);
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
-        CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
+        // Plan 47 CB-15a: Copy link, Pin and Unpin take the sibling verbs'
+        // guard too. On a date-group header Copy link spoke core's refusal of
+        // the empty path, and Pin wrote the empty path into the pins. Copy
+        // link is also for a Markdown file only, as on the Mac.
+        CopyWikilinkCommand = new RelayCommand(
+            _ => CopyWikilink(),
+            _ => IsOneMarkdownFile(SelectedNode));
         // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
         // folder so the canonical DuplicateFilesOnly refusal can speak.
         DuplicateCommand = new RelayCommand(
@@ -653,8 +659,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _ => !IsImporting && !IsTrashing
                 && (BatchSelectionCount > 0
                     || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
-        PinCommand = new RelayCommand(_ => InThePane(PinSelected), _ => SelectedNode is { IsDirectory: false });
-        UnpinCommand = new RelayCommand(_ => InThePane(UnpinSelected), _ => SelectedNode is { IsDirectory: false });
+        PinCommand = new RelayCommand(
+            _ => InThePane(PinSelected),
+            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
+        UnpinCommand = new RelayCommand(
+            _ => InThePane(UnpinSelected),
+            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
         UnpinAllCommand = new RelayCommand(_ => InThePane(UnpinAllInFolder), _ => _pinned.Count > 0);
         AddShortcutCommand = new RelayCommand(_ => InThePane(AddShortcut), _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         RemoveShortcutCommand = new RelayCommand(_ => InThePane(RemoveShortcut), _ => SelectedShortcut is not null);
@@ -790,6 +800,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             if (value is null || value.IsPlaceholder || value.IsGroupHeader)
             {
+                // Plan 47 CB-15a: the selection's verbs re-query here too, or
+                // the File actions buttons keep the last row's state on a
+                // date-group header, a placeholder or nothing.
+                RaiseCommandStates();
                 return;
             }
 
@@ -1537,7 +1551,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            return new TagLoadOutcome([], $"Could not load tags: {exception.Message}");
+            return new TagLoadOutcome([], $"Could not load tags: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1798,7 +1812,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder {attempted}: {exception.Message}");
+            ReportFailure($"Could not create folder {attempted}: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1878,7 +1892,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create note {attempted}: {exception.Message}");
+            ReportFailure($"Could not create note {attempted}: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -1964,7 +1978,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure(CanvasCreateFailure($"{attempted}: {exception.Message}"));
+            ReportFailure(CanvasCreateFailure($"{attempted}: {FailureDetail.Of(exception)}"));
         }
     }
 
@@ -2055,7 +2069,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {exception.Message}"); }
+            if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {FailureDetail.Of(exception)}"); }
         }
         finally { EndTrash(owner, staged); }
     }
@@ -2096,7 +2110,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder note: {exception.Message}");
+            ReportFailure($"Could not create folder note: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2128,13 +2142,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not delete folder note: {exception.Message}");
+            ReportFailure($"Could not delete folder note: {FailureDetail.Of(exception)}");
         }
     }
 
+    /// <summary>Plan 47 CB-15a: Copy link is for exactly one Markdown file, as
+    /// on the Mac (SidebarActionCatalog's exactlyOneMarkdownFile). A row is
+    /// Markdown when core's summary of it says so (files.is_markdown); a row
+    /// with no summary is judged by core's Markdown extensions
+    /// (CoreDocumentClassification).</summary>
+    private static bool IsOneMarkdownFile([NotNullWhen(true)] FileTreeNodeViewModel? node) =>
+        node is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false }
+        && (node.Summary?.IsMarkdown ?? CoreDocumentClassification.IsMarkdown(node.Path));
+
     private void CopyWikilink()
     {
-        if (SelectedNode is not { IsDirectory: false } node)
+        if (SelectedNode is not { } node || !IsOneMarkdownFile(node))
         {
             return;
         }
@@ -2154,16 +2177,27 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 ReportResult($"Copied wikilink for {node.DisplayName}.");
                 _announce(new A11yEvent.SelectionCopied());
             }
+            else
+            {
+                // Plan 47 CB-15a: core makes no wikilink for a Markdown file
+                // still in the index that is gone from disk, is now a folder
+                // or a link, or cannot be checked there (stale index rows
+                // fail closed); for one that has left the index; for one
+                // with a case twin in the index; and for a name a link cannot
+                // hold. The Mac's sentence says why nothing was copied
+                // (AppState.swift's copy wikilink).
+                ReportFailure("Could not create a wikilink for this file.");
+            }
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not copy wikilink: {exception.Message}");
+            ReportFailure($"Could not copy wikilink: {FailureDetail.Of(exception)}");
         }
     }
 
     private void PinSelected()
     {
-        if (SelectedNode is { IsDirectory: false } node)
+        if (SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
         {
             _pinned.Add(node.Path);
             _pinGeneration++;
@@ -2178,7 +2212,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void UnpinSelected()
     {
-        if (SelectedNode is { IsDirectory: false } node)
+        if (SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
         {
             _pinned.Remove(node.Path);
             _pinGeneration++;
@@ -2382,7 +2416,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // No report: what committed is unknown, so the entry stays as
             // anticipated for the next open to verify.
             JournalStructuralOutcomeUnknown(journalEntry);
-            ReportFailure($"Move failed: {exception.Message}");
+            ReportFailure($"Move failed: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2450,7 +2484,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {exception.Message}"); }
+            if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {FailureDetail.Of(exception)}"); }
         }
         finally { EndTrash(owner, staged); }
     }
@@ -2623,7 +2657,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load folder files: {exception.Message}");
+            ReportFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2831,7 +2865,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ReportFailure($"Could not save sidebar organization: {exception.Message}");
+            ReportFailure($"Could not save sidebar organization: {FailureDetail.Of(exception)}");
             HostLog.Write(HostDiagnosticEvent.SidebarOrganizationPersistFailed, exception);
             NoteSettingsBlocked();
             return false;
@@ -2898,7 +2932,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _pinsBehindFile = true;
-            string message = $"Could not save pins: {exception.Message}";
+            string message = $"Could not save pins: {FailureDetail.Of(exception)}";
             if (reportFailure is null)
             {
                 ReportFailure(message);
@@ -2928,7 +2962,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _shortcutsBehindFile = true;
-            string message = $"Could not save shortcuts: {exception.Message}";
+            string message = $"Could not save shortcuts: {FailureDetail.Of(exception)}";
             if (reportFailure is null)
             {
                 ReportFailure(message);

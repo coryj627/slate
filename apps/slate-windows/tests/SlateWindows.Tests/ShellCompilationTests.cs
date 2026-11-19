@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests;
@@ -70,6 +71,61 @@ public class ShellCompilationTests
             candidate => candidate.OriginalDefinition.ToDisplayString() == "System.Collections.Generic.IEnumerable<T>");
         Assert.Equal(row, enumerable.TypeArguments[0].ToDisplayString());
     }
+
+    /// <summary>Plan 47 CB-15a (#1890): the compilation binds with the shell's
+    /// own generated global usings and no others. A census tree of its own
+    /// once added <c>System.IO</c> and <c>System.Net.Http</c>, which the app
+    /// does not have, and made <c>Path</c> ambiguous with WPF's
+    /// <c>System.Windows.Shapes.Path</c> in three shell sources. Every tree
+    /// is a shell source or a file the build generated in the configuration
+    /// these tests were built in (as ShellPromptOwnerCensus reads them), and
+    /// none is one of the <c>_wpftmp</c> copies the markup compile leaves
+    /// behind: a stale copy, or another configuration's newer build, would
+    /// bind names the shell no longer has.</summary>
+    [Fact]
+    public void ItsGlobalUsingsAreExactlyTheShellsGeneratedOnes()
+    {
+        string separator = Path.DirectorySeparatorChar.ToString();
+        string shellRoot = Path.GetFullPath(SourceText.ShellSourceRoot()) + separator;
+        string configuration = AppContext.BaseDirectory.Contains($"{separator}Debug{separator}", StringComparison.OrdinalIgnoreCase)
+            ? "Debug"
+            : "Release";
+        string objRoot = Path.Combine(shellRoot, "obj");
+        string ownObj = Path.Combine(objRoot, configuration) + separator;
+        string generated = Directory.EnumerateFiles(ownObj, "SlateWindows.GlobalUsings.g.cs", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .First();
+        string[] expected = GlobalUsings(CSharpSyntaxTree.ParseText(File.ReadAllText(generated)));
+        string[] actual = [.. ShellCompilation.Compilation.SyntaxTrees
+            .SelectMany(GlobalUsings)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+
+        Assert.NotEmpty(expected);
+        Assert.True(
+            expected.SequenceEqual(actual, StringComparer.Ordinal),
+            $"the shell's generated usings, {generated}, are [{string.Join(", ", expected)}]; the compilation binds "
+            + $"[{string.Join(", ", actual)}]");
+        string[] strays = [.. ShellCompilation.Compilation.SyntaxTrees
+            .Select(tree => Path.GetFullPath(tree.FilePath))
+            .Where(path => !path.StartsWith(shellRoot, StringComparison.OrdinalIgnoreCase)
+                || (path.StartsWith(objRoot + separator, StringComparison.OrdinalIgnoreCase)
+                    && (!path.StartsWith(ownObj, StringComparison.OrdinalIgnoreCase)
+                        || Path.GetFileName(path).Contains("_wpftmp", StringComparison.OrdinalIgnoreCase))))];
+        Assert.True(
+            strays.Length == 0,
+            $"the compilation binds {strays.Length} tree(s) that are neither a shell source nor a file the {configuration} "
+            + $"build generated (the usings file it should follow is {generated}):\n" + string.Join("\n", strays));
+    }
+
+    private static string[] GlobalUsings(SyntaxTree tree) =>
+    [
+        .. ((CompilationUnitSyntax)tree.GetRoot()).Usings
+            .Where(directive => directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword))
+            .Select(directive => directive.NamespaceOrType.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal),
+    ];
 
     [Fact]
     public void TheShellsOwnAssemblyIsLeftOutAndMustBeRecordedExactlyOnce()

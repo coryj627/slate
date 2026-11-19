@@ -1176,7 +1176,7 @@ internal sealed partial class WorkspaceViewModel
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            failure = exception.Message;
+            failure = FailureDetail.Of(exception);
         }
         Dictionary<string, string?>? after = TagEditIndexRead(open, "after");
         // Codex round 3: a note core wrote and then failed to index is

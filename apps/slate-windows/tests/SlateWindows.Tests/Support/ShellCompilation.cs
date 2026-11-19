@@ -14,10 +14,11 @@ namespace SlateWindows.Tests;
 /// framework, WPF, the packages, the binding — everything but the shell's
 /// own assembly, whose types the sources declare. The references come from
 /// the build (#1600), so every census binds the same types whatever ran
-/// before it. The XAML-generated partials are added when a build left them
-/// under obj/; without them a few members stay unbound, so a census asks
-/// for what it needs and says when binding yields nothing. Built once per
-/// test process.
+/// before it. The SDK's global usings and the XAML-generated partials come
+/// from the shell's build in the configuration these tests were built in
+/// (obj/Release or obj/Debug), never from a <c>_wpftmp</c> copy; with no
+/// generated usings file the compilation fails with the instruction to
+/// build the shell first. Built once per test process.
 /// </summary>
 internal static class ShellCompilation
 {
@@ -60,35 +61,38 @@ internal static class ShellCompilation
             }
             sources.Add((relative, CSharpSource.LoadPath(file)));
         }
-        // The SDK's implicit usings live in a generated file under obj/;
-        // parsed with the sources' own options so the trees agree on a
+        // Parsed with the sources' own options so the trees agree on a
         // language version.
         var parseOptions = (CSharpParseOptions)sources[0].Source.Root.SyntaxTree.Options;
-        SyntaxTree globalUsings = CSharpSyntaxTree.ParseText(
-            "global using System;\nglobal using System.Collections.Generic;\nglobal using System.IO;\n"
-            + "global using System.Linq;\nglobal using System.Net.Http;\nglobal using System.Threading;\n"
-            + "global using System.Threading.Tasks;\n",
-            parseOptions,
-            path: "GlobalUsings.census.cs");
-        // The XAML-generated partials — the x:Name fields, InitializeComponent —
-        // live under obj/ after a build; the newest copy of each is added so
-        // a call through an x:Name field BINDS instead of failing closed
-        // (codex post-implementation pass 3, IPB-17).
-        var generated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        string objRoot = Path.Combine(shellRoot, "obj");
-        if (Directory.Exists(objRoot))
-        {
-            foreach (string file in Directory.EnumerateFiles(objRoot, "*.g.cs", SearchOption.AllDirectories))
-            {
-                string name = Path.GetFileName(file);
-                if (!generated.TryGetValue(name, out string? existing)
-                    || File.GetLastWriteTimeUtc(file) > File.GetLastWriteTimeUtc(existing))
-                {
-                    generated[name] = file;
-                }
-            }
-        }
-        IEnumerable<SyntaxTree> generatedTrees = generated.Values
+        // The sources the shell's build generated, in the configuration these
+        // tests were built in, as ShellPromptOwnerCensus reads them: the
+        // SDK's implicit global usings (SlateWindows.GlobalUsings.g.cs), the
+        // shell's own and no others, and the XAML-generated partials (the
+        // x:Name fields, InitializeComponent), so a call through an x:Name
+        // field BINDS instead of failing closed (codex post-implementation
+        // pass 3, IPB-17). Plan 47 CB-15a (#1890): a census tree of global
+        // usings once added System.IO and System.Net.Http, which the app does
+        // not have, and made Path ambiguous with WPF's in three shell
+        // sources. The _wpftmp copies the markup compile leaves behind are
+        // never read, nor another configuration's build: a stale copy would
+        // bind names the shell no longer has.
+        string configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Debug{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            ? "Debug"
+            : "Release";
+        string objRoot = Path.Combine(shellRoot, "obj", configuration);
+        string globalUsings = (Directory.Exists(objRoot)
+                ? Directory.EnumerateFiles(objRoot, "SlateWindows.GlobalUsings.g.cs", SearchOption.AllDirectories)
+                : Enumerable.Empty<string>())
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                $"No SlateWindows.GlobalUsings.g.cs under {objRoot}: the shell's generated global usings come from "
+                + $"its build. Build the shell in {configuration} (SlateWindows.csproj, or SlateWindows.Tests.csproj, "
+                + "which builds it) first.");
+        IEnumerable<SyntaxTree> generatedTrees = Directory
+            .EnumerateFiles(Path.GetDirectoryName(globalUsings)!, "*.g.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetFileName(path).Contains("_wpftmp", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: path));
         // #1600: the test project's compile references as its build recorded
@@ -102,7 +106,7 @@ internal static class ShellCompilation
             .ToArray();
         var compilation = CSharpCompilation.Create(
             "shell-census",
-            sources.Select(s => s.Source.Root.SyntaxTree).Append(globalUsings).Concat(generatedTrees),
+            sources.Select(s => s.Source.Root.SyntaxTree).Concat(generatedTrees),
             references,
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
