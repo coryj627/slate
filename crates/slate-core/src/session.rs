@@ -5639,8 +5639,9 @@ impl VaultSession {
     ///
     /// `existed` is the caller's in-transaction pre-upsert existence
     /// check (the #802 Created/Modified discriminator — reused here
-    /// for the graph FileAdded hook). `graph_sink` stages the graph
-    /// replay ops; the caller applies them post-commit (#550).
+    /// for the graph FileAdded hook, and for the heal of a path's first
+    /// row, #1704). `graph_sink` stages the graph replay ops; the caller
+    /// applies them post-commit (#550).
     #[allow(clippy::too_many_arguments)] // cohesive save-index seam
     fn index_saved_file(
         &self,
@@ -5799,6 +5800,13 @@ impl VaultSession {
         // moves neither and a delete/recreate can never reuse an
         // earlier value (ABA).
         stamp_index_epoch(tx, file_id)?;
+        // #1704: a path's first row heals the dangling links that name it,
+        // after the file's own links resolved above. A save of a new path
+        // and a create both arrive here; a failure fails the index, so the
+        // save is `SavedButUnindexed` and the create `PublishedUnindexed`.
+        if !existed {
+            crate::links_db::heal_rows_naming_first_indexed(tx, path, graph_sink)?;
+        }
         Ok(file_id)
     }
 
@@ -6816,31 +6824,10 @@ impl VaultSession {
                 &mut graph_sink,
             )
         };
+        // The index above also healed the dangling rows that name this
+        // path, in this transaction, with the graph's replay staged
+        // (`index_saved_file`, #1704; WB-19's targeted heal, #1426).
         let file_id = indexed.map_err(published)?;
-        // A materialised file heals the ghost rows that named it (W6-2
-        // PR B, #746 — the Connections leaf's journey found it): the
-        // links table's unresolved rows re-resolve against the inventory
-        // that now holds this path, inside the create's own transaction,
-        // and every affected source's linkset is replayed to the graph —
-        // the rename and batch-move paths' exact pattern. Without it a
-        // note created from a graph row's ghost stayed unresolved until
-        // the next full scan, which the mac runs after every structural
-        // mutation and the Windows shell never does; SQLite now heals at
-        // scan, move AND create time, and the graph keeps replaying it.
-        // #1426: only the dangling rows that could name this path.
-        let resolved_sources = crate::links_db::heal_after_create(&tx, path).map_err(published)?;
-        if graph_sink.live() {
-            for source in &resolved_sources {
-                graph_sink
-                    .stage_with(|| {
-                        Ok(crate::graph::GraphOp::LinksetChanged {
-                            source_path: source.clone(),
-                            rows: crate::links_db::graph_linkset_for(&tx, source)?,
-                        })
-                    })
-                    .map_err(published)?;
-            }
-        }
         if let Some(stem) = bind_log {
             // Recovery re-binding, atomic with the row itself; the
             // partial UNIQUE index backstops double-binding.
@@ -9237,7 +9224,17 @@ impl VaultSession {
             None,
             &mut graph_sink,
         ) {
-            Ok(()) => {}
+            Ok(first_row) => {
+                if first_row {
+                    // #1704: a repair that wrote the path's first row (a
+                    // file the index never held, or a create or save that
+                    // landed unindexed) heals the links that name it, as
+                    // the save of a new path does, and is announced
+                    // `Created`, as that save is.
+                    crate::links_db::heal_rows_naming_first_indexed(&tx, path, &mut graph_sink)?;
+                    outcome = ReindexOutcome::FirstIndexed;
+                }
+            }
             Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
                 // The path is GONE from disk: convergence means
                 // removing its index row, not erroring forever
@@ -9317,6 +9314,7 @@ impl VaultSession {
         //   missing and say so.
         let kind = match outcome {
             ReindexOutcome::Reindexed => FileChangeKind::Modified,
+            ReindexOutcome::FirstIndexed => FileChangeKind::Created,
             ReindexOutcome::RemovedRow => FileChangeKind::Deleted,
             ReindexOutcome::NothingStood => {
                 // Dropped, not applied: `index_file` stages a new path's
@@ -11901,6 +11899,16 @@ fn prune_unseen_dirs(
 /// reclassification, rename-without-reread, or migration backfill
 /// would break it. If you add such a path, also update `body_text`
 /// in the same statement (set to `""` for non-markdown).
+///
+/// # The first row (#1704)
+///
+/// Returns `true` when this call wrote the path's first `files` row (no
+/// row stood under the path when it began, and it upserted one), and
+/// `false` when a row stood: the fast path, which needs an existing row,
+/// and every re-index of one. A repair and `open_base`'s repair heal the
+/// dangling links that name a first row; the scan ignores the value and
+/// heals once, at its tail, because a heal per file during the walk would
+/// resolve against only the files walked so far.
 fn index_file(
     tx: &rusqlite::Transaction,
     provider: &dyn VaultProvider,
@@ -11913,7 +11921,7 @@ fn index_file(
     large_file_refuse_bytes: u64,
     mut file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     graph_sink: &mut crate::graph::GraphOpSink,
-) -> Result<(), VaultError> {
+) -> Result<bool, VaultError> {
     let stat = provider.stat(path)?;
     // Case-fold the extension so macOS (APFS) and Windows (NTFS) files
     // saved as `README.MD` or `Notes.Markdown` are still recognized as
@@ -12038,7 +12046,7 @@ fn index_file(
                 stat.birthtime_ms
             ])?;
             report.files_skipped += 1;
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -12151,7 +12159,7 @@ fn index_file(
         // any older write intent just like a normal index does.
         stamp_index_epoch(tx, file_id)?;
         report.files_indexed += 1;
-        return Ok(());
+        return Ok(!replacing_existing_file);
     }
 
     let content = provider.read_file(path)?;
@@ -12271,7 +12279,7 @@ fn index_file(
     stamp_index_epoch(tx, file_id)?;
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
-    Ok(())
+    Ok(!replacing_existing_file)
 }
 
 /// W7-7 PR 7 (R-9): a row's committed hash is new or differs from the
@@ -13450,6 +13458,10 @@ enum MarkerBinding {
 enum ReindexOutcome {
     /// The path was indexed again from disk: announced as `Modified`.
     Reindexed,
+    /// No `files` row stood under the path and the file was indexed: its
+    /// first row, written with the heal of the links that name it, and
+    /// announced as `Created`, as a save of a new path is (#1704).
+    FirstIndexed,
     /// The file is gone and a `files` row stood under the path: the row was
     /// removed, and so was its graph node where this session's graph is live
     /// and holds one; announced as `Deleted`.
@@ -19948,7 +19960,7 @@ impl VaultSession {
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
-        index_file(
+        let first_row = index_file(
             &tx,
             self.provider.as_ref(),
             path,
@@ -19961,6 +19973,11 @@ impl VaultSession {
             None,
             &mut graph_sink,
         )?;
+        // #1704: a base the index never held heals the links that name it;
+        // a row re-indexed for its missing `file_meta` heals nothing.
+        if first_row {
+            crate::links_db::heal_rows_naming_first_indexed(&tx, path, &mut graph_sink)?;
+        }
         tx.commit()?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
@@ -22485,6 +22502,9 @@ impl VaultSession {
                         resolved_inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
                     })
                 })?;
+                // #1704: the canvas's first row heals the links that name
+                // it, after the graph has heard of the node they heal onto.
+                crate::links_db::heal_rows_naming_first_indexed(&tx, path, &mut graph_sink)?;
                 (
                     tx.query_row(
                         "SELECT id FROM files WHERE path = ?1",
