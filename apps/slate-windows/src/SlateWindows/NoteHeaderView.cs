@@ -530,7 +530,7 @@ internal sealed class NoteHeaderView : Grid
     /// and forgotten once that input is done: the most recent input device stays the mouse
     /// through a later Invoke. Shift+F10 and the Apps key on the button would reach WPF's
     /// context menu service, which opens the menu with the keys on the menu itself, so they
-    /// open it here as Enter does; a right-click still opens it as WPF does.</summary>
+    /// open it here as Enter does; a right-click still opens it as WPF does, holding nothing.</summary>
     private static void OpensItsMenu(Button owner)
     {
         bool byPointer = false;
@@ -543,10 +543,21 @@ internal sealed class NoteHeaderView : Grid
         // The keys' request carries no place (-1, -1); a right-click's carries the pointer's.
         owner.ContextMenuOpening += (_, request) =>
         {
-            if (request.CursorLeft < 0 && request.CursorTop < 0 && owner.ContextMenu is not null)
+            if (owner.ContextMenu is not { } menu)
+            {
+                return;
+            }
+
+            if (request.CursorLeft < 0 && request.CursorTop < 0)
             {
                 request.Handled = true;
                 Open(withPointer: false);
+            }
+            else if (IsWithin(request.OriginalSource as DependencyObject, owner))
+            {
+                // A right-click on the button: WPF opens the menu, and a pointer's open holds
+                // nothing, so a keys' open whose close is still fading gives its rows back now.
+                RestingPointerHold.Release(menu);
             }
         };
 
