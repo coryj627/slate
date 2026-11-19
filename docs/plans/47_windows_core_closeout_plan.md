@@ -934,6 +934,7 @@ started:
 | CB-15a | `specs/cb15a_failure_detail_and_the_files_sidebar_speak_cores_words.md` |
 | CB-24 | `specs/cb24_a_resting_pointer_leaves_the_keys_on_a_menus_first_row.md` |
 | CB-28 | `specs/cb28_a_timed_out_svg_decode_is_remembered.md` |
+| #2016 (early find) | `specs/fix2016_forward_tab_wraps_from_the_windows_last_stop.md` |
 
 CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
 each ends with the corrections its delivery made. Wave C5's specs were
@@ -944,6 +945,9 @@ before code, and each ends with what its delivery changed. Wave C6's
 specs were written on 2026-11-18 and cite `main` at eeb99032, with the
 same step 0, red team and closing record. Wave C7's specs were written
 on 2026-11-18 and cite `main` at 26d353ef, with the same three parts.
+The spec for #2016, a find taken early in that wave, records its step 0
+on `main` at 5b890dd9 and ends with what its delivery changed; its red
+teams read the diff.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1078,7 +1082,7 @@ owner's call, a second answer, a rebuild or a ledger line.
 | CB-28 | #2011 | 2026-11-18 (9999cb68) | #1635 (CD19) | 5 / 2 / 3 / 0 | #1954: the Mac embed view decodes SVGs with no time budget (EmbedView.swift:161, by reading; needs a Mac). #1955: a deadline for the diagram stage's decodes; a bounded cache of successful decodes. Owner: departure 3, where slow successes spend the 20 s deadline at every refresh, and whether the diagram stage gets a deadline |
 | CB-24 | #2014 | 2026-11-18 (5b890dd9) | #1849; #1846 by comment (CD16) | 4 / 3 / 0 / 1 | Filed #2013: a context menu WPF's service opens from the keys lands no row, and a resting pointer gives the keys to the row under it (in the editor, Shift+F10 3 of 3 and the Apps key 1 of 1). The judge's two accepted minors: the two close-fade hosted facts pass vacuously where menus do not fade, and the gate grew (CI ran it in 25 min 25 s of its 35-minute limit). Not delivered: a run at 100 % scale (CI's DPI and animation setting are unknown; red on main was seen only at 200 % with animations on), touch and pen, a real mouse right-click during a close fade, and Shift+F10 on a row of the open menu. No Mac work owed |
 | CB-15a | #2015 | 2026-11-19 (cc16f7e3) | none (Refs #1890, open for CB-15b and CB-15c; CD9) | 8 / 5 / 1 / 1 | Filed #2012: a folder listing fails when another session commits during it (core refuses even a first page and the host never restarts), and some of core's details read as developer text. One line on #1955: the Copy link failure is spoken at High on Windows and at Medium on the Mac. One line on #1956: the Copy link sentence, which is host-composed and is the Mac's, plus leads that repeat the path an InvalidPath detail names. For the owner: whether Windows adopts the Mac's specific unavailable reason, "Select exactly one Markdown file to copy its wikilink."; today the palette gives its generic "This command is not available right now.". CB-15b and CB-15c inherit ShellFailureDetailCensus's 61 dated rows (73 reads) and its baseline. Not delivered: the synchronous tree refresh path has no fact (a path only tests take; the census holds it); the Markdown refusal and the disabled buttons after a header selection were not heard under NVDA; the other three uniffi error types and an AggregateException still dump their fields if they ever reach the helper. No Mac work owed |
-ROW2016
+| #2016 (early find) | #2017 | 2026-11-19 (57b9fbbb) | #2016 | 5 / 4 / 1 / 0 | One line on #1955 (comment 7001021616): with the palette open, an external activation request leaves the keys on the bare window; main does the same. Intended changes the lead ruled: with a canvas open, the logo's and the empty pane stop's arrows stay put; with no vault open, the logo keeps its arrows and the workspace chords; Shift+Tab from the logo lands on the last recent vault. Not delivered: Narrator and VoiceOver passes; CI runs of the 15 logo facts, which skip on hosted runners under the #1680 guard (local Release run, 43 of 43). No Mac work owed |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1447,23 +1451,30 @@ xhigh, as the protocol's step 3 asks, or stays at the configured high
 that every wave so far has used.
 
 Wave C7, 2026-11-18 and 19. CB-28 (#2011) merged as 9999cb68, CB-24
-(#2014) as 5b890dd9 and CB-15a (#2015) as cc16f7e3, in that order. Each
-spec had a step 0 measurement and a fresh Opus red team before code
-(blockers, medium and low: CB-28 2, 7 and 12; CB-24 2, 5 and 14;
-CB-15a 0, 7 and 23). Each diff had a fresh Opus red team: CB-28's found
-0 blockers, 3 medium and 7 low; CB-24's 0 blockers, 1 major and 12
-minor; CB-15a's 0 blockers, 2 major and 12 minor. Codex ran at the
-configured effort, high, below the protocol's xhigh as in the earlier
-waves, to an approve: CB-24 in two rounds; CB-28 in four, with rounds 3
-and 4 approving, the fourth after the merge of `main`; and CB-15a in
-two, then in two more on the first judge's change and one on the
-second's, each ending in an approve. The first of those delta rounds
-found the Markdown refusal fact green before the change; the finding
-was declined with reason, since that fact guards the case the change
-must leave speaking, and a mutation proves it.
+(#2014) as 5b890dd9 and CB-15a (#2015) as cc16f7e3, in that order, and
+#2017, the PR for #2016, a find taken early (below), merged as 57b9fbbb
+on 2026-11-19. Each chunk's spec had a step 0 measurement and a fresh
+Opus red team before code (blockers, medium and low: CB-28 2, 7 and 12;
+CB-24 2, 5 and 14; CB-15a 0, 7 and 23). Each chunk's diff had a fresh
+Opus red team: CB-28's found 0 blockers, 3 medium and 7 low; CB-24's 0
+blockers, 1 major and 12 minor; CB-15a's 0 blockers, 2 major and 12
+minor. Two Opus xhigh red teams read #2017's diff: the first found no
+blocker or major, and the second one blocker, the menu bar logo's Left
+and Right leaving the bar, which was taken. Codex ran at the configured
+effort, high, below the protocol's xhigh as in the earlier waves, to an
+approve: CB-24 in two rounds; CB-28 in four, with rounds 3 and 4
+approving, the fourth after the merge of `main`; CB-15a in two, then in
+two more on the first judge's change and one on the second's, each
+ending in an approve; and #2017 in five, with rounds 1, 4 and 5
+approving. On CB-15a the first of those delta rounds found the Markdown
+refusal fact green before the change; the finding was declined with
+reason, since that fact guards the case the change must leave
+speaking, and a mutation proves it. On #2017, round 2 found the logo's
+keeper swallowing Move Tab, taken red first, and round 3 the two
+welcome-view changes, which the lead ruled intended (below).
 
 Codoki stayed at its monthly limit (500 of 500, until 2026-12-01) and
-reviewed none of the three. As in wave C6, each product PR had an
+reviewed none of the four. As in wave C6, each product PR had an
 independent Opus merge judge at effort xhigh in its place, recorded by
 the lead on the PR, and every verdict was Merge, with no blocker and no
 major. CB-28 had one judge
@@ -1487,7 +1498,13 @@ states, red first (when the Files selection moved to a date-group
 header, a placeholder or nothing, the buttons kept the last row's
 enabled state, as on `main`), and a comment's list of core's refusal
 cases. The third judge, on that last change, found no blocker, major or
-minor.
+minor. #2017 had one judge
+([#2017, comment 7011800264](https://github.com/coryj627/slate/pull/2017#issuecomment-7011800264)),
+whose two minors were both taken: a window key binding now counts for
+the keepers only when its command is not null and not `NotACommand`,
+red first, since with no vault open the arrow bindings have no command
+and the logo let Ctrl+Alt+Left and Ctrl+Alt+Shift+Left through; and
+#2017's body names the 15 logo facts that CI skips as not delivered.
 
 The lead ruled CB-28's eight calls on 2026-11-18. The reading view's
 refresh, the Ctrl+E popover's build and the embeds leaf's batch each
@@ -1605,8 +1622,17 @@ collapsed welcome view's `FocusManager.FocusedElement`
 (`MainWindow.xaml:1030`) ends WPF's search for the first stop. An
 in-process probe found the cause; by reading, the binding moved onto
 the welcome view in a8c7b960 (#1010). #2014 is not the cause: 9999cb68,
-before it, behaves the same. #2016 was taken as its own PR, as #1965
-was for CB-4's find, and its row is in the table above.
+before it, behaves the same. #2016 was taken early as its own PR, as
+#1965 was for CB-4's find. #2017 merged as 57b9fbbb on 2026-11-19, and
+its row is in the table above. The binding moves to the Window, a focus
+scope, where W0 first put it. The dead end had also ended WPF's arrow
+search through the window, so three stops that had kept their arrows
+only because of it now keep them themselves: the empty editor stop and
+the menu bar's logo by a KeyDown keeper, and the rail's ends by a
+Contained group. #2017 edits `MainWindow.xaml`, `MainWindow.xaml.cs`
+and `MainWindow.ShellRegions.cs`, after CB-24's merge. Under NVDA
+2026.3.1, Tab from More panels with a vault open said "tab" and nothing
+else on base, and "New note, button" on head.
 
 Where the specs were wrong, each spec's closing section says so:
 
@@ -1655,6 +1681,11 @@ Where the specs were wrong, each spec's closing section says so:
   spec put it on the Files toolbar with one. Load folder files
   (`:2626`) has a deterministic fact through a constructed directory
   row, where the spec allowed census-only coverage.
+- #2016: the smallest change, the binding moved in `MainWindow.xaml`,
+  was not enough; the fix also needs the two keepers and the rail's
+  group (above). The return to the welcome view does not rest on
+  `ViewModel_ReturnedToWelcome` alone: the landing when the workspace
+  root goes also lands on Open Vault.
 
 CD37: wave C7's start read is the one recorded above, after wave C6:
 the lead's three comments of 2026-11-18. No other CD37 comment was
@@ -1691,3 +1722,12 @@ adopting it adds a spoken sentence on Windows. The three questions
 from wave C6 are still open: CB-14's order, the MathCAT report and
 Codex's effort. A fourth is open too: whether the owner's #1991 call
 covers every route through a tab, as §3.1's row reads it.
+
+#2017 also changes three things a reader can notice. The lead ruled
+each one intended, and they are listed here for the owner:
+
+| Where | On `main` | Since #2017 |
+|---|---|---|
+| A canvas open (measured in the shown-shell harness): the menu bar's logo with Left or Right, the empty editor stop with any arrow, and the rail's ends (Down on More panels, Up on the bare strip) | the arrow leaves the stop | the stop keeps it |
+| No vault open: Alt onto the logo, then Left, Ctrl+Alt+Left or Ctrl+Alt+Shift+Left | the keys go into the welcome view | the keys stay on the logo |
+| The welcome view with a recent vault: Alt onto the logo, then Shift+Tab | Open Vault, past the recent vaults | the last recent vault, the welcome view's true last stop |
