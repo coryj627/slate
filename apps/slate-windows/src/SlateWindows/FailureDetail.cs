@@ -7,8 +7,9 @@ namespace SlateWindows;
 
 /// <summary>#1890: the detail a failure sentence speaks: core's rendering
 /// for a vault error, never the binding's field dump ("@message=..."), and
-/// any other exception's own message. The only reader of an exception's
-/// Message the shell census allows (ShellFailureDetailCensus).</summary>
+/// any other exception's own message. The one exempt reader of an
+/// exception's Message in the shell census (ShellFailureDetailCensus); the
+/// reads that stood before it are that census's dated rows.</summary>
 /// <remarks>Limits: CommandException, GraphConfigException and
 /// HotExitException dump their fields too, and core renders none of them;
 /// each is read by its typed fields where it is spoken. An AggregateException

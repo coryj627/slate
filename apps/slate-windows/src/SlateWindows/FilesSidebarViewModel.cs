@@ -634,7 +634,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => StructuralMutationBlocked);
         CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
-        CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
+        // Plan 47 CB-15a: Copy link, Pin and Unpin take the sibling verbs'
+        // guard too. On a date-group header Copy link spoke core's refusal of
+        // the empty path, and Pin wrote the empty path into the pins.
+        CopyWikilinkCommand = new RelayCommand(
+            _ => CopyWikilink(),
+            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
         // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
         // folder so the canonical DuplicateFilesOnly refusal can speak.
         DuplicateCommand = new RelayCommand(
@@ -653,8 +658,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _ => !IsImporting && !IsTrashing
                 && (BatchSelectionCount > 0
                     || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
-        PinCommand = new RelayCommand(_ => InThePane(PinSelected), _ => SelectedNode is { IsDirectory: false });
-        UnpinCommand = new RelayCommand(_ => InThePane(UnpinSelected), _ => SelectedNode is { IsDirectory: false });
+        PinCommand = new RelayCommand(
+            _ => InThePane(PinSelected),
+            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
+        UnpinCommand = new RelayCommand(
+            _ => InThePane(UnpinSelected),
+            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
         UnpinAllCommand = new RelayCommand(_ => InThePane(UnpinAllInFolder), _ => _pinned.Count > 0);
         AddShortcutCommand = new RelayCommand(_ => InThePane(AddShortcut), _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         RemoveShortcutCommand = new RelayCommand(_ => InThePane(RemoveShortcut), _ => SelectedShortcut is not null);
@@ -2134,7 +2143,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void CopyWikilink()
     {
-        if (SelectedNode is not { IsDirectory: false } node)
+        if (SelectedNode is not { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
         }
@@ -2157,9 +2166,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             else
             {
                 // Plan 47 CB-15a: core makes no wikilink for a file that is
-                // not Markdown, has left the index, or is a case twin; the
-                // Mac's sentence says why nothing was copied
-                // (AppState.swift's copy wikilink).
+                // not Markdown, has left the index, is a case twin, or has a
+                // name a link cannot hold; the Mac's sentence says why nothing
+                // was copied (AppState.swift's copy wikilink).
                 ReportFailure("Could not create a wikilink for this file.");
             }
         }
@@ -2171,7 +2180,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void PinSelected()
     {
-        if (SelectedNode is { IsDirectory: false } node)
+        if (SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
         {
             _pinned.Add(node.Path);
             _pinGeneration++;
@@ -2186,7 +2195,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void UnpinSelected()
     {
-        if (SelectedNode is { IsDirectory: false } node)
+        if (SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
         {
             _pinned.Remove(node.Path);
             _pinGeneration++;

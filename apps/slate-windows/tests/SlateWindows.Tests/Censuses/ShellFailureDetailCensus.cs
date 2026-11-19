@@ -229,7 +229,55 @@ public sealed class ShellFailureDetailCensus
     /// fall below them without lowering them, hold a row dated another day,
     /// or give a row to another chunk than its folder's.</summary>
     internal static IReadOnlyList<string> TableProblems(
-        IReadOnlyList<Row> rows, int rowCeiling = RowCeiling, int readCeiling = ReadCeiling) => [];
+        IReadOnlyList<Row> rows, int rowCeiling = RowCeiling, int readCeiling = ReadCeiling)
+    {
+        List<string> problems = [];
+        int reads = rows.Sum(row => row.Reads);
+        if (rows.Count > rowCeiling)
+        {
+            problems.Add($"the table holds {rows.Count} rows, more than its ceiling of {rowCeiling}: it only shrinks, "
+                + "so a new read goes through FailureDetail.Of, never into a row.");
+        }
+        else if (rows.Count < rowCeiling)
+        {
+            problems.Add($"the table holds {rows.Count} rows under a ceiling of {rowCeiling}: lower RowCeiling to "
+                + $"{rows.Count}, so the rows this PR routed cannot come back.");
+        }
+        if (reads > readCeiling)
+        {
+            problems.Add($"the table's rows hold {reads} reads, more than its ceiling of {readCeiling}: it only "
+                + "shrinks, so a new read goes through FailureDetail.Of, never into a row.");
+        }
+        else if (reads < readCeiling)
+        {
+            problems.Add($"the table's rows hold {reads} reads under a ceiling of {readCeiling}: lower ReadCeiling "
+                + $"to {reads}, so the reads this PR routed cannot come back.");
+        }
+        foreach (Row row in rows)
+        {
+            if (row.Dated != Dated)
+            {
+                problems.Add($"{Named(row)}: dated {row.Dated}; every row is a read that stood on {Dated}, and none "
+                    + "is added after it.");
+            }
+            string owner = OwnerOf(row.File);
+            if (row.Owner != owner)
+            {
+                problems.Add($"{Named(row)}: owned by {row.Owner}; a row in this folder is {owner}'s "
+                    + "(CB-15b: Canvas/, Graph/ and Search/; CB-15c: the rest).");
+            }
+        }
+        return problems;
+    }
+
+    /// <summary>The chunk that ends a row in <paramref name="file"/>'s folder
+    /// (plan 47 §5).</summary>
+    private static string OwnerOf(string file) =>
+        file.StartsWith("Canvas/", StringComparison.Ordinal)
+            || file.StartsWith("Graph/", StringComparison.Ordinal)
+            || file.StartsWith("Search/", StringComparison.Ordinal)
+            ? CB15b
+            : CB15c;
 
     /// <summary>The rule's shapes, planted beside the shell and run through
     /// MessageReads alone: each is named, and a typed field, a record's own
@@ -534,30 +582,31 @@ public sealed class ShellFailureDetailCensus
                 return new Read(file, type, member, read.Line, read.Context);
             });
 
-    /// <summary>The declaration that holds a read's operation tree, as
-    /// SaveChainAdmissionCensus reads one (HoldsAnOperationTree): a method, a
-    /// constructor (named as its type), an operator or conversion (its
-    /// metadata name), an accessor (Property.get, .set, .init, .add, .remove),
-    /// an expression-bodied property or indexer (its getter), a field or
-    /// property initializer (the field or property), or a primary
-    /// constructor's base arguments (the type's name). A lambda or local
-    /// function counts to the member around it. The type is the one that
-    /// declares the member.</summary>
+    /// <summary>The declaration that holds a read's operation tree, named as
+    /// SaveChainAdmissionCensus names one (HoldsAnOperationTree and MemberOf):
+    /// a method by its name; a constructor, static or not, by its type's
+    /// name; an operator or conversion by its metadata name (op_Addition,
+    /// op_Implicit); a finalizer as Finalize; every accessor (get, set, init,
+    /// add, remove), an expression-bodied property or indexer and a property
+    /// initializer by their property, event or indexer (this[]); a field
+    /// initializer by its field; and a primary constructor's base arguments
+    /// by the type's name. A lambda or local function counts to the member
+    /// around it. The type is the one that declares the member. One
+    /// departure: a method is named by its identifier, so an explicit
+    /// interface implementation is TryCreateNote, not its qualified metadata
+    /// name.</summary>
     internal static (string Type, string Member) Holder(SemanticModel model, SyntaxNode node)
     {
         for (SyntaxNode? current = node.Parent; current is not null; current = current.Parent)
         {
             string? member = current switch
             {
-                AccessorDeclarationSyntax { Parent.Parent: BasePropertyDeclarationSyntax property } accessor =>
-                    $"{PropertyName(property)}.{accessor.Keyword.ValueText}",
-                ArrowExpressionClauseSyntax { Parent: BasePropertyDeclarationSyntax property } => $"{PropertyName(property)}.get",
                 ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
                 DestructorDeclarationSyntax => "Finalize",
                 MethodDeclarationSyntax method => method.Identifier.ValueText,
                 OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax =>
                     model.GetDeclaredSymbol(current)?.Name ?? "(an operator)",
-                // Reached past no accessor and no arrow: the initializer.
+                // An accessor, an arrow body or an initializer: the property.
                 BasePropertyDeclarationSyntax property => PropertyName(property),
                 VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax } field => field.Identifier.ValueText,
                 PrimaryConstructorBaseTypeSyntax => TypeName(current),

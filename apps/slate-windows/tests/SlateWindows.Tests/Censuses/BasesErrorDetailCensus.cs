@@ -305,20 +305,24 @@ public sealed class BasesErrorDetailCensus
         Assert.DoesNotContain(failures, failure => failure.Contains("FailureDetail.Of(thrown)", StringComparison.Ordinal));
     }
 
-    /// <summary>The real helper's body, declared partial so a planted source
-    /// can add an overload to the same class: the text a case binds in place
-    /// of <c>FailureDetail.cs</c>.</summary>
-    internal const string PartialHelper = """
-        namespace SlateWindows;
-
-        using uniffi.slate_uniffi;
-
-        internal static partial class FailureDetail
+    /// <summary>The real <c>FailureDetail.cs</c>, read from the shell's
+    /// sources and declared partial, so a planted source can add an overload
+    /// to the same class: the text a case binds in place of the real file. It
+    /// is the real file's text with one word added, so a change to the real
+    /// helper reaches every case that binds it.</summary>
+    internal static string PartialHelper
+    {
+        get
         {
-            internal static string Of(Exception failure) =>
-                failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
+            const string declaration = "internal static class FailureDetail";
+            string real = FailureDetailTree().GetText().ToString();
+            int at = real.IndexOf(declaration, StringComparison.Ordinal);
+            Assert.True(
+                at >= 0 && real.IndexOf(declaration, at + 1, StringComparison.Ordinal) < 0,
+                $"premise: FailureDetail.cs declares `{declaration}` once, so the planted cases can bind it partial.");
+            return real.Replace(declaration, "internal static partial class FailureDetail", StringComparison.Ordinal);
         }
-        """;
+    }
 
     /// <summary>Codex round 10: a generic helper is never a trusted consumer,
     /// and a body over a type parameter constrained to an exception is held
