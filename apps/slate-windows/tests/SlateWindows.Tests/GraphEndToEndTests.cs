@@ -637,14 +637,18 @@ public sealed class GraphEndToEndTests
 
         // A second create of the same target through the leaf's seam: the
         // Exists arm rides the relay as NoteCreateFailed; nothing on disk
-        // changes.
+        // changes. Plan 47 CB-15a (#1890): the whole sentence is core's
+        // detail for the refusal, never the binding's field dump
+        // ("@path=...").
         DateTime stamp = File.GetLastWriteTimeUtc(Path.Combine(vault.Root, expectedPath));
         host.Lines.Clear();
         leaf.CreateNoteFromSurface!(expectedPath, leaf.Root!, leaf.RootEpoch);
         PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
         PumpedDispatcher.Drain();
         string failedPrefix = Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.NoteCreateFailed("MESSAGE"))).Split("MESSAGE")[0];
-        Assert.Equal(1, host.Lines.Count(line => line.StartsWith(failedPrefix, StringComparison.Ordinal)));
+        string failed = Assert.Single(host.Lines, line => line.StartsWith(failedPrefix, StringComparison.Ordinal));
+        Assert.Equal($"Couldn't create note: Something named {expectedPath} already exists there.", failed);
+        Assert.DoesNotMatch(@"@\w+=", failed);
         Assert.Equal(stamp, File.GetLastWriteTimeUtc(Path.Combine(vault.Root, expectedPath)));
     });
 

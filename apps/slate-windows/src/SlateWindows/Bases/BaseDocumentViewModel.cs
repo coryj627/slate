@@ -1822,9 +1822,9 @@ internal static class BasePhrase
 
     /// <summary>#1697: the detail a Bases failure sentence speaks: core's
     /// rendering for a vault error, never the binding's field dump
-    /// ("@message=..."), and any other exception's own message.</summary>
-    internal static string ErrorDetail(Exception failure) =>
-        failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
+    /// ("@message=..."), and any other exception's own message. #1890: the
+    /// shell's one helper says it (FailureDetail.Of).</summary>
+    internal static string ErrorDetail(Exception failure) => FailureDetail.Of(failure);
 }
 
 /// <summary>W7-7 PR 7 (codex PR 7 round 5, fix 1): an awaited base

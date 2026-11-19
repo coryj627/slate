@@ -575,7 +575,7 @@ public sealed class StatusBarAndPaneTogglesTests
         ["DeleteCommand"] = "its prompt names the file",
         ["CreateFolderNoteCommand"] = "spoken",
         ["DeleteFolderNoteCommand"] = "spoken",
-        ["CopyWikilinkCommand"] = "the clipboard",
+        ["CopyWikilinkCommand"] = "the clipboard, or a spoken failure",
         ["CopyPathCommand"] = "the clipboard",
         ["RevealCommand"] = "Explorer",
         ["DuplicateCommand"] = "spoken",

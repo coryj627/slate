@@ -306,7 +306,7 @@ internal sealed partial class FilesSidebarViewModel
             catch (VaultException exception)
             {
                 SettleTreeRefreshWaiters(generation, exception);
-                ReportTreeFailure($"Could not load files: {exception.Message}", silent);
+                ReportTreeFailure($"Could not load files: {FailureDetail.Of(exception)}", silent);
                 _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (Exception exception)
@@ -453,7 +453,7 @@ internal sealed partial class FilesSidebarViewModel
         {
             await ReportTreeRefreshFailureAsync(
                 generation,
-                $"Could not load files: {exception.Message}",
+                $"Could not load files: {FailureDetail.Of(exception)}",
                 exception,
                 silent,
                 token).ConfigureAwait(false);

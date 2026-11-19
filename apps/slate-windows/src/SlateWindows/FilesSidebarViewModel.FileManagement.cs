@@ -1180,7 +1180,7 @@ internal sealed partial class FilesSidebarViewModel
                 // survives the "Loading files…" write.
                 RequestSelectionAt(null);
                 Refresh();
-                ReportFailure($"Move failed: {exception.Message}");
+                ReportFailure($"Move failed: {FailureDetail.Of(exception)}");
             }
 
             return;
@@ -1210,7 +1210,7 @@ internal sealed partial class FilesSidebarViewModel
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create folder {folderPath}: {exception.Message}");
+            ReportFailure($"Could not create folder {folderPath}: {FailureDetail.Of(exception)}");
             return;
         }
 
@@ -1315,7 +1315,7 @@ internal sealed partial class FilesSidebarViewModel
         catch (VaultException exception)
         {
             ReportFailure(
-                $"Could not duplicate {node.DisplayName}: {exception.Message}");
+                $"Could not duplicate {node.DisplayName}: {FailureDetail.Of(exception)}");
         }
     }
 
