@@ -23,9 +23,10 @@ namespace SlateWindows.Tests;
 /// (saving the sidebar's organization, pins and shortcuts) catch ordinary I/O
 /// errors and keep their text, which SidebarSettingsRetryTests pins by
 /// prefix. ShellFailureDetailCensus holds all four to FailureDetail.Of.
-/// Also here: Copy link on a file core makes no wikilink for says the Mac's
-/// sentence instead of nothing, and Copy link, Pin and Unpin do nothing on a
-/// row that is not a file.
+/// Also here: Copy link is for exactly one Markdown file, as on the Mac; on a
+/// Markdown file core makes no wikilink for it says the Mac's sentence
+/// instead of nothing; and Copy link, Pin and Unpin do nothing on a row that
+/// is not a file.
 /// </summary>
 public sealed class FilesSidebarFailureDetailTests
 {
@@ -481,24 +482,59 @@ public sealed class FilesSidebarFailureDetailTests
 
     // ------------------------------------------------------------- Copy link
 
-    /// <summary>Copy link on a file core makes no wikilink for (a canvas, an
-    /// image) says why, in the Mac's sentence (AppState.swift's copy
-    /// wikilink), once at High, and copies nothing. It used to say nothing.</summary>
+    /// <summary>The merge judge's minor 1: Copy link is for exactly one
+    /// Markdown file, as on the Mac (SidebarActionCatalog's
+    /// exactlyOneMarkdownFile). On a canvas or an image it is unavailable (the
+    /// palette gives its generic reason), and run anyway it copies nothing and
+    /// says nothing. It used to say "Could not create a wikilink for this
+    /// file." there, where the Mac offers no action.</summary>
     [Theory]
     [InlineData("board.canvas")]
     [InlineData("picture.png")]
-    public async Task CopyLinkOnAFileWithNoWikilinkSaysWhy(string file)
+    public async Task CopyLinkIsUnavailableOnAFileThatIsNotMarkdown(string file)
     {
-        using Rig rig = await Rig.Open("cb15a-copy-link-none", vault =>
+        using Rig rig = await Rig.Open("cb15a-copy-link-not-markdown", vault =>
         {
             vault.Write("a.md", "# A\n");
             vault.Write("board.canvas", SlateUniffiMethods.CanvasCanonicalEmptyText());
             vault.WriteBytes("picture.png", [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
         });
-        Assert.Null(rig.Session.WikilinkForPath(file));
-        rig.Sidebar.SelectedNode = rig.Node(file);
+        FileTreeNodeViewModel row = rig.Node(file);
+        Assert.NotNull(row.Summary);
+        Assert.False(row.Summary.IsMarkdown, "premise: core's summary says the file is not Markdown.");
+        rig.Sidebar.SelectedNode = row;
+        string status = rig.Sidebar.Status;
         rig.Spoken.Clear();
 
+        Assert.False(rig.Sidebar.CopyWikilinkCommand.CanExecute(null), $"Copy link is available on {file}.");
+        rig.Sidebar.CopyWikilinkCommand.Execute(null);
+        await rig.Settle();
+
+        Assert.Empty(rig.Copied);
+        Assert.Equal(status, rig.Sidebar.Status);
+        Assert.Empty(rig.Spoken.OfType<A11yEvent.HostComposed>());
+    }
+
+    /// <summary>A Markdown file core makes no wikilink for (here, the note left
+    /// the disk after the scan, so core's lookup finds no link) keeps Copy link
+    /// available, and the command says why it copied nothing, in the Mac's
+    /// sentence (AppState.swift's copy wikilink), once at High.</summary>
+    [Fact]
+    public async Task CopyLinkOnAMarkdownFileCoreMakesNoLinkForSaysWhy()
+    {
+        using Rig rig = await Rig.Open("cb15a-copy-link-no-link", vault =>
+        {
+            vault.Write("a.md", "# A\n");
+            vault.Write("b.md", "# B\n");
+        });
+        FileTreeNodeViewModel row = rig.Node("a.md");
+        Assert.True(row.Summary?.IsMarkdown, "premise: core's summary says the note is Markdown.");
+        File.Delete(Path.Combine(rig.Root, "a.md"));
+        Assert.Null(rig.Session.WikilinkForPath("a.md"));
+        rig.Sidebar.SelectedNode = row;
+        rig.Spoken.Clear();
+
+        Assert.True(rig.Sidebar.CopyWikilinkCommand.CanExecute(null), "Copy link is unavailable on a Markdown file.");
         rig.Sidebar.CopyWikilinkCommand.Execute(null);
         await rig.Settle();
 
