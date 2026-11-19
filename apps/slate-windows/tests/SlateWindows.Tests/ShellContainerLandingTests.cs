@@ -44,6 +44,48 @@ public sealed class ShellContainerLandingTests
         Assert.Same(bar, Keyboard.FocusedElement);
     });
 
+    /// <summary>#2016: the empty editor stop is the content pane's border itself, and a stop's
+    /// arrows are judged in its parent's group. The border keeps all four with its own key
+    /// handler (in the shell, the welcome view's hidden Open Vault button had kept them by
+    /// accident).</summary>
+    [Theory]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Right)]
+    [InlineData(Key.Up)]
+    [InlineData(Key.Down)]
+    public void TheEmptyEditorStopKeepsItsArrows(Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        FrameworkElement pane = host.Lift(host.Shell.ContentPaneBorder);
+        host.Show(pane);
+        Assert.True(pane.Focus());
+
+        host.Press(key);
+
+        Assert.Same(pane, Keyboard.FocusedElement);
+    });
+
+    /// <summary>#2016: the menu bar's logo, its one header. The bar's None mode lets an
+    /// arrow out, so Left and Right are kept by the bar's own key handler.</summary>
+    [Theory]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Right)]
+    public void TheMenuBarsLogoKeepsLeftAndRight(Key key) => RunSta(() =>
+    {
+        using var host = new Host();
+        FrameworkElement menu = host.Lift(host.Shell.MainMenu);
+        host.Show(menu);
+        if (!host.Shell.AppMenuItem.Focus())
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's arrows weren't measured on it");
+        }
+
+        host.Press(key);
+
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+        Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+    });
+
     /// <summary>The Bases query builder's landing (the sheet opens on its
     /// combinator box): a combo box is its own stop, and it takes every
     /// arrow as a move between its choices.</summary>
