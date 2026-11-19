@@ -1063,6 +1063,53 @@ public partial class MainWindow : IShellRegionHost
     private static bool IsRailArrow(Key key) =>
         key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown;
 
+    /// <summary>
+    /// #2016: two stops whose own arrows WPF judges in the window's directional
+    /// group. The empty pane's stop is the content pane's border itself, and WPF
+    /// judges a stop's arrows in its parent's group (the status bar has a
+    /// Contained border around it for the same reason). The menu bar's logo is
+    /// the bar's one header: it opens its menu on Up and Down and takes neither
+    /// Left nor Right, and the bar's None mode refuses an arrow coming in but
+    /// lets one go out. Until #2016, the welcome view's hidden Open Vault button
+    /// ended WPF's search through the window, so no arrow found a target; once
+    /// it did not, Left on the border reached the Files pane and Right the right
+    /// pane, and Left on the logo reached the rail. An arrow nothing else took
+    /// stays on the stop while the stop itself holds the keys, whatever its
+    /// modifiers, since WPF's navigation takes those too. An arrow chord one of
+    /// the window's key bindings takes is left to the binding: the pane chords
+    /// (Ctrl+Alt+arrows) and Move Tab (Ctrl+Alt+Shift+Left and Right) (Codex
+    /// round 2), while a workspace gives them their commands. An arrow from
+    /// inside the pane or from the logo's menu is theirs to move.
+    /// </summary>
+    private void KeepTheLoneStopsArrows()
+    {
+        ContentPaneBorder.KeyDown += (_, e) => KeepTheArrow(e, ContentPaneBorder);
+        MainMenu.KeyDown += (_, e) => KeepTheArrow(e, AppMenuItem);
+    }
+
+    private void KeepTheArrow(KeyEventArgs e, UIElement stop)
+    {
+        if (ReferenceEquals(e.OriginalSource, stop)
+            && e.Key is Key.Left or Key.Right or Key.Up or Key.Down
+            && !AWindowKeyBindingTakes(e))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Whether one of the window's key bindings takes the press when it
+    /// reaches the window, as WPF's CommandManager decides: a binding counts only
+    /// with a command (InputBindingCollection.FindMatch skips one without, as
+    /// every arrow binding is with no vault open, Workspace being null) that is
+    /// not NotACommand, and its gesture matches. A matched press is handled
+    /// whether or not the command can run (CommandManager.TranslateInput), so
+    /// CanExecute is not asked (merge judge 1).</summary>
+    private bool AWindowKeyBindingTakes(KeyEventArgs e) =>
+        InputBindings.OfType<KeyBinding>().Any(binding =>
+            binding.Command is not null
+            && binding.Command != ApplicationCommands.NotACommand
+            && binding.Gesture?.Matches(this, e) == true);
+
     private bool LandAfterLoadMore()
     {
         if (!PanelReviewList.IsVisible || !PanelReviewList.HasItems || _viewModel.Workspace is not { } workspace)

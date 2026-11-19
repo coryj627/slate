@@ -17,6 +17,7 @@
         AutomationProperties.AutomationId="Slate.MainWindow"
         Background="{DynamicResource Slate.WindowBackgroundBrush}"
         Foreground="{DynamicResource Slate.TextBrush}"
+        FocusManager.FocusedElement="{Binding ElementName=OpenVaultButton}"
         PreviewKeyDown="Window_PreviewKeyDown"
         PreviewKeyUp="Window_PreviewKeyUp"
         PreviewTextInput="Window_PreviewTextInput"
@@ -26,6 +27,10 @@
         SourceInitialized="Window_SourceInitialized"
         Closing="Window_Closing"
         Closed="Window_Closed">
+    <!-- #2016: the window names Open Vault as its focused element, which gives a launch with no
+         vault its keys. The window is a focus scope, so Tab never follows it. On the welcome view,
+         which is not one, it did: WPF's search for the window's first stop went into the hidden
+         button under an open vault, and Tab on the last stop moved nowhere. -->
     <!-- DS-12 (#1813): one 48 row for the title bar and the menus. WindowChrome keeps resize,
          Snap, Win+arrow and Alt+Space native; the caption height follows the row, which grows
          with text size (TitleBar_SizeChanged). Any glass frame, WindowChrome's default
@@ -1026,8 +1031,7 @@
                   Background="{DynamicResource Slate.WindowBackgroundBrush}"
                   AutomationProperties.AutomationId="WelcomeView"
                   AutomationProperties.Name="Welcome"
-                  Visibility="{Binding IsWelcomeVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
-                  FocusManager.FocusedElement="{Binding ElementName=OpenVaultButton}">
+                  Visibility="{Binding IsWelcomeVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <local:AutomationLandmarkGrid.Style>
                     <Style TargetType="{x:Type local:AutomationLandmarkGrid}">
                         <Setter Property="IsEnabled" Value="True" />
@@ -2805,13 +2809,19 @@
                             </StackPanel>
                             <!-- DS-16 (DSD8): the rail is a strip of five icons and More panels,
                                  which holds the other twelve. Arrows move in the strip, and More
-                                 panels is the next Tab stop. A short window scrolls them both. -->
+                                 panels is the next Tab stop. A short window scrolls them both.
+                                 #2016: the strip and More panels judge their own arrows in this
+                                 Contained group, so Down on More panels and Up on the bare strip
+                                 stay in the rail. In the window's group they wrapped to the rail's
+                                 other end once the welcome view's hidden button stopped ending
+                                 WPF's search. -->
                             <ScrollViewer x:Name="RightPaneRailStrip"
                                           Grid.Column="1"
                                           Focusable="False"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
-                                <StackPanel Margin="4">
+                                <StackPanel Margin="4"
+                                            KeyboardNavigation.DirectionalNavigation="Contained">
                                     <ListBox x:Name="RightPaneLeavesList"
                                              KeyboardNavigation.DirectionalNavigation="Contained"
                                              ItemsSource="{Binding StripLeafOptions}"
