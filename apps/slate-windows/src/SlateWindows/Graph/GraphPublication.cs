@@ -86,7 +86,7 @@ internal sealed class GraphPublication
 
     public GraphLoadState State { get; }
 
-    /// <summary>The humanised failure message under ERROR.</summary>
+    /// <summary>The failure's detail under ERROR (FailureDetail.Of).</summary>
     public string? Error { get; }
 
     /// <summary>READY in rule L's sense: a snapshot is held.</summary>

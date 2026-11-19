@@ -891,12 +891,12 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         catch (VaultException exception)
         {
             envelope = new ConnectionsLoadEnvelope(
-                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
+                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, FailureDetail.Of(exception));
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
             envelope = new ConnectionsLoadEnvelope(
-                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
+                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, FailureDetail.Of(exception));
         }
         // The test seam, ONCE per fetch on either path: a park holds the
         // worker here after its crossings, a successful fetch's or a failing
@@ -909,7 +909,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
             envelope = new ConnectionsLoadEnvelope(
-                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
+                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, FailureDetail.Of(exception));
         }
         return EnvelopeForTests is { } rewrite ? rewrite(envelope) : envelope;
     }

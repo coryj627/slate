@@ -85,7 +85,7 @@ internal sealed class GraphConfigStore
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or DecoderFallbackException)
         {
-            string reason = $"{FileName} is unreadable: {exception.Message}";
+            string reason = $"{FileName} is unreadable: {FailureDetail.Of(exception)}";
             HostLog.Write(HostDiagnosticEvent.GraphConfigReadFailed, exception);
             return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: false, Failure: reason);
         }
@@ -162,13 +162,22 @@ internal sealed class GraphConfigStore
         return ReadExisting(store) ?? throw new FileNotFoundException("The vault has no graph config.");
     }
 
-    /// <summary>The host-facing reason for each core refusal (the mac's
-    /// adapter mapping): the parser's message, or the version not downgraded.</summary>
+    /// <summary>The host-facing reason for each core refusal, read from the
+    /// error's typed fields in the words the FFI crate gives the two
+    /// variants (its <c>GraphConfigError</c> Display): the version not
+    /// downgraded, or the parser's reason. Never the binding's Message,
+    /// which is its field dump ("@version=3", "@reason=…"; #1890). The last
+    /// arm cannot run while the binding has these two variants, which a
+    /// fact pins (GraphSearchFailureDetailTests); it says the read arm's
+    /// lead with no dump.</summary>
     internal static string Reason(GraphConfigException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        return exception is GraphConfigException.NewerVersion
-            ? $"{FileName} is a newer version; not downgrading ({exception.Message})"
-            : exception.Message;
+        return exception switch
+        {
+            GraphConfigException.NewerVersion newer => $"{FileName} is a newer version ({newer.@version}); not downgrading",
+            GraphConfigException.Unparseable unparseable => $"{FileName} is unparseable: {unparseable.@reason}",
+            _ => $"{FileName} is unreadable",
+        };
     }
 }

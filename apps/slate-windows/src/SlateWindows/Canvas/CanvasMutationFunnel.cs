@@ -483,7 +483,7 @@ internal sealed class CanvasMutationFunnel(
                 // detail, never silence.
                 outcome = CanvasOperationOutcome.ApplyRefused;
                 announce(new CanvasA11yEvent.CanvasActionFailed(
-                    CanvasFailedAction.CanvasAction, refusal.Message ?? string.Empty));
+                    CanvasFailedAction.CanvasAction, FailureDetail.Of(refusal)));
                 return;
             }
 
