@@ -1040,6 +1040,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         long imagePool = FetchedEmbedImageByteBudget;
         long svgPixels = ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
             ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
+        // #1635 (CD19): the projection's SVG decodes share one deadline, so a
+        // note of slow images costs a refresh at most its 20 seconds of
+        // waiting; past it the rest say so without entering the decoder.
+        EditorInteractionCoordinator.SvgDecodeDeadline svgDeadline =
+            EditorInteractionCoordinator.SvgDecodeDeadline.ForProjection();
         foreach (string key in keys)
         {
             ThrowIfCancelled(cancel);
@@ -1115,7 +1120,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 if (svgPixels <= 0)
                 {
-                    imageDecode = new ReadingEmbedImageDecode(null, null, BudgetRefused: true);
+                    // The pool is spent, so the SVG never enters the decoder;
+                    // but one the decoder remembers as timed out, or one past
+                    // the projection's deadline, still says its own sentence
+                    // (#1635, Codex round 2).
+                    string? refusal = EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(
+                        image.Bytes, svgDeadline);
+                    imageDecode = refusal is null
+                        ? new ReadingEmbedImageDecode(null, null, BudgetRefused: true)
+                        : new ReadingEmbedImageDecode(null, refusal);
                 }
                 else
                 {
@@ -1138,6 +1151,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                             reserved += pixels;
                             return true;
                         },
+                        svgDeadline,
                         out bool budgetSpent,
                         out string? decodeFailure);
                     imageDecode = new ReadingEmbedImageDecode(decoded, decodeFailure, budgetSpent, reserved);
@@ -2357,9 +2371,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
                 DigestResolution(hash, embed.Resolution.Resolution);
             }
-            // #1634: the SVG decode's outcome is identity too. A decode past
-            // its budget or refused at the cap may succeed on the next
-            // refresh, and that refresh must rebuild to show the image.
+            // #1634: the SVG decode's outcome is identity too. A decode refused
+            // at the cap, or one the projection's deadline stopped, may succeed
+            // on the next refresh, and that refresh must rebuild to show the
+            // image. One past its whole budget is remembered (#1635) and says
+            // the same sentence at every refresh.
             DigestField(hash, embed.ImageDecode switch
             {
                 null => "svg-none",

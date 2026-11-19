@@ -8069,10 +8069,11 @@ pub fn code_block_preamble_with_verbosity(
     )
 }
 
-/// The sentence a diagram block shows when a render time budget stopped
-/// it (#1580), and the one an SVG preview's decode budget will (#1581):
-/// `what` is `"diagram"`, `"note"`, `"busy"` or `"image"`. Composed in
-/// core so both hosts show identical text.
+/// The sentence a block shows when a time budget stopped its diagram's
+/// render or its image's decode (#1580, #1581, #1635): `what` selects one of
+/// core's forms, which `core::diagram::render_time_exceeded_message` lists,
+/// and `seconds` is the budget it names. Composed in core so both hosts show
+/// identical text.
 #[uniffi::export]
 pub fn render_time_exceeded_message(what: String, seconds: u64) -> String {
     core::diagram::render_time_exceeded_message(&what, seconds)
