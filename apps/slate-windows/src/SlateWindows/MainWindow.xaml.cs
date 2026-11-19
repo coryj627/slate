@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         KeepLeafKeysThroughPublications();
         GuardRegions();
         WatchRailArrows();
-        KeepTheEmptyPaneStopsArrows();
+        KeepTheLoneStopsArrows();
         // W7-7 PR 8 (R-10, OD-12): the one editor landing this window holds,
         // and its window-level cancellations — the window losing activation,
         // and WPF's restore when it comes back (no one's move).

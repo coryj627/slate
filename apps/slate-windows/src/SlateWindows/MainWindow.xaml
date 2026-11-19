@@ -2809,13 +2809,19 @@
                             </StackPanel>
                             <!-- DS-16 (DSD8): the rail is a strip of five icons and More panels,
                                  which holds the other twelve. Arrows move in the strip, and More
-                                 panels is the next Tab stop. A short window scrolls them both. -->
+                                 panels is the next Tab stop. A short window scrolls them both.
+                                 #2016: the strip and More panels judge their own arrows in this
+                                 Contained group, so Down on More panels and Up on the bare strip
+                                 stay in the rail. In the window's group they wrapped to the rail's
+                                 other end once the welcome view's hidden button stopped ending
+                                 WPF's search. -->
                             <ScrollViewer x:Name="RightPaneRailStrip"
                                           Grid.Column="1"
                                           Focusable="False"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
-                                <StackPanel Margin="4">
+                                <StackPanel Margin="4"
+                                            KeyboardNavigation.DirectionalNavigation="Contained">
                                     <ListBox x:Name="RightPaneLeavesList"
                                              KeyboardNavigation.DirectionalNavigation="Contained"
                                              ItemsSource="{Binding StripLeafOptions}"

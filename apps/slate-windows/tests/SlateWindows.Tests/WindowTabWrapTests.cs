@@ -116,6 +116,61 @@ public sealed class WindowTabWrapTests
         Assert.Empty(changes);
     });
 
+    /// <summary>The menu bar's logo is the bar's one header: Up and Down open its menu, and
+    /// Left and Right have nowhere to go. The bar's None mode refuses an arrow coming in but
+    /// not one going out, so WPF judged them in the window's group; the hidden Open Vault
+    /// button's dead end had kept them, and without it Right reached the editor panes and
+    /// Left the rail. Both stay on the logo.</summary>
+    [Theory]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Right)]
+    public void TheMenuBarsLogoKeepsLeftAndRight(Key key) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.OpenPath("note.md");
+        host.Settle();
+        if (((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { }) == ShellRegionLanding.Refused)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's arrows weren't measured on it");
+        }
+
+        host.Settle();
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        Press(host, key);
+
+        Assert.True(
+            ReferenceEquals(host.Shell.AppMenuItem, Keyboard.FocusedElement),
+            $"{key} on the menu bar's logo moved the keys to {Describe(Keyboard.FocusedElement)}");
+        Assert.Empty(changes);
+        Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+    });
+
+    /// <summary>Ctrl+Alt+arrows on the logo are still the window's pane chords: the logo's
+    /// key handler keeps only what WPF's navigation would take, and Ctrl+Alt+Left goes on to
+    /// the window's binding, which asks for the Files pane, the edge to the left.</summary>
+    [Fact]
+    public void ThePaneChordsStillRunFromTheLogo() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.OpenPath("note.md");
+        host.Settle();
+        if (((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { }) == ShellRegionLanding.Refused)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's chords weren't measured on it");
+        }
+
+        host.Settle();
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+        WorkspaceFocusBoundary? boundary = null;
+        host.Workspace.FocusBoundaryRequested += (_, requested) => boundary = requested;
+
+        CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Control | ModifierKeys.Alt, () => Press(host, Key.Left));
+
+        Assert.Equal(WorkspaceFocusBoundary.Files, boundary);
+    });
+
     /// <summary>Ctrl+Alt+arrows on the empty pane's stop are still the window's pane chords
     /// (its preview route takes them before the stop's own key handler): Ctrl+Alt+Left asks
     /// for the Files pane, the edge to its left.</summary>
@@ -153,6 +208,66 @@ public sealed class WindowTabWrapTests
             $"Down on the onboarding line left the keys on {Describe(landed)}");
     });
 
+    /// <summary>The rail's ends: Down on More panels, the rail's foot, and Up on the bare strip
+    /// when its first row is its current one, its head, have nowhere to go in the rail. The
+    /// window's Cycle wrapped them to the rail's other end once the hidden Open Vault button no
+    /// longer ended WPF's search; the rail's own Contained group keeps them. A vault opened
+    /// through the lifecycle, so the rail is laid out as it is in use.</summary>
+    [Theory]
+    [InlineData("More panels", Key.Down)]
+    [InlineData("the strip", Key.Up)]
+    public void TheRailKeepsTheArrowsAtItsEnds(string stop, Key key) => RunSta(() =>
+    {
+        using var shell = OpenTheFixtureVault();
+        UIElement held = stop == "More panels" ? shell.Shell.RightPaneMorePanelsButton : shell.Shell.RightPaneLeavesList;
+        if (held is ListBox strip)
+        {
+            // The bare strip's own Up moves to its first row and makes it the current one.
+            Assert.True(strip.Focus(), "premise: the strip refused the keys");
+            shell.Settle();
+            Press(shell.Shell, shell.Settle, Key.Up);
+            Assert.True(
+                ReferenceEquals(strip.ItemContainerGenerator.ContainerFromIndex(0), Keyboard.FocusedElement),
+                $"premise: Up on the bare strip went to {Describe(Keyboard.FocusedElement)}, not its first row");
+        }
+
+        Assert.True(held.Focus() && ReferenceEquals(held, Keyboard.FocusedElement), $"premise: {stop} refused the keys");
+        shell.Settle();
+
+        Press(shell.Shell, shell.Settle, key);
+
+        Assert.True(
+            ReferenceEquals(held, Keyboard.FocusedElement),
+            $"{key} on {stop} moved the keys to {Describe(Keyboard.FocusedElement)}");
+    });
+
+    /// <summary>Up on More panels still enters the strip, on its open panel's row, as it did
+    /// before #2016: the rail's group keeps its ends, not its own arrows.</summary>
+    [Fact]
+    public void UpOnMorePanelsStillEntersTheStrip() => RunSta(() =>
+    {
+        using var shell = OpenTheFixtureVault();
+        Assert.True(shell.Shell.RightPaneMorePanelsButton.Focus(), "premise: More panels refused the keys");
+        shell.Settle();
+
+        Press(shell.Shell, shell.Settle, Key.Up);
+
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem && shell.Shell.RightPaneLeavesList.IsKeyboardFocusWithin,
+            $"Up on More panels left the keys on {Describe(Keyboard.FocusedElement)}");
+    });
+
+    private static WelcomeShell OpenTheFixtureVault()
+    {
+        var shell = new WelcomeShell();
+        shell.ReleaseParks();
+        shell.Lifecycle.OpenVaultCommand.Execute(null);
+        shell.WaitForTheOpenToEnd();
+        Assert.True(shell.Lifecycle.IsVaultOpen, "premise: the fixture vault did not open");
+        Assert.True(shell.Shell.RightPaneMorePanelsButton.IsVisible, "premise: the rail is not shown");
+        return shell;
+    }
+
     private static void OpenTheBoard(ShownShell host)
     {
         host.Workspace.OpenPath("board.canvas");
@@ -171,14 +286,16 @@ public sealed class WindowTabWrapTests
 
     private static void PressTab(ShownShell host) => Press(host, Key.Tab);
 
-    private static void Press(ShownShell host, Key key)
+    private static void Press(ShownShell host, Key key) => Press(host.Shell, host.Settle, key);
+
+    private static void Press(MainWindow shell, Action settle, Key key)
     {
         InputManager.Current.ProcessInput(new KeyEventArgs(
-            Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, key)
+            Keyboard.PrimaryDevice, PresentationSource.FromVisual(shell)!, Environment.TickCount, key)
         {
             RoutedEvent = Keyboard.PreviewKeyDownEvent,
         });
-        host.Settle();
+        settle();
     }
 
     private static string Describe(IInputElement? element) => element is FrameworkElement framework
