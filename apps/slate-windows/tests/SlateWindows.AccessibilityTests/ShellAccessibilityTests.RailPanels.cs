@@ -9,6 +9,23 @@ namespace SlateWindows.AccessibilityTests;
 
 public sealed partial class ShellAccessibilityTests
 {
+    /// <summary>#1849's class on the rail: More panels lands its open panel's row, or its
+    /// first, on every open, and a pointer resting where its rows appear took the keys from
+    /// it (step 0, 4 of 4). With the keys on the button and the pointer resting on another
+    /// row, Enter leaves them on the landing row.</summary>
+    [Fact]
+    public void MorePanels_APointerRestingWhereItOpensLeavesTheKeysOnTheLandingRow() =>
+        RunRestingPointerJourney("more-panels-resting-pointer", (process, window, automation, said) =>
+            AssertALandingRowStaysUnderARestingPointer(
+                process,
+                window,
+                automation,
+                "RightPaneMorePanels",
+                "More panels",
+                ["RightPaneMorePanels."],
+                rows => rows.FirstOrDefault(IsToggledOn) ?? rows[0],
+                said));
+
     /// <summary>DS-16: opens a right-pane panel the way a reader does. A panel in the
     /// strip by its row; one of the other twelve through More panels and its menu's
     /// row, which a toggle picks as a click does. Returns once the panel is open: the

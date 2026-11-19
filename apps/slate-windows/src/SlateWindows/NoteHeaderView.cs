@@ -524,9 +524,13 @@ internal sealed class NoteHeaderView : Grid
     /// <summary>Makes a button open its menu under it. Opened without a pointer (the keyboard,
     /// or the button's Invoke pattern, as a screen reader's object navigation does) the menu
     /// lands on its first row, as a Windows menu does: WPF leaves the keys on the menu itself,
-    /// and a reader hears only "menu". A pointer's click is told by the button's own mouse-up,
-    /// which comes just before its Click, and forgotten once that input is done: the most
-    /// recent input device stays the mouse through a later Invoke.</summary>
+    /// and a reader hears only "menu". Such an open holds the rows from a pointer resting where
+    /// they appear (#1849), so the row under it can't take the keys from the first. A
+    /// pointer's click is told by the button's own mouse-up, which comes just before its Click,
+    /// and forgotten once that input is done: the most recent input device stays the mouse
+    /// through a later Invoke. Shift+F10 and the Apps key on the button would reach WPF's
+    /// context menu service, which opens the menu with the keys on the menu itself, so they
+    /// open it here as Enter does; a right-click still opens it as WPF does, holding nothing.</summary>
     private static void OpensItsMenu(Button owner)
     {
         bool byPointer = false;
@@ -535,7 +539,29 @@ internal sealed class NoteHeaderView : Grid
             byPointer = true;
             owner.Dispatcher.BeginInvoke(DispatcherPriority.Input, () => byPointer = false);
         };
-        owner.Click += (_, _) =>
+        owner.Click += (_, _) => Open(byPointer);
+        // The keys' request carries no place (-1, -1); a right-click's carries the pointer's.
+        owner.ContextMenuOpening += (_, request) =>
+        {
+            if (owner.ContextMenu is not { } menu)
+            {
+                return;
+            }
+
+            if (request.CursorLeft < 0 && request.CursorTop < 0)
+            {
+                request.Handled = true;
+                Open(withPointer: false);
+            }
+            else if (IsWithin(request.OriginalSource as DependencyObject, owner))
+            {
+                // A right-click on the button: WPF opens the menu, and a pointer's open holds
+                // nothing, so a keys' open whose close is still fading gives its rows back now.
+                RestingPointerHold.Release(menu);
+            }
+        };
+
+        void Open(bool withPointer)
         {
             if (owner.ContextMenu is not { } menu)
             {
@@ -544,12 +570,36 @@ internal sealed class NoteHeaderView : Grid
 
             menu.PlacementTarget = owner;
             menu.Placement = PlacementMode.Bottom;
+            if (withPointer)
+            {
+                // A keys' open whose close is still fading has not given its rows back yet.
+                RestingPointerHold.Release(menu);
+            }
+            else
+            {
+                menu.Closed -= ReleaseTheRows;
+                menu.Closed += ReleaseTheRows;
+                RestingPointerHold.Begin(menu, menu.Items.OfType<MenuItem>());
+            }
+
             menu.IsOpen = true;
-            if (!byPointer)
+            if (!withPointer)
             {
                 menu.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => menu.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled)?.Focus());
             }
-        };
+        }
+    }
+
+    /// <summary>The menu's close gives its rows back. A context menu's popup fades out (WPF sets
+    /// its animation from the system's menu animation, whatever the menu's style says) and
+    /// raises Closed only when the fade ends. By then the menu can be open again and holding for
+    /// that open, so a close is taken only from a menu that is shut.</summary>
+    private static void ReleaseTheRows(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is ContextMenu { IsOpen: false } menu)
+        {
+            RestingPointerHold.Release(menu);
+        }
     }
 
     private (RadioButton Choice, TextBlock Label, FrameworkElement Glyph) Choice(string automationId, string label, string glyph, string group)

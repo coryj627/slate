@@ -78,63 +78,15 @@ public partial class MainWindow
         return true;
     }
 
-    /// <summary>Where the pointer rested when the keys opened the menu, while it hasn't moved
-    /// since; null otherwise.</summary>
-    private NativePointer.Point? _restingPointer;
-
     /// <summary>#1939: the keys open the menu on its first row, and a pointer resting where the
-    /// popup appears mustn't take them. When a popup appears under a resting pointer WPF finds
-    /// a row under it and hovers it, and a hovered row takes the keys and the selection (and a
-    /// hovered menu's row opens its menu); WPF's own guard (a <see cref="MenuItem"/>'s
-    /// ignore-mouse flag) lapses at Background priority, so on a slow machine the row under the
-    /// pointer took the keys, Exit among them. While the keys hold the menu and the pointer
-    /// rests, the rows are out of hit testing, so nothing hovers. A move gives them back; so
-    /// does a press, which then re-reads what is under the pointer, and the release works that
-    /// row as a menu's press-and-release does; and so does the menu closing.</summary>
+    /// popup appears mustn't take them (<see cref="RestingPointerHold"/>, which says why). The
+    /// open menu holds the mouse, so every move and press reaches the bar's own route, over the
+    /// popups or not; and the popup's own close gives the rows back.</summary>
     private void HoldTheRestingPointer()
     {
-        if (!NativePointer.GetCursorPos(out NativePointer.Point at))
-        {
-            return;
-        }
-
-        if (_restingPointer is null)
-        {
-            // The open menu holds the mouse, so every move and press reaches the bar's own
-            // route, over the popups or not.
-            MainMenu.PreviewMouseMove += ReleaseThePointerOnceItMoves;
-            MainMenu.PreviewMouseDown += ReleaseThePointerOnAPress;
-            AppMenuItem.SubmenuClosed += ReleaseThePointerWhenTheMenuCloses;
-        }
-
-        _restingPointer = at;
-        foreach (MenuItem row in RowsOf(AppMenuItem))
-        {
-            row.IsHitTestVisible = false;
-        }
-    }
-
-    private void ReleaseThePointerOnceItMoves(object sender, MouseEventArgs e)
-    {
-        if (_restingPointer is { } rested
-            && NativePointer.GetCursorPos(out NativePointer.Point now)
-            && (now.X != rested.X || now.Y != rested.Y))
-        {
-            ReleaseThePointer();
-        }
-    }
-
-    private void ReleaseThePointerOnAPress(object sender, MouseButtonEventArgs e)
-    {
-        if (_restingPointer is null)
-        {
-            return;
-        }
-
-        ReleaseThePointer();
-        // The press went where the rows weren't; now they're back, the row under the pointer
-        // is read again before the release, which a menu's row answers.
-        Mouse.Synchronize();
+        AppMenuItem.SubmenuClosed -= ReleaseThePointerWhenTheMenuCloses;
+        AppMenuItem.SubmenuClosed += ReleaseThePointerWhenTheMenuCloses;
+        RestingPointerHold.Begin(MainMenu, RowsOf(AppMenuItem));
     }
 
     private void ReleaseThePointerWhenTheMenuCloses(object sender, RoutedEventArgs e)
@@ -142,24 +94,8 @@ public partial class MainWindow
         // A menu inside the popup closing bubbles here too; only the popup's own close counts.
         if (!AppMenuItem.IsSubmenuOpen)
         {
-            ReleaseThePointer();
-        }
-    }
-
-    private void ReleaseThePointer()
-    {
-        if (_restingPointer is null)
-        {
-            return;
-        }
-
-        _restingPointer = null;
-        MainMenu.PreviewMouseMove -= ReleaseThePointerOnceItMoves;
-        MainMenu.PreviewMouseDown -= ReleaseThePointerOnAPress;
-        AppMenuItem.SubmenuClosed -= ReleaseThePointerWhenTheMenuCloses;
-        foreach (MenuItem row in RowsOf(AppMenuItem))
-        {
-            row.ClearValue(IsHitTestVisibleProperty);
+            AppMenuItem.SubmenuClosed -= ReleaseThePointerWhenTheMenuCloses;
+            RestingPointerHold.Release(MainMenu);
         }
     }
 
@@ -174,19 +110,5 @@ public partial class MainWindow
                 yield return inner;
             }
         }
-    }
-
-    private static class NativePointer
-    {
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        internal struct Point
-        {
-            public int X;
-            public int Y;
-        }
-
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-        internal static extern bool GetCursorPos(out Point point);
     }
 }

@@ -3,10 +3,14 @@
 
 using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
+using Point = System.Drawing.Point;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace SlateWindows.AccessibilityTests;
 
@@ -123,4 +127,485 @@ public sealed partial class ShellAccessibilityTests
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
+
+    /// <summary>How long the keys must stay on a menu's landing row with the pointer resting
+    /// over another: step 0 saw the row under the pointer take them 130 to 151 ms after the
+    /// landing, every time.</summary>
+    private static readonly TimeSpan RestingPointerKeysStay = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>⋯'s rows.</summary>
+    private static readonly string[] MoreRowIds = ["NoteHeaderSplitRight", "NoteHeaderAddProperty", "NoteHeaderBulkRename"];
+
+    /// <summary>#1849's steps: Lecture split right from ⋯, Alpha opened in the right pane, the
+    /// keys in its editor. Then the left ⋯ opens with the pointer resting on its last row, by
+    /// one of four doors: its Invoke pattern (a reader's object navigation, with the keys in
+    /// the right pane's editor), or Enter, Shift+F10 or the Apps key with the keys on ⋯. The
+    /// keys land on Split Right and stay, while the row under the pointer is Bulk Rename
+    /// Properties… in the open being measured, and Down goes on from Split Right. On main the
+    /// row under the pointer took them (step 0, 5 of 5), and the two keys' opens landed no row
+    /// at all.</summary>
+    [Theory]
+    [InlineData("invoke")]
+    [InlineData("enter")]
+    [InlineData("shift-f10")]
+    [InlineData("apps")]
+    public void NoteHeader_APointerRestingWhereItsMenuOpensLeavesTheKeysOnTheFirstRow(string door) =>
+        RunRestingPointerJourney($"note-header-resting-pointer-{door}", (process, window, automation, said) =>
+        {
+            QuickOpen(window, automation, "Lecture", VirtualKeyShort.RETURN);
+            AssertEventuallyFocused(WaitForEditor(window, automation, "Lecture.md editor", TimeSpan.FromSeconds(10)), "Quick Open didn't land in Lecture.");
+            AutomationElement only = WaitForElement(window, "NoteHeaderMore", TimeSpan.FromSeconds(10));
+            only.Patterns.Invoke.Pattern.Invoke();
+            WaitForOpenMenuRow(window, automation, "NoteHeaderSplitRight").Patterns.Invoke.Pattern.Invoke();
+            AutomationElement[] editors = [];
+            Assert.True(
+                Retry.WhileFalse(() => (editors = Editors(window, automation)).Length == 2, TimeSpan.FromSeconds(10)).Success,
+                $"Split Right made {editors.Length} editors, not 2.");
+            editors[^1].Focus();
+            AssertEventuallyFocused(editors[^1], "the right pane's editor didn't take the keys.");
+            QuickOpen(window, automation, "Alpha", VirtualKeyShort.RETURN);
+            AutomationElement alpha = WaitForEditor(window, automation, "Alpha.md editor", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(alpha, "Quick Open didn't land in Alpha.");
+            editors = Editors(window, automation);
+            Assert.True(
+                editors.Length == 2 && editors[^1].Equals(alpha),
+                $"Alpha didn't open in the right pane: the editors are {string.Join(", ", editors.Select(DescribeForDiagnosis))}.");
+
+            AutomationElement more = WaitForLeftmost(window, automation, "NoteHeaderMore");
+            Assert.False(more.IsOffscreen, $"the left pane's ⋯ is off the screen. {said}");
+            Point resting = RestingPlaceOn(
+                window,
+                automation,
+                () => more.Patterns.Invoke.Pattern.Invoke(),
+                MoreRowIds,
+                rows => rows.Single(row => row.AutomationId == "NoteHeaderBulkRename"));
+
+            (string How, Action PutTheKeys, Action Open) chosen = door switch
+            {
+                "invoke" => ("its Invoke pattern, with the keys in the right pane's editor", () => FocusFor(alpha), () => more.Patterns.Invoke.Pattern.Invoke()),
+                "enter" => ("Enter on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.RETURN)),
+                "shift-f10" => ("Shift+F10 on ⋯", () => FocusFor(more), () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
+                "apps" => ("the Apps key on ⋯", () => FocusFor(more), () => PressKey(VirtualKeyShort.APPS)),
+                _ => throw new ArgumentOutOfRangeException(nameof(door), door, "no such door"),
+            };
+            (string how, Action putTheKeys, Action open) = chosen;
+            putTheKeys();
+            RestThePointerAt(resting);
+            open();
+            string context = $"⋯ opened by {how}, the pointer resting on Bulk Rename Properties… at {resting}. {said}";
+            AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, "NoteHeaderSplitRight"), context);
+            // The census sees the open menu's rows, held, under the resting pointer.
+            AssertItemNamesAreSpeakable(process, $"note-header-resting-pointer-{door}");
+
+            // The pointer rests on Bulk Rename Properties… where it settled in this open, so the
+            // row under it had its chance to take the keys.
+            Rectangle settled = SettledBoundsOf(WaitForOpenMenuRow(window, automation, "NoteHeaderBulkRename"));
+            Assert.True(
+                settled.Contains(resting),
+                $"Bulk Rename Properties… settled at {settled} in this open, not under the pointer resting at {resting}: {context}");
+            Assert.Equal(resting, Mouse.Position);
+            PressKey(VirtualKeyShort.DOWN);
+            AssertEventuallyFocused(WaitForOpenMenuRow(window, automation, "NoteHeaderAddProperty"), $"Down from Split Right didn't reach Add Property…: {context}");
+            CloseOpenMenu(window, automation, "NoteHeaderSplitRight");
+        });
+    /// <summary>#1849's hold gives the rows back to the pointer: with ⋯ open over a resting
+    /// pointer, a move within the row under it gives that row the keys, and a click with the
+    /// pointer still resting works the row (Bulk Rename's sheet opens). Nothing is held on
+    /// main, so this passes there too; it pins the hold's releases.</summary>
+    [Fact]
+    public void NoteHeader_AMovedPointerHoversAndAStillClickWorksTheRow() =>
+        RunRestingPointerJourney("note-header-moved-pointer", (process, window, automation, said) =>
+        {
+            QuickOpen(window, automation, "Lecture", VirtualKeyShort.RETURN);
+            AutomationElement editor = WaitForEditor(window, automation, "Lecture.md editor", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(editor, "Quick Open didn't land in Lecture.");
+            AutomationElement more = WaitForElement(window, "NoteHeaderMore", TimeSpan.FromSeconds(10));
+            Point resting = RestingPlaceOn(
+                window,
+                automation,
+                () => more.Patterns.Invoke.Pattern.Invoke(),
+                MoreRowIds,
+                rows => rows.Single(row => row.AutomationId == "NoteHeaderBulkRename"));
+
+            // A move within the row under the pointer gives it the keys.
+            FocusFor(editor);
+            RestThePointerAt(resting);
+            more.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement bulkRename = WaitForOpenMenuRow(window, automation, "NoteHeaderBulkRename");
+            AssertRestingOn(window, automation, "NoteHeaderBulkRename", resting, $"⋯ opened by its Invoke pattern for the move. {said}");
+            Mouse.Position = resting with { X = resting.X + 4 };
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Mouse.Position = resting with { X = resting.X + 8 };
+            AssertEventuallyFocused(bulkRename, $"Moving the pointer within Bulk Rename Properties… didn't give it the keys. {said}");
+            AssertItemNamesAreSpeakable(process, "note-header-moved-pointer");
+            CloseOpenMenu(window, automation, "NoteHeaderSplitRight");
+
+            // A click with the pointer still resting works the row under it.
+            FocusFor(editor);
+            RestThePointerAt(resting);
+            more.Patterns.Invoke.Pattern.Invoke();
+            AssertRestingOn(window, automation, "NoteHeaderBulkRename", resting, $"⋯ opened by its Invoke pattern for the still click. {said}");
+            Mouse.Click();
+            Assert.True(
+                TryWaitForElement(window, "BulkRenameSheet", TimeSpan.FromSeconds(10)) is not null,
+                $"A click on Bulk Rename Properties… with the pointer resting didn't open its sheet. {said}");
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "BulkRenameSheet");
+        });
+
+    /// <summary>A journey for the resting-pointer facts: a vault of three notes, the window
+    /// sized as <see cref="NoteHeader_NamesKeysAndAxe_AreClean"/> sizes it (a CI screen is
+    /// about 1044 wide, so there it is the screen's), the pointer away from every menu, and
+    /// the pointer at (0, 0) at the end, as #1944's fact leaves it. The journey is handed a
+    /// line that says whether Windows animations were on and where the window was, which
+    /// each failure carries.</summary>
+    private static void RunRestingPointerJourney(string name, Action<Process, Window, UIA3Automation, string> journey)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"slate-{name}-{Guid.NewGuid():N}");
+        string vault = Path.Combine(root, "Vault");
+        string device = Path.Combine(root, "device");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(Path.Combine(vault, "notes"));
+        Directory.CreateDirectory(device);
+        File.WriteAllText(Path.Combine(vault, "notes", "Lecture.md"), "# Lecture\n\nA line.\n");
+        File.WriteAllText(Path.Combine(vault, "Alpha.md"), "# Alpha\n\nA line.\n");
+        File.WriteAllText(Path.Combine(vault, "Beta.md"), "# Beta\n\nA line.\n");
+        Process? process = null;
+        try
+        {
+            using var automation = new UIA3Automation();
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.Environment[ShellLaunch.Variable] = device;
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"{name}-{Guid.NewGuid():N}";
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            start.ArgumentList.Add(vault);
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, name))
+            {
+                return;
+            }
+
+            Mouse.Position = new Point(0, 0);
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            double scale = NoteHeaderDpiForWindow(window.Properties.NativeWindowHandle.Value) / 96.0;
+            window.Patterns.Transform.Pattern.Resize(1500 * scale, 820 * scale);
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            WaitForTreeItemStartingWith(tree, automation, "Alpha.md");
+            string said = $"Windows animations were {(ClientAreaAnimationIsOn() ? "on" : "off")}; the window was at {window.BoundingRectangle} "
+                + $"at {scale * 100:F0}% on a desktop at {automation.GetDesktop().BoundingRectangle}.";
+            TestContext.Current.TestOutputHelper?.WriteLine($"{name}: {said}");
+            journey(process, window, automation, said);
+        }
+        catch (Exception exception) when (exception is not Xunit.Sdk.SkipException)
+        {
+            PreserveEvidence(name, logs);
+            throw;
+        }
+        finally
+        {
+            // A pointer left over the window is how the job VMs met #1939.
+            Mouse.Position = new Point(0, 0);
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            process?.WaitForExit(10_000);
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>Opens a menu with the pointer away from it, reads where its rows settle, and
+    /// answers the centre of the row <paramref name="pick"/> chooses, once that row is whole on
+    /// the screen and the place the pointer waited at is inside none of the rows. The menu is
+    /// closed again.</summary>
+    private static Point RestingPlaceOn(
+        Window window, UIA3Automation automation, Action open, string[] rowIds, Func<AutomationElement[], AutomationElement> pick)
+    {
+        Mouse.Position = new Point(0, 0);
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        open();
+        AutomationElement[] rows = OpenMenuRows(window, automation, rowIds);
+        Rectangle[] bounds = [.. rows.Select(SettledBoundsOf)];
+        AutomationElement target = pick(rows);
+        Rectangle place = bounds[Array.FindIndex(rows, row => row.Equals(target))];
+        Rectangle screen = automation.GetDesktop().BoundingRectangle;
+        Assert.True(
+            !target.IsOffscreen && screen.Contains(place),
+            $"{DescribeForDiagnosis(target)} isn't whole on the screen: it is at {place} on a desktop at {screen}.");
+        Assert.DoesNotContain(bounds, row => row.Contains(Mouse.Position));
+        CloseOpenMenu(window, automation, rowIds[0]);
+        return place.Center();
+    }
+
+    /// <summary>The row <paramref name="rowId"/> settled under the still pointer in the open being
+    /// measured, not only in the open that found where to park it, so the row under the pointer
+    /// has its chance to take the keys.</summary>
+    private static void AssertRestingOn(Window window, UIA3Automation automation, string rowId, Point resting, string context)
+    {
+        Rectangle settled = SettledBoundsOf(WaitForOpenMenuRow(window, automation, rowId));
+        Assert.True(
+            settled.Contains(resting),
+            $"{rowId} settled at {settled} in this open, not under the pointer resting at {resting}: {context}");
+        Assert.Equal(resting, Mouse.Position);
+    }
+
+    /// <summary>Puts the pointer at <paramref name="place"/> and lets it rest there.</summary>
+    private static void RestThePointerAt(Point place)
+    {
+        Mouse.Position = place;
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        Assert.Equal(place, Mouse.Position);
+    }
+
+    private static void FocusFor(AutomationElement element)
+    {
+        element.Focus();
+        AssertEventuallyFocused(element, $"{DescribeForDiagnosis(element)} didn't take the keys.");
+    }
+
+    /// <summary>The keys land on <paramref name="row"/> and are still there every time they're
+    /// read for <see cref="RestingPointerKeysStay"/>.</summary>
+    private static void AssertTheKeysStayOn(UIA3Automation automation, AutomationElement row, string context)
+    {
+        // Where the keys were at each read until they land, so a miss names the row that took them.
+        var held = new List<string>();
+        bool landed = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    string now = DescribeForDiagnosis(automation.FocusedElement());
+                    if (held.Count < 64 && (held.Count == 0 || held[^1] != now))
+                    {
+                        held.Add(now);
+                    }
+
+                    return row.Properties.HasKeyboardFocus.ValueOrDefault;
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10));
+        if (!landed)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The keys never landed on {DescribeForDiagnosis(row)}; they were on {string.Join(" -> ", held)}: {context} {FocusDiagnosis()}");
+        }
+
+        var clock = Stopwatch.StartNew();
+        while (clock.Elapsed < RestingPointerKeysStay)
+        {
+            AutomationElement? focused;
+            try
+            {
+                focused = automation.FocusedElement();
+            }
+            catch (Exception exception) when (IsTransientUiaFault(exception))
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
+            if (focused is null || !focused.Equals(row))
+            {
+                throw new Xunit.Sdk.XunitException(
+                    $"The keys left {DescribeForDiagnosis(row)} for {DescribeForDiagnosis(focused)} {clock.ElapsedMilliseconds} ms after they "
+                    + $"landed: {context}");
+            }
+
+            Thread.Sleep(50);
+        }
+    }
+
+    /// <summary>The open menu's row <paramref name="rowId"/>. A context menu is its own HWND, so
+    /// it is found from the desktop, in this process.</summary>
+    private static AutomationElement WaitForOpenMenuRow(Window window, UIA3Automation automation, string rowId) =>
+        WaitForOpenMenuRow(window, automation, automation.ConditionFactory.ByAutomationId(rowId), rowId);
+
+    private static AutomationElement WaitForOpenMenuRow(Window window, UIA3Automation automation, ConditionBase id, string said)
+    {
+        AutomationElement? row = null;
+        Assert.True(
+            SpinWait.SpinUntil(() => (row = FindOpenMenuRow(window, automation, id)) is not null, TimeSpan.FromSeconds(10)),
+            $"No open menu has a row {said}.");
+        return row!;
+    }
+
+    private static AutomationElement? FindOpenMenuRow(Window window, UIA3Automation automation, string rowId) =>
+        FindOpenMenuRow(window, automation, automation.ConditionFactory.ByAutomationId(rowId));
+
+    private static AutomationElement? FindOpenMenuRow(Window window, UIA3Automation automation, ConditionBase id)
+    {
+        try
+        {
+            return automation.GetDesktop()
+                .FindAllChildren(automation.ConditionFactory.ByProcessId(window.Properties.ProcessId.Value))
+                .Select(top => top.FindFirstDescendant(automation.ConditionFactory.ByControlType(ControlType.MenuItem).And(id)))
+                .FirstOrDefault(row => row is not null);
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Sort and group's and More panels' fact: a menu built at each open that lands
+    /// its <paramref name="landing"/> row on every open. With the pointer away, it reads the
+    /// rows, where they settle and every toggle; then, with the keys on the button and the
+    /// pointer resting on the last whole row that isn't the landing one, Enter: the keys
+    /// land and stay, a move within the row under the pointer gives it the keys, Escape
+    /// gives the button the keys back, and every toggle is as it was.</summary>
+    private static void AssertALandingRowStaysUnderARestingPointer(
+        Process process,
+        Window window,
+        UIA3Automation automation,
+        string buttonId,
+        string menuName,
+        string[] rowIds,
+        Func<AutomationElement[], AutomationElement> landing,
+        string said)
+    {
+        AutomationElement button = WaitForElement(window, buttonId, TimeSpan.FromSeconds(10));
+        Assert.False(button.IsOffscreen, $"{menuName}'s button is off the screen. {said}");
+        // Its rows, where they settle and their toggles, with the pointer away from them.
+        Mouse.Position = new Point(0, 0);
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        button.Patterns.Invoke.Pattern.Invoke();
+        AutomationElement[] rows = OpenMenuRows(window, automation, rowIds);
+        Rectangle[] bounds = [.. rows.Select(SettledBoundsOf)];
+        string[] before = ToggleStatesOf(rows);
+        string table = string.Join("; ", rows.Select((row, index) => $"{DescribeForDiagnosis(row)} {before[index]} at {bounds[index]}"));
+        TestContext.Current.TestOutputHelper?.WriteLine($"{menuName}'s rows: {table}");
+        AutomationElement? land = null;
+        try
+        {
+            land = landing(rows);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert.True(land is not null, $"{menuName} has no row to land on among {table}. {said}");
+        string landId = land.AutomationId;
+        Rectangle screen = automation.GetDesktop().BoundingRectangle;
+        int parked = -1;
+        for (int index = rows.Length - 1; index >= 0 && parked < 0; index--)
+        {
+            if (!rows[index].Equals(land) && !rows[index].IsOffscreen && screen.Contains(bounds[index]))
+            {
+                parked = index;
+            }
+        }
+
+        Assert.True(
+            parked >= 0,
+            $"{menuName} has no row but its landing row whole on the screen: {string.Join("; ", rows.Select((row, index) => $"{DescribeForDiagnosis(row)} at {bounds[index]}"))}. {said}");
+        Assert.DoesNotContain(bounds, row => row.Contains(Mouse.Position));
+        string parkedId = rows[parked].AutomationId;
+        string parkedName = rows[parked].Name;
+        Point resting = bounds[parked].Center();
+        CloseOpenMenu(window, automation, landId);
+
+        // The keys on the button, the pointer resting on that row, and Enter.
+        FocusFor(button);
+        RestThePointerAt(resting);
+        PressKey(VirtualKeyShort.RETURN);
+        string context = $"{menuName} opened by Enter, the pointer resting on '{parkedName}' at {resting}. {said}";
+        AssertRestingOn(window, automation, parkedId, resting, context);
+        AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, landId), context);
+        AssertItemNamesAreSpeakable(process, $"{buttonId}-resting-pointer");
+        Assert.Equal(resting, Mouse.Position);
+
+        // A move within that row gives it the keys.
+        Mouse.Position = resting with { X = resting.X + 4 };
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        Mouse.Position = resting with { X = resting.X + 8 };
+        AssertEventuallyFocused(WaitForOpenMenuRow(window, automation, parkedId), $"Moving the pointer within '{parkedName}' didn't give it the keys: {context}");
+        CloseOpenMenu(window, automation, landId);
+        AssertEventuallyFocused(button, $"Escape from {menuName} didn't give its button the keys back. {said}");
+
+        // Every toggle as it was.
+        Mouse.Position = new Point(0, 0);
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        button.Patterns.Invoke.Pattern.Invoke();
+        WaitForOpenMenuRow(window, automation, landId);
+        string[] after = ToggleStatesOf(OpenMenuRows(window, automation, rowIds));
+        CloseOpenMenu(window, automation, landId);
+        Assert.Equal(before, after);
+    }
+
+    private static string[] ToggleStatesOf(AutomationElement[] rows) =>
+        [.. rows.Select(row => $"{row.Name}={row.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault}")];
+
+    private static bool IsToggledOn(AutomationElement row) =>
+        row.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault == ToggleState.On;
+
+    /// <summary>The open menu's rows from top to bottom: every row in this process's windows
+    /// whose id starts with one of <paramref name="rowIds"/>. Asked of a row's parent, the
+    /// list left out the menu's first row (Sort and group's Name (A to Z), More panels'
+    /// Embeds).</summary>
+    private static AutomationElement[] OpenMenuRows(Window window, UIA3Automation automation, string[] rowIds)
+    {
+        AutomationElement[] rows = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        rows = [.. automation.GetDesktop()
+                            .FindAllChildren(automation.ConditionFactory.ByProcessId(window.Properties.ProcessId.Value))
+                            .SelectMany(top => top.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.MenuItem)))
+                            .Where(row => rowIds.Any(id => (row.Properties.AutomationId.ValueOrDefault ?? string.Empty).StartsWith(id, StringComparison.Ordinal)))
+                            .GroupBy(row => row.Properties.AutomationId.ValueOrDefault)
+                            .Select(same => same.First())
+                            .OrderBy(row => row.BoundingRectangle.Y)];
+                        return rows.Length > 0;
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10)),
+            $"No open menu has a row whose id starts with {string.Join(" or ", rowIds)}.");
+        return rows;
+    }
+
+    /// <summary>Escape until the menu that holds <paramref name="rowId"/> is gone.</summary>
+    private static void CloseOpenMenu(Window window, UIA3Automation automation, string rowId)
+    {
+        for (int press = 0; press < 3 && FindOpenMenuRow(window, automation, rowId) is not null; press++)
+        {
+            PressKey(VirtualKeyShort.ESCAPE);
+        }
+
+        Assert.True(
+            SpinWait.SpinUntil(() => FindOpenMenuRow(window, automation, rowId) is null, TimeSpan.FromSeconds(5)),
+            $"Escape didn't close the menu with {rowId}.");
+    }
+
+    private static AutomationElement[] Editors(Window window, UIA3Automation automation) =>
+        [.. window.FindAllDescendants(automation.ConditionFactory.ByAutomationId("MarkdownEditor")).OrderBy(editor => editor.BoundingRectangle.X)];
+
+    private static AutomationElement WaitForLeftmost(Window window, UIA3Automation automation, string automationId)
+    {
+        AutomationElement[] found = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => (found = window.FindAllDescendants(automation.ConditionFactory.ByAutomationId(automationId))).Length > 0,
+                TimeSpan.FromSeconds(10)),
+            $"No {automationId}.");
+        return found.OrderBy(element => element.BoundingRectangle.X).First();
+    }
+
+    /// <summary>Whether Windows animates controls (SPI_GETCLIENTAREAANIMATION), which slides a
+    /// menu in under a resting pointer.</summary>
+    private static bool ClientAreaAnimationIsOn() =>
+        NoteHeaderSystemParameters(0x1042, 0, out int on, 0) && on != 0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SystemParametersInfoW")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool NoteHeaderSystemParameters(uint action, uint parameter, out int value, uint update);
 }

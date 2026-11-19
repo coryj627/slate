@@ -308,17 +308,20 @@ public sealed class NoteHeaderTests
     /// menu's popup keep the keys, and WPF hands them back to ⋯: there the fact asserts that
     /// refusal and has nothing further to claim, as CanvasNavigatorTests' TryPutTheKeysInTheMenu
     /// does. A desktop that lets a row take the keys must have landed them there.</summary>
-    private static bool LandedOnTheFirstRow(Button more)
+    private static bool LandedOnTheFirstRow(Button more) => LandedOn(more, MenuRow(more, "NoteHeaderSplitRight"));
+
+    /// <summary><see cref="LandedOnTheFirstRow"/> for any header button's menu and its first
+    /// row.</summary>
+    private static bool LandedOn(Button owner, MenuItem first)
     {
-        MenuItem first = MenuRow(more, "NoteHeaderSplitRight");
         if (ReferenceEquals(first, Keyboard.FocusedElement))
         {
             return true;
         }
 
         Assert.False(first.Focus(), "the menu didn't land on its first row, though this desktop lets a row take the keys");
-        Assert.Same(more, Keyboard.FocusedElement);
-        more.ContextMenu!.IsOpen = false;
+        Assert.Same(owner, Keyboard.FocusedElement);
+        owner.ContextMenu!.IsOpen = false;
         return false;
     }
 
@@ -799,6 +802,316 @@ public sealed class NoteHeaderTests
         other.ContextMenu!.IsOpen = false;
         split.Settle();
     });
+
+    /// <summary>#1849: ⋯ opened without the pointer holds its rows from a pointer resting
+    /// where they appear, so the row under it can't take the keys from the first. The
+    /// pointer's read is the fact's, since a CI session has no pointer (#1680). A close, a
+    /// press and a move to another place each give the rows back; a move that leaves the
+    /// pointer where it rested doesn't. A pointer's own open holds nothing, and Shift+F10 or
+    /// the Apps key on ⋯ opens it as the keys do, on its first row and held.</summary>
+    [Fact]
+    public void MoreOpenedWithoutTheMouseHoldsItsRowsFromARestingPointer() => StaThread.RunPumped(() => WithPointerAt((40, 40), pointer =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Button more = More(HeaderOf(host, "Lecture.md"));
+        ContextMenu menu = more.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        // (a) By its Invoke pattern: held already when the popup opens (a menu that slides in
+        // passes its rows under a resting pointer before it settles), held while open, and a
+        // close with no press gives them back.
+        bool opened = false;
+        bool heldWhenOpened = false;
+        void Opened(object sender, RoutedEventArgs eventArgs)
+        {
+            opened = true;
+            heldWhenOpened = rows.All(row => row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) is false);
+        }
+
+        menu.Opened += Opened;
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        menu.Opened -= Opened;
+        Assert.True(menu.IsOpen);
+        Assert.True(opened, "⋯'s popup never raised Opened, so whether its rows were held then wasn't measured.");
+        Assert.True(heldWhenOpened, "⋯'s rows were not held yet when its popup opened.");
+        AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
+        CloseAndAwait(host, menu, closes);
+        AssertGivenBack(rows, "once ⋯ closed with no press");
+
+        // (b) A press gives them back.
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, "with ⋯ opened again");
+        menu.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
+        AssertGivenBack(rows, "after a press on the menu");
+        CloseAndAwait(host, menu, closes);
+
+        // (c) A move that leaves the pointer where it rested keeps them; a move elsewhere gives them back.
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, "with ⋯ opened a third time");
+        menu.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = UIElement.PreviewMouseMoveEvent });
+        AssertHeld(rows, "after a move that left the pointer where it rested");
+        pointer.At = (41, 40);
+        menu.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = UIElement.PreviewMouseMoveEvent });
+        AssertGivenBack(rows, "after a move to another place");
+        pointer.At = (40, 40);
+        CloseAndAwait(host, menu, closes);
+
+        // (d) A pointer's click, its mouse-up and Click in one input, holds nothing.
+        Assert.True(more.Focus());
+        more.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen);
+        AssertGivenBack(rows, "with ⋯ opened by a pointer's click");
+        CloseAndAwait(host, menu, closes);
+
+        // (e) The Apps key on ⋯, through WPF's own route: the keys' open, held, on its first row.
+        Assert.True(more.Focus());
+        PressApplicationsKey(more);
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, "the Apps key on ⋯ opened nothing.");
+        AssertHeld(rows, "with ⋯ opened by the Apps key");
+        int open = closes.Count;
+        if (LandedOnTheFirstRow(more))
+        {
+            menu.IsOpen = false;
+        }
+
+        closes.AwaitOneAfter(host, open);
+        AssertGivenBack(rows, "once the Apps key's menu closed");
+    }));
+
+    /// <summary>#1849: the compact bar's Folders menu opens through the same door as ⋯, so
+    /// opened by its Invoke pattern or by the Apps key it holds its rows the same way.</summary>
+    [Fact]
+    public void TheFoldersMenuHoldsItsRowsFromARestingPointer() => StaThread.RunPumped(() => WithPointerAt((40, 40), _ =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 500;
+        host.Settle();
+        Assert.True(header.IsCompact);
+        Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        ContextMenu menu = folders.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        Assert.True(folders.Focus());
+        Invoke(folders);
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen);
+        AssertHeld(rows, "with Folders opened by its Invoke pattern");
+        CloseAndAwait(host, menu, closes);
+        AssertGivenBack(rows, "once Folders closed with no press");
+
+        Assert.True(folders.Focus());
+        PressApplicationsKey(folders);
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, "the Apps key on Folders opened nothing.");
+        AssertHeld(rows, "with Folders opened by the Apps key");
+        int open = closes.Count;
+        if (LandedOn(folders, rows[0]))
+        {
+            menu.IsOpen = false;
+        }
+
+        closes.AwaitOneAfter(host, open);
+        AssertGivenBack(rows, "once the Apps key's menu closed");
+    }));
+
+    /// <summary>#1849: a context menu's popup fades out and raises Closed only when the fade
+    /// ends, so a pointer can open ⋯ again while a keyboard open's close is still fading. That
+    /// open is a pointer's, and holds nothing: the earlier open's hold doesn't carry over to it.
+    /// (Where the popup doesn't fade, its Closed has already given the rows back.)</summary>
+    [Fact]
+    public void APointersOpenWhileAKeyboardOpenIsStillClosingHoldsNothing() => StaThread.RunPumped(() => WithPointerAt((40, 40), _ =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Button more = More(HeaderOf(host, "Lecture.md"));
+        ContextMenu menu = more.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, "with ⋯ opened by its Invoke pattern");
+        int before = closes.Count;
+        menu.IsOpen = false;
+        bool fading = closes.Count == before;
+        TestContext.Current.TestOutputHelper?.WriteLine($"the keyboard open's close was {(fading ? "still fading" : "done at once")} when the pointer opened ⋯");
+
+        more.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, "the pointer's click didn't open ⋯.");
+        AssertGivenBack(rows, $"with ⋯ opened by a pointer while the keyboard open's close was {(fading ? "still fading" : "done")}");
+        CloseAndAwait(host, menu, closes);
+    }));
+
+    /// <summary>#1849: the same for a right-click on a header button (⋯, or the compact bar's
+    /// Folders), which WPF's context menu service answers, not the button's Click. Escape gives
+    /// the mouse back, so the press never reaches the menu, and WPF reopens a popup whose close
+    /// is still fading. The pointer's request gives back the keyboard open's hold, and WPF
+    /// still opens the menu.</summary>
+    [Theory]
+    [InlineData("NoteHeaderMore")]
+    [InlineData("NoteHeaderFolders")]
+    public void ARightClickWhileAKeyboardOpenIsStillClosingHoldsNothing(string buttonId) => StaThread.RunPumped(() => WithPointerAt((40, 40), _ =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 500;
+        host.Settle();
+        Assert.True(header.IsCompact);
+        Button button = ShownShell.Descendants(header).OfType<Button>().Single(candidate => candidate.IsVisible && AutomationProperties.GetAutomationId(candidate) == buttonId);
+        ContextMenu menu = button.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        Assert.True(button.Focus());
+        Invoke(button);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, $"with {buttonId}'s menu opened by its Invoke pattern");
+        int before = closes.Count;
+        menu.IsOpen = false;
+        bool fading = closes.Count == before;
+        TestContext.Current.TestOutputHelper?.WriteLine($"the keyboard open's close was {(fading ? "still fading" : "done at once")} when the right-click came");
+
+        Assert.True(RightClick(button, new Point(4, 4)), $"the right-click on {buttonId} opened no menu.");
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, $"the right-click didn't open {buttonId}'s menu.");
+        AssertGivenBack(rows, $"with {buttonId}'s menu opened by a right-click while the keyboard open's close was {(fading ? "still fading" : "done")}");
+        CloseAndAwait(host, menu, closes);
+    }));
+
+    /// <summary>WPF's own right-click request, as CanvasContextMenuTests drives it: the popup
+    /// service's mouse-up handler raises ContextMenuOpening on the element under the pointer at
+    /// the pointer's place, then opens the menu its route found unless something handled it.
+    /// Answers whether a menu opened or the request was handled.</summary>
+    private static bool RightClick(IInputElement element, Point at)
+    {
+        System.Reflection.PropertyInfo service = typeof(FrameworkElement).GetProperty(
+            "PopupControlService",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("WPF's popup service is not where this fact reaches for it.");
+        object popups = service.GetValue(null)
+            ?? throw new InvalidOperationException("WPF's popup service is not running.");
+        System.Reflection.MethodInfo raise = popups.GetType().GetMethod(
+            "RaiseContextMenuOpeningEvent",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
+            [typeof(IInputElement), typeof(double), typeof(double), typeof(bool)])
+            ?? throw new InvalidOperationException("WPF's popup service has no pointer request door to drive.");
+        return (bool)raise.Invoke(popups, [element, at.X, at.Y, true])!;
+    }
+
+    /// <summary>Counts a menu's Closed events. A context menu's popup fades out (about 170 ms
+    /// here) before it raises Closed, which is when the hold ends.</summary>
+    private sealed class Closes
+    {
+        internal Closes(ContextMenu menu) => menu.Closed += (_, _) => Count++;
+
+        internal int Count { get; private set; }
+
+        /// <summary>Pumps until a Closed after the <paramref name="before"/>th has come.</summary>
+        internal void AwaitOneAfter(ShownShell host, int before) =>
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        host.Settle();
+                        return Count > before;
+                    },
+                    TimeSpan.FromSeconds(5)),
+                "the menu never raised Closed.");
+    }
+
+    private static void CloseAndAwait(ShownShell host, ContextMenu menu, Closes closes)
+    {
+        int before = closes.Count;
+        menu.IsOpen = false;
+        closes.AwaitOneAfter(host, before);
+    }
+
+    /// <summary>The pointer the hold reads, which a fact moves.</summary>
+    private sealed class FakePointer
+    {
+        internal (int X, int Y)? At { get; set; }
+    }
+
+    /// <summary>Runs <paramref name="fact"/> with the hold reading <paramref name="at"/> as the
+    /// pointer, on the calling thread (the fact's own STA thread); the read is put back after.</summary>
+    private static void WithPointerAt((int X, int Y) at, Action<FakePointer> fact)
+    {
+        var pointer = new FakePointer { At = at };
+        Func<(int X, int Y)?> saved = RestingPointerHold.PointerForTests;
+        RestingPointerHold.PointerForTests = () => pointer.At;
+        try
+        {
+            fact(pointer);
+        }
+        finally
+        {
+            RestingPointerHold.PointerForTests = saved;
+        }
+    }
+
+    private static void AssertHeld(IEnumerable<MenuItem> rows, string when)
+    {
+        foreach (MenuItem row in rows)
+        {
+            Assert.True(row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) is false, $"{row.Header} is not held {when}.");
+        }
+    }
+
+    private static void AssertGivenBack(IEnumerable<MenuItem> rows, string when)
+    {
+        foreach (MenuItem row in rows)
+        {
+            Assert.True(
+                row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) == DependencyProperty.UnsetValue,
+                $"{row.Header} keeps a local hit-test value {when}.");
+        }
+    }
+
+    /// <summary>The Apps key through WPF's own route, as CanvasContextMenuTests drives it: a
+    /// key-up handed to the input manager, where the popup service raises ContextMenuOpening
+    /// on the focused element with the keyboard's -1, -1 and opens the menu its route found.</summary>
+    private static void PressApplicationsKey(Visual within) =>
+        InputManager.Current.ProcessInput(new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            PresentationSource.FromVisual(within) ?? throw new InvalidOperationException("the element is not in a window."),
+            0,
+            Key.Apps)
+        {
+            RoutedEvent = Keyboard.KeyUpEvent,
+        });
 
     /// <summary>Below 520 the switch drops its labels for tooltips, and the folders collapse
     /// into a "…" button with a Folders menu. The bar is sized, not the window, so the fact
