@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Text;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -39,7 +40,8 @@ public sealed class SvgPreviewGuardTests
     /// <summary>The shapes real documents use stay inside every cap:
     /// Illustrator's class rules, Mermaid's markers, an icon sheet's
     /// reuse, a filter's chained inputs, a stylesheet's gradient fills
-    /// and each cap itself.</summary>
+    /// and each cap itself. #1610 (CB-29): each, and the repository's own
+    /// SVG, is estimated at under a tenth of the decode limit.</summary>
     [Fact]
     public void AcceptsTheShapesRealDocumentsUse()
     {
@@ -79,12 +81,236 @@ public sealed class SvgPreviewGuardTests
                 + " */rect{fill:red}</style>" + Square),
         ];
 
-        foreach (string source in accepted)
+        string pie = File.ReadAllText(
+            Path.Combine(SourceText.RepoRoot(), "demo-vault", "attachments", "pie.svg"));
+        foreach (string source in accepted.Append(pie))
         {
             Assert.True(
                 Check(source) == nameof(SvgRefusal.None),
                 $"refused ({Check(source)}): {source[..Math.Min(source.Length, 200)]}");
+            double estimate = EstimateOf(source).Milliseconds;
+            Assert.True(
+                estimate < SvgPreviewGuard.MaxEstimatedDecodeMilliseconds / 10.0,
+                $"estimated at {estimate:F1} ms: {source[..Math.Min(source.Length, 200)]}");
         }
+    }
+
+    private static SvgDecodeEstimate EstimateOf(string source) =>
+        SvgPreviewGuard.Estimate(source, 8 * 1024 * 1024);
+
+    public static TheoryData<string> SlowDocumentCases() => [.. SlowDocuments.Keys];
+
+    /// <summary>
+    /// #1610 (CB-29): a document that would hold a decoder for many seconds
+    /// is refused for its cost before anything decodes it. Each row is sized
+    /// to estimate past 10 seconds, so it is refused at any limit the owner
+    /// picks from the calibration table: #1581's four reproductions, a
+    /// plotting library's scatter, a one-rule stylesheet over many uses,
+    /// markers inherited from a group, each selector shape whose query is not
+    /// linear (descendant chains over nested groups, general siblings,
+    /// of-type pseudo-classes), a <c>var()</c> fallback that re-resolves past
+    /// the depth limit, declarations on elements that draw nothing, and a
+    /// marker set through <c>var()</c>. The two rows that expand
+    /// exponentially (four <c>var()</c> references per level at 15 levels,
+    /// about 1.07e9 lookups; six descendant steps over 254 nested groups,
+    /// hours by arithmetic) cost the guard itself under 100 ms on this
+    /// fact's own stopwatch, after one call has compiled the guard.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(SlowDocumentCases))]
+    public void RefusesEachSlowDocumentForItsCost(string name)
+    {
+        (Func<string> build, bool timed) = SlowDocuments[name];
+        string source = build();
+        Assert.Equal(nameof(SvgRefusal.DecodeCost), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate > 10_000, $"{name}: estimated at {estimate:F0} ms");
+        if (timed)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024);
+            stopwatch.Stop();
+            Assert.Equal(SvgRefusal.DecodeCost, verdict);
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
+                $"{name}: the guard took {stopwatch.Elapsed.TotalMilliseconds:F1} ms");
+        }
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, bool Timed)> SlowDocuments = new()
+    {
+        // #1581's four rows, reproduced by step 0 (40.5 s, 135.6 s, 34.8 s, 50.0 s).
+        ["#1581 A: 3,000 universal rules over 13,000 groups"] = (() => SlowSvgDocuments.Generate("A_star_g R=3000 E=13000"), false),
+        ["#1581 B: 15,000 universal rules over 8,000 rects"] = (() => SlowSvgDocuments.Generate("A_star_rect R=15000 E=8000"), false),
+        ["#1581 C: var() doubling at 15 levels over 5,000 rects"] = (() => SlowSvgDocuments.Generate("C_double D=15 E=5000"), false),
+        ["#1581 D: a 2,000-rect marker on a 10,000-vertex polyline"] = (() => SlowSvgDocuments.Generate("D_marker M=2000 V=10000"), false),
+        // 17.4 s; one global rule and a use per point.
+        ["a plotting scatter of 10,000 points"] = (() => SlowSvgDocuments.Generate("G_scatter N=10000"), false),
+        // 30.3 s; the same uses without the rule decode in 2.0 s.
+        ["one rule over 10,000 uses"] = (() => SlowSvgDocuments.Generate("A_use R=1 G=4 U=10000"), false),
+        // Estimated at 1.8 ms a rect: 7,000 passes 10 s (1,000 decode in 2.6 s).
+        ["a 100-rect marker inherited from a group by 7,000 rects"] = (() => SlowSvgDocuments.Generate("D_rects_inherit M=100 N=7000"), false),
+        // The follow-up measured each: 33.0 s, past 60 s, 20.6 s.
+        ["four descendant steps over 128 nested groups"] = (() => SlowSvgDocuments.Generate("N_desc K=4 R=1 D=128"), false),
+        ["two general-sibling steps over 3,000 rects"] = (() => SlowSvgDocuments.Generate("N_sib K=3 R=1 N=3000"), false),
+        ["ten first-of-type rules over 10,000 rects"] = (() => SlowSvgDocuments.Generate("N_nth Q=1 R=10 N=10000"), false),
+        // Each level's fallback names the level below once more, so a chain
+        // past the depth limit is resolved again from every level: 0.4 to
+        // 0.9 ms a rect in the follow-up.
+        ["a var() fallback chain past the depth limit over 30,000 rects"] = (() => SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000"), false),
+        // 3.7 s at 10,000; desc draws nothing, and still takes every declaration.
+        ["1,000 custom properties on 25,000 desc elements"] = (() => SlowSvgDocuments.Generate("N_unstyled T=1 Q=2 D=1000 N=25000"), false),
+        // The follow-up: marker-mid:var(--m) costs what the attribute does.
+        ["a 2,000-rect marker set through var() on a 10,000-vertex polyline"] = (() => SlowSvgDocuments.Generate("D_var M=2000 V=10000"), false),
+        ["four var() references per level at 15 levels"] = (() => SlowSvgDocuments.Generate("C_kary K=4 D=15 E=1"), true),
+        ["six descendant steps over 254 nested groups"] = (
+            () => Svg("<style>g g g g g g rect{fill:red}</style>" + Repeat("<g>", 254) + Square + Repeat("</g>", 254)),
+            true),
+    };
+
+    public static TheoryData<string, double> CalibratedDocuments() => new()
+    {
+        { "A_class R=5000 E=6000", 2834.6 },
+        { "A_list R=2500 S=4 E=10000", 9373.4 },
+        { "A_type R=1000 E=3000", 3375.2 },
+        { "A_use R=1 G=4 U=3000", 2569.8 },
+        { "C_double D=15 E=1000", 6291.7 },
+        { "D_marker M=500 V=1000", 1326.1 },
+    };
+
+    /// <summary>#1610 (CB-29): one document per term, each estimated within
+    /// 10% of the estimate the committed calibration records for it (the
+    /// <c>est2Ms</c> column of
+    /// <c>docs/plans/47_windows_core_closeout/calibration/cb29/est.csv</c>),
+    /// so a later change to the counting is seen against the calibration.
+    /// A_list's rules have four selectors each, so a count of rules in place
+    /// of branches is a quarter of it.</summary>
+    [Theory]
+    [MemberData(nameof(CalibratedDocuments))]
+    public void EstimatesTrackTheCalibration(string label, double calibratedMilliseconds)
+    {
+        double estimate = EstimateOf(SlowSvgDocuments.Generate(label)).Milliseconds;
+        Assert.True(
+            Math.Abs(estimate - calibratedMilliseconds) <= calibratedMilliseconds * 0.10,
+            $"{label}: estimated at {estimate:F1} ms; the calibration records {calibratedMilliseconds:F1} ms");
+    }
+
+    public static TheoryData<string, double> QuickDocuments() => new()
+    {
+        // Attribute selectors filed by attribute: about 89 ms (under * every
+        // rule would land on every rect, about 1 s).
+        { "A_attr R=300 E=3000", 300 },
+        // Past the depth limit Svg.Custom gives up at once: 31 ms to decode.
+        { "C_double D=16 E=1000", 50 },
+        // The scatter at 500 points with its rule: about 76 ms.
+        { "G_scatter N=500", 250 },
+        // No <style>, so no use term: 2.0 s to decode, all of it drawing.
+        { "A_use_nostyle G=4 U=10000", 50 },
+        // Markers at a line's start and end only: about 4 ms (as marker-mid, 1.3 s).
+        { "D_start M=500 V=1000", 200 },
+        // A marker inside a marker is not placed (the follow-up: 157 ms with
+        // the inner marker, 135 ms without): about 199 ms.
+        { "D_nested M=10 VO=2000 VI=200", 500 },
+        // nth-child decodes in linear time (the follow-up: 164 ms): about 112 ms.
+        { "N_nth Q=2 R=10 N=10000", 500 },
+        // A property repeated in one rule is applied once (the follow-up: 70 ms).
+        { "N_unstyled T=1 Q=1 D=1000 N=10000", 300 },
+    };
+
+    /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist
+    /// for are admitted, each estimated under its own bound, which sits
+    /// between the row's estimate and the decode limit.</summary>
+    [Theory]
+    [MemberData(nameof(QuickDocuments))]
+    public void AdmitsWhatDecodesQuickly(string label, double boundMilliseconds)
+    {
+        string source = SlowSvgDocuments.Generate(label);
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate < boundMilliseconds, $"{label}: estimated at {estimate:F1} ms");
+    }
+
+    /// <summary>
+    /// #1610 (CB-29): core's renders of the dialects whose edges carry
+    /// markers, the only cost a rendered diagram has, sized to render in
+    /// under a second each so core's 5-second budget never cuts them, are
+    /// estimated at under a thirtieth of the decode limit. The marker term
+    /// grows with the edges, so the largest diagram core renders (a
+    /// sequence of 1,093 messages, 76 ms in the committed calibration)
+    /// stays near a tenth of it.
+    /// </summary>
+    [Fact]
+    public void RealDiagramsStayFarBelowTheLimit()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "svg-guard-real-diagrams");
+        string[] sources = [SequenceSource(300), ClassSource(150), StateSource(150)];
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "d.md"),
+            string.Concat(sources.Select(source => "```mermaid\n" + source + "```\n\n")));
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        DiagramBlock[] blocks = session.GetDiagramBlocks("d.md");
+        Assert.Equal(3, blocks.Length);
+        foreach (DiagramBlock block in blocks)
+        {
+            Assert.True(block.RenderStatus is DiagramRenderStatus.Ok, $"not rendered: {block.RenderStatus}");
+            string svg = Encoding.UTF8.GetString(block.Svg!);
+            Assert.Equal(nameof(SvgRefusal.None), Check(svg));
+            double estimate = EstimateOf(svg).Milliseconds;
+            Assert.True(
+                estimate < SvgPreviewGuard.MaxEstimatedDecodeMilliseconds / 30.0,
+                $"{block.Source.Split('\n')[0]}: estimated at {estimate:F1} ms");
+        }
+    }
+
+    private static string SequenceSource(int messages)
+    {
+        var source = new StringBuilder("sequenceDiagram\n");
+        for (int participant = 0; participant < 6; participant++)
+        {
+            source.Append($"  participant P{participant}\n");
+        }
+        for (int i = 0; i < messages; i++)
+        {
+            source.Append($"  P{i % 6}->>P{(i + 1 + (i / 6)) % 6}: message {i}\n");
+            if (i % 7 == 6)
+            {
+                source.Append($"  P{(i + 2) % 6}-->>P{i % 6}: reply {i}\n");
+            }
+        }
+        return source.ToString();
+    }
+
+    private static string ClassSource(int classes)
+    {
+        var source = new StringBuilder("classDiagram\n");
+        for (int i = 0; i < classes; i++)
+        {
+            source.Append($"  class C{i} {{\n    +int field{i}\n    +String name\n    +method{i}() bool\n  }}\n");
+            if (i > 0)
+            {
+                source.Append(i % 3 == 0 ? $"  C{i / 2} <|-- C{i}\n" : $"  C{i - 1} --> C{i} : uses\n");
+            }
+        }
+        return source.ToString();
+    }
+
+    private static string StateSource(int states)
+    {
+        var source = new StringBuilder("stateDiagram-v2\n  [*] --> S0\n");
+        for (int i = 0; i < states; i++)
+        {
+            source.Append($"  S{i} --> S{i + 1} : event{i}\n");
+            if (i % 4 == 3)
+            {
+                source.Append($"  S{i} --> S{i - 2} : back{i}\n");
+            }
+        }
+        source.Append($"  S{states} --> [*]\n");
+        return source.ToString();
     }
 
     public static TheoryData<string> RefusalCases() => [.. Refusals.Keys];

@@ -92,6 +92,109 @@ public sealed class ReadingSvgEmbedDecodeTests
     /// decoded-pixel pool, as much of it as names it.</summary>
     private const string PoolNotice = "over this note's embedded-image budget";
 
+    private const string TooLongToDecode = "Image not shown: it would take too long to decode.";
+
+    /// <summary>#1581's first row, reproduced by CB-29's step 0 (40.5 s to
+    /// decode): far past the decode limit at any pick.</summary>
+    private static string CostlySvg() => SlowSvgDocuments.Generate("A_star_g R=3000 E=13000");
+
+    /// <summary>#1610 (CB-29): in the reading view an SVG refused for its cost
+    /// says core's sentence in its card, and the SVG after it still shows its
+    /// image. Only the small one reaches the decoder: the body, which hands
+    /// back a one-pixel PNG for it, runs once.</summary>
+    [Fact]
+    public void AnSvgRefusedForItsCostSaysSoInItsCard()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-cost");
+        string small = FilledSvg("teal");
+        File.WriteAllText(Path.Combine(fixture.Root, "slow.svg"), CostlySvg());
+        File.WriteAllText(Path.Combine(fixture.Root, "ok.svg"), small);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[slow.svg]]\n\n![[ok.svg]]\n");
+        var bodies = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        StaThread.Run(() =>
+        {
+            using VaultSession session = Scanned(fixture.Root);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = (bytes, _) =>
+            {
+                string svg = System.Text.Encoding.UTF8.GetString(bytes);
+                bodies.Enqueue(svg);
+                return svg == small ? TinyPng : null;
+            };
+            try
+            {
+                using WorkspaceTabViewModel tab = ReadingTab(session, "host.md");
+                FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                ParkedSvgDecodes.AssertSaid(CardSentences(document, "slow.svg", "ok.svg"), TooLongToDecode, string.Empty);
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                Assert.Equal(new[] { small }, bodies);
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                    "a decoder never ended");
+            }
+        });
+    }
+
+    /// <summary>#1610 (CB-29): once the projection's pixel pool is spent, an
+    /// SVG refused for its cost still says the cost sentence, not the pool
+    /// notice, and never reaches the decoder. The first SVG's body spends the
+    /// whole pool.</summary>
+    [Fact]
+    public void AnSvgRefusedForItsCostAfterThePoolIsSpentStillSaysTheCostSentence()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-cost-past-pool");
+        string first = FilledSvg("navy");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), first);
+        File.WriteAllText(Path.Combine(fixture.Root, "slow.svg"), CostlySvg());
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[slow.svg]]\n");
+        var bodies = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+                // An 8x8 SVG rasterises to 64 pixels: a.svg spends the pool.
+                ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = (bytes, reserve) =>
+                {
+                    bodies.Enqueue(System.Text.Encoding.UTF8.GetString(bytes));
+                    return reserve(64 * 4) ? TinyPng : null;
+                };
+                try
+                {
+                    using WorkspaceTabViewModel tab = ReadingTab(session, "host.md");
+                    FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                    ParkedSvgDecodes.AssertSaid(CardSentences(document, "a.svg", "slow.svg"), string.Empty, TooLongToDecode);
+                    Assert.Equal(new[] { first }, bodies);
+                }
+                finally
+                {
+                    EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                    EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                    Assert.True(
+                        SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                        "a decoder never ended");
+                }
+            });
+        }
+        finally
+        {
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
     /// <summary>#1635 (Codex round 2): once the projection's pixel pool is
     /// spent a later SVG never enters the decoder, but one its decoder slots
     /// remember as timed out still says so, not the pool notice. The real
@@ -480,7 +583,7 @@ public sealed class ReadingSvgEmbedDecodeTests
     private static string[] CardSentences(FlowDocument document, params string[] files)
     {
         string text = TextOf(document);
-        string[] sentences = [TookLonger, ProjectionSpent, Busy, PoolNotice];
+        string[] sentences = [TookLonger, ProjectionSpent, Busy, PoolNotice, TooLongToDecode];
         var said = new string[files.Length];
         int start = 0;
         for (int index = 0; index < files.Length; index++)

@@ -235,7 +235,7 @@ public sealed class W2EditorInteractionRedTeamTests
                 EditorEmbedPreviewNode corrupt = EditorInteractionCoordinator.BuildEmbedPreviewNode(
                     new EmbedResolution.Image(
                         "broken.svg",
-                        Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed"),
+                        Encoding.UTF8.GetBytes(ZeroSizeSvg),
                         "image/svg+xml",
                         null));
                 Assert.True(corrupt.IsWarning);
@@ -516,6 +516,13 @@ public sealed class W2EditorInteractionRedTeamTests
         Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
     }
 
+    /// <summary>A well-formed SVG the guard admits and the decode returns
+    /// nothing for: its picture has no width (#1610: malformed XML no longer
+    /// reaches the decoder). Zero width and height both is not one: Svg.Skia
+    /// 5.2.3 draws it as one pixel.</summary>
+    private const string ZeroSizeSvg =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='0' height='8'/>";
+
     /// <summary>#1581: an ordinary decode failure carries no reason, so the
     /// callers keep their own "Could not decode image" sentence.</summary>
     [Fact]
@@ -529,12 +536,171 @@ public sealed class W2EditorInteractionRedTeamTests
             () =>
             {
                 Assert.Null(EditorInteractionCoordinator.DecodeImage(
-                    Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed"),
+                    Encoding.UTF8.GetBytes(ZeroSizeSvg),
                     "image/svg+xml",
                     out string? reason));
                 Assert.Null(reason);
             });
         Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+    }
+
+    private const string TooLongToDecode = "Image not shown: it would take too long to decode.";
+
+    /// <summary>#1581's first row, reproduced by CB-29's step 0 (40.5 s to
+    /// decode): far past the decode limit at any pick.</summary>
+    private static byte[] CostlySvg() =>
+        Encoding.UTF8.GetBytes(SlowSvgDocuments.Generate("A_star_g R=3000 E=13000"));
+
+    /// <summary>#1610 (CB-29): a document the guard refuses for its cost says
+    /// core's sentence at once and never reaches the decoder: no slot, no
+    /// thread, no body run. It is not remembered, so a second request is
+    /// refused the same way, and each refusal is logged with its estimate and
+    /// its largest term.</summary>
+    [Fact]
+    public void SvgPreview_ADocumentRefusedForItsCostSaysCoresSentenceAndStartsNoDecode()
+    {
+        using var lines = new DiagnosticLines();
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = CostlySvg();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                for (int decode = 0; decode < 2; decode++)
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                    Assert.Equal(TooLongToDecode, reason);
+                    Assert.Equal(0, decodes.Runs);
+                    Assert.Equal(0, Volatile.Read(ref slots.Live));
+                    Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+                    Assert.Equal(0, slots.TimeoutMemory.Count);
+                }
+            });
+        Assert.Equal(
+            2,
+            lines.Snapshot.Count(line =>
+                line.StartsWith($"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedForCost} (estimateMs=", StringComparison.Ordinal)
+                && line.EndsWith(", term=stylesheet)", StringComparison.Ordinal)));
+    }
+
+    /// <summary>#1610 (CB-29): the guard runs before the decoder slots, so a
+    /// document refused for its cost says so even while two abandoned
+    /// decodes fill the cap, not the busy sentence.</summary>
+    [Fact]
+    public void SvgPreview_ACostRefusalIsSaidEvenWhileTwoDecodesAreAbandoned()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = CostlySvg();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                Volatile.Write(ref slots.Abandoned, EditorInteractionCoordinator.MaxAbandonedSvgDecodes);
+                try
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                    Assert.Equal(TooLongToDecode, reason);
+                    Assert.Equal(0, decodes.Runs);
+                    Assert.Equal(0, Volatile.Read(ref slots.Live));
+                }
+                finally
+                {
+                    Volatile.Write(ref slots.Abandoned, 0);
+                }
+            });
+    }
+
+    /// <summary>#1610 (CB-29): a document the guard refuses for anything but
+    /// its cost (a script, a reference outside the document) starts no
+    /// decode either, and still carries no reason, so the caller says its
+    /// own "Could not decode image" sentence.</summary>
+    [Fact]
+    public void SvgPreview_AStructuralRefusalStartsNoDecodeAndKeepsTheCorruptImageSentence()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[][] refused =
+        [
+            Encoding.UTF8.GetBytes(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><script>1</script>"
+                + "<rect width='8' height='8'/></svg>"),
+            Encoding.UTF8.GetBytes(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                + "<image href='https://example.invalid/a.png' width='4' height='4'/></svg>"),
+        ];
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                foreach (byte[] svg in refused)
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                    Assert.Null(reason);
+                }
+                Assert.Equal(0, decodes.Runs);
+                Assert.Equal(0, Volatile.Read(ref slots.Live));
+            });
+    }
+
+    /// <summary>#1610 (CB-29, Call 6): a document past the guard's render cap
+    /// bounds the same work the cost refusal does, so it says the cost
+    /// sentence, not that the image may be corrupt.</summary>
+    [Fact]
+    public void SvgPreview_ARenderedElementsRefusalSaysTheCostSentence()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        string fanOut = SvgPreviewGuardTests.Refusals["exponential use fan-out"].Build();
+        Assert.Equal(SvgRefusal.RenderedElements, SvgPreviewGuard.Check(fanOut, 8 * 1024 * 1024));
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                    Encoding.UTF8.GetBytes(fanOut), "image/svg+xml", out string? reason));
+                Assert.Equal(TooLongToDecode, reason);
+                Assert.Equal(0, decodes.Runs);
+            });
+    }
+
+    /// <summary>#1610 (CB-29): bytes that sniff as an SVG but are not UTF-8
+    /// give no image and no reason, and no exception reaches the caller,
+    /// wherever the decode reads them.</summary>
+    [Fact]
+    public void SvgPreview_InvalidUtf8BytesGiveNullAndNoException()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        byte[] svg =
+        [
+            .. Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><text>"),
+            0xFF,
+            0xFE,
+            .. Encoding.UTF8.GetBytes("</text></svg>"),
+        ];
+        Assert.True(EditorInteractionCoordinator.IsSvgImage(svg, null));
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: null,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, null, out string? reason));
+                Assert.Null(reason);
+                // A decoder thread, where one read the bytes, releases its
+                // slot just after the caller wakes.
+                WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+                Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+            });
     }
 
     private const string TookLonger = "Image not shown: decoding took longer than 5 seconds.";
@@ -934,9 +1100,10 @@ public sealed class W2EditorInteractionRedTeamTests
         const uint waitFailed = 0xFFFFFFFF;
         const string mime = "image/svg+xml";
 
-        // An ordinary failure: nothing and no reason.
+        // An ordinary failure: nothing and no reason. The bytes are
+        // well-formed, so the guard sends them to the body (#1610).
         var ordinary = new ParkedSvgDecodes();
-        byte[] unclosed = Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed");
+        byte[] failing = Encoding.UTF8.GetBytes(FilledSvg("ivory"));
         WithSvgDecodeSeams(
             new EditorInteractionCoordinator.SvgDecodeSlots(),
             budgetMilliseconds: null,
@@ -945,10 +1112,10 @@ public sealed class W2EditorInteractionRedTeamTests
             {
                 for (int decode = 0; decode < 2; decode++)
                 {
-                    Assert.Null(EditorInteractionCoordinator.DecodeImage(unclosed, mime, out string? reason));
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(failing, mime, out string? reason));
                     Assert.Null(reason);
                 }
-                Assert.Equal(2, ordinary.RunsOf(unclosed));
+                Assert.Equal(2, ordinary.RunsOf(failing));
             });
 
         // A wait that fails: logged, and the decode is joined.
