@@ -226,6 +226,57 @@ public sealed class WindowTabWrapTests
             $"{modifiers}+{key} on the logo moved the keys to {Describe(Keyboard.FocusedElement)}");
     });
 
+    /// <summary>Codex round 3, the lead's ruling: with no vault open, the welcome view shown,
+    /// the logo keeps Left as it does with a vault open. Main handed it to the welcome view
+    /// (Open Vault, or the last recent vault): its welcome view was visible, so WPF's search
+    /// did not dead-end there. The logo's arrows never leave the menu bar.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OnTheWelcomeViewTheLogoKeepsLeft(bool aRecentVault) => RunSta(() =>
+    {
+        using var shell = aRecentVault ? new WelcomeShell(WelcomeShell.TheFixtureVault) : new WelcomeShell();
+        Assert.True(shell.Shell.WelcomeRoot.IsVisible, "premise: the welcome view is not shown");
+        if (!shell.Shell.AppMenuItem.Focus())
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's arrows weren't measured on it");
+        }
+
+        shell.Settle();
+
+        Press(shell.Shell, shell.Settle, Key.Left);
+
+        Assert.True(
+            ReferenceEquals(shell.Shell.AppMenuItem, Keyboard.FocusedElement),
+            $"Left on the logo moved the keys to {Describe(Keyboard.FocusedElement)}");
+    });
+
+    /// <summary>Codex round 3, the lead's ruling: Shift+Tab from the logo over the welcome view
+    /// enters it at its last stop, the last recent vault, as WelcomeTabRingTests' ring runs
+    /// backwards; with no recent vault, that is Open Vault. Main's welcome view sent backward
+    /// entry to Open Vault, its focused element, and skipped the recents.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShiftTabFromTheLogoEntersTheWelcomeViewAtItsLastStop(bool aRecentVault) => RunSta(() =>
+    {
+        using var shell = aRecentVault ? new WelcomeShell(WelcomeShell.TheFixtureVault) : new WelcomeShell();
+        Assert.True(shell.Shell.WelcomeRoot.IsVisible, "premise: the welcome view is not shown");
+        IInputElement last = aRecentVault ? shell.RecentButton(shell.VaultRoot) : shell.Shell.OpenVaultButton;
+        if (!shell.Shell.AppMenuItem.Focus())
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so Shift+Tab from the logo wasn't measured on it");
+        }
+
+        shell.Settle();
+
+        CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Shift, () => Press(shell.Shell, shell.Settle, Key.Tab));
+
+        Assert.True(
+            ReferenceEquals(last, Keyboard.FocusedElement),
+            $"Shift+Tab from the logo left the keys on {Describe(Keyboard.FocusedElement)}, not {Describe(last)}");
+    });
+
     /// <summary>Codex round 2: on the empty pane's stop, a chord no window binding runs stays
     /// too: Move Tab is bound to Ctrl+Alt+Shift+Left but has no tab to move, and
     /// Ctrl+Shift+Right is bound to nothing.</summary>
