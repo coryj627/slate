@@ -600,6 +600,11 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         bool ReserveDecoded(long cost) =>
             EditorInteractionCoordinator.TryReserveDecodedBytes(
                 ref decodedBytes, cost, MaxEmbedDecodedImageBytes);
+        // #1635 (CD19): the batch's SVG decodes share one deadline. The leaf
+        // resolves every embed of the active note on each activation, shown
+        // or not, so this bounds what every open of such a note pays.
+        EditorInteractionCoordinator.SvgDecodeDeadline svgDeadline =
+            EditorInteractionCoordinator.SvgDecodeDeadline.ForProjection();
         var rows = new List<EmbedRowViewModel>(
             Math.Min(embedLinks.Length, MaxEmbedRows + 1));
         for (int index = 0; index < embedLinks.Length; index++)
@@ -723,7 +728,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                 resolution,
                 truncated,
                 EditorInteractionCoordinator.BuildEmbedPreviewNode(
-                    resolution, ReserveDecoded));
+                    resolution, ReserveDecoded, svgDeadline));
             cache[key] = shared;
             rows.Add(EmbedRowViewModel.FromShared(link, shared));
         }

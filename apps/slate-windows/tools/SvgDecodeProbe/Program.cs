@@ -13,7 +13,9 @@ namespace SvgDecodeProbe;
 
 internal static class Program
 {
-    // The reading view decodes diagrams on the dispatcher thread, an STA.
+    // The reading view decodes on its refresh's worker since #1634. The probe
+    // keeps an STA because a decode's caller may still be one, and the
+    // decode's plain Win32 wait is written for it.
     [STAThread]
     private static int Main(string[] args)
     {

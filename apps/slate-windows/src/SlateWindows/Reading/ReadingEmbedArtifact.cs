@@ -37,8 +37,11 @@ internal sealed record ReadingEmbedArtifact(
 /// a dispatcher blocked that long when the reading view takes focus leaves
 /// NVDA on its IAccessible fallback. <see cref="Source"/> is frozen, so the
 /// dispatcher can place it; when it is null, <see cref="FailureReason"/> is
-/// core's sentence for a decode past its budget or refused at the cap, or
-/// null for an ordinary failure, whose sentence is the builder's.
+/// core's sentence for a decode past its budget, refused at the cap,
+/// refused because its bytes ran past their budget before (the same
+/// sentence as the first time), or stopped by the projection's decode
+/// deadline (#1635); or null for an ordinary failure, whose sentence is the
+/// builder's.
 /// <see cref="BudgetRefused"/> marks a decode the projection's decoded-pixel
 /// pool refused, before its raster was allocated or before it began, which
 /// the builder states as the budget notice. <see cref="ReservedPixels"/> is
