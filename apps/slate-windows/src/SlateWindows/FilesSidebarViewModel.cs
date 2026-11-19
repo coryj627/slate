@@ -2180,9 +2180,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             else
             {
                 // Plan 47 CB-15a: core makes no wikilink for a Markdown file
-                // that has left the index, is a case twin, or has a name a
-                // link cannot hold; the Mac's sentence says why nothing was
-                // copied (AppState.swift's copy wikilink).
+                // still in the index that is gone from disk, is now a folder
+                // or a link, or cannot be checked there (stale index rows
+                // fail closed); for one that has left the index; for one
+                // with a case twin in the index; and for a name a link cannot
+                // hold. The Mac's sentence says why nothing was copied
+                // (AppState.swift's copy wikilink).
                 ReportFailure("Could not create a wikilink for this file.");
             }
         }
