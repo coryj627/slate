@@ -12,17 +12,21 @@ namespace SlateWindows.Tests;
 /// Plan 47 CB-15a (#1890): every Files sidebar failure sentence built from a
 /// caught failure says core's words (<c>FailureDetail.Of</c>, core's
 /// <c>vault_error_detail</c> for a vault error), never the binding's field
-/// dump (<c>@message=…</c>, <c>@path=…, @reason=…</c>). One fact per site,
-/// each driving a real core refusal there and asserting the exact status
-/// line and the one High announcement (or the canvas or graph event's
+/// dump (<c>@message=…</c>, <c>@path=…, @reason=…</c>). One fact per vault
+/// site, each driving a real core refusal there and asserting the exact
+/// status line and the one High announcement (or the canvas or graph event's
 /// text), and no field token. The oracles are literals where core's text is
 /// fixed and locale-free; for an operating-system error (<c>Io</c>) the
 /// oracle is the lead and core's detail of the same call made directly.
-/// <c>FilesSidebarViewModel.TreeOperations.cs</c>'s synchronous refresh (the
-/// path the app never takes: it always passes a dispatcher context) has no
-/// fact: no seam reaches it, and ShellFailureDetailCensus holds it.
+/// Four sites have no fact here. <c>FilesSidebarViewModel.TreeOperations.cs</c>'s
+/// synchronous refresh is the path the app never takes (it always passes a
+/// dispatcher context), and no seam reaches it. The three settings sites
+/// (saving the sidebar's organization, pins and shortcuts) catch ordinary I/O
+/// errors and keep their text, which SidebarSettingsRetryTests pins by
+/// prefix. ShellFailureDetailCensus holds all four to FailureDetail.Of.
 /// Also here: Copy link on a file core makes no wikilink for says the Mac's
-/// sentence instead of nothing.
+/// sentence instead of nothing, and Copy link, Pin and Unpin do nothing on a
+/// row that is not a file.
 /// </summary>
 public sealed class FilesSidebarFailureDetailTests
 {
@@ -177,9 +181,12 @@ public sealed class FilesSidebarFailureDetailTests
         rig.AssertReported("Could not delete folder note: " + detail);
     }
 
-    /// <summary>Copy wikilink: core refuses only a malformed path, and a tree
-    /// row's path is always well formed, so the row is constructed. It drives
-    /// the real catch with a real core refusal.</summary>
+    /// <summary>Copy wikilink: core refuses only a malformed path. A file row's
+    /// path is always well formed, and the rows whose path is empty (a
+    /// date-group header, a placeholder) are not files, so Copy link is
+    /// unavailable on them (CopyLinkPinAndUnpinDoNothingOnARowThatIsNotAFile).
+    /// The row here is constructed: it drives the real catch with a real core
+    /// refusal.</summary>
     [Fact]
     public async Task ACopyWikilinkCoreRefusesSaysCoresDetail()
     {
@@ -213,19 +220,23 @@ public sealed class FilesSidebarFailureDetailTests
         rig.Sidebar.MoveDestination = "sub";
         rig.Spoken.Clear();
 
+        // The env lock is a Monitor, so it is released before any await: its
+        // exit must run on the thread that took it (as FileManagementTests
+        // does). The batch move runs inside Execute, so core has refused it
+        // before the lock goes.
         using (EnvFaultLock.Acquire())
         {
             Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_PLANT_MARKERS", trigger);
             try
             {
                 rig.Sidebar.BatchMoveCommand.Execute(null);
-                await rig.Settle();
             }
             finally
             {
                 Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_PLANT_MARKERS", null);
             }
         }
+        await rig.Settle();
 
         rig.AssertReported("Move failed: test fault: injected marker plant failure");
     }
@@ -510,6 +521,51 @@ public sealed class FilesSidebarFailureDetailTests
         Assert.Equal(link, Assert.Single(rig.Copied));
         Assert.Equal($"Copied wikilink for {rig.Node("a.md").DisplayName}.", rig.Sidebar.Status);
         Assert.DoesNotContain(rig.Spoken.OfType<A11yEvent.HostComposed>(), item => item.Priority == A11yPriority.High);
+    }
+
+    /// <summary>The diff red team's major 1 and minor 7: a date-group header
+    /// and a placeholder are selectable rows whose path is empty. Copy link,
+    /// Pin and Unpin are unavailable on them, as every sibling verb is, and
+    /// run anyway (the palette's command, a stale state) they copy, speak,
+    /// pin and unpin nothing. Copy link on one reached core with the empty
+    /// path and spoke its refusal ("Could not copy wikilink: Invalid path :
+    /// ..."), and Pin wrote the empty path into the pins.</summary>
+    [Theory]
+    [InlineData("a date-group header")]
+    [InlineData("a placeholder")]
+    public async Task CopyLinkPinAndUnpinDoNothingOnARowThatIsNotAFile(string kind)
+    {
+        using Rig rig = await Rig.Open("cb15a-not-a-file", vault => vault.Write("a.md", "# A\n"));
+        FileTreeNodeViewModel row;
+        if (kind == "a date-group header")
+        {
+            rig.Sidebar.GroupByDate = true;
+            await rig.Settle();
+            row = rig.Sidebar.RootNodes.First(node => node.IsGroupHeader);
+        }
+        else
+        {
+            row = FileTreeNodeViewModel.Loading();
+        }
+        Assert.Equal(string.Empty, row.Path);
+        Assert.False(row.IsDirectory, "premise: the row is not a folder, so the old guard let it through.");
+        rig.Sidebar.SelectedNode = row;
+        string status = rig.Sidebar.Status;
+        rig.Spoken.Clear();
+
+        Assert.False(rig.Sidebar.CopyWikilinkCommand.CanExecute(null), $"Copy link is available on {kind}.");
+        Assert.False(rig.Sidebar.PinCommand.CanExecute(null), $"Pin is available on {kind}.");
+        Assert.False(rig.Sidebar.UnpinCommand.CanExecute(null), $"Unpin is available on {kind}.");
+
+        rig.Sidebar.CopyWikilinkCommand.Execute(null);
+        rig.Sidebar.PinCommand.Execute(null);
+        rig.Sidebar.UnpinCommand.Execute(null);
+        await rig.Settle();
+
+        Assert.Empty(rig.Copied);
+        Assert.DoesNotContain(string.Empty, rig.Sidebar.PinnedForTests);
+        Assert.Equal(status, rig.Sidebar.Status);
+        Assert.Empty(rig.Spoken.OfType<A11yEvent.HostComposed>());
     }
 
     // ================================================================ helpers

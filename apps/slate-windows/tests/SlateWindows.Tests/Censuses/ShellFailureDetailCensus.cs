@@ -174,6 +174,63 @@ public sealed class ShellFailureDetailCensus
             + string.Join("\n", problems));
     }
 
+    /// <summary>The diff red team's minor 5: the table only shrinks. On
+    /// 2026-11-18 it held 61 rows and 73 reads, each row dated that day and
+    /// owned by the chunk its folder names (CB-15b for Canvas/, Graph/ and
+    /// Search/, CB-15c for the rest). A row added later fails, and so does a
+    /// ceiling left above the table once a PR routes reads.</summary>
+    [Fact]
+    public void TheTableOnlyShrinks()
+    {
+        IReadOnlyList<string> problems = TableProblems(Remaining);
+        Assert.True(problems.Count == 0, string.Join("\n", problems));
+    }
+
+    /// <summary>The ratchet on planted tables: more rows or reads than the
+    /// ceilings, a ceiling above the table, a row dated another day, and a
+    /// row owned by another chunk than its folder's are each named.</summary>
+    [Fact]
+    public void TheRatchetNamesAGrownTableALooseCeilingAnotherDateAndAnotherOwner()
+    {
+        Row canvas = new("Canvas/Planted.cs", "Planted", "M", 2, CB15b, Dated, "a planted read");
+        Row panel = new("Panels/Planted.cs", "Planted", "N", 1, CB15c, Dated, "a planted read");
+        Assert.Empty(TableProblems([canvas, panel], rowCeiling: 2, readCeiling: 3));
+
+        Assert.Contains(
+            TableProblems([canvas, panel, panel with { Member = "O" }], rowCeiling: 2, readCeiling: 4),
+            problem => problem.StartsWith("the table holds 3 rows", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas, panel with { Reads = 2 }], rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("the table's rows hold 4 reads", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas], rowCeiling: 2, readCeiling: 2),
+            problem => problem.Contains("lower RowCeiling to 1", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas, panel], rowCeiling: 2, readCeiling: 4),
+            problem => problem.Contains("lower ReadCeiling to 3", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas, panel with { Dated = "2026-11-19" }], rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Panels/Planted.cs (Planted.N): dated 2026-11-19", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas with { Owner = CB15c }, panel], rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Canvas/Planted.cs (Planted.M): owned by CB-15c", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas, panel with { Owner = CB15b }], rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Panels/Planted.cs (Planted.N): owned by CB-15b", StringComparison.Ordinal));
+    }
+
+    /// <summary>The table's ceilings: the rows and reads it held on
+    /// 2026-11-18. A PR that routes reads lowers them to what is left.</summary>
+    internal const int RowCeiling = 61;
+
+    internal const int ReadCeiling = 73;
+
+    /// <summary>What the table itself may not do: grow past its ceilings,
+    /// fall below them without lowering them, hold a row dated another day,
+    /// or give a row to another chunk than its folder's.</summary>
+    internal static IReadOnlyList<string> TableProblems(
+        IReadOnlyList<Row> rows, int rowCeiling = RowCeiling, int readCeiling = ReadCeiling) => [];
+
     /// <summary>The rule's shapes, planted beside the shell and run through
     /// MessageReads alone: each is named, and a typed field, a record's own
     /// Message and the helper's call are not.</summary>
@@ -250,30 +307,20 @@ public sealed class ShellFailureDetailCensus
     }
 
     /// <summary>Each place a read can stand counts to the member and type a
-    /// row names: a lambda and a local function to their member, an accessor
-    /// as Property.get or .set, an expression-bodied property as its getter, a
-    /// constructor as its type's name, a field or property initializer as
-    /// that field or property, every overload of a name together, and the
-    /// same name in a second type apart.</summary>
+    /// row names: a lambda and a local function to their member; an
+    /// accessor (get, set, init, add, remove) and an expression-bodied
+    /// property or indexer to their property, event or indexer (this[]); a
+    /// constructor, static or not, to its type's name; an operator or
+    /// conversion to its metadata name; a finalizer as Finalize; a field or
+    /// property initializer to that field or property; a primary
+    /// constructor's base arguments to the type; every overload of a name
+    /// together; and the same name in a second or nested type apart.</summary>
     [Fact]
     public void EachReadCountsToTheMemberAndTypeItsRowNames()
     {
         Read[] reads = PlantedReads(Holders);
-        (string Type, string Member, int Reads)[] keyed =
-        [
-            ("Holders", "ByLambda", 1),
-            ("Holders", "ByLocal", 1),
-            ("Holders", "Detail.get", 1),
-            ("Holders", "Detail.set", 1),
-            ("Holders", "Holders", 1),
-            ("Holders", "Initial", 1),
-            ("Holders", "Spoken.get", 1),
-            ("Holders", "Twice", 2),
-            ("Holders", "_render", 1),
-            ("Other", "Twice", 1),
-        ];
         Assert.Equal(
-            keyed,
+            HolderKeys,
             reads.GroupBy(read => (read.Type, read.Member))
                 .Select(group => (group.Key.Type, group.Key.Member, Reads: group.Count()))
                 .OrderBy(group => group.Type, StringComparer.Ordinal)
@@ -283,24 +330,13 @@ public sealed class ShellFailureDetailCensus
     /// <summary>The table is held to the reads both ways: a member with more
     /// reads than its row, or a read with no row, is named with a ready row; a
     /// row with fewer reads in its member than it names, or none, is stale;
-    /// and a row may never stand for the Files sidebar or the tag edit.</summary>
+    /// two rows for one member are named; and a row may never stand for the
+    /// Files sidebar or the tag edit.</summary>
     [Fact]
     public void TheTableIsHeldToTheReads()
     {
         Read[] reads = PlantedReads(Holders);
-        Row[] exact =
-        [
-            new("Planted.cs", "Holders", "ByLambda", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "ByLocal", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Detail.get", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Detail.set", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Holders", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Initial", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Spoken.get", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "Twice", 2, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Holders", "_render", 1, CB15c, Dated, "a planted read"),
-            new("Planted.cs", "Other", "Twice", 1, CB15c, Dated, "a planted read"),
-        ];
+        Row[] exact = [.. HolderKeys.Select(key => new Row("Planted.cs", key.Type, key.Member, key.Reads, CB15c, Dated, "a planted read"))];
         Assert.Empty(Problems(reads, exact));
 
         // A member with two reads under a one-read row.
@@ -323,6 +359,11 @@ public sealed class ShellFailureDetailCensus
         Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (Holders.ByLocal): the row names 2 reads", StringComparison.Ordinal));
         Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (Holders.Gone): a row that matches no read", StringComparison.Ordinal));
 
+        // Two rows for one member.
+        Assert.Contains(
+            Problems(reads, [.. exact, exact.First(row => row.Member == "Spoken")]),
+            problem => problem.StartsWith("Planted.cs (Holders.Spoken): more than one row names it", StringComparison.Ordinal));
+
         // The sidebar's files and the tag edit never stand as rows.
         IReadOnlyList<string> sidebar = Problems(
             [],
@@ -339,7 +380,30 @@ public sealed class ShellFailureDetailCensus
             problem => problem.StartsWith("Planted.cs (Holders.Initial): a row with no owner", StringComparison.Ordinal));
     }
 
-    /// <summary>The planted holders: one read in each place a read can
+    /// <summary>The members the planted holders' reads count to, and how many
+    /// each holds.</summary>
+    private static readonly (string Type, string Member, int Reads)[] HolderKeys =
+    [
+        ("Derived", "Derived", 1),
+        ("Holders", "ByLambda", 1),
+        ("Holders", "ByLocal", 1),
+        ("Holders", "Detail", 2),
+        ("Holders", "Finalize", 1),
+        ("Holders", "Holders", 2),
+        ("Holders", "Initial", 1),
+        ("Holders", "Said", 2),
+        ("Holders", "Seeded", 1),
+        ("Holders", "Spoken", 1),
+        ("Holders", "Twice", 2),
+        ("Holders", "_render", 1),
+        ("Holders", "op_Addition", 1),
+        ("Holders", "op_Implicit", 1),
+        ("Holders", "this[]", 1),
+        ("Nested", "Twice", 1),
+        ("Other", "Twice", 1),
+    ];
+
+    /// <summary>The planted holders: a read in each place a read can
     /// stand.</summary>
     private const string Holders = """
         namespace SlateWindows.Planted
@@ -350,9 +414,19 @@ public sealed class ShellFailureDetailCensus
 
                 private string _last = "";
 
+                static Holders()
+                {
+                    _ = new InvalidOperationException("planted").Message;
+                }
+
                 internal Holders(Exception failure)
                 {
                     _last = failure.Message;
+                }
+
+                ~Holders()
+                {
+                    _last = Failure?.Message ?? "";
                 }
 
                 internal Exception? Failure { get; set; }
@@ -366,6 +440,24 @@ public sealed class ShellFailureDetailCensus
                     get { return Failure!.Message; }
                     set { _last = Failure!.Message + value; }
                 }
+
+                internal string Seeded
+                {
+                    get => _last;
+                    init => _last = value + (Failure?.Message ?? "");
+                }
+
+                internal event Action<string>? Said
+                {
+                    add { _last = Failure!.Message; }
+                    remove { _last = Failure!.Message; }
+                }
+
+                internal string this[Exception failure] => failure.Message;
+
+                public static string operator +(Holders holders, Exception failure) => holders._last + failure.Message;
+
+                public static implicit operator string(Holders holders) => holders.Failure?.Message ?? "";
 
                 internal string ByLambda(Exception failure)
                 {
@@ -382,12 +474,24 @@ public sealed class ShellFailureDetailCensus
                 internal string Twice(Exception failure) => failure.Message;
 
                 internal string Twice(Exception failure, string lead) => lead + failure.Message;
+
+                internal sealed class Nested
+                {
+                    internal string Twice(Exception failure) => failure.Message;
+                }
             }
 
             internal sealed class Other
             {
                 internal string Twice(Exception failure) => failure.Message;
             }
+
+            internal class Base(string text)
+            {
+                internal string Text { get; } = text;
+            }
+
+            internal sealed class Derived(Exception failure) : Base(failure.Message);
         }
         """;
 
