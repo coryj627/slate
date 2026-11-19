@@ -875,9 +875,14 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     private void PublishError(Exception failure)
     {
         State = SearchOverlayState.Error;
-        var announcement = new A11yEvent.SearchFailed(HumanReadable(failure));
+        // Core's words for the failure (#1890, CD9): a vault error's
+        // detail is core's own rendering, never the binding's field dump,
+        // and the host adds no lead of its own. An InvalidQuery's message
+        // embeds a raw SQLite string; it is passed through, never parsed
+        // and never re-classified host-side (contract S6).
+        var announcement = new A11yEvent.SearchFailed(FailureDetail.Of(failure));
         // The displayed line is the event's own rendering ("Search
-        // error: {message}", a11y.rs:872) — the displayed and spoken
+        // error: {message}", a11y.rs:2155) — the displayed and spoken
         // strings stay one template, never two copies (contract S6).
         PublishSummary(SlateUniffiMethods.A11yRender(announcement).Text, announcement);
     }
@@ -899,21 +904,6 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             _announce(announcement);
         }
     }
-
-    /// <summary>
-    /// The mac <c>humanReadable</c> arms reachable from search
-    /// (contract S6). The InvalidQuery message embeds a raw SQLite
-    /// string: it is passed through, never parsed and never
-    /// re-classified host-side.
-    /// </summary>
-    private static string HumanReadable(Exception failure) => failure switch
-    {
-        VaultException.Io io => io.message,
-        VaultException.Db db => db.message,
-        VaultException.InvalidQuery invalid => $"Search query is invalid: {invalid.message}",
-        VaultException.Unsupported unsupported => $"{unsupported.feature} is not implemented yet.",
-        _ => failure.Message,
-    };
 
     private void ClearRows()
     {

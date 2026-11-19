@@ -555,6 +555,8 @@ A new surface joins ALL SIX or fails a named gate.
   [#1113](https://github.com/coryj627/slate/issues/1113): mac adopting
   exclusivity is the cheaper end state for both platforms.
 
+- **SD-6 — Windows says core's detail for a failed search; the Mac adds a lead of its own.** Owner decision CD9 (plan 47, 2026-11-16, #1890): the overlay's own error arms are gone, and `SearchFailed` carries the failure's detail through `FailureDetail.Of`: core's `vault_error_detail` for a vault error, and any other exception's own message. An `InvalidQuery` says core's message bare ("Search error: FTS5 could not parse …"), where the Mac's `humanReadable` adds "Search query is invalid: " (`AppState.swift:26018-26019`). The template S6 cites is now `a11y.rs:2155`. Convergence is the Mac adopting core's detail (#1527, #1954). Facts: `GraphSearchFailureDetailTests`.
+
 ## Accepted-risk register (owner-recorded; off-limits for re-litigation)
 
 - **SR-1 — The sidebar loses its reading-view tag entry point.** SD-4

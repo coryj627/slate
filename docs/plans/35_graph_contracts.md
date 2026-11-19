@@ -12541,6 +12541,7 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   TABLE's states and are not consulted: the layout snapshots the graph
   itself (`start_graph_layout`), as the mac's build reads no table
   snapshot.
+  *Amended by CB-15b under CD9 (2026-11-16, #1890): DiagramError is the failure's detail through `FailureDetail.Of`: core's `vault_error_detail` for a vault error, and any other exception's own message; not a humanised message of the host's own.*
 - **Term G3 — the semantic epoch and the topology.** The renderer's
   visible set, per-node record and edges come from `GraphTopology(query,
   config)` fetched ONCE per epoch — (the model's identity, the model's
@@ -13938,6 +13939,8 @@ document's HumanReadable is the search overlay's twin rather than the
 table's raw `exception.Message` — Term G2 asks for the humanised
 message. MUTATIONS, each restored byte for byte, each caught by the
 named fact: the gate admitting a retired model, the handle freed with a call in flight, the count never freeing, the install ignoring the sequence, the registration dropped, the forces not re-read at the install, the epoch key ignoring the groups, the topology apply accepting another generation, the frame currency dropped, Reduce Motion ignored, the settle line spoken unarmed, the probe refreshing on every generation, RefreshAgain not consumed on the null path, the pin prune dropped, the teardown skipping the run's stop, a planted bare call on the session field, a planted catch of the disposal, a held session local in the build, a planted Task.Run under Graph/, a second model construction, a load starter outside the closed list — twenty-one of twenty-one caught (`gD-mutations.py`, the T2 entries).
+
+*Amended by CB-15b under CD9 (2026-11-16, #1890): the build's failures and the table's carry the failure's detail through `FailureDetail.Of`: core's `vault_error_detail` for a vault error, and any other exception's own message. The `HumanReadable` arms this record names, and note (viii)'s contrast with the table's raw `exception.Message`, are gone: a vault error says core's words in both, and an `InvalidQuery` no longer adds "Search query is invalid: ".*
 
 **TGD-3 — T3: rules T and V in the renderer — the three visuals, the
 visible set and the tier, tier A's complete peers, tier B's summary, the
@@ -17367,6 +17370,8 @@ drift ("Zoom 100%") → the renderer fact's literal and its pin; a planted
 class (a script observation, not a test — the register is prose, and
 the grep is its teeth).
 
+*Amended by CB-15b under CD9 (2026-11-16, #1890): the `VaultException` arms this record names are gone. The message inside `GraphBlocked{LoadFailed}` and the diagram's error is the failure's detail through `FailureDetail.Of` (core's `vault_error_detail` for a vault error, any other exception's own message), so Windows keeps no host mapping here; the Mac's `humanReadable` keeps its own (#1527, #1954).*
+
 **TGF-6 — The matrix: the evidence split by surface, the aggregate, the
 generator's close-out status, the surface row derived (F7, FD-5,
 FD-10).** `chords.json`'s one `graph` group became FOUR command groups
@@ -18611,31 +18616,31 @@ that exists and is not keyed is not claimed as keyed.
 | C-D19 | A sort during an Orphans pair adopts with `GridSorted` alone on Windows | §C, line 9984 |
 | C-D20 | Withdrawn | §C, line 9989 |
 | C-D21 | A shell route's landing over a held publication during a slow pair can speak two row lines | §C, line 9991 |
-| D-D1 | No focus-routed menu owner. | §D, line 13499 |
-| D-D2 | The node peer's HelpText is the neighbour content; T65's activation help is not carried. | §D, line 13505 |
-| D-D3 | A keyboard selection move is the relay's `GraphRow` line, the peers taking no focus | §D, line 13512 |
-| D-D4 | Tab and Shift+Tab are consumed by the renderer as the structural step whenever a node is visible | §D, line 13517 |
-| D-D5 | No restore-time focus suppression flag | §D, line 13521 |
-| D-D6 | Type-ahead folds with OrdinalIgnoreCase | §D, line 13526 |
-| D-D7 | Ctrl+wheel zooms; no pinch. | §D, line 13529 |
-| D-D8 | The fit padding is 60 layout units | §D, line 13532 |
-| D-D9 | The diagram's peers are complete, the canvas's windowed | §D, line 13535 |
-| D-D10 | The Where-am-I panel shows the diagram's readback too | §D, line 13538 |
-| D-D11 | The drag pans | §D, line 13540 |
-| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13541; **closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either |
-| E-D1 | The pane is a leaf, the mac's is a trailing panel inside the graph tab | §E, line 15376 |
-| E-D2 | The accessible value of a slider is numeric | §E, line 15381 |
-| E-D3 | The forces edit restarts the driver's run | §E, line 15383 |
-| E-D4 | A display change is a redraw, not an epoch | §E, line 15385 |
-| E-D5 | The pane's hide returns the keys to the projection | §E, line 15387 |
-| E-D6 | A read-only config is SHOWN in the pane | §E, line 15389 |
-| E-D7 | A forces edit under a build in flight speaks the settle | §E, line 15392 |
-| E-D8 | The pane is disabled outside an effective graph, with a notice | §E, line 15396 |
-| FD-D1 | The graph has no mutation harness. | §F, line 16922 |
-| FD-D2 | The large-graph budgets measure the driver and the renderer's rebuild on the UI thread, not the frame. | §F, line 16928 |
-| FD-D3 | Windows has no residue census. | §F, line 16934 |
-| FD-D4 | The Voice Access commands are the graph's verbs. | §F, line 16939 |
-| FD-D5 | The graph document has no "Verified during implementation" register; its task records are that register. | §F, line 16944 |
+| D-D1 | No focus-routed menu owner. | §D, line 13500 |
+| D-D2 | The node peer's HelpText is the neighbour content; T65's activation help is not carried. | §D, line 13506 |
+| D-D3 | A keyboard selection move is the relay's `GraphRow` line, the peers taking no focus | §D, line 13513 |
+| D-D4 | Tab and Shift+Tab are consumed by the renderer as the structural step whenever a node is visible | §D, line 13518 |
+| D-D5 | No restore-time focus suppression flag | §D, line 13522 |
+| D-D6 | Type-ahead folds with OrdinalIgnoreCase | §D, line 13527 |
+| D-D7 | Ctrl+wheel zooms; no pinch. | §D, line 13530 |
+| D-D8 | The fit padding is 60 layout units | §D, line 13533 |
+| D-D9 | The diagram's peers are complete, the canvas's windowed | §D, line 13536 |
+| D-D10 | The Where-am-I panel shows the diagram's readback too | §D, line 13539 |
+| D-D11 | The drag pans | §D, line 13541 |
+| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13542; **closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either |
+| E-D1 | The pane is a leaf, the mac's is a trailing panel inside the graph tab | §E, line 15379 |
+| E-D2 | The accessible value of a slider is numeric | §E, line 15384 |
+| E-D3 | The forces edit restarts the driver's run | §E, line 15386 |
+| E-D4 | A display change is a redraw, not an epoch | §E, line 15388 |
+| E-D5 | The pane's hide returns the keys to the projection | §E, line 15390 |
+| E-D6 | A read-only config is SHOWN in the pane | §E, line 15392 |
+| E-D7 | A forces edit under a build in flight speaks the settle | §E, line 15395 |
+| E-D8 | The pane is disabled outside an effective graph, with a notice | §E, line 15399 |
+| FD-D1 | The graph has no mutation harness. | §F, line 16925 |
+| FD-D2 | The large-graph budgets measure the driver and the renderer's rebuild on the UI thread, not the frame. | §F, line 16931 |
+| FD-D3 | Windows has no residue census. | §F, line 16937 |
+| FD-D4 | The Voice Access commands are the graph's verbs. | §F, line 16942 |
+| FD-D5 | The graph document has no "Verified during implementation" register; its task records are that register. | §F, line 16947 |
 
 | Id | Head | Recorded |
 |---|---|---|
@@ -18658,21 +18663,21 @@ that exists and is not keyed is not claimed as keyed.
 | CR-5 | A write past the five-second drain completes on the application writer after the workspace is gone | §C, line 10017 |
 | CR-7 | A failed write loses its aggregate | §C, line 10024 |
 | CR-6 | A vault reached through a junction or a substituted drive is a different writer key | §C, line 10028 |
-| DR-1 | The mac twin of the `layout` artifact section is unrun on this box | §D, line 13549 |
-| DR-2 | Cross-platform float drift in the position golden is a GATE FAILURE, not an accepted drift | §D, line 13553 |
-| DR-3 | A complete peer set of 1,500 Buttons. | §D, line 13563 |
-| DR-4 | A diagram select of a node the table's snapshot lacks is refused | §D, line 13567 |
-| DR-5 | The warm-tick budget is the host's | §D, line 13574 |
-| DR-6 | `SystemParameters.ClientAreaAnimation` is the animation preference on Windows 10 and 11 ("Animation effects") | §D, line 13577 |
-| ER-1 | A slider drag's writes. | §E, line 15403 |
-| ER-2 | The seed's order. | §E, line 15409 |
-| ER-3 | The right pane's other leaves. | §E, line 15412 |
-| FR-1 | The Swift fact is unrun on this box. | §F, line 16959 |
-| FR-2 | The reconciliation's contract → evidence table is generated from prose, and its structured references are review-only. | §F, line 16962 |
-| FR-3 | The trigger census resolves sites, not preconditions. | §F, line 16968 |
-| FR-4 | The budgets in F1 run on CI's runner. | §F, line 16973 |
-| FR-5 | Two large vaults in the unit suite. | §F, line 16976 |
-| FR-6 | The spatial oracle's inputs are quantised. | §F, line 16980 |
+| DR-1 | The mac twin of the `layout` artifact section is unrun on this box | §D, line 13550 |
+| DR-2 | Cross-platform float drift in the position golden is a GATE FAILURE, not an accepted drift | §D, line 13554 |
+| DR-3 | A complete peer set of 1,500 Buttons. | §D, line 13564 |
+| DR-4 | A diagram select of a node the table's snapshot lacks is refused | §D, line 13568 |
+| DR-5 | The warm-tick budget is the host's | §D, line 13575 |
+| DR-6 | `SystemParameters.ClientAreaAnimation` is the animation preference on Windows 10 and 11 ("Animation effects") | §D, line 13578 |
+| ER-1 | A slider drag's writes. | §E, line 15406 |
+| ER-2 | The seed's order. | §E, line 15412 |
+| ER-3 | The right pane's other leaves. | §E, line 15415 |
+| FR-1 | The Swift fact is unrun on this box. | §F, line 16962 |
+| FR-2 | The reconciliation's contract → evidence table is generated from prose, and its structured references are review-only. | §F, line 16965 |
+| FR-3 | The trigger census resolves sites, not preconditions. | §F, line 16971 |
+| FR-4 | The budgets in F1 run on CI's runner. | §F, line 16976 |
+| FR-5 | Two large vaults in the unit suite. | §F, line 16979 |
+| FR-6 | The spatial oracle's inputs are quantised. | §F, line 16983 |
 
 <!-- graph-reconciliation:generated:end -->
 
