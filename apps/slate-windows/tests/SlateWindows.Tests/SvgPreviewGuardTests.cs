@@ -114,7 +114,8 @@ public sealed class SvgPreviewGuardTests
     /// exponentially (four <c>var()</c> references per level at 15 levels,
     /// about 1.07e9 lookups; six descendant steps over 254 nested groups,
     /// hours by arithmetic) cost the guard itself under 100 ms on this
-    /// fact's own stopwatch, after one call has compiled the guard.
+    /// fact's own stopwatch: the median of <see cref="WallClockBudget"/>'s
+    /// warm readings, so a loaded runner does not reach it.
     /// </summary>
     [Theory]
     [MemberData(nameof(SlowDocumentCases))]
@@ -127,13 +128,17 @@ public sealed class SvgPreviewGuardTests
         Assert.True(estimate > 10_000, $"{name}: estimated at {estimate:F0} ms");
         if (timed)
         {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024);
-            stopwatch.Stop();
-            Assert.Equal(SvgRefusal.DecodeCost, verdict);
+            TimeSpan guardTime = WallClockBudget.WarmMedian(() =>
+            {
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024);
+                stopwatch.Stop();
+                Assert.Equal(SvgRefusal.DecodeCost, verdict);
+                return stopwatch.Elapsed;
+            });
             Assert.True(
-                stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
-                $"{name}: the guard took {stopwatch.Elapsed.TotalMilliseconds:F1} ms");
+                guardTime < TimeSpan.FromMilliseconds(100),
+                $"{name}: the guard took {guardTime.TotalMilliseconds:F1} ms");
         }
     }
 
