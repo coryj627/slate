@@ -630,6 +630,7 @@ fn a_create_heals_only_the_dangling_rows_that_could_name_it() {
     reset_counters();
     crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(|paths| paths.set(0));
     crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
+    crate::links_db::FIRST_INDEX_HEALS.with(|heals| heals.set(0));
     session
         .create_exclusive("notes/f\u{f6}o.md", "# f\u{f6}o\n")
         .unwrap();
@@ -656,6 +657,9 @@ fn a_create_heals_only_the_dangling_rows_that_could_name_it() {
         "the heal read rows beyond the {} that name the created path",
         naming.len()
     );
+    // #1704: a second heal on the same create would read no rows (the first
+    // already resolved them), so only the call counter can see it.
+    assert_eq!(first_index_heals(), 1, "the create ran other than one heal");
 }
 
 /// #1426: lowercasing reads context, so a created path's folded form and
@@ -816,6 +820,485 @@ fn a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing() {
         fresh_rows(&session, None),
         3,
         "a heal UPDATE survived the rollback"
+    );
+}
+
+// --- Plan 47 CB-31 (#1704): every first index of a path heals the
+// dangling links that could name it, as a create does, and nothing else
+// heals per file. ---
+
+fn first_index_heals() -> usize {
+    crate::links_db::FIRST_INDEX_HEALS.with(std::cell::Cell::get)
+}
+
+/// Zeroes both heal counters on this thread, right before a route.
+fn reset_heal_counters() {
+    crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
+    crate::links_db::FIRST_INDEX_HEALS.with(|heals| heals.set(0));
+}
+
+/// `A.md`'s three links, to a note, a canvas and a base.
+const FIRST_INDEX_LINKS: &str = "# A\n\n[[Draft]]\n[[Board.canvas]]\n[[Table.base]]\n";
+const FIRST_INDEX_BASE: &[u8] = b"views:\n  - type: table\n    name: All\n";
+const FIRST_INDEX_CANVAS: &[u8] = b"{\"nodes\":[],\"edges\":[]}";
+
+/// A scanned vault where `A.md` holds `body` and every link of it dangles,
+/// with the graph built, so its incremental hooks are live for the route
+/// (`graph_sink()` stages nothing while no graph exists).
+fn dangling_link_vault(body: &str) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        outgoing_targets(&session, "A.md")
+            .iter()
+            .all(Option::is_none),
+        "premise: every link of A.md dangles"
+    );
+    session.with_graph(|graph| graph.node_count()).unwrap();
+    (tmp, session)
+}
+
+/// What a first index of `path` leaves behind: `A.md`'s link number `link`
+/// resolves to it and its other links still dangle; `path`'s Backlinks
+/// list `A.md`; one heal ran and read the one row; and the live graph,
+/// checked as still built before anything reads it, equals a fresh
+/// rebuild, holds no ghost keyed `ghost`, and gives `A.md`'s Connections
+/// leaf the target with its path.
+fn assert_first_index_healed(
+    session: &VaultSession,
+    link: usize,
+    path: &str,
+    ghost: &str,
+    route: &str,
+) {
+    use crate::graph::NodeKey;
+    let (heals, rows) = (first_index_heals(), heal_rows_visited());
+    assert!(
+        session.graph_is_built(),
+        "{route}: the graph was dropped, so its replay went unchecked"
+    );
+    let mut expected: Vec<Option<String>> = vec![None; outgoing_targets(session, "A.md").len()];
+    expected[link] = Some(path.to_string());
+    assert_eq!(
+        outgoing_targets(session, "A.md"),
+        expected,
+        "{route}: A.md's links"
+    );
+    let backlinks: Vec<String> = session
+        .backlinks(path, Paging::first(50))
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|backlink| backlink.source_path)
+        .collect();
+    assert_eq!(backlinks, ["A.md"], "{route}: {path}'s backlinks");
+    assert_eq!((heals, rows), (1, 1), "{route}: (heals run, rows read)");
+    let fresh = session.graph_rebuild_reference().unwrap();
+    let (equal, ghosts) = session
+        .with_graph(|graph| {
+            let ghosts: Vec<String> = graph
+                .canonical_nodes()
+                .into_iter()
+                .filter_map(|(key, _, _)| match key {
+                    NodeKey::Ghost(key) => Some(key),
+                    NodeKey::Path(_) => None,
+                })
+                .collect();
+            (graph.deep_equals(&fresh), ghosts)
+        })
+        .unwrap();
+    assert!(equal, "{route}: the live graph differs from a rebuild");
+    assert!(
+        !ghosts.iter().any(|key| key == ghost),
+        "{route}: the graph still holds the ghost {ghost:?}: {ghosts:?}"
+    );
+    let tree = session
+        .graph_connections_tree("A.md", 1, crate::graph_queries::connections_filter())
+        .unwrap();
+    assert!(
+        tree.outgoing
+            .iter()
+            .any(|row| row.path.as_deref() == Some(path)),
+        "{route}: A.md's Connections leaf does not list {path}"
+    );
+}
+
+/// #1704, fact 1: a first save of a path no row holds heals the dangling
+/// rows that name it, whether no file stood there or one stood unindexed
+/// (saved over with its own hash, as a host saves a note it loaded).
+#[test]
+fn a_first_save_heals_the_dangling_rows_that_name_it() {
+    let (_absent_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    reset_heal_counters();
+    session.save_text("Draft.md", "# Draft\n", None).unwrap();
+    assert_first_index_healed(&session, 0, "Draft.md", "draft", "a first save");
+
+    let (_unindexed_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    session
+        .provider
+        .write_file("Draft.md", b"# Draft\n")
+        .unwrap();
+    reset_heal_counters();
+    session
+        .save_text(
+            "Draft.md",
+            "# Draft\n\nedited\n",
+            Some(&crate::content_hash(b"# Draft\n")),
+        )
+        .unwrap();
+    assert_first_index_healed(
+        &session,
+        0,
+        "Draft.md",
+        "draft",
+        "a first save over an unindexed file",
+    );
+}
+
+/// #1704, fact 2: a saved query exported as a base, which core writes
+/// through `save_text` with no expected hash, heals the links that name the
+/// new base. Both hosts' export reaches this.
+#[test]
+fn a_saved_query_export_heals_the_links_that_name_it() {
+    let (_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    let (base, warnings) = crate::bases::parse_base("views:\n  - type: table\n    name: All\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query = serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap();
+    let id = session
+        .save_query("Exported", None, &query, SavedQuerySourceSyntax::Builder)
+        .unwrap();
+    reset_heal_counters();
+    session
+        .export_saved_query_as_base(&id, "Table.base")
+        .unwrap();
+    assert_first_index_healed(
+        &session,
+        2,
+        "Table.base",
+        "table.base",
+        "a saved query's export",
+    );
+}
+
+/// #1704, fact 3: each repair that writes a path's first row heals the
+/// rows that name it: `reindex_path`, `repair_or_contain_path`, the
+/// abandoned-intent sweep after a save that landed unindexed, and the
+/// Windows repair coordinator's call after a create that landed
+/// unindexed. The faulted arms use paths no other fact uses, because a
+/// fault seam matches a path substring in every session of the process.
+#[test]
+fn a_repair_that_first_indexes_a_file_heals_the_dangling_rows_that_name_it() {
+    let (_reindex_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    session
+        .provider
+        .write_file("Draft.md", b"# Draft\n")
+        .unwrap();
+    reset_heal_counters();
+    session.reindex_path("Draft.md").unwrap();
+    assert_first_index_healed(&session, 0, "Draft.md", "draft", "reindex_path");
+
+    let (_repair_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    session
+        .provider
+        .write_file("Draft.md", b"# Draft\n")
+        .unwrap();
+    reset_heal_counters();
+    let repaired = session.repair_or_contain_path("Draft.md");
+    assert!(
+        matches!(repaired, Ok(TaskIndexRepairOutcome::Repaired)),
+        "{repaired:?}"
+    );
+    assert_first_index_healed(&session, 0, "Draft.md", "draft", "repair_or_contain_path");
+
+    let mut env = fault_guard();
+    let (_sweep_tmp, session) = dangling_link_vault("# A\n\n[[Swept1704]]\n");
+    env.set("SLATE_TEST_FAULT_AFTER_WRITE", "Swept1704");
+    let saved = session.save_text("Swept1704.md", "# swept\n", None);
+    env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
+    assert!(
+        matches!(saved, Err(VaultError::SavedButUnindexed { .. })),
+        "premise: the save landed unindexed: {saved:?}"
+    );
+    env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "Swept1704");
+    reset_heal_counters();
+    session.note_tasks("Swept1704.md", 10).unwrap();
+    env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
+    assert_first_index_healed(
+        &session,
+        0,
+        "Swept1704.md",
+        "swept1704",
+        "the abandoned-intent sweep",
+    );
+
+    let (_published_tmp, session) = dangling_link_vault("# A\n\n[[Published1704]]\n");
+    env.set("SLATE_TEST_FAULT_AFTER_WRITE", "Published1704");
+    let created = session.create_exclusive_reporting("Published1704.md", "# published\n");
+    env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
+    assert!(
+        matches!(
+            created,
+            Ok(CreateExclusiveOutcome::PublishedUnindexed { .. })
+        ),
+        "premise: the create landed unindexed: {created:?}"
+    );
+    reset_heal_counters();
+    let repaired = session.repair_or_contain_path("Published1704.md");
+    assert!(
+        matches!(repaired, Ok(TaskIndexRepairOutcome::Repaired)),
+        "{repaired:?}"
+    );
+    assert_first_index_healed(
+        &session,
+        0,
+        "Published1704.md",
+        "published1704",
+        "the repair of a create that landed unindexed",
+    );
+}
+
+/// #1704, fact 4: `open_base` of a base no row holds indexes it and heals
+/// the rows that name it.
+#[test]
+fn an_open_base_that_first_indexes_a_base_heals_the_dangling_rows_that_name_it() {
+    let (_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    session
+        .provider
+        .write_file("Table.base", FIRST_INDEX_BASE)
+        .unwrap();
+    reset_heal_counters();
+    session.open_base("Table.base").unwrap();
+    assert_first_index_healed(&session, 2, "Table.base", "table.base", "open_base");
+}
+
+/// #1704, fact 5: `open_canvas` of a canvas no row holds indexes it and
+/// heals the rows that name it, after the graph hears the new node.
+#[test]
+fn an_open_canvas_that_first_indexes_a_canvas_heals_the_dangling_rows_that_name_it() {
+    let (_tmp, session) = dangling_link_vault(FIRST_INDEX_LINKS);
+    session
+        .provider
+        .write_file("Board.canvas", FIRST_INDEX_CANVAS)
+        .unwrap();
+    reset_heal_counters();
+    session.open_canvas("Board.canvas").unwrap();
+    assert_first_index_healed(&session, 1, "Board.canvas", "board.canvas", "open_canvas");
+}
+
+/// #1704, fact 6 (never silent): a first save whose heal fails fails after
+/// its bytes landed: `SavedButUnindexed` with the landed hash, the file on
+/// disk, no `files` row, and every row the heal would have healed still
+/// dangling. The save's twin of the create's fact above.
+#[test]
+fn a_first_save_whose_heal_fails_is_saved_but_unindexed_and_commits_nothing() {
+    let (tmp, session) = make_vault(|provider| {
+        for n in 1..=3 {
+            provider
+                .write_file(&format!("ghosts/g{n}.md"), b"# g\n\n[[fresh]]\n")
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let fresh_rows =
+        |resolved: Option<&str>| link_rows_where(&session, "l.target_raw = 'fresh'", resolved);
+    assert_eq!(fresh_rows(None), 3, "premise: three rows dangle");
+
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let saved = session.save_text("fresh.md", "# fresh\n", None);
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    match saved {
+        Err(VaultError::SavedButUnindexed {
+            new_content_hash, ..
+        }) => assert_eq!(new_content_hash, crate::content_hash(b"# fresh\n")),
+        other => panic!("expected SavedButUnindexed, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("fresh.md")).unwrap(),
+        "# fresh\n",
+        "the bytes landed"
+    );
+    let rows: i64 = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = 'fresh.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0, "the failed save committed its files row");
+    assert_eq!(fresh_rows(None), 3, "a heal UPDATE survived the rollback");
+}
+
+/// #1704, fact 6b: an open canvas whose heal fails opens nothing: an
+/// error, no `files` row, no handle, and the row that names it still
+/// dangling. With the fault gone, the next open succeeds and heals.
+#[test]
+fn an_open_canvas_whose_heal_fails_opens_nothing_and_commits_nothing() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("A.md", b"# A\n\n[[Board.canvas]]\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session
+        .provider
+        .write_file("Board.canvas", FIRST_INDEX_CANVAS)
+        .unwrap();
+    let canvas_rows = |session: &VaultSession| -> i64 {
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'Board.canvas'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let opened = session.open_canvas("Board.canvas");
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    assert!(
+        opened.is_err(),
+        "the open succeeded although its heal failed"
+    );
+    assert_eq!(
+        canvas_rows(&session),
+        0,
+        "the failed open committed its row"
+    );
+    assert!(
+        session.canvases.lock().unwrap().is_empty(),
+        "the failed open registered a handle"
+    );
+    assert_eq!(outgoing_targets(&session, "A.md"), [None]);
+
+    session.open_canvas("Board.canvas").unwrap();
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        [Some("Board.canvas".to_string())]
+    );
+}
+
+/// #1704, fact 7 (guard): a save, repair or open of a path that already
+/// had a row runs no heal. The fact sets `A.md`'s three resolved rows back
+/// to NULL itself (rows only a heal or a scan would touch), so a heal run
+/// on any of these routes would show both in the call counter and in the
+/// rows. A direct heal of each path at the end shows those rows were
+/// healable.
+#[test]
+fn a_path_already_indexed_runs_no_heal() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("A.md", FIRST_INDEX_LINKS.as_bytes())
+            .unwrap();
+        provider.write_file("Draft.md", b"# Draft\n").unwrap();
+        provider
+            .write_file("Board.canvas", FIRST_INDEX_CANVAS)
+            .unwrap();
+        provider.write_file("Table.base", FIRST_INDEX_BASE).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let resolved: Vec<Option<String>> = ["Draft.md", "Board.canvas", "Table.base"]
+        .into_iter()
+        .map(|path| Some(path.to_string()))
+        .collect();
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        resolved,
+        "premise: every link resolves"
+    );
+    let execute = |sql: &str, path: &str| {
+        session.conn.lock().unwrap().execute(sql, [path]).unwrap();
+    };
+    execute(
+        "UPDATE links SET target_path = NULL
+         WHERE source_file_id = (SELECT id FROM files WHERE path = ?1)",
+        "A.md",
+    );
+    let still_dangling = |route: &str| {
+        assert_eq!(first_index_heals(), 0, "{route} ran a heal");
+        assert_eq!(
+            outgoing_targets(&session, "A.md"),
+            [None, None, None],
+            "{route} healed a row"
+        );
+    };
+    still_dangling("premise: the rows were set dangling");
+    let drop_file_meta = |path: &str| {
+        execute(
+            "DELETE FROM file_meta WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            path,
+        );
+    };
+
+    reset_heal_counters();
+    session
+        .save_text("Draft.md", "# Draft\n\nagain\n", None)
+        .unwrap();
+    still_dangling("a second save");
+
+    reset_heal_counters();
+    session.reindex_path("Draft.md").unwrap();
+    still_dangling("reindex_path of an indexed path");
+
+    drop_file_meta("Table.base");
+    reset_heal_counters();
+    session.open_base("Table.base").unwrap();
+    still_dangling("open_base re-indexing an existing row");
+
+    drop_file_meta("Board.canvas");
+    reset_heal_counters();
+    session.open_canvas("Board.canvas").unwrap();
+    still_dangling("open_canvas of an existing row");
+
+    {
+        let conn = session.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        for path in ["Draft.md", "Board.canvas", "Table.base"] {
+            crate::links_db::re_resolve_unresolved_links_naming(&tx, path).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        resolved,
+        "control: a heal of each path heals its row"
+    );
+}
+
+/// #1704, fact 8 (guard): a cold scan heals once, at its tail, and runs no
+/// heal per file. Each of the two notes names the other, so whichever the
+/// walk reaches second would find the first one's dangling row, whatever
+/// the walk's order.
+#[test]
+fn a_cold_scan_runs_no_per_file_heal() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("a.md", b"[[b]]\n").unwrap();
+        provider.write_file("b.md", b"[[a]]\n").unwrap();
+    });
+    reset_heal_counters();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        (first_index_heals(), heal_rows_visited()),
+        (0, 0),
+        "the scan ran a heal per file: (heals run, rows read)"
+    );
+    assert_eq!(
+        outgoing_targets(&session, "a.md"),
+        [Some("b.md".to_string())]
+    );
+    assert_eq!(
+        outgoing_targets(&session, "b.md"),
+        [Some("a.md".to_string())]
     );
 }
 

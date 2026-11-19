@@ -427,7 +427,7 @@ fn another_sessions_rename_reaches_the_next_feed_window_whatever_was_swept() {
 /// Fact 9: a rename that stopped between the volume and the index (#1981's
 /// shape) leaves the row under the old path and a held marker under each
 /// name. The sweep removes that row and still announces it, and reads the
-/// destination.
+/// destination, whose first row it announces `Created` (#1704).
 #[test]
 fn a_stopped_renames_recovery_still_announces_the_row_it_removed() {
     let (tmp, a) = make_vault(|provider| {
@@ -443,7 +443,7 @@ fn a_stopped_renames_recovery_still_announces_the_row_it_removed() {
 
     assert_eq!(
         recorder.take_sorted(),
-        strings(&["Deleted A1683.md", "Modified B1683.md"])
+        strings(&["Created B1683.md", "Deleted A1683.md"])
     );
     assert!(!row_stands(&a, "A1683.md"));
 }
@@ -666,4 +666,44 @@ fn a_case_only_rename_on_a_folder_that_keeps_case_reports_only_the_stored_spelli
     assert_eq!(vault_tasks(&a), strings(&["a1683.md: one"]));
 
     assert_eq!(recorder.take(), strings(&["Modified a1683.md"]));
+}
+
+/// Fact 13 (plan 47 CB-31, #1704): a repair that writes a path's first row
+/// announces `Created`, as a save of a new path does, through both host
+/// repair routes; a repair of a path the index already holds still
+/// announces `Modified`. A Windows host reseats a missing tab on `Created`
+/// and not on `Modified`.
+#[test]
+fn a_repair_that_first_indexes_a_file_announces_it_created() {
+    let (_tmp, a, recorder) = one_note_vault();
+    a.provider
+        .write_file("arrived1683.md", b"- [ ] arrived\n")
+        .unwrap();
+    let repaired = a.repair_or_contain_path("arrived1683.md");
+    assert!(
+        matches!(repaired, Ok(TaskIndexRepairOutcome::Repaired)),
+        "{repaired:?}"
+    );
+    let first_repair = recorder.take();
+    a.repair_or_contain_path("arrived1683.md").unwrap();
+    let second_repair = recorder.take();
+
+    let (_tmp, b, recorder) = one_note_vault();
+    b.provider
+        .write_file("arrived1683.md", b"- [ ] arrived\n")
+        .unwrap();
+    b.reindex_path("arrived1683.md").unwrap();
+    let first_reindex = recorder.take();
+    b.reindex_path("arrived1683.md").unwrap();
+    let second_reindex = recorder.take();
+
+    assert_eq!(
+        (first_repair, second_repair, first_reindex, second_reindex),
+        (
+            strings(&["Created arrived1683.md"]),
+            strings(&["Modified arrived1683.md"]),
+            strings(&["Created arrived1683.md"]),
+            strings(&["Modified arrived1683.md"]),
+        )
+    );
 }
