@@ -1998,7 +1998,10 @@ public sealed partial class ConnectionsLeafTests
         }
         catch (VaultException failure)
         {
-            return Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed(failure.Message)));
+            // Core's own renderer, not the shell's FailureDetail.Of: the
+            // oracle never calls the routine under test (#1890, CB-15b).
+            return Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed(
+                SlateUniffiMethods.VaultErrorDetail(failure))));
         }
     }
 

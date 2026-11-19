@@ -23,7 +23,8 @@
 // more reads than its row, fails and prints a ready row; a row holding more
 // than the member reads, or matching no read, fails as stale, so each later
 // PR deletes or lowers the rows it ends. No row may name a Files sidebar
-// file or the tag edit's EditTagAtItsTurn, which CB-15a routed.
+// file or the tag edit's EditTagAtItsTurn, which CB-15a routed, or a file in
+// Canvas/, Graph/ or Search/, which CB-15b routed.
 //
 // The table only shrinks. A baseline, kept apart from it, holds each
 // member's allowance as it stood on 2026-11-18: a row names a member the
@@ -40,6 +41,18 @@
 // in 29 files, none a dump reaching text by reading (typed-field reads of a
 // uniffi error, stored exceptions, captures, wrappers, delegates), which is
 // not few (CD9's condition; the lead's ruling of 2026-11-18).
+//
+// CB-15b (CD9, 2026-11-19) routed the 26 reads in Canvas/, Graph/ and Search/
+// (22 rows) and removed the search's and the graph's own error arms; 39 rows
+// and 47 reads stand, all CB-15c's. Its trial of rule 2 over those three
+// folders had 20 hits of its own, none an exception reaching text. One of its
+// reads has no fact of its own and is held here alone:
+// CanvasDocumentViewModel.CanvasRemoveFromGroup's catch wraps only
+// CanvasPlaceNew, which refuses nothing but a closed handle, after
+// CanvasParentOf has asked the same handle in the same lease hold, so only a
+// close that bypasses the lease's lock in the middle of that hold reaches it:
+// a race the lease forbids in production (the lead's ruling on CB-15b's
+// Call 8).
 //
 // What this census cannot see:
 // - A count is the key: one read routed and another added in the same member
@@ -85,34 +98,13 @@ public sealed class ShellFailureDetailCensus
     private const string Dated = "2026-11-18";
 
     /// <summary>The reads that stand (plan 47 §4 rule 4), from the census's
-    /// own ready rows on 2026-11-18: 61 members, 73 reads (CB-15b 22 members
-    /// and 26 reads, CB-15c 39 members and 47 reads).</summary>
+    /// own ready rows on 2026-11-18: 61 members, 73 reads then (CB-15b 22
+    /// members and 26 reads, CB-15c 39 members and 47 reads). CB-15b routed
+    /// its rows; 39 members and 47 reads stand, all CB-15c's. No row names a
+    /// Files sidebar file, the tag edit, or a file in Canvas/, Graph/ or
+    /// Search/.</summary>
     internal static readonly Row[] Remaining =
     [
-        // CB-15b: Canvas/, Graph/ and Search/.
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddFileCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a file card"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddLinkCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a link card"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasConvertToNote", 1, CB15b, Dated, "CanvasBlocked (NoteReadFailed), converting a card to a note"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasCreateConnectedCard", 1, CB15b, Dated, "CanvasActionFailed (CreateConnectedCard)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasDuplicate", 1, CB15b, Dated, "CanvasActionFailed (Duplicate)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasMoveIntoGroup", 1, CB15b, Dated, "CanvasActionFailed (MoveIntoGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewCard", 1, CB15b, Dated, "CanvasActionFailed (NewCard)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewGroup", 1, CB15b, Dated, "CanvasActionFailed (NewGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasRemoveFromGroup", 1, CB15b, Dated, "CanvasActionFailed (RemoveFromGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "RequestVaultPick", 1, CB15b, Dated, "CanvasActionFailed, the vault picker's load (Locate or add a file card)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitBulkMarked", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), a change to the marked cards"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitGroupMarked", 1, CB15b, Dated, "CanvasActionFailed (NewGroup), grouping the marked cards"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "TryWhereAmI", 1, CB15b, Dated, "CanvasActionFailed (WhereAmI), the card's readback"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "OpenFailed", 1, CB15b, Dated, "This canvas could not be opened: {detail} ({path})"),
-        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "RetargetAbsent", 1, CB15b, Dated, "CanvasBlocked (ReopenFailed), {from} moved to {to}: {detail}"),
-        new("Canvas/CanvasMutationFunnel.cs", "SlateWindows.Canvas.CanvasMutationFunnel", "Transact", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), an apply core refused"),
-        new("Graph/ConnectionsLeafViewModel.cs", "SlateWindows.Graph.ConnectionsLeafViewModel", "FetchUnder", 3, CB15b, Dated, "the Connections leaf's load failure"),
-        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Read", 1, CB15b, Dated, "{file} is unreadable: {detail}, the graph config's load failure"),
-        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Reason", 2, CB15b, Dated, "the graph config's refusal, a newer version or an unreadable file"),
-        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "FetchUnder", 2, CB15b, Dated, "the graph's load failure"),
-        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "HumanReadable", 1, CB15b, Dated, "the graph's error arm for any other vault error (CD9)"),
-        new("Search/SearchOverlayViewModel.cs", "SlateWindows.Search.SearchOverlayViewModel", "HumanReadable", 1, CB15b, Dated, "the search overlay's error arm for any other vault error (CD9)"),
-
         // CB-15c: the rest of the shell.
         new("Commands/SlateCommandRegistrar.cs", "SlateWindows.Commands.DispatcherCommandAction", "Invoke", 1, CB15c, Dated, "CommandException.ActionFailed, a palette command's failure"),
         new("EditorInteractions.cs", "SlateWindows.EditorInteractionCoordinator", "ResolveEmbedPreview", 1, CB15c, Dated, "EmbedUnresolvedReason.ReadError, an embed preview's read failure"),
@@ -330,11 +322,13 @@ public sealed class ShellFailureDetailCensus
 
     private static Allowance AllowanceOf(Row row) => new(row.File, row.Type, row.Member, row.Reads);
 
-    /// <summary>The table's ceilings: the rows and reads it held on
-    /// 2026-11-18. A PR that routes reads lowers them to what is left.</summary>
-    internal const int RowCeiling = 61;
+    /// <summary>The table's ceilings: the rows and reads it holds now. A PR
+    /// that routes reads lowers them to what is left: 61 rows and 73 reads on
+    /// 2026-11-18, 39 and 47 once CB-15b routed Canvas/, Graph/ and
+    /// Search/.</summary>
+    internal const int RowCeiling = 39;
 
-    internal const int ReadCeiling = 73;
+    internal const int ReadCeiling = 47;
 
     /// <summary>The baseline itself never grows: it holds the 61 members and
     /// 73 reads that stood on 2026-11-18, each once.</summary>
@@ -609,7 +603,8 @@ public sealed class ShellFailureDetailCensus
     /// reads than its row, or a read with no row, is named with a ready row; a
     /// row with fewer reads in its member than it names, or none, is stale;
     /// two rows for one member are named; and a row may never stand for the
-    /// Files sidebar or the tag edit.</summary>
+    /// Files sidebar, the tag edit, or a file in Canvas/, Graph/ or
+    /// Search/.</summary>
     [Fact]
     public void TheTableIsHeldToTheReads()
     {
@@ -651,6 +646,24 @@ public sealed class ShellFailureDetailCensus
             ]);
         Assert.Contains(sidebar, problem => problem.StartsWith("FilesSidebarViewModel.TreeOperations.cs (SlateWindows.FilesSidebarViewModel.Refresh): CB-15a routed", StringComparison.Ordinal));
         Assert.Contains(sidebar, problem => problem.StartsWith("WorkspaceViewModel.Properties.cs (SlateWindows.WorkspaceViewModel.EditTagAtItsTurn): CB-15a routed", StringComparison.Ordinal));
+
+        // Nor does any file in Canvas/, Graph/ or Search/, each folder planted
+        // on its own so a rule that forgot one fails; a folder of the same
+        // name deeper in the tree is not one of them.
+        (string File, string Type)[] routed =
+        [
+            ("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel"),
+            ("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore"),
+            ("Search/SearchOverlayViewModel.cs", "SlateWindows.Search.SearchOverlayViewModel"),
+        ];
+        foreach ((string file, string type) in routed)
+        {
+            IReadOnlyList<string> folder = Problems([], [new(file, type, "Planted", 1, CB15b, Dated, "a planted read")]);
+            Assert.Contains(folder, problem => problem.StartsWith($"{file} ({type}.Planted): CB-15b routed", StringComparison.Ordinal));
+        }
+        Assert.DoesNotContain(
+            Problems([], [new("Panels/Canvas/Planted.cs", "SlateWindows.Panels.Planted", "Planted", 1, CB15c, Dated, "a planted read")]),
+            problem => problem.Contains("CB-15b routed", StringComparison.Ordinal));
 
         // A row says who ends it, when, and what it reaches.
         Assert.Contains(
@@ -871,8 +884,10 @@ public sealed class ShellFailureDetailCensus
     /// <summary>What the rows do not answer: a read in a member no row names,
     /// or in a member holding more reads than its row (each printed with a
     /// ready row); a row naming more reads than its member holds, or matching
-    /// none (stale); a row for the Files sidebar or the tag edit; a row with
-    /// no owner, date or sentence; two rows for one member.</summary>
+    /// none (stale); a row for the Files sidebar or the tag edit, which CB-15a
+    /// routed, or for a file in Canvas/, Graph/ or Search/, which CB-15b
+    /// routed; a row with no owner, date or sentence; two rows for one
+    /// member.</summary>
     internal static IReadOnlyList<string> Problems(IReadOnlyList<Read> reads, IReadOnlyList<Row> rows)
     {
         List<string> problems = [];
@@ -887,6 +902,13 @@ public sealed class ShellFailureDetailCensus
                 || row.Member == "EditTagAtItsTurn")
             {
                 problems.Add($"{Named(row)}: CB-15a routed the Files sidebar's reads and the tag edit's through "
+                    + "FailureDetail.Of; they never stand as rows.");
+            }
+            if (row.File.StartsWith("Canvas/", StringComparison.Ordinal)
+                || row.File.StartsWith("Graph/", StringComparison.Ordinal)
+                || row.File.StartsWith("Search/", StringComparison.Ordinal))
+            {
+                problems.Add($"{Named(row)}: CB-15b routed every read in Canvas/, Graph/ and Search/ through "
                     + "FailureDetail.Of; they never stand as rows.");
             }
         }

@@ -2611,10 +2611,13 @@ public sealed class CanvasMutationTests : IDisposable
     /// preparation queries the session CATCHES its own refusal inside
     /// the prepare lambda — the funnel's transaction catches only the
     /// apply's exception, so a placement or lookup that throws would
-    /// otherwise escape the gate. Pinned as a SOURCE census: no session
-    /// fault is inducible from a real vault (an unknown anchor does not
-    /// throw — core places anyway), so the clause is asserted on the
-    /// verbs' text, the way the chord scrape asserts the navigator's.</summary>
+    /// otherwise escape the gate. Pinned as a SOURCE census: ordinary input
+    /// makes no session fault here (an unknown anchor does not throw — core
+    /// places anyway), so the clause is asserted on the verbs' text, the way
+    /// the chord scrape asserts the navigator's. A constructed fault does
+    /// reach each of these catches over a real vault (the canvas handle
+    /// closed behind the lease, or a group core no longer holds), and
+    /// CanvasFailureDetailTests drives them so (#1890, CB-15b).</summary>
     [Fact]
     public void EveryQueryingFrontDoorPrepareCatchesItsOwnRefusal()
     {
