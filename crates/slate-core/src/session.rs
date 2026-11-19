@@ -22504,7 +22504,10 @@ impl VaultSession {
                     })
                 })?;
                 // #1704: the canvas's first row heals the links that name
-                // it, after the graph has heard of the node they heal onto.
+                // it. Either order with the `FileAdded` above replays to the
+                // same graph: had the heal run first, its linkset replay
+                // would map the row to its ghost, and the addition, whose
+                // inbound rows would then include it, moves it onto the node.
                 crate::links_db::heal_rows_naming_first_indexed(&tx, path, &mut graph_sink)?;
                 (
                     tx.query_row(
