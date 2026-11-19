@@ -232,7 +232,7 @@ public sealed partial class ShellAccessibilityTests
             RestThePointerAt(resting);
             more.Patterns.Invoke.Pattern.Invoke();
             AutomationElement bulkRename = WaitForOpenMenuRow(window, automation, "NoteHeaderBulkRename");
-            SettledBoundsOf(bulkRename);
+            AssertRestingOn(window, automation, "NoteHeaderBulkRename", resting, $"⋯ opened by its Invoke pattern for the move. {said}");
             Mouse.Position = resting with { X = resting.X + 4 };
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             Mouse.Position = resting with { X = resting.X + 8 };
@@ -244,8 +244,7 @@ public sealed partial class ShellAccessibilityTests
             FocusFor(editor);
             RestThePointerAt(resting);
             more.Patterns.Invoke.Pattern.Invoke();
-            SettledBoundsOf(WaitForOpenMenuRow(window, automation, "NoteHeaderBulkRename"));
-            Assert.Equal(resting, Mouse.Position);
+            AssertRestingOn(window, automation, "NoteHeaderBulkRename", resting, $"⋯ opened by its Invoke pattern for the still click. {said}");
             Mouse.Click();
             Assert.True(
                 TryWaitForElement(window, "BulkRenameSheet", TimeSpan.FromSeconds(10)) is not null,
@@ -335,6 +334,18 @@ public sealed partial class ShellAccessibilityTests
         Assert.DoesNotContain(bounds, row => row.Contains(Mouse.Position));
         CloseOpenMenu(window, automation, rowIds[0]);
         return place.Center();
+    }
+
+    /// <summary>The row <paramref name="rowId"/> settled under the still pointer in the open being
+    /// measured, not only in the open that found where to park it, so the row under the pointer
+    /// has its chance to take the keys.</summary>
+    private static void AssertRestingOn(Window window, UIA3Automation automation, string rowId, Point resting, string context)
+    {
+        Rectangle settled = SettledBoundsOf(WaitForOpenMenuRow(window, automation, rowId));
+        Assert.True(
+            settled.Contains(resting),
+            $"{rowId} settled at {settled} in this open, not under the pointer resting at {resting}: {context}");
+        Assert.Equal(resting, Mouse.Position);
     }
 
     /// <summary>Puts the pointer at <paramref name="place"/> and lets it rest there.</summary>
@@ -501,6 +512,7 @@ public sealed partial class ShellAccessibilityTests
         RestThePointerAt(resting);
         PressKey(VirtualKeyShort.RETURN);
         string context = $"{menuName} opened by Enter, the pointer resting on '{parkedName}' at {resting}. {said}";
+        AssertRestingOn(window, automation, parkedId, resting, context);
         AssertTheKeysStayOn(automation, WaitForOpenMenuRow(window, automation, landId), context);
         AssertItemNamesAreSpeakable(process, $"{buttonId}-resting-pointer");
         Assert.Equal(resting, Mouse.Position);

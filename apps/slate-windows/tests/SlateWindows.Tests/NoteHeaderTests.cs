@@ -971,6 +971,66 @@ public sealed class NoteHeaderTests
         CloseAndAwait(host, menu, closes);
     }));
 
+    /// <summary>#1849: the same for a right-click on a header button (⋯, or the compact bar's
+    /// Folders), which WPF's context menu service answers, not the button's Click. Escape gives
+    /// the mouse back, so the press never reaches the menu, and WPF reopens a popup whose close
+    /// is still fading. The pointer's request gives back the keyboard open's hold, and WPF
+    /// still opens the menu.</summary>
+    [Theory]
+    [InlineData("NoteHeaderMore")]
+    [InlineData("NoteHeaderFolders")]
+    public void ARightClickWhileAKeyboardOpenIsStillClosingHoldsNothing(string buttonId) => StaThread.RunPumped(() => WithPointerAt((40, 40), _ =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 500;
+        host.Settle();
+        Assert.True(header.IsCompact);
+        Button button = ShownShell.Descendants(header).OfType<Button>().Single(candidate => candidate.IsVisible && AutomationProperties.GetAutomationId(candidate) == buttonId);
+        ContextMenu menu = button.ContextMenu!;
+        MenuItem[] rows = [.. menu.Items.OfType<MenuItem>()];
+        var closes = new Closes(menu);
+
+        Assert.True(button.Focus());
+        Invoke(button);
+        host.Settle();
+        host.Settle();
+        AssertHeld(rows, $"with {buttonId}'s menu opened by its Invoke pattern");
+        int before = closes.Count;
+        menu.IsOpen = false;
+        bool fading = closes.Count == before;
+        TestContext.Current.TestOutputHelper?.WriteLine($"the keyboard open's close was {(fading ? "still fading" : "done at once")} when the right-click came");
+
+        Assert.True(RightClick(button, new Point(4, 4)), $"the right-click on {buttonId} opened no menu.");
+        host.Settle();
+        host.Settle();
+        Assert.True(menu.IsOpen, $"the right-click didn't open {buttonId}'s menu.");
+        AssertGivenBack(rows, $"with {buttonId}'s menu opened by a right-click while the keyboard open's close was {(fading ? "still fading" : "done")}");
+        CloseAndAwait(host, menu, closes);
+    }));
+
+    /// <summary>WPF's own right-click request, as CanvasContextMenuTests drives it: the popup
+    /// service's mouse-up handler raises ContextMenuOpening on the element under the pointer at
+    /// the pointer's place, then opens the menu its route found unless something handled it.
+    /// Answers whether a menu opened or the request was handled.</summary>
+    private static bool RightClick(IInputElement element, Point at)
+    {
+        System.Reflection.PropertyInfo service = typeof(FrameworkElement).GetProperty(
+            "PopupControlService",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("WPF's popup service is not where this fact reaches for it.");
+        object popups = service.GetValue(null)
+            ?? throw new InvalidOperationException("WPF's popup service is not running.");
+        System.Reflection.MethodInfo raise = popups.GetType().GetMethod(
+            "RaiseContextMenuOpeningEvent",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
+            [typeof(IInputElement), typeof(double), typeof(double), typeof(bool)])
+            ?? throw new InvalidOperationException("WPF's popup service has no pointer request door to drive.");
+        return (bool)raise.Invoke(popups, [element, at.X, at.Y, true])!;
+    }
+
     /// <summary>Counts a menu's Closed events. A context menu's popup fades out (about 170 ms
     /// here) before it raises Closed, which is when the hold ends.</summary>
     private sealed class Closes
