@@ -559,7 +559,12 @@ internal sealed class NoteHeaderView : Grid
 
             menu.PlacementTarget = owner;
             menu.Placement = PlacementMode.Bottom;
-            if (!withPointer)
+            if (withPointer)
+            {
+                // A keys' open whose close is still fading has not given its rows back yet.
+                RestingPointerHold.Release(menu);
+            }
+            else
             {
                 menu.Closed -= ReleaseTheRows;
                 menu.Closed += ReleaseTheRows;
@@ -574,9 +579,10 @@ internal sealed class NoteHeaderView : Grid
         }
     }
 
-    /// <summary>The menu's close gives its rows back. A popup that fades out (a menu with no
-    /// theme's style) raises Closed only when the fade ends, and by then the menu can be open
-    /// again and holding for that open, so a close is taken only from a menu that is shut.</summary>
+    /// <summary>The menu's close gives its rows back. A context menu's popup fades out (WPF sets
+    /// its animation from the system's menu animation, whatever the menu's style says) and
+    /// raises Closed only when the fade ends. By then the menu can be open again and holding for
+    /// that open, so a close is taken only from a menu that is shut.</summary>
     private static void ReleaseTheRows(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is ContextMenu { IsOpen: false } menu)
