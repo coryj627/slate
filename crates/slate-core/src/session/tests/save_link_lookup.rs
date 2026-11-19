@@ -724,9 +724,9 @@ fn a_create_heals_exactly_what_the_vault_wide_heal_heals() {
     for path in INDEXED_PATHS {
         targeted.create_exclusive(path, "# t\n").unwrap();
         crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
-        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(true));
+        crate::links_db::FIRST_INDEX_HEAL_VAULT_WIDE.with(|on| on.set(true));
         let created = vault_wide.create_exclusive(path, "# t\n");
-        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(false));
+        crate::links_db::FIRST_INDEX_HEAL_VAULT_WIDE.with(|on| on.set(false));
         created.unwrap();
         assert_eq!(
             heal_rows_visited(),
@@ -860,13 +860,13 @@ fn create_heal_timing() {
     let (_tmp, session) = dangling_vault(true);
     let (mut vault_wide, mut targeted, mut targeted_rows) = (Vec::new(), Vec::new(), Vec::new());
     for round in 0..9 {
-        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(true));
+        crate::links_db::FIRST_INDEX_HEAL_VAULT_WIDE.with(|on| on.set(true));
         let start = std::time::Instant::now();
         session
             .create_exclusive(&format!("new/w{round}.md"), "# new\n")
             .unwrap();
         vault_wide.push(start.elapsed().as_secs_f64() * 1000.0);
-        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(false));
+        crate::links_db::FIRST_INDEX_HEAL_VAULT_WIDE.with(|on| on.set(false));
         crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
         let start = std::time::Instant::now();
         session

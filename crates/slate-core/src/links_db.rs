@@ -116,10 +116,15 @@ thread_local! {
     /// read on this thread — the rows a create's heal visits.
     pub(crate) static HEAL_ROWS_VISITED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
-    /// #1426 test seam: while set, a create on this thread heals through the
-    /// vault-wide [`re_resolve_unresolved_links`], so a fact can compare the
-    /// two heals on twin vaults.
-    pub(crate) static CREATE_HEAL_VAULT_WIDE: std::cell::Cell<bool> =
+    /// #1704 test seam: the heals of a first-indexed path run on this
+    /// thread, counted on entry, so a fact can tell "no heal ran" from "a
+    /// heal ran and read nothing" (a heal reads only rows still dangling).
+    pub(crate) static FIRST_INDEX_HEALS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1426 test seam: while set, a first index on this thread heals
+    /// through the vault-wide [`re_resolve_unresolved_links`], so a fact
+    /// can compare the two heals on twin vaults.
+    pub(crate) static FIRST_INDEX_HEAL_VAULT_WIDE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
 
@@ -542,7 +547,7 @@ pub(crate) fn heal_after_create(
     created_path: &str,
 ) -> Result<Vec<String>, VaultError> {
     #[cfg(test)]
-    if CREATE_HEAL_VAULT_WIDE.with(std::cell::Cell::get) {
+    if FIRST_INDEX_HEAL_VAULT_WIDE.with(std::cell::Cell::get) {
         return re_resolve_unresolved_links(tx);
     }
     re_resolve_unresolved_links_naming(tx, created_path)
