@@ -80,27 +80,190 @@ public sealed class ReadingSvgEmbedDecodeTests
         }
     }
 
-    /// <summary>The decode's outcome is part of the projection's identity: a
-    /// decode that ran past its budget once and succeeds on the next refresh
-    /// rebuilds the card with the image, where an unchanged note alone would
-    /// keep showing the timeout sentence.</summary>
+    private const string TookLonger = "Image not shown: decoding took longer than 5 seconds.";
+
+    private const string ProjectionSpent =
+        "Image not shown: this note's images used their 20-second decoding budget.";
+
+    private const string Busy =
+        "Image not shown: earlier images are still decoding past their 5-second budget.";
+
+    /// <summary>The builder's notice for an image past the projection's
+    /// decoded-pixel pool, as much of it as names it.</summary>
+    private const string PoolNotice = "over this note's embedded-image budget";
+
+    /// <summary>#1635 (Codex round 2): once the projection's pixel pool is
+    /// spent a later SVG never enters the decoder, but one its decoder slots
+    /// remember as timed out still says so, not the pool notice. The real
+    /// <c>a.svg</c> spends the pool; <c>b.svg</c>, remembered from an earlier
+    /// open, meets it spent.</summary>
     [Fact]
-    public void ARefreshWhoseSvgDecodeNowSucceedsShowsTheImage()
+    public void ARememberedSvgPastTheSpentPixelPoolStillSaysItTimedOut()
     {
-        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-retry");
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-remembered-past-pool");
+        string b = FilledSvg("maroon");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), FilledSvg("navy"));
+        File.WriteAllText(Path.Combine(fixture.Root, "b.svg"), b);
+        File.WriteAllText(Path.Combine(fixture.Root, "first.md"), "![[b.svg]]\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.svg]]\n");
+        var probed = new List<string>();
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+                var decodes = new ParkedSvgDecodes();
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+                try
+                {
+                    // The first open times b.svg out at its whole budget, so
+                    // these slots remember it.
+                    EditorInteractionCoordinator.SvgDecodeBodyForTests = decodes.Parked;
+                    EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+                    try
+                    {
+                        using WorkspaceTabViewModel first = ReadingTab(session, "first.md");
+                        Assert.Equal(
+                            new[] { TookLonger },
+                            CardSentences(Assert.IsType<ReadingContentViewModel>(first.Reading).Document!, "b.svg"));
+                    }
+                    finally
+                    {
+                        EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                        EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                        decodes.Release();
+                        Assert.True(
+                            SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                            "the parked decode never ended");
+                    }
+
+                    // An 8x8 SVG rasterises to 64 pixels: the real a.svg spends
+                    // the whole pool.
+                    ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+                    ReadingContentViewModel.EmbedSvgDecodeProbeForTests = probed.Add;
+                    using WorkspaceTabViewModel tab = ReadingTab(session, "host.md");
+                    FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                    ParkedSvgDecodes.AssertSaid(CardSentences(document, "a.svg", "b.svg"), string.Empty, TookLonger);
+                    Assert.Equal(["a.svg"], probed);
+                    Assert.Equal(1, decodes.RunsOf(b));
+                    Assert.Single(
+                        BlocksOf(document.Blocks),
+                        block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                }
+                finally
+                {
+                    EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                }
+            });
+        }
+        finally
+        {
+            ReadingContentViewModel.EmbedSvgDecodeProbeForTests = null;
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
+    /// <summary>#1635 (Codex round 2): an SVG met once the projection's pixel
+    /// pool and its decode deadline are both spent says the deadline's
+    /// sentence, not the pool notice, and never enters the decoder. The first
+    /// decode spends both: it reserves the whole pool, then runs out a 100 ms
+    /// budget that is the whole 100 ms deadline.</summary>
+    [Fact]
+    public void AnSvgPastTheSpentPixelPoolAndDeadlineSaysTheDeadline()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-deadline-past-pool");
+        string[] svgs = [FilledSvg("olive"), FilledSvg("orange")];
+        File.WriteAllText(Path.Combine(fixture.Root, "a.svg"), svgs[0]);
+        File.WriteAllText(Path.Combine(fixture.Root, "b.svg"), svgs[1]);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.svg]]\n");
+        try
+        {
+            StaThread.Run(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+                var decodes = new ParkedSvgDecodes();
+                ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 64;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+                EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = 100;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = decodes.ParkedAfterReserving(64 * 4);
+                EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+                EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = 100;
+                try
+                {
+                    using WorkspaceTabViewModel tab = ReadingTab(session, "host.md");
+                    FlowDocument document = Assert.IsType<ReadingContentViewModel>(tab.Reading).Document!;
+
+                    ParkedSvgDecodes.AssertSaid(
+                        CardSentences(document, "a.svg", "b.svg"), TookLonger, ProjectionSpent);
+                    Assert.Equal(new[] { 1, 0 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                    Assert.Equal(new uint[] { 100 }, decodes.Waits);
+                }
+                finally
+                {
+                    EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = null;
+                    EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                    EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                    EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = null;
+                    EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                    decodes.Release();
+                    Assert.True(
+                        SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                        "the parked decode never ended");
+                }
+            });
+        }
+        finally
+        {
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = null;
+        }
+    }
+
+    /// <summary>A tab on <paramref name="path"/>, switched to reading, its
+    /// projection built on this thread.</summary>
+    private static WorkspaceTabViewModel ReadingTab(VaultSession session, string path)
+    {
+        var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, path)),
+            startInteractionBackgroundWork: false);
+        tab.ToggleViewMode();
+        return tab;
+    }
+
+    /// <summary>#1635 (CD19): a refresh never decodes again an SVG whose
+    /// decode ran out its budget. It says the sentence it said the first time,
+    /// and the projection is a memo hit, so its card does not flip to the busy
+    /// sentence while the abandoned decode runs on. A decode that reserved
+    /// pixels before its budget ended rebuilds once, with the same sentence:
+    /// the remembered refusal reserves none.</summary>
+    [Fact]
+    public void ASecondRefreshNeverReDecodesAnSvgThatRanPastItsBudget()
+    {
+        // The field document's shape (step 0's P6): its reservation comes
+        // after 5 seconds, so a decode abandoned at its budget reserved none.
+        RefreshTwiceOverATimedOutDecode("reading-svg-embed-remembered", reservesFirst: false);
+        RefreshTwiceOverATimedOutDecode("reading-svg-embed-remembered-reserving", reservesFirst: true);
+    }
+
+    private static void RefreshTwiceOverATimedOutDecode(string name, bool reservesFirst)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, name);
         File.WriteAllText(Path.Combine(fixture.Root, "pic.svg"), Svg);
         File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
         StaThread.Run(() =>
         {
             using VaultSession session = Scanned(fixture.Root);
-            using var release = new ManualResetEventSlim(false);
-            EditorInteractionCoordinator.SvgDecodeSlotsForTests = new EditorInteractionCoordinator.SvgDecodeSlots();
-            EditorInteractionCoordinator.SvgDecodeBodyForTests = (_, _) =>
-            {
-                release.Wait(TimeSpan.FromSeconds(10));
-                return null;
-            };
-            EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => 0x102;
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            var decodes = new ParkedSvgDecodes();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests =
+                reservesFirst ? decodes.ParkedAfterReserving(256) : decodes.Parked;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
             try
             {
                 using var tab = new WorkspaceTabViewModel(
@@ -111,31 +274,228 @@ public sealed class ReadingSvgEmbedDecodeTests
                     startInteractionBackgroundWork: false);
                 tab.ToggleViewMode();
                 ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
-                Assert.Contains(
-                    "Image not shown: decoding took longer than 5 seconds.",
-                    TextOf(reading.Document!),
-                    StringComparison.Ordinal);
+                FlowDocument opened = reading.Document!;
+                Assert.Equal(1, decodes.Runs);
+                Assert.Equal(new[] { TookLonger }, CardSentences(opened, "pic.svg"));
 
-                EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
-                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
-                release.Set();
                 reading.Refresh();
+                Assert.Equal(1, decodes.Runs);
+                Assert.Equal(new[] { TookLonger }, CardSentences(reading.Document!, "pic.svg"));
+                FlowDocument settled = reading.Document!;
+                if (!reservesFirst)
+                {
+                    Assert.Same(opened, settled);
+                }
 
-                FlowDocument document = reading.Document!;
-                Assert.DoesNotContain("Image not shown", TextOf(document), StringComparison.Ordinal);
-                Assert.True(
-                    BlocksOf(document.Blocks).Any(
-                        block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } }),
-                    "the refreshed card did not place the image: " + TextOf(document));
+                reading.Refresh();
+                Assert.Equal(1, decodes.Runs);
+                Assert.Same(settled, reading.Document);
+                Assert.Equal(new[] { TookLonger }, CardSentences(reading.Document!, "pic.svg"));
             }
             finally
             {
-                release.Set();
                 EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                decodes.Release();
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                    "the parked decodes never ended");
+            }
+        });
+    }
+
+    /// <summary>What #1908's fact pinned that still holds: a decode refused
+    /// as busy never started, so the next refresh decodes it, and the
+    /// decode's outcome is part of the projection's identity, so that refresh
+    /// rebuilds the card with the image where an unchanged note alone would
+    /// keep the busy sentence.</summary>
+    [Fact]
+    public void ARefreshAfterABusyRefusalShowsTheImage()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-busy-retry");
+        File.WriteAllText(Path.Combine(fixture.Root, "pic.svg"), Svg);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
+        StaThread.Run(() =>
+        {
+            using VaultSession session = Scanned(fixture.Root);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots
+            {
+                Abandoned = EditorInteractionCoordinator.MaxAbandonedSvgDecodes,
+            };
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                FlowDocument opened = reading.Document!;
+                Assert.Equal(new[] { Busy }, CardSentences(opened, "pic.svg"));
+
+                // The body reserves nothing, so the two projections differ in
+                // the decode's outcome alone.
+                Volatile.Write(ref slots.Abandoned, 0);
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = (_, _) => TinyPng;
+                reading.Refresh();
+
+                FlowDocument document = reading.Document!;
+                Assert.NotSame(opened, document);
+                Assert.Equal(new[] { string.Empty }, CardSentences(document, "pic.svg"));
+                Assert.Single(
+                    BlocksOf(document.Blocks),
+                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+            }
+            finally
+            {
                 EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
                 EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
             }
         });
+    }
+
+    /// <summary>#1635: a projection whose refresh runs on a worker reads the
+    /// process's own deadline there, where no fact's per-thread seam
+    /// reaches: with it spent, the card says the projection's sentence and
+    /// the SVG never enters the decoder.</summary>
+    [Fact]
+    public void ABackgroundRefreshReadsTheProcessDeadline()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-process-deadline");
+        File.WriteAllText(Path.Combine(fixture.Root, "pic.svg"), Svg);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[pic.svg]]\n");
+        EditorInteractionCoordinator.SvgProjectionDecodeDeadlineDefaultMillisecondsForTests = 0;
+        try
+        {
+            StaThread.RunPumped(() =>
+            {
+                using VaultSession session = Scanned(fixture.Root);
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: true);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                Assert.True(
+                    PumpedDispatcher.PumpUntil(
+                        () => !reading.IsLoading && reading.Document is not null,
+                        UnhurriedSvgDecodes.LandingWait()),
+                    "the projection never landed");
+
+                Assert.Equal(new[] { ProjectionSpent }, CardSentences(reading.Document!, "pic.svg"));
+            });
+        }
+        finally
+        {
+            UnhurriedSvgDecodes.LetEveryRealDecodeFinish();
+        }
+    }
+
+    /// <summary>#1635 (CD19): a reading projection's SVG decodes share a
+    /// deadline. Each waits for its own budget or what is left of the
+    /// deadline, whichever is shorter; once the deadline is spent the rest
+    /// say the projection's sentence without entering the decoder. The next
+    /// refresh refuses the remembered one at once and charges it nothing, so
+    /// the next image gets its turn.</summary>
+    [Fact]
+    public void SvgsPastTheProjectionsDecodeDeadlineNeverEnterTheDecoder()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-deadline");
+        string[] files = ["a.svg", "b.svg", "c.svg"];
+        string[] svgs = [FilledSvg("navy"), FilledSvg("maroon"), FilledSvg("purple")];
+        for (int index = 0; index < files.Length; index++)
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, files[index]), svgs[index]);
+        }
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "host.md"), "![[a.svg]]\n\n![[b.svg]]\n\n![[c.svg]]\n");
+        StaThread.Run(() =>
+        {
+            using VaultSession session = Scanned(fixture.Root);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            var decodes = new ParkedSvgDecodes();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = 100;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = decodes.Parked;
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = decodes.TimeoutOnceEntered;
+            EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = 150;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "host.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                FlowDocument opened = reading.Document!;
+                ParkedSvgDecodes.AssertSaid(
+                    CardSentences(opened, files), TookLonger, ProjectionSpent, ProjectionSpent);
+                Assert.Equal(new[] { 1, 1, 0 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                Assert.Equal(new uint[] { 100, 50 }, decodes.Waits);
+
+                decodes.Repark();
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                    "the parked decodes never ended");
+                reading.Refresh();
+
+                ParkedSvgDecodes.AssertSaid(
+                    CardSentences(reading.Document!, files), TookLonger, TookLonger, ProjectionSpent);
+                Assert.Equal(new[] { 1, 2, 1 }, svgs.Select(svg => decodes.RunsOf(svg)));
+                Assert.Equal(new uint[] { 100, 50, 100, 50 }, decodes.Waits);
+                Assert.NotSame(opened, reading.Document);
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgProjectionDecodeDeadlineMillisecondsForTests = null;
+                EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                decodes.Release();
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                    "the parked decodes never ended");
+            }
+        });
+    }
+
+    /// <summary>The 8x8 test SVG in a fill of its own, so its bytes are its
+    /// own (#1635 remembers a decode by its bytes).</summary>
+    private static string FilledSvg(string fill) =>
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+        + $"<rect width='8' height='8' fill='{fill}'/></svg>";
+
+    /// <summary>What each card says of the decode sentences, in the order of
+    /// <paramref name="files"/>, which is the cards' order: a card runs from
+    /// its file's name to the next card's.</summary>
+    private static string[] CardSentences(FlowDocument document, params string[] files)
+    {
+        string text = TextOf(document);
+        string[] sentences = [TookLonger, ProjectionSpent, Busy, PoolNotice];
+        var said = new string[files.Length];
+        int start = 0;
+        for (int index = 0; index < files.Length; index++)
+        {
+            start = text.IndexOf(files[index], start, StringComparison.Ordinal);
+            Assert.True(start >= 0, $"no card names {files[index]}: {text}");
+            int end = index + 1 < files.Length
+                ? text.IndexOf(files[index + 1], start, StringComparison.Ordinal)
+                : text.Length;
+            Assert.True(end > start, $"the cards are out of order: {text}");
+            string card = text[start..end];
+            said[index] = string.Join(
+                " | ", sentences.Where(sentence => card.Contains(sentence, StringComparison.Ordinal)));
+        }
+        return said;
     }
 
     /// <summary>The decoded-pixel pool bounds the worker's SVG decodes, as it
