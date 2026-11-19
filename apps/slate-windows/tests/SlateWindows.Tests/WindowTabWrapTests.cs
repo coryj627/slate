@@ -171,6 +171,80 @@ public sealed class WindowTabWrapTests
         Assert.Equal(WorkspaceFocusBoundary.Files, boundary);
     });
 
+    /// <summary>Codex round 2: Ctrl+Alt+Shift+Left and Right on the logo still move the active
+    /// tab, through the window's bindings, in both directions.</summary>
+    [Theory]
+    [InlineData(Key.Left)]
+    [InlineData(Key.Right)]
+    public void MoveTabStillRunsFromTheLogo(Key key) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("b.md", "# B\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Workspace.OpenPath("b.md", WorkspaceOpenTarget.NewTab);
+        host.Settle();
+        WorkspaceTabViewModel[] before = [.. host.Workspace.ActiveGroup.Tabs];
+        Assert.Equal(2, before.Length);
+        WorkspaceTabViewModel moving = key == Key.Left ? before[1] : before[0];
+        host.Workspace.ActiveGroup.ActiveTab = moving;
+        host.Settle();
+        if (((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { }) == ShellRegionLanding.Refused)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's chords weren't measured on it");
+        }
+
+        host.Settle();
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+
+        CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, () => Press(host, key));
+
+        Assert.Equal([before[1], before[0]], host.Workspace.ActiveGroup.Tabs);
+    });
+
+    /// <summary>Codex round 2: an arrow chord no window binding takes stays on the logo, as a
+    /// bare Left or Right does, whatever its modifiers: WPF's navigation takes those too.
+    /// (Up and Down, with any modifiers, open the logo's menu.)</summary>
+    [Theory]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Shift, Key.Left)]
+    [InlineData(ModifierKeys.Control, Key.Right)]
+    public void TheLogoKeepsAnUnboundArrowChord(ModifierKeys modifiers, Key key) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.OpenPath("note.md");
+        host.Settle();
+        if (((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { }) == ShellRegionLanding.Refused)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the logo's chords weren't measured on it");
+        }
+
+        host.Settle();
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+
+        CommandPaletteTests.ThreadModifiers.Hold(modifiers, () => Press(host, key));
+
+        Assert.True(
+            ReferenceEquals(host.Shell.AppMenuItem, Keyboard.FocusedElement),
+            $"{modifiers}+{key} on the logo moved the keys to {Describe(Keyboard.FocusedElement)}");
+    });
+
+    /// <summary>Codex round 2: on the empty pane's stop, a chord no window binding runs stays
+    /// too: Move Tab is bound to Ctrl+Alt+Shift+Left but has no tab to move, and
+    /// Ctrl+Shift+Right is bound to nothing.</summary>
+    [Theory]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, Key.Left)]
+    [InlineData(ModifierKeys.Control | ModifierKeys.Shift, Key.Right)]
+    public void TheEmptyPanesStopKeepsAChordNoBindingRuns(ModifierKeys modifiers, Key key) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor), "premise: the empty pane's stop took no keys");
+        Assert.Same(host.Shell.ContentPaneBorder, Keyboard.FocusedElement);
+
+        CommandPaletteTests.ThreadModifiers.Hold(modifiers, () => Press(host, key));
+
+        Assert.True(
+            ReferenceEquals(host.Shell.ContentPaneBorder, Keyboard.FocusedElement),
+            $"{modifiers}+{key} on the empty pane's stop moved the keys to {Describe(Keyboard.FocusedElement)}");
+    });
+
     /// <summary>Ctrl+Alt+arrows on the empty pane's stop are still the window's pane chords
     /// (its preview route takes them before the stop's own key handler): Ctrl+Alt+Left asks
     /// for the Files pane, the edge to its left.</summary>

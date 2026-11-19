@@ -1074,10 +1074,12 @@ public partial class MainWindow : IShellRegionHost
     /// ended WPF's search through the window, so no arrow found a target; once
     /// it did not, Left on the border reached the Files pane and Right the right
     /// pane, and Left on the logo reached the rail. An arrow nothing else took
-    /// stays on the stop while the stop itself holds the keys. The pane chords
-    /// (Ctrl+Alt+arrows) are not kept: the window's preview route takes them in
-    /// the workspace, and from the logo they go on to the window's bindings. An
-    /// arrow from inside the pane or from the logo's menu is theirs to move.
+    /// stays on the stop while the stop itself holds the keys, whatever its
+    /// modifiers, since WPF's navigation takes those too. An arrow chord one of
+    /// the window's key bindings matches is left to the binding: the pane chords
+    /// (Ctrl+Alt+arrows) and Move Tab (Ctrl+Alt+Shift+Left and Right) (Codex
+    /// round 2). An arrow from inside the pane or from the logo's menu is theirs
+    /// to move.
     /// </summary>
     private void KeepTheLoneStopsArrows()
     {
@@ -1085,15 +1087,21 @@ public partial class MainWindow : IShellRegionHost
         MainMenu.KeyDown += (_, e) => KeepTheArrow(e, AppMenuItem);
     }
 
-    private static void KeepTheArrow(KeyEventArgs e, UIElement stop)
+    private void KeepTheArrow(KeyEventArgs e, UIElement stop)
     {
         if (ReferenceEquals(e.OriginalSource, stop)
             && e.Key is Key.Left or Key.Right or Key.Up or Key.Down
-            && !IsPaneNavigationGesture(e.Key, e.KeyboardDevice.Modifiers))
+            && !AWindowKeyBindingMatches(e))
         {
             e.Handled = true;
         }
     }
+
+    /// <summary>Whether one of the window's key bindings matches the press. WPF's
+    /// CommandManager marks a matched press handled whether or not the binding's
+    /// command can run, so the binding takes it when it reaches the window.</summary>
+    private bool AWindowKeyBindingMatches(KeyEventArgs e) =>
+        InputBindings.OfType<KeyBinding>().Any(binding => binding.Gesture.Matches(this, e));
 
     private bool LandAfterLoadMore()
     {
