@@ -181,19 +181,24 @@ public sealed class SvgPreviewGuardTests
         { "A_use R=1 G=4 U=3000", 2569.8 },
         { "C_double D=15 E=1000", 6291.7 },
         { "D_marker M=500 V=1000", 1326.1 },
-        // A descendant step over one flat group walks the tree a second
-        // time: step 0 measured twice the query's cost, the weight's 1 + 1.
-        { "A_desc R=2000 E=5000", 1885.3 },
+        // The follow-up's selector counts, each its count x its fitted rate
+        // (f2-est-depth.csv): the depth bound x 0.05985 us (13.4 s to
+        // decode), sibling-list reads x 0.01437 us (1.9 s), and rules x the
+        // sibling-list size per match x 0.01993 us (1.9 s).
+        { "N_desc K=3 R=10 D=128", 13820.7 },
+        { "N_sib K=2 R=1 N=10000", 1437.3 },
+        { "N_nth Q=1 R=10 N=3000", 1794.3 },
     };
 
-    /// <summary>#1610 (CB-29): one document per term, each estimated within
+    /// <summary>#1610 (CB-29): one document per count, each estimated within
     /// 10% of the estimate the committed calibration records for it (the
     /// <c>est2Ms</c> column of
-    /// <c>docs/plans/47_windows_core_closeout/calibration/cb29/est.csv</c>),
-    /// so a later change to the counting is seen against the calibration.
-    /// A_list's rules have four selectors each, so a count of rules in place
-    /// of branches is a quarter of it; A_desc's descendant step weighs one
-    /// more walk of the tree.</summary>
+    /// <c>docs/plans/47_windows_core_closeout/calibration/cb29/est.csv</c>,
+    /// and for the selector counts the follow-up's count times its fitted
+    /// rate, <c>followup2.md</c> and <c>f2-est-depth.csv</c> there), so a
+    /// later change to the counting is seen against the calibration. A_list's
+    /// rules have four selectors each, so a count of rules in place of
+    /// branches is a quarter of it.</summary>
     [Theory]
     [MemberData(nameof(CalibratedDocuments))]
     public void EstimatesTrackTheCalibration(string label, double calibratedMilliseconds)
@@ -224,6 +229,18 @@ public sealed class SvgPreviewGuardTests
         { "N_nth Q=2 R=10 N=10000", 500 },
         // A property repeated in one rule is applied once (the follow-up: 70 ms).
         { "N_unstyled T=1 Q=1 D=1000 N=10000", 300 },
+        // A reference that resolves never reaches its fallback: two fallback
+        // references per level at 15 levels over 100 rects decode in 7 ms
+        // (counting every var( as a copy gives 275 s).
+        { "C_fb F=2 D=15 E=100", 200 },
+        // The follow-up's selector counts admit what decodes under the
+        // limit: four descendant steps over 64 nested groups, 1.09 s to
+        // decode, about 1.12 s; one general-sibling step over 10,000 rects,
+        // 1.89 s, about 1.45 s; ten first-of-type rules over 3,000 rects,
+        // 1.90 s, about 1.83 s.
+        { "N_desc K=4 R=1 D=64", 1500 },
+        { "N_sib K=2 R=1 N=10000", 1800 },
+        { "N_nth Q=1 R=10 N=3000", 1950 },
     };
 
     /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist
