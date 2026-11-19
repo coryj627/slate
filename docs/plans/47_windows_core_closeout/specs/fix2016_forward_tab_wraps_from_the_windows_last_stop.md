@@ -1,6 +1,6 @@
 # #2016: Forward Tab wraps from the window's last stop
 
-Issue: #2016. PR: #2017, merged 2026-11-19 as 57b9fbbb. Taken early in wave C7 as a standalone fix, not a CB chunk. Lanes: windows (the app job and the shell gate). AT: an NVDA spot check on base and head. Review: two Opus red teams, Codex adversarial-review rounds 1 to 5 (approve at rounds 1, 4 and 5), and merge judge 1 (Merge).
+Issue: #2016. PR: #2017, merged 2026-11-19 as 57b9fbbb. Taken early in wave C7 as a standalone fix, not a CB chunk. Lanes: windows (the app job and the shell gate). AT: an NVDA spot check on base and head. Review: two Opus xhigh red teams, Codex adversarial-review rounds 1 to 5 (approve at rounds 1, 4 and 5), and merge judge 1 (Merge).
 
 `S/` below is `apps/slate-windows/src/SlateWindows/`; `T/` is `apps/slate-windows/tests/SlateWindows.Tests/`; `G/` is `apps/slate-windows/tests/SlateWindows.AccessibilityTests/`.
 
@@ -80,7 +80,7 @@ Count: found 5, fixed here 4, deferred 1, filed 0.
 
 ## What delivery changed
 
-- The plan's "smallest change in MainWindow.xaml" was not enough. The fix also needs the two keepers and the rail's group.
+- Moving the binding in `MainWindow.xaml` alone was not enough. The fix also needs the two keepers, the constructor call that registers them, and the rail's group.
 - The return to the welcome view does not rest on `ViewModel_ReturnedToWelcome` alone. The WorkspaceRoot gone landing also lands on Open Vault.
 - The fixes found in review:
   - Codex round 2 found the logo's keeper swallowing Move Tab, so bound chords are now exempt.
@@ -89,4 +89,4 @@ Count: found 5, fixed here 4, deferred 1, filed 0.
 - Not delivered:
   - Narrator and VoiceOver passes.
   - CI runs of the logo facts (the #1680 guard).
-  - The red team's suggested census rule, that every focusable region root names what keeps its own arrows.
+- Not taken: the red team's suggested census rule, that every focusable region root names what keeps its own arrows.
