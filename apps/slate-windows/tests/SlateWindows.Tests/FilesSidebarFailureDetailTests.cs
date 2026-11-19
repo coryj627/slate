@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Diagnostics;
 using SlateWindows.Canvas;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
@@ -457,7 +456,12 @@ public sealed class FilesSidebarFailureDetailTests
 
     /// <summary>The tag edit, through the workspace as the lifecycle wires it:
     /// core refuses a tag its normalizer leaves empty. The workspace composes
-    /// the failure's text and the sidebar publishes it.</summary>
+    /// the failure's text and the sidebar publishes it. No wait: the notes'
+    /// chains are idle, so the coordinator runs the admitted edit inside the
+    /// command (WorkspaceSaveCoordinator.Enqueue), the edit publishes before
+    /// it returns (EditTagAtItsTurn runs the sidebar's publication as its last
+    /// step), and its ticket completes there. When Execute returns, the
+    /// operation has ended and its sentence has been said.</summary>
     [Fact]
     public async Task ATagEditCoreRefusesSaysCoresDetail()
     {
@@ -466,15 +470,12 @@ public sealed class FilesSidebarFailureDetailTests
         rig.Sidebar.TagEditRequested = workspace.EditTagAdmitted;
         rig.Node("a.md").IsBatchSelected = true;
         rig.Sidebar.TagInput = "#";
+        Assert.True(workspace.SavesIdle, "premise: no save or operation is admitted before the tag edit.");
         rig.Spoken.Clear();
 
         rig.Sidebar.AddTagCommand.Execute(null);
-        var clock = Stopwatch.StartNew();
-        while (!rig.Sidebar.Status.StartsWith("Tag edit", StringComparison.Ordinal) && clock.Elapsed < Wait)
-        {
-            await Task.Delay(50);
-        }
 
+        Assert.True(workspace.SavesIdle, "the tag edit's admitted operation had not ended when the command returned.");
         rig.AssertReported("Tag edit failed: \"#\" is not a valid tag.");
     }
 

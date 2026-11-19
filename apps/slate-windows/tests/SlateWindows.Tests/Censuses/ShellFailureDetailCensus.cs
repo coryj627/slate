@@ -79,69 +79,69 @@ public sealed class ShellFailureDetailCensus
     internal static readonly Row[] Remaining =
     [
         // CB-15b: Canvas/, Graph/ and Search/.
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasAddFileCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a file card"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasAddLinkCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a link card"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasConvertToNote", 1, CB15b, Dated, "CanvasBlocked (NoteReadFailed), converting a card to a note"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasCreateConnectedCard", 1, CB15b, Dated, "CanvasActionFailed (CreateConnectedCard)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasDuplicate", 1, CB15b, Dated, "CanvasActionFailed (Duplicate)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasMoveIntoGroup", 1, CB15b, Dated, "CanvasActionFailed (MoveIntoGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasNewCard", 1, CB15b, Dated, "CanvasActionFailed (NewCard)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasNewGroup", 1, CB15b, Dated, "CanvasActionFailed (NewGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "CanvasRemoveFromGroup", 1, CB15b, Dated, "CanvasActionFailed (RemoveFromGroup)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "RequestVaultPick", 1, CB15b, Dated, "CanvasActionFailed, the vault picker's load (Locate or add a file card)"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "SubmitBulkMarked", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), a change to the marked cards"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "SubmitGroupMarked", 1, CB15b, Dated, "CanvasActionFailed (NewGroup), grouping the marked cards"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasDocumentViewModel", "TryWhereAmI", 1, CB15b, Dated, "CanvasActionFailed (WhereAmI), the card's readback"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasPhrase", "OpenFailed", 1, CB15b, Dated, "This canvas could not be opened: {detail} ({path})"),
-        new("Canvas/CanvasDocumentViewModel.cs", "CanvasPhrase", "RetargetAbsent", 1, CB15b, Dated, "CanvasBlocked (ReopenFailed), {from} moved to {to}: {detail}"),
-        new("Canvas/CanvasMutationFunnel.cs", "CanvasMutationFunnel", "Transact", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), an apply core refused"),
-        new("Graph/ConnectionsLeafViewModel.cs", "ConnectionsLeafViewModel", "FetchUnder", 3, CB15b, Dated, "the Connections leaf's load failure"),
-        new("Graph/GraphConfigStore.cs", "GraphConfigStore", "Read", 1, CB15b, Dated, "{file} is unreadable: {detail}, the graph config's load failure"),
-        new("Graph/GraphConfigStore.cs", "GraphConfigStore", "Reason", 2, CB15b, Dated, "the graph config's refusal, a newer version or an unreadable file"),
-        new("Graph/GraphDocumentViewModel.cs", "GraphDocumentViewModel", "FetchUnder", 2, CB15b, Dated, "the graph's load failure"),
-        new("Graph/GraphDocumentViewModel.cs", "GraphDocumentViewModel", "HumanReadable", 1, CB15b, Dated, "the graph's error arm for any other vault error (CD9)"),
-        new("Search/SearchOverlayViewModel.cs", "SearchOverlayViewModel", "HumanReadable", 1, CB15b, Dated, "the search overlay's error arm for any other vault error (CD9)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddFileCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a file card"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasAddLinkCard", 1, CB15b, Dated, "CanvasActionFailed (Create), adding a link card"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasConvertToNote", 1, CB15b, Dated, "CanvasBlocked (NoteReadFailed), converting a card to a note"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasCreateConnectedCard", 1, CB15b, Dated, "CanvasActionFailed (CreateConnectedCard)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasDuplicate", 1, CB15b, Dated, "CanvasActionFailed (Duplicate)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasMoveIntoGroup", 1, CB15b, Dated, "CanvasActionFailed (MoveIntoGroup)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewCard", 1, CB15b, Dated, "CanvasActionFailed (NewCard)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasNewGroup", 1, CB15b, Dated, "CanvasActionFailed (NewGroup)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "CanvasRemoveFromGroup", 1, CB15b, Dated, "CanvasActionFailed (RemoveFromGroup)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "RequestVaultPick", 1, CB15b, Dated, "CanvasActionFailed, the vault picker's load (Locate or add a file card)"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitBulkMarked", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), a change to the marked cards"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "SubmitGroupMarked", 1, CB15b, Dated, "CanvasActionFailed (NewGroup), grouping the marked cards"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasDocumentViewModel", "TryWhereAmI", 1, CB15b, Dated, "CanvasActionFailed (WhereAmI), the card's readback"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "OpenFailed", 1, CB15b, Dated, "This canvas could not be opened: {detail} ({path})"),
+        new("Canvas/CanvasDocumentViewModel.cs", "SlateWindows.Canvas.CanvasPhrase", "RetargetAbsent", 1, CB15b, Dated, "CanvasBlocked (ReopenFailed), {from} moved to {to}: {detail}"),
+        new("Canvas/CanvasMutationFunnel.cs", "SlateWindows.Canvas.CanvasMutationFunnel", "Transact", 1, CB15b, Dated, "CanvasActionFailed (CanvasAction), an apply core refused"),
+        new("Graph/ConnectionsLeafViewModel.cs", "SlateWindows.Graph.ConnectionsLeafViewModel", "FetchUnder", 3, CB15b, Dated, "the Connections leaf's load failure"),
+        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Read", 1, CB15b, Dated, "{file} is unreadable: {detail}, the graph config's load failure"),
+        new("Graph/GraphConfigStore.cs", "SlateWindows.Graph.GraphConfigStore", "Reason", 2, CB15b, Dated, "the graph config's refusal, a newer version or an unreadable file"),
+        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "FetchUnder", 2, CB15b, Dated, "the graph's load failure"),
+        new("Graph/GraphDocumentViewModel.cs", "SlateWindows.Graph.GraphDocumentViewModel", "HumanReadable", 1, CB15b, Dated, "the graph's error arm for any other vault error (CD9)"),
+        new("Search/SearchOverlayViewModel.cs", "SlateWindows.Search.SearchOverlayViewModel", "HumanReadable", 1, CB15b, Dated, "the search overlay's error arm for any other vault error (CD9)"),
 
         // CB-15c: the rest of the shell.
-        new("Commands/SlateCommandRegistrar.cs", "DispatcherCommandAction", "Invoke", 1, CB15c, Dated, "CommandException.ActionFailed, a palette command's failure"),
-        new("EditorInteractions.cs", "EditorInteractionCoordinator", "ResolveEmbedPreview", 1, CB15c, Dated, "EmbedUnresolvedReason.ReadError, an embed preview's read failure"),
-        new("FindInNoteViewModel.cs", "FindInNoteViewModel", "CreateStrategy", 1, CB15c, Dated, "Find in note's pattern error"),
-        new("Panels/BibliographyViewModel.cs", "BibliographyViewModel", "LoadEntries", 1, CB15c, Dated, "the bibliography panel's load failure"),
-        new("Panels/BibliographyViewModel.cs", "BibliographyViewModel", "LoadUnresolved", 1, CB15c, Dated, "the bibliography panel's unresolved citations failure"),
-        new("Panels/BulkRenameViewModel.cs", "BulkRenameViewModel", "RunPreview", 1, CB15c, Dated, "the bulk rename sheet's preview error"),
-        new("Panels/BulkRenameViewModel.cs", "BulkRenameViewModel", "StartApplyWork", 1, CB15c, Dated, "the bulk rename sheet's apply error"),
-        new("Panels/CitationsPanelViewModel.cs", "CitationsPanelViewModel", "Refresh", 1, CB15c, Dated, "the citations panel's load failure"),
-        new("Panels/HistoryViewModel.cs", "HistoryViewModel", "LoadDeletedFiles", 1, CB15c, Dated, "the history panel's deleted files failure"),
-        new("Panels/HistoryViewModel.cs", "HistoryViewModel", "LoadFirstPageBody", 1, CB15c, Dated, "the history panel's versions failure"),
-        new("Panels/HistoryViewModel.cs", "HistoryViewModel", "LoadOlder", 1, CB15c, Dated, "the history panel's older versions failure"),
-        new("Panels/HistoryViewModel.cs", "HistoryViewModel", "RunDiff", 1, CB15c, Dated, "the history panel's diff failure"),
-        new("Panels/NotePropertiesViewModel.cs", "NotePropertiesViewModel", "RefreshProperties", 1, CB15c, Dated, "the properties panel's load failure"),
-        new("Panels/RightPanePanelsViewModel.cs", "RightPanePanelsViewModel", "LoadLinks", 1, CB15c, Dated, "the links panel's load failure"),
-        new("Panels/RightPanePanelsViewModel.cs", "RightPanePanelsViewModel", "LoadOutline", 1, CB15c, Dated, "the outline panel's load failure"),
-        new("Panels/RightPanePanelsViewModel.cs", "RightPanePanelsViewModel", "LoadTasks", 1, CB15c, Dated, "the tasks panel's load failure"),
-        new("Panels/SyncDiagnosticsViewModel.cs", "SyncDiagnosticsViewModel", "LoadBody", 1, CB15c, Dated, "the sync diagnostics panel's load failure"),
-        new("Panels/TaskIndexRepairCoordinator.cs", "TaskIndexRepairCoordinator", "Retry", 1, CB15c, Dated, "the task index repair's last error"),
-        new("Panels/TaskIndexRepairCoordinator.cs", "TaskIndexRepairCoordinator", "TryRepairNow", 1, CB15c, Dated, "the task index repair's error"),
-        new("Panels/TasksReviewViewModel.cs", "TasksReviewViewModel", "DirectToggleAtItsTurn", 2, CB15c, Dated, "TaskToggleFailed, the task review's toggle"),
-        new("Panels/TasksReviewViewModel.cs", "TasksReviewViewModel", "LoadFirstPage", 1, CB15c, Dated, "the task review's load failure"),
-        new("Panels/TasksReviewViewModel.cs", "TasksReviewViewModel", "LoadMore", 1, CB15c, Dated, "the task review's next page failure"),
-        new("Reading/MathMlUiaProperty.cs", "MathMlUiaProperty", "Initialize", 1, CB15c, Dated, "the MathML property's inactive reason, logged"),
-        new("Reading/ReadingContentViewModel.cs", "ReadingContentViewModel", "ProjectBaseEmbed", 1, CB15c, Dated, "an embedded base's execute error in reading view"),
-        new("VaultLifecycleViewModel.cs", "VaultLifecycleViewModel", "OpenVaultAsync", 2, CB15c, Dated, "Could not open vault: and Unexpected vault error:"),
-        new("VaultLifecycleViewModel.cs", "VaultLifecycleViewModel", "RecordRecentVault", 1, CB15c, Dated, "Could not save recent vaults:"),
-        new("VaultLifecycleViewModel.cs", "VaultLifecycleViewModel", "RemoveRecentVault", 1, CB15c, Dated, "Could not update recent vaults:"),
-        new("WorkspaceTabViewModel.Properties.cs", "WorkspaceTabViewModel", "WriteProperty", 1, CB15c, Dated, "PropertyEditFailed, a property write's other fault"),
-        new("WorkspaceViewModel.Citations.cs", "WorkspaceViewModel", "ReadAndSeedSources", 1, CB15c, Dated, "a bibliography source's notice"),
-        new("WorkspaceViewModel.History.cs", "WorkspaceViewModel", "CommitRestoreAsDeleted", 2, CB15c, Dated, "the history panel's Restore As failure, a deleted file"),
-        new("WorkspaceViewModel.History.cs", "WorkspaceViewModel", "CommitRestoreAsVersion", 2, CB15c, Dated, "the history panel's Restore As failure, a version"),
-        new("WorkspaceViewModel.History.cs", "WorkspaceViewModel", "RecoverAdmitted", 3, CB15c, Dated, "the history panel's recover failure"),
-        new("WorkspaceViewModel.History.cs", "WorkspaceViewModel", "RestoreAdmitted", 2, CB15c, Dated, "the history panel's restore failure"),
-        new("WorkspaceViewModel.Properties.cs", "WorkspaceViewModel", "AddWriteCompletion", 1, CB15c, Dated, "PropertyEditFailed, adding a property"),
-        new("WorkspaceViewModel.Properties.cs", "WorkspaceViewModel", "BulkRenameApplyAtItsTurn", 1, CB15c, Dated, "the bulk rename sheet's apply error"),
-        new("WorkspaceViewModel.Properties.cs", "WorkspaceViewModel", "PropertyWriteCompletion", 1, CB15c, Dated, "PropertyEditFailed, a property write"),
-        new("WorkspaceViewModel.Templates.cs", "WorkspaceViewModel", "CreateFromTemplate", 1, CB15c, Dated, "the template prompt's create refusal, shown inline"),
-        new("WorkspaceViewModel.cs", "WorkspaceTabViewModel", "PerformTaskToggle", 2, CB15c, Dated, "TaskToggleFailed, a toggle's other fault"),
-        new("WorkspaceViewModel.cs", "WorkspaceTabViewModel", "StartAdmittedTaskToggle", 1, CB15c, Dated, "TaskToggleFailed, a faulted toggle"),
+        new("Commands/SlateCommandRegistrar.cs", "SlateWindows.Commands.DispatcherCommandAction", "Invoke", 1, CB15c, Dated, "CommandException.ActionFailed, a palette command's failure"),
+        new("EditorInteractions.cs", "SlateWindows.EditorInteractionCoordinator", "ResolveEmbedPreview", 1, CB15c, Dated, "EmbedUnresolvedReason.ReadError, an embed preview's read failure"),
+        new("FindInNoteViewModel.cs", "SlateWindows.FindInNoteViewModel", "CreateStrategy", 1, CB15c, Dated, "Find in note's pattern error"),
+        new("Panels/BibliographyViewModel.cs", "SlateWindows.Panels.BibliographyViewModel", "LoadEntries", 1, CB15c, Dated, "the bibliography panel's load failure"),
+        new("Panels/BibliographyViewModel.cs", "SlateWindows.Panels.BibliographyViewModel", "LoadUnresolved", 1, CB15c, Dated, "the bibliography panel's unresolved citations failure"),
+        new("Panels/BulkRenameViewModel.cs", "SlateWindows.Panels.BulkRenameViewModel", "RunPreview", 1, CB15c, Dated, "the bulk rename sheet's preview error"),
+        new("Panels/BulkRenameViewModel.cs", "SlateWindows.Panels.BulkRenameViewModel", "StartApplyWork", 1, CB15c, Dated, "the bulk rename sheet's apply error"),
+        new("Panels/CitationsPanelViewModel.cs", "SlateWindows.Panels.CitationsPanelViewModel", "Refresh", 1, CB15c, Dated, "the citations panel's load failure"),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadDeletedFiles", 1, CB15c, Dated, "the history panel's deleted files failure"),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadFirstPageBody", 1, CB15c, Dated, "the history panel's versions failure"),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "LoadOlder", 1, CB15c, Dated, "the history panel's older versions failure"),
+        new("Panels/HistoryViewModel.cs", "SlateWindows.Panels.HistoryViewModel", "RunDiff", 1, CB15c, Dated, "the history panel's diff failure"),
+        new("Panels/NotePropertiesViewModel.cs", "SlateWindows.Panels.NotePropertiesViewModel", "RefreshProperties", 1, CB15c, Dated, "the properties panel's load failure"),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadLinks", 1, CB15c, Dated, "the links panel's load failure"),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadOutline", 1, CB15c, Dated, "the outline panel's load failure"),
+        new("Panels/RightPanePanelsViewModel.cs", "SlateWindows.Panels.RightPanePanelsViewModel", "LoadTasks", 1, CB15c, Dated, "the tasks panel's load failure"),
+        new("Panels/SyncDiagnosticsViewModel.cs", "SlateWindows.Panels.SyncDiagnosticsViewModel", "LoadBody", 1, CB15c, Dated, "the sync diagnostics panel's load failure"),
+        new("Panels/TaskIndexRepairCoordinator.cs", "SlateWindows.Panels.TaskIndexRepairCoordinator", "Retry", 1, CB15c, Dated, "the task index repair's last error"),
+        new("Panels/TaskIndexRepairCoordinator.cs", "SlateWindows.Panels.TaskIndexRepairCoordinator", "TryRepairNow", 1, CB15c, Dated, "the task index repair's error"),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "DirectToggleAtItsTurn", 2, CB15c, Dated, "TaskToggleFailed, the task review's toggle"),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "LoadFirstPage", 1, CB15c, Dated, "the task review's load failure"),
+        new("Panels/TasksReviewViewModel.cs", "SlateWindows.Panels.TasksReviewViewModel", "LoadMore", 1, CB15c, Dated, "the task review's next page failure"),
+        new("Reading/MathMlUiaProperty.cs", "SlateWindows.Reading.MathMlUiaProperty", "Initialize", 1, CB15c, Dated, "the MathML property's inactive reason, logged"),
+        new("Reading/ReadingContentViewModel.cs", "SlateWindows.Reading.ReadingContentViewModel", "ProjectBaseEmbed", 1, CB15c, Dated, "an embedded base's execute error in reading view"),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "OpenVaultAsync", 2, CB15c, Dated, "Could not open vault: and Unexpected vault error:"),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "RecordRecentVault", 1, CB15c, Dated, "Could not save recent vaults:"),
+        new("VaultLifecycleViewModel.cs", "SlateWindows.VaultLifecycleViewModel", "RemoveRecentVault", 1, CB15c, Dated, "Could not update recent vaults:"),
+        new("WorkspaceTabViewModel.Properties.cs", "SlateWindows.WorkspaceTabViewModel", "WriteProperty", 1, CB15c, Dated, "PropertyEditFailed, a property write's other fault"),
+        new("WorkspaceViewModel.Citations.cs", "SlateWindows.WorkspaceViewModel", "ReadAndSeedSources", 1, CB15c, Dated, "a bibliography source's notice"),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "CommitRestoreAsDeleted", 2, CB15c, Dated, "the history panel's Restore As failure, a deleted file"),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "CommitRestoreAsVersion", 2, CB15c, Dated, "the history panel's Restore As failure, a version"),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "RecoverAdmitted", 3, CB15c, Dated, "the history panel's recover failure"),
+        new("WorkspaceViewModel.History.cs", "SlateWindows.WorkspaceViewModel", "RestoreAdmitted", 2, CB15c, Dated, "the history panel's restore failure"),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "AddWriteCompletion", 1, CB15c, Dated, "PropertyEditFailed, adding a property"),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "BulkRenameApplyAtItsTurn", 1, CB15c, Dated, "the bulk rename sheet's apply error"),
+        new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "PropertyWriteCompletion", 1, CB15c, Dated, "PropertyEditFailed, a property write"),
+        new("WorkspaceViewModel.Templates.cs", "SlateWindows.WorkspaceViewModel", "CreateFromTemplate", 1, CB15c, Dated, "the template prompt's create refusal, shown inline"),
+        new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "PerformTaskToggle", 2, CB15c, Dated, "TaskToggleFailed, a toggle's other fault"),
+        new("WorkspaceViewModel.cs", "SlateWindows.WorkspaceTabViewModel", "StartAdmittedTaskToggle", 1, CB15c, Dated, "TaskToggleFailed, a faulted toggle"),
     ];
 
     private static readonly Lazy<IReadOnlyList<Read>> Shell = new(() =>
@@ -192,32 +192,61 @@ public sealed class ShellFailureDetailCensus
     [Fact]
     public void TheRatchetNamesAGrownTableALooseCeilingAnotherDateAndAnotherOwner()
     {
-        Row canvas = new("Canvas/Planted.cs", "Planted", "M", 2, CB15b, Dated, "a planted read");
-        Row panel = new("Panels/Planted.cs", "Planted", "N", 1, CB15c, Dated, "a planted read");
-        Assert.Empty(TableProblems([canvas, panel], rowCeiling: 2, readCeiling: 3));
+        Row canvas = new("Canvas/Planted.cs", "SlateWindows.Canvas.Planted", "M", 2, CB15b, Dated, "a planted read");
+        Row panel = new("Panels/Planted.cs", "SlateWindows.Panels.Planted", "N", 1, CB15c, Dated, "a planted read");
+        Allowance[] baseline = [AllowanceOf(canvas), AllowanceOf(panel)];
+        Assert.Empty(TableProblems([canvas, panel], baseline, rowCeiling: 2, readCeiling: 3));
 
         Assert.Contains(
-            TableProblems([canvas, panel, panel with { Member = "O" }], rowCeiling: 2, readCeiling: 4),
+            TableProblems([canvas, panel, panel with { Member = "O" }], baseline, rowCeiling: 2, readCeiling: 4),
             problem => problem.StartsWith("the table holds 3 rows", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas, panel with { Reads = 2 }], rowCeiling: 2, readCeiling: 3),
+            TableProblems([canvas, panel with { Reads = 2 }], baseline, rowCeiling: 2, readCeiling: 3),
             problem => problem.StartsWith("the table's rows hold 4 reads", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas], rowCeiling: 2, readCeiling: 2),
+            TableProblems([canvas], baseline, rowCeiling: 2, readCeiling: 2),
             problem => problem.Contains("lower RowCeiling to 1", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas, panel], rowCeiling: 2, readCeiling: 4),
+            TableProblems([canvas, panel], baseline, rowCeiling: 2, readCeiling: 4),
             problem => problem.Contains("lower ReadCeiling to 3", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas, panel with { Dated = "2026-11-19" }], rowCeiling: 2, readCeiling: 3),
-            problem => problem.StartsWith("Panels/Planted.cs (Planted.N): dated 2026-11-19", StringComparison.Ordinal));
+            TableProblems([canvas, panel with { Dated = "2026-11-19" }], baseline, rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Panels/Planted.cs (SlateWindows.Panels.Planted.N): dated 2026-11-19", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas with { Owner = CB15c }, panel], rowCeiling: 2, readCeiling: 3),
-            problem => problem.StartsWith("Canvas/Planted.cs (Planted.M): owned by CB-15c", StringComparison.Ordinal));
+            TableProblems([canvas with { Owner = CB15c }, panel], baseline, rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Canvas/Planted.cs (SlateWindows.Canvas.Planted.M): owned by CB-15c", StringComparison.Ordinal));
         Assert.Contains(
-            TableProblems([canvas, panel with { Owner = CB15b }], rowCeiling: 2, readCeiling: 3),
-            problem => problem.StartsWith("Panels/Planted.cs (Planted.N): owned by CB-15b", StringComparison.Ordinal));
+            TableProblems([canvas, panel with { Owner = CB15b }], baseline, rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith("Panels/Planted.cs (SlateWindows.Panels.Planted.N): owned by CB-15b", StringComparison.Ordinal));
     }
+
+    /// <summary>Codex round 1, finding 1: an allowance cannot move. A row
+    /// rekeyed to another member (its read moved there), and a count moved
+    /// from one row to another, with the totals, dates and owners unchanged,
+    /// are each named against the baseline.</summary>
+    [Fact]
+    public void TheRatchetNamesAMovedAllowance()
+    {
+        Row canvas = new("Canvas/Planted.cs", "SlateWindows.Canvas.Planted", "M", 2, CB15b, Dated, "a planted read");
+        Row panel = new("Panels/Planted.cs", "SlateWindows.Panels.Planted", "N", 1, CB15c, Dated, "a planted read");
+        Allowance[] baseline = [AllowanceOf(canvas), AllowanceOf(panel)];
+        Assert.Empty(TableProblems([canvas, panel], baseline, rowCeiling: 2, readCeiling: 3));
+
+        Assert.Contains(
+            TableProblems([canvas, panel with { Member = "Moved" }], baseline, rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith(
+                "Panels/Planted.cs (SlateWindows.Panels.Planted.Moved): no allowance in the baseline", StringComparison.Ordinal));
+        Assert.Contains(
+            TableProblems([canvas with { Reads = 1 }, panel with { Reads = 2 }], baseline, rowCeiling: 2, readCeiling: 3),
+            problem => problem.StartsWith(
+                "Panels/Planted.cs (SlateWindows.Panels.Planted.N): the row names 2 reads and its baseline allows 1",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>The allowance a row stands for: its key and its count.</summary>
+    internal sealed record Allowance(string File, string Type, string Member, int Reads);
+
+    private static Allowance AllowanceOf(Row row) => new(row.File, row.Type, row.Member, row.Reads);
 
     /// <summary>The table's ceilings: the rows and reads it held on
     /// 2026-11-18. A PR that routes reads lowers them to what is left.</summary>
@@ -225,11 +254,15 @@ public sealed class ShellFailureDetailCensus
 
     internal const int ReadCeiling = 73;
 
+    /// <summary>The table against its baseline and ceilings.</summary>
+    internal static IReadOnlyList<string> TableProblems(IReadOnlyList<Row> rows) =>
+        TableProblems(rows, [], RowCeiling, ReadCeiling);
+
     /// <summary>What the table itself may not do: grow past its ceilings,
     /// fall below them without lowering them, hold a row dated another day,
     /// or give a row to another chunk than its folder's.</summary>
     internal static IReadOnlyList<string> TableProblems(
-        IReadOnlyList<Row> rows, int rowCeiling = RowCeiling, int readCeiling = ReadCeiling)
+        IReadOnlyList<Row> rows, IReadOnlyList<Allowance> baseline, int rowCeiling, int readCeiling)
     {
         List<string> problems = [];
         int reads = rows.Sum(row => row.Reads);
@@ -320,7 +353,7 @@ public sealed class ShellFailureDetailCensus
         {
             Read read = Assert.Single(reads);
             Assert.Contains(named, read.Context, StringComparison.Ordinal);
-            Assert.Equal(("Planted", "M"), (read.Type, read.Member));
+            Assert.Equal(("SlateWindows.Planted.Planted", "M"), (read.Type, read.Member));
         }
     }
 
@@ -350,9 +383,95 @@ public sealed class ShellFailureDetailCensus
             """,
             failureDetail: BasesErrorDetailCensus.PartialHelper);
         (string File, string Type, string Member, int Line)[] named =
-            [("Planted.cs", "FailureDetail", "Of", 5), ("Planted.cs", "FailureDetail", "Of", 13)];
+            [("Planted.cs", "SlateWindows.Planted.FailureDetail", "Of", 5), ("Planted.cs", "SlateWindows.FailureDetail", "Of", 13)];
         Assert.Equal(named, reads.Select(read => (read.File, read.Type, read.Member, read.Line)).OrderBy(read => read.Line));
     }
+
+    /// <summary>Codex round 1, finding 2: a read keys by its type's full name
+    /// (namespace, nesting and arity) and by its member as
+    /// SaveChainAdmissionCensus names one. A read moved into a type of the same
+    /// name in another namespace or nested in another type, into a generic
+    /// twin of another arity, or into an explicit interface implementation
+    /// beside an ordinary member of the same name, keys apart, so a row for
+    /// one never stands for another.</summary>
+    [Fact]
+    public void ARowForOneMemberNeverStandsForItsTwin()
+    {
+        Read[] reads = PlantedReads(Twins);
+        (string Type, string Member)[] keys =
+        [
+            ("SlateWindows.Planted.Both", "Read"),
+            ("SlateWindows.Planted.Both", "SlateWindows.Planted.IReader.Read"),
+            ("SlateWindows.Planted.Pair`1", "Read"),
+            ("SlateWindows.Planted.Pair`2", "Read"),
+            ("SlateWindows.Planted.Store", "Read"),
+            ("SlateWindows.Planted.Twin.Store", "Read"),
+            ("SlateWindows.Planted.Wrapper+Store", "Read"),
+        ];
+        Assert.Equal(
+            keys,
+            reads.Select(read => (read.Type, read.Member))
+                .Distinct()
+                .OrderBy(key => key.Type, StringComparer.Ordinal)
+                .ThenBy(key => key.Member, StringComparer.Ordinal));
+
+        IReadOnlyList<string> problems = Problems(
+            reads, [new("Planted.cs", "SlateWindows.Planted.Store", "Read", 1, CB15c, Dated, "a planted read")]);
+        foreach ((string type, string member) in keys.Where(key => key.Type != "SlateWindows.Planted.Store"))
+        {
+            Assert.Contains(problems, problem => problem.Contains(
+                $"Planted.cs ({type}.{member}) holds 1 read(s) and no row names it", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>Reads in types and members whose short names collide.</summary>
+    private const string Twins = """
+        namespace SlateWindows.Planted
+        {
+            internal sealed class Store
+            {
+                internal string Read(Exception failure) => failure.Message;
+            }
+
+            internal sealed class Wrapper
+            {
+                internal sealed class Store
+                {
+                    internal string Read(Exception failure) => failure.Message;
+                }
+            }
+
+            internal sealed class Pair<T>
+            {
+                internal string Read(Exception failure) => failure.Message;
+            }
+
+            internal sealed class Pair<TFirst, TSecond>
+            {
+                internal string Read(Exception failure) => failure.Message;
+            }
+
+            internal interface IReader
+            {
+                string Read(Exception failure);
+            }
+
+            internal sealed class Both : IReader
+            {
+                public string Read(Exception failure) => failure.Message;
+
+                string IReader.Read(Exception failure) => failure.Message;
+            }
+        }
+
+        namespace SlateWindows.Planted.Twin
+        {
+            internal sealed class Store
+            {
+                internal string Read(Exception failure) => failure.Message;
+            }
+        }
+        """;
 
     /// <summary>Each place a read can stand counts to the member and type a
     /// row names: a lambda and a local function to their member; an
@@ -388,67 +507,67 @@ public sealed class ShellFailureDetailCensus
         Assert.Empty(Problems(reads, exact));
 
         // A member with two reads under a one-read row.
-        IReadOnlyList<string> under = Problems(reads, [.. exact.Select(row => row.Member == "Twice" && row.Type == "Holders" ? row with { Reads = 1 } : row)]);
-        Assert.Contains(under, problem => problem.Contains("Planted.cs (Holders.Twice) holds 2 reads and its row names 1", StringComparison.Ordinal));
-        Assert.Contains(under, problem => problem.Contains("new(\"Planted.cs\", \"Holders\", \"Twice\", 2,", StringComparison.Ordinal));
+        IReadOnlyList<string> under = Problems(reads, [.. exact.Select(row => row.Member == "Twice" && row.Type == "SlateWindows.Planted.Holders" ? row with { Reads = 1 } : row)]);
+        Assert.Contains(under, problem => problem.Contains("Planted.cs (SlateWindows.Planted.Holders.Twice) holds 2 reads and its row names 1", StringComparison.Ordinal));
+        Assert.Contains(under, problem => problem.Contains("new(\"Planted.cs\", \"SlateWindows.Planted.Holders\", \"Twice\", 2,", StringComparison.Ordinal));
 
         // A read with no row.
-        IReadOnlyList<string> unrowed = Problems(reads, [.. exact.Where(row => row.Type != "Other")]);
-        Assert.Contains(unrowed, problem => problem.Contains("(Other.Twice)", StringComparison.Ordinal));
-        Assert.Contains(unrowed, problem => problem.Contains("new(\"Planted.cs\", \"Other\", \"Twice\", 1,", StringComparison.Ordinal));
+        IReadOnlyList<string> unrowed = Problems(reads, [.. exact.Where(row => row.Type != "SlateWindows.Planted.Other")]);
+        Assert.Contains(unrowed, problem => problem.Contains("(SlateWindows.Planted.Other.Twice)", StringComparison.Ordinal));
+        Assert.Contains(unrowed, problem => problem.Contains("new(\"Planted.cs\", \"SlateWindows.Planted.Other\", \"Twice\", 1,", StringComparison.Ordinal));
 
         // A row with fewer reads in its member than it names, and a row with none.
         IReadOnlyList<string> stale = Problems(
             reads,
             [
                 .. exact.Select(row => row.Member == "ByLocal" ? row with { Reads = 2 } : row),
-                new("Planted.cs", "Holders", "Gone", 1, CB15c, Dated, "a read that was routed"),
+                new("Planted.cs", "SlateWindows.Planted.Holders", "Gone", 1, CB15c, Dated, "a read that was routed"),
             ]);
-        Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (Holders.ByLocal): the row names 2 reads", StringComparison.Ordinal));
-        Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (Holders.Gone): a row that matches no read", StringComparison.Ordinal));
+        Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (SlateWindows.Planted.Holders.ByLocal): the row names 2 reads", StringComparison.Ordinal));
+        Assert.Contains(stale, problem => problem.StartsWith("Planted.cs (SlateWindows.Planted.Holders.Gone): a row that matches no read", StringComparison.Ordinal));
 
         // Two rows for one member.
         Assert.Contains(
             Problems(reads, [.. exact, exact.First(row => row.Member == "Spoken")]),
-            problem => problem.StartsWith("Planted.cs (Holders.Spoken): more than one row names it", StringComparison.Ordinal));
+            problem => problem.StartsWith("Planted.cs (SlateWindows.Planted.Holders.Spoken): more than one row names it", StringComparison.Ordinal));
 
         // The sidebar's files and the tag edit never stand as rows.
         IReadOnlyList<string> sidebar = Problems(
             [],
             [
-                new("FilesSidebarViewModel.TreeOperations.cs", "FilesSidebarViewModel", "Refresh", 1, CB15c, Dated, "Could not load files"),
-                new("WorkspaceViewModel.Properties.cs", "WorkspaceViewModel", "EditTagAtItsTurn", 1, CB15c, Dated, "Tag edit failed"),
+                new("FilesSidebarViewModel.TreeOperations.cs", "SlateWindows.FilesSidebarViewModel", "Refresh", 1, CB15c, Dated, "Could not load files"),
+                new("WorkspaceViewModel.Properties.cs", "SlateWindows.WorkspaceViewModel", "EditTagAtItsTurn", 1, CB15c, Dated, "Tag edit failed"),
             ]);
-        Assert.Contains(sidebar, problem => problem.StartsWith("FilesSidebarViewModel.TreeOperations.cs (FilesSidebarViewModel.Refresh): CB-15a routed", StringComparison.Ordinal));
-        Assert.Contains(sidebar, problem => problem.StartsWith("WorkspaceViewModel.Properties.cs (WorkspaceViewModel.EditTagAtItsTurn): CB-15a routed", StringComparison.Ordinal));
+        Assert.Contains(sidebar, problem => problem.StartsWith("FilesSidebarViewModel.TreeOperations.cs (SlateWindows.FilesSidebarViewModel.Refresh): CB-15a routed", StringComparison.Ordinal));
+        Assert.Contains(sidebar, problem => problem.StartsWith("WorkspaceViewModel.Properties.cs (SlateWindows.WorkspaceViewModel.EditTagAtItsTurn): CB-15a routed", StringComparison.Ordinal));
 
         // A row says who ends it, when, and what it reaches.
         Assert.Contains(
             Problems(reads, [.. exact.Select(row => row.Member == "Initial" ? row with { Reaches = " " } : row)]),
-            problem => problem.StartsWith("Planted.cs (Holders.Initial): a row with no owner", StringComparison.Ordinal));
+            problem => problem.StartsWith("Planted.cs (SlateWindows.Planted.Holders.Initial): a row with no owner", StringComparison.Ordinal));
     }
 
     /// <summary>The members the planted holders' reads count to, and how many
     /// each holds.</summary>
     private static readonly (string Type, string Member, int Reads)[] HolderKeys =
     [
-        ("Derived", "Derived", 1),
-        ("Holders", "ByLambda", 1),
-        ("Holders", "ByLocal", 1),
-        ("Holders", "Detail", 2),
-        ("Holders", "Finalize", 1),
-        ("Holders", "Holders", 2),
-        ("Holders", "Initial", 1),
-        ("Holders", "Said", 2),
-        ("Holders", "Seeded", 1),
-        ("Holders", "Spoken", 1),
-        ("Holders", "Twice", 2),
-        ("Holders", "_render", 1),
-        ("Holders", "op_Addition", 1),
-        ("Holders", "op_Implicit", 1),
-        ("Holders", "this[]", 1),
-        ("Nested", "Twice", 1),
-        ("Other", "Twice", 1),
+        ("SlateWindows.Planted.Derived", "Derived", 1),
+        ("SlateWindows.Planted.Holders", "ByLambda", 1),
+        ("SlateWindows.Planted.Holders", "ByLocal", 1),
+        ("SlateWindows.Planted.Holders", "Detail", 2),
+        ("SlateWindows.Planted.Holders", "Finalize", 1),
+        ("SlateWindows.Planted.Holders", "Holders", 2),
+        ("SlateWindows.Planted.Holders", "Initial", 1),
+        ("SlateWindows.Planted.Holders", "Said", 2),
+        ("SlateWindows.Planted.Holders", "Seeded", 1),
+        ("SlateWindows.Planted.Holders", "Spoken", 1),
+        ("SlateWindows.Planted.Holders", "Twice", 2),
+        ("SlateWindows.Planted.Holders", "_render", 1),
+        ("SlateWindows.Planted.Holders", "op_Addition", 1),
+        ("SlateWindows.Planted.Holders", "op_Implicit", 1),
+        ("SlateWindows.Planted.Holders", "this[]", 1),
+        ("SlateWindows.Planted.Holders+Nested", "Twice", 1),
+        ("SlateWindows.Planted.Other", "Twice", 1),
     ];
 
     /// <summary>The planted holders: a read in each place a read can
