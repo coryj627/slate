@@ -636,10 +636,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         // Plan 47 CB-15a: Copy link, Pin and Unpin take the sibling verbs'
         // guard too. On a date-group header Copy link spoke core's refusal of
-        // the empty path, and Pin wrote the empty path into the pins.
+        // the empty path, and Pin wrote the empty path into the pins. Copy
+        // link is also for a Markdown file only, as on the Mac.
         CopyWikilinkCommand = new RelayCommand(
             _ => CopyWikilink(),
-            _ => SelectedNode is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false });
+            _ => IsOneMarkdownFile(SelectedNode));
         // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
         // folder so the canonical DuplicateFilesOnly refusal can speak.
         DuplicateCommand = new RelayCommand(
@@ -2141,9 +2142,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>Plan 47 CB-15a: Copy link is for exactly one Markdown file, as
+    /// on the Mac (SidebarActionCatalog's exactlyOneMarkdownFile). A row is
+    /// Markdown when core's summary of it says so (files.is_markdown); a row
+    /// with no summary is judged by core's Markdown extensions
+    /// (CoreDocumentClassification).</summary>
+    private static bool IsOneMarkdownFile([NotNullWhen(true)] FileTreeNodeViewModel? node) =>
+        node is { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false }
+        && (node.Summary?.IsMarkdown ?? CoreDocumentClassification.IsMarkdown(node.Path));
+
     private void CopyWikilink()
     {
-        if (SelectedNode is not { IsDirectory: false, IsPlaceholder: false, IsGroupHeader: false } node)
+        if (SelectedNode is not { } node || !IsOneMarkdownFile(node))
         {
             return;
         }
@@ -2165,10 +2175,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
             else
             {
-                // Plan 47 CB-15a: core makes no wikilink for a file that is
-                // not Markdown, has left the index, is a case twin, or has a
-                // name a link cannot hold; the Mac's sentence says why nothing
-                // was copied (AppState.swift's copy wikilink).
+                // Plan 47 CB-15a: core makes no wikilink for a Markdown file
+                // that has left the index, is a case twin, or has a name a
+                // link cannot hold; the Mac's sentence says why nothing was
+                // copied (AppState.swift's copy wikilink).
                 ReportFailure("Could not create a wikilink for this file.");
             }
         }
