@@ -66,6 +66,19 @@ internal static class SvgDecodeRates
     /// the document: per branch, per pass, per element.</summary>
     internal const double QueryPerBranchElement = 0.0935;
 
+    /// <summary>A branch's descendant steps, per unit of the follow-up's
+    /// depth bound (each element times the ways to pick 1 to K of its
+    /// ancestors; fitted 0.05985).</summary>
+    internal const double DescendantChainUnit = 0.060;
+
+    /// <summary>A branch's general-sibling steps, per sibling-list read
+    /// (fitted 0.01437).</summary>
+    internal const double SiblingListRead = 0.0144;
+
+    /// <summary>An of-type pseudo-class, per element filed under its
+    /// compound's key times its sibling-list size (fitted 0.01993).</summary>
+    internal const double OfTypeSiblingRead = 0.0199;
+
     /// <summary>A declaration applied to an element a rule matched.</summary>
     internal const double MatchedDeclaration = 1.03;
 
@@ -1147,9 +1160,10 @@ internal static class SvgPreviewGuard
     /// <see cref="SvgDecodeRates"/>:
     /// <list type="bullet">
     /// <item>the stylesheet: each selector branch queries every element
-    /// once per pass (more for combinators and of-type pseudo-classes), each
-    /// declaration lands on every element its rule is filed under, and each
-    /// rule is parsed on its own;</item>
+    /// once per pass, plus the follow-up's measured counts for descendant
+    /// chains, general siblings and of-type pseudo-classes, whose queries are
+    /// not linear; each declaration lands on every element its rule is filed
+    /// under, and each rule is parsed on its own;</item>
     /// <item>under any <c>&lt;style&gt;</c>, each use render re-applies the
     /// stylesheet to the whole document and to its instance;</item>
     /// <item>each lookup a <c>var()</c> resolution makes, which Svg.Custom
@@ -1179,15 +1193,12 @@ internal static class SvgPreviewGuard
             "width", "x", "x1", "x2", "y", "y1", "y2",
         };
 
-        /// <summary>A branch with no combinator's steps; never added to.</summary>
-        private static readonly List<(char Combinator, KeyStats Left)> NoSteps = [];
-
         private readonly Dictionary<string, KeyStats> keys = new(StringComparer.Ordinal);
-        private readonly List<DeferredBranch> deferredBranches = [];
+        private readonly List<SelectorBranch> selectorBranches = [];
         private readonly List<(string Value, List<KeyStats> Subjects)> ruleVarUses = [];
         private readonly List<(string Name, string Value)> ruleDefinitions = [];
         private readonly HashSet<string> attributeNames = new(StringComparer.Ordinal);
-        private double simpleBranchPasses;
+        private double queriedPasses;
         private int rules;
         private double[] renders = [];
 
@@ -1196,10 +1207,10 @@ internal static class SvgPreviewGuard
             int elements = document.Names.Count;
             ReadRules(Unescape(document.Stylesheet));
             renders = Renders();
-            (double[] subtree, double[] later, int largestFamily) = Families(elements);
-            double markerUnits = VisitElements(subtree, later, ReadAttributeKeys());
+            Family family = Families(elements);
+            double markerUnits = VisitElements(family.Siblings, ReadAttributeKeys());
             return new SvgDecodeEstimate(
-                Cap(StylesheetMicroseconds(elements, largestFamily)),
+                Cap(StylesheetMicroseconds(elements, family)),
                 Cap(UseMicroseconds(elements)),
                 Cap(SvgDecodeRates.VarCopy * VarLookups()),
                 Cap(SvgDecodeRates.MarkerUnit * markerUnits));
@@ -1314,20 +1325,17 @@ internal static class SvgPreviewGuard
             List<KeyStats>? subjects = holdsVarUse ? new(branches.Count) : null;
             foreach (string branch in branches)
             {
-                (KeyStats subject, List<(char Combinator, KeyStats Left)> steps, bool ofType) = ReadBranch(branch);
+                (KeyStats subject, int descendants, int siblings, List<KeyStats>? ofType) = ReadBranch(branch);
                 subject.DeclarationMicroseconds += landing;
                 if (markers is not null)
                 {
                     (subject.Markers ??= []).AddRange(markers);
                 }
                 subjects?.Add(subject);
-                if (steps.Count == 0 && !ofType)
+                queriedPasses += passes;
+                if (descendants > 0 || siblings > 0 || ofType is not null)
                 {
-                    simpleBranchPasses += passes;
-                }
-                else
-                {
-                    deferredBranches.Add(new DeferredBranch(passes, steps, ofType));
+                    selectorBranches.Add(new SelectorBranch(passes, descendants, siblings, ofType));
                 }
             }
             if (subjects is not null)
@@ -1367,14 +1375,18 @@ internal static class SvgPreviewGuard
 
         /// <summary>
         /// A selector branch: the key its subject (the rightmost compound) is
-        /// filed under, each combinator step with the key of the compound on
-        /// its left, and whether an of-type pseudo-class (or one whose
-        /// position counts from the end) recomputes the parent's children
-        /// per element.
+        /// filed under, its descendant steps and its general-sibling steps
+        /// (child and adjacent-sibling steps read one level or one sibling,
+        /// and add nothing past the branch's own query), and the keys of the
+        /// compounds carrying an of-type pseudo-class (or one whose position
+        /// counts from the end), which recomputes the parent's children per
+        /// element, or null for none.
         /// </summary>
-        private (KeyStats Subject, List<(char Combinator, KeyStats Left)> Steps, bool OfType) ReadBranch(string branch)
+        private (KeyStats Subject, int Descendants, int Siblings, List<KeyStats>? OfType) ReadBranch(string branch)
         {
-            List<(char Combinator, KeyStats Left)>? steps = null;
+            int descendants = 0;
+            int siblings = 0;
+            List<KeyStats>? ofType = null;
             string? previous = null;
             char combinator = '\0';
             int depth = 0;
@@ -1388,7 +1400,12 @@ internal static class SvgPreviewGuard
                     string compound = branch[start..i];
                     if (previous is not null)
                     {
-                        (steps ??= []).Add((combinator == '\0' ? ' ' : combinator, KeyOf(CompoundKey(previous))));
+                        descendants += combinator == '\0' ? 1 : 0;
+                        siblings += combinator == '~' ? 1 : 0;
+                    }
+                    if (RecomputesFamily(compound))
+                    {
+                        (ofType ??= []).Add(KeyOf(CompoundKey(compound)));
                     }
                     previous = compound;
                     combinator = '\0';
@@ -1424,13 +1441,20 @@ internal static class SvgPreviewGuard
                     depth = Math.Max(0, depth - 1);
                 }
             }
-            bool ofType = branch.Contains(':', StringComparison.Ordinal)
-                && (branch.Contains("of-type", StringComparison.OrdinalIgnoreCase)
-                    || branch.Contains(":nth-last-", StringComparison.OrdinalIgnoreCase)
-                    || branch.Contains(":last-child", StringComparison.OrdinalIgnoreCase)
-                    || branch.Contains(":only-child", StringComparison.OrdinalIgnoreCase));
-            return (KeyOf(CompoundKey(previous ?? AnyElementKey)), steps ?? NoSteps, ofType);
+            return (KeyOf(CompoundKey(previous ?? AnyElementKey)), descendants, siblings, ofType);
         }
+
+        /// <summary>Whether a compound carries a pseudo-class that re-reads
+        /// the parent's children for each element it tests: the of-type
+        /// ones (measured), and, unmeasured, those counting from the end.
+        /// nth-child and first-child read an index and stay linear (the
+        /// follow-up measured nth-child).</summary>
+        private static bool RecomputesFamily(string compound) =>
+            compound.Contains(':', StringComparison.Ordinal)
+            && (compound.Contains("of-type", StringComparison.OrdinalIgnoreCase)
+                || compound.Contains(":nth-last-", StringComparison.OrdinalIgnoreCase)
+                || compound.Contains(":last-child", StringComparison.OrdinalIgnoreCase)
+                || compound.Contains(":only-child", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// The key a compound selector is filed under: its id, else its first
@@ -1575,71 +1599,147 @@ internal static class SvgPreviewGuard
             return key[1..(end < 0 ? key.Length - 1 : end)];
         }
 
-        private double StylesheetMicroseconds(int elements, int largestFamily)
+        /// <summary>
+        /// Every branch's query walks every element once per pass. A branch
+        /// whose query is not linear (#1610, Design 1b, with the follow-up's
+        /// measured counts) adds, per pass: for its descendant steps, the
+        /// depth bound; for its general-sibling steps, the sibling-list
+        /// reads; for each compound with an of-type pseudo-class, the
+        /// sibling-list sizes of the elements filed under its key. Then the
+        /// declarations each key's elements take, and each rule.
+        /// </summary>
+        private double StylesheetMicroseconds(int elements, Family family)
         {
-            double queried = simpleBranchPasses;
-            foreach (DeferredBranch branch in deferredBranches)
+            var depthBounds = new Dictionary<int, double>();
+            var siblingReads = new Dictionary<int, double>();
+            double selectors = 0;
+            foreach (SelectorBranch branch in selectorBranches)
             {
-                double weight = 1;
-                double prefix = 1;
-                foreach ((char combinator, KeyStats left) in branch.Steps)
+                double work = 0;
+                if (branch.Descendants > 0)
                 {
-                    double factor = combinator switch
+                    if (!depthBounds.TryGetValue(branch.Descendants, out double bound))
                     {
-                        ' ' => Math.Max(1, left.SubtreeSum / elements),
-                        '~' => Math.Max(1, left.LaterSiblingSum / elements),
-                        _ => 1,
-                    };
-                    prefix = Cap(prefix * factor);
-                    weight = Cap(weight + prefix);
+                        depthBounds[branch.Descendants] = bound = DepthBound(family, branch.Descendants);
+                    }
+                    work = Cap(work + (SvgDecodeRates.DescendantChainUnit * bound));
                 }
-                if (branch.OfType)
+                if (branch.Siblings > 0)
                 {
-                    weight = Cap(weight * largestFamily);
+                    if (!siblingReads.TryGetValue(branch.Siblings, out double reads))
+                    {
+                        siblingReads[branch.Siblings] = reads = SiblingReads(family, branch.Siblings);
+                    }
+                    work = Cap(work + (SvgDecodeRates.SiblingListRead * reads));
                 }
-                queried = Cap(queried + (branch.Passes * weight));
+                foreach (KeyStats key in branch.OfType ?? [])
+                {
+                    work = Cap(work + (SvgDecodeRates.OfTypeSiblingRead * key.FamilySum));
+                }
+                selectors = Cap(selectors + (branch.Passes * work));
             }
             double matched = 0;
             foreach (KeyStats key in keys.Values)
             {
                 matched = Cap(matched + (key.Count * key.DeclarationMicroseconds));
             }
-            return Cap(SvgDecodeRates.QueryPerBranchElement * queried * elements)
+            return Cap(SvgDecodeRates.QueryPerBranchElement * queriedPasses * elements)
+                + selectors
                 + matched
                 + (SvgDecodeRates.Rule * rules);
         }
 
-        /// <summary>The element counts the stylesheet's combinators read:
-        /// each element's subtree (itself and every descendant) and its
-        /// later siblings, and the largest family of siblings.</summary>
-        private (double[] Subtree, double[] Later, int LargestFamily) Families(int elements)
+        /// <summary>
+        /// The follow-up's depth bound for a branch of
+        /// <paramref name="steps"/> descendant steps: over every element, the
+        /// ways to pick 1 to <paramref name="steps"/> of its ancestors, the
+        /// work ExCSS's composed query does when every ancestor matches every
+        /// compound (duplicates are removed only at the end). Elements are
+        /// counted by depth, so it costs at most 257 x 256 steps.
+        /// </summary>
+        private static double DepthBound(Family family, int steps)
         {
-            IReadOnlyList<int> parents = document.Parents;
-            var subtree = new double[elements];
-            var later = new double[elements];
-            var children = new int[elements];
-            var ordinal = new int[elements];
-            for (int i = 0; i < elements; i++)
+            double total = 0;
+            for (int depth = 1; depth < family.AtDepth.Length; depth++)
             {
-                subtree[i] = 1;
-                if (parents[i] >= 0)
+                if (family.AtDepth[depth] > 0)
                 {
-                    ordinal[i] = children[parents[i]]++;
+                    total = Cap(total + (family.AtDepth[depth] * Choices(depth, steps)));
                 }
             }
-            int largest = 1;
-            for (int i = elements - 1; i >= 0; i--)
+            return total;
+        }
+
+        /// <summary>
+        /// The follow-up's sibling-list reads for a branch of
+        /// <paramref name="steps"/> general-sibling steps: each step reads
+        /// the whole sibling list for every current match, duplicates
+        /// included, so a parent of n children costs n x the ways to pick 1 to
+        /// <paramref name="steps"/> of them when every child matches.
+        /// </summary>
+        private static double SiblingReads(Family family, int steps)
+        {
+            double total = 0;
+            foreach ((int children, int parents) in family.Parents)
+            {
+                total = Cap(total + ((double)parents * children * Choices(children, steps)));
+            }
+            return total;
+        }
+
+        /// <summary>C(n, 1) + ... + C(n, k), saturating.</summary>
+        private static double Choices(int n, int k)
+        {
+            double sum = 0;
+            double term = 1;
+            for (int s = 1; s <= Math.Min(n, k) && sum < Saturated; s++)
+            {
+                term = term * (n - s + 1) / s;
+                sum = Cap(sum + term);
+            }
+            return sum;
+        }
+
+        /// <summary>The family counts the selector work reads: how many
+        /// elements sit at each depth (proper ancestors, the root at 0), how
+        /// many parents have each number of children, and each element's
+        /// sibling-list size (its parent's children, the root's 0).</summary>
+        private Family Families(int elements)
+        {
+            IReadOnlyList<int> parents = document.Parents;
+            var depths = new int[elements];
+            var children = new int[elements];
+            var atDepth = new double[MaxRenderDepth + 1];
+            for (int i = 0; i < elements; i++)
             {
                 int parent = parents[i];
                 if (parent >= 0)
                 {
-                    subtree[parent] += subtree[i];
-                    later[i] = children[parent] - ordinal[i] - 1;
+                    depths[i] = depths[parent] + 1;
+                    children[parent]++;
                 }
-                largest = Math.Max(largest, children[i]);
+                atDepth[Math.Min(depths[i], MaxRenderDepth)]++;
             }
-            return (subtree, later, largest);
+            var siblings = new double[elements];
+            var families = new Dictionary<int, int>();
+            for (int i = 0; i < elements; i++)
+            {
+                if (parents[i] >= 0)
+                {
+                    siblings[i] = children[parents[i]];
+                }
+                if (children[i] > 0)
+                {
+                    families[children[i]] = families.GetValueOrDefault(children[i]) + 1;
+                }
+            }
+            return new Family(atDepth, families, siblings);
         }
+
+        /// <summary>Elements by depth, parents by their number of children
+        /// (children, parents), and each element's sibling-list
+        /// size.</summary>
+        private sealed record Family(double[] AtDepth, Dictionary<int, int> Parents, double[] Siblings);
 
         // ------------------------------------------------------------------
         // Elements: their keys, and the markers they place
@@ -1700,7 +1800,7 @@ internal static class SvgPreviewGuard
         /// attributes, its style attribute or the rules filed under its keys,
         /// the one with the most renders), else its parent's.
         /// </summary>
-        private double VisitElements(double[] subtree, double[] later, List<(int Element, KeyStats Key)> attributeKeys)
+        private double VisitElements(double[] siblings, List<(int Element, KeyStats Key)> attributeKeys)
         {
             int elements = document.Names.Count;
             int throughVar = WidestVarMarker();
@@ -1742,8 +1842,7 @@ internal static class SvgPreviewGuard
                 void VisitStats(KeyStats stats)
                 {
                     stats.Count++;
-                    stats.SubtreeSum += subtree[i];
-                    stats.LaterSiblingSum += later[i];
+                    stats.FamilySum += siblings[i];
                     if (stats.MarkerSet is { } markerSet)
                     {
                         for (int slot = 0; slot < Slots; slot++)
@@ -1957,15 +2056,14 @@ internal static class SvgPreviewGuard
             return lookups;
         }
 
-        private sealed record DeferredBranch(double Passes, List<(char Combinator, KeyStats Left)> Steps, bool OfType);
+        private sealed record SelectorBranch(double Passes, int Descendants, int Siblings, List<KeyStats>? OfType);
 
         /// <summary>What the elements filed under one key add up to, and
         /// what the rules filed there apply to each.</summary>
         private sealed class KeyStats
         {
             internal double Count;
-            internal double SubtreeSum;
-            internal double LaterSiblingSum;
+            internal double FamilySum;
             internal double DeclarationMicroseconds;
             internal List<MarkerDeclaration>? Markers;
             internal bool[]? MarkerSet;
