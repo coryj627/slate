@@ -80,6 +80,7 @@ internal enum HostDiagnosticEvent
     SingleInstanceActivationTimedOut,
     SvgDecodeAbandoned,
     SvgDecodeRefusedAtCap,
+    SvgDecodeRefusedForCost,
     SvgDecodeRefusedPastDeadline,
     SvgDecodeRefusedRemembered,
     SvgDecodeWaitFailed,

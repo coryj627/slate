@@ -3285,6 +3285,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         s_svgDecodeBusyMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
             "image-busy", SvgDecodeBudgetSeconds);
 
+    private static string? s_svgDecodeCostRefusedMessage;
+
+    /// <summary>#1610 (CB-29): core's sentence for an SVG the guard refused
+    /// for what it would cost to decode (the "image-cost" form). Nothing was
+    /// decoded, so it names no budget; core's form takes none. Read
+    /// once.</summary>
+    internal static string SvgDecodeCostRefusedMessage =>
+        s_svgDecodeCostRefusedMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
+            "image-cost", SvgDecodeBudgetSeconds);
+
     /// <summary>#1635 (CD19): how long one projection's SVG decodes may wait
     /// in all. A projection is the reading view's refresh, a Ctrl+E
     /// popover's card or the embeds leaf's batch.</summary>

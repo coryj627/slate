@@ -44,6 +44,97 @@ internal enum SvgRefusal
 
     /// <summary>Not well-formed XML, or over the size cap.</summary>
     Malformed,
+
+    /// <summary>#1610 (CB-29): an estimated decode longer than
+    /// <see cref="SvgPreviewGuard.MaxEstimatedDecodeMilliseconds"/>
+    /// (<see cref="SvgDecodeEstimate"/>), for a document every other check
+    /// admits.</summary>
+    DecodeCost,
+}
+
+/// <summary>
+/// #1610 (CB-29): what Svg.Custom 5.2.3 and Svg.Skia 5.2.3 spend on the four
+/// costs that make an SVG slow to decode, in microseconds per unit. CB-29's
+/// step 0 measured each on one desktop (an AMD Ryzen 7 9800X3D, .NET 10); the
+/// calibration is committed in
+/// <c>docs/plans/47_windows_core_closeout/calibration/cb29/</c>, and CB-29's
+/// spec names each rate.
+/// </summary>
+internal static class SvgDecodeRates
+{
+    /// <summary>A stylesheet selector branch's query walks every element of
+    /// the document: per branch, per pass, per element.</summary>
+    internal const double QueryPerBranchElement = 0.0935;
+
+    /// <summary>A declaration applied to an element a rule matched.</summary>
+    internal const double MatchedDeclaration = 1.03;
+
+    /// <summary>A matched custom-property definition, or a matched
+    /// declaration whose value holds <c>var()</c>.</summary>
+    internal const double MatchedCustomDeclaration = 0.5;
+
+    /// <summary>Each rule of the stylesheet, parsed on its own.</summary>
+    internal const double Rule = 4.5;
+
+    /// <summary>Under any <c>&lt;style&gt;</c>, each <c>&lt;use&gt;</c>
+    /// render re-applies the stylesheet: per use render, per element of the
+    /// document and per <see cref="UseRenderRuleWeight"/> elements a rule
+    /// costs.</summary>
+    internal const double UseRenderElement = 0.2465;
+
+    /// <summary>What one rule weighs in a use render, in elements.</summary>
+    internal const double UseRenderRuleWeight = 15;
+
+    /// <summary>Under any <c>&lt;style&gt;</c>, each element of a use's
+    /// instance, per use render.</summary>
+    internal const double UseInstanceElement = 22.2;
+
+    /// <summary>What each rule adds to <see cref="UseInstanceElement"/>.</summary>
+    internal const double UseInstanceElementRule = 0.0666;
+
+    /// <summary>Each lookup a <c>var()</c> resolution makes.</summary>
+    internal const double VarCopy = 0.192;
+
+    /// <summary>A marker unit: a placement's marker renders and its
+    /// <see cref="MarkerPlacementWeight"/>, or a marked element's widest
+    /// marker.</summary>
+    internal const double MarkerUnit = 2.548;
+
+    /// <summary>What one marker placement weighs beyond its marker's
+    /// renders.</summary>
+    internal const double MarkerPlacementWeight = 20;
+}
+
+/// <summary>#1610 (CB-29): the decode time <see cref="SvgPreviewGuard"/>
+/// estimates for a document, one term per cost, in microseconds at
+/// <see cref="SvgDecodeRates"/>.</summary>
+internal readonly record struct SvgDecodeEstimate(
+    double StylesheetMicroseconds,
+    double UseMicroseconds,
+    double VarMicroseconds,
+    double MarkerMicroseconds)
+{
+    internal double Microseconds =>
+        StylesheetMicroseconds + UseMicroseconds + VarMicroseconds + MarkerMicroseconds;
+
+    internal double Milliseconds => Microseconds / 1000;
+
+    /// <summary>The largest term's name, for the log: <c>stylesheet</c>,
+    /// <c>use</c>, <c>var</c> or <c>marker</c>.</summary>
+    internal string LargestTerm
+    {
+        get
+        {
+            (string Name, double Value)[] terms =
+            [
+                ("stylesheet", StylesheetMicroseconds),
+                ("use", UseMicroseconds),
+                ("var", VarMicroseconds),
+                ("marker", MarkerMicroseconds),
+            ];
+            return terms.MaxBy(term => term.Value).Name;
+        }
+    }
 }
 
 /// <summary>
@@ -84,6 +175,14 @@ internal static class SvgPreviewGuard
     /// <summary>Deepest bracket nesting in one attribute value or one
     /// stylesheet.</summary>
     internal const int MaxValueNesting = 16;
+
+    /// <summary>#1610 (CB-29): the longest decode a preview admits, as
+    /// <see cref="SvgDecodeEstimate"/> estimates it at
+    /// <see cref="SvgDecodeRates"/>. 2,000 ms is a PLACEHOLDER: the
+    /// recommendation of CB-29's calibration table, built in until the owner
+    /// picks the limit from that table (CD20's second step). It is not the
+    /// owner's pick.</summary>
+    internal const int MaxEstimatedDecodeMilliseconds = 2_000;
 
     /// <summary>The key of a stylesheet rule that applies to every element.</summary>
     private const string AnyElementKey = "*";
@@ -130,6 +229,11 @@ internal static class SvgPreviewGuard
         }
         return document.Measure();
     }
+
+    /// <summary>#1610 (CB-29): the decode time <see cref="Check"/> compares
+    /// with <see cref="MaxEstimatedDecodeMilliseconds"/>, for a document every
+    /// other check admits; zero for any other.</summary>
+    internal static SvgDecodeEstimate Estimate(string source, int maxCharacters) => default;
 
     /// <summary>The elements of a document and the edges a render can
     /// follow between them, collected in one pass.</summary>
