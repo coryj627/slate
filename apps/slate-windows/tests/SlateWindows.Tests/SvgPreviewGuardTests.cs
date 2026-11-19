@@ -176,6 +176,9 @@ public sealed class SvgPreviewGuardTests
         { "A_use R=1 G=4 U=3000", 2569.8 },
         { "C_double D=15 E=1000", 6291.7 },
         { "D_marker M=500 V=1000", 1326.1 },
+        // A descendant step over one flat group walks the tree a second
+        // time: step 0 measured twice the query's cost, the weight's 1 + 1.
+        { "A_desc R=2000 E=5000", 1885.3 },
     };
 
     /// <summary>#1610 (CB-29): one document per term, each estimated within
@@ -184,7 +187,8 @@ public sealed class SvgPreviewGuardTests
     /// <c>docs/plans/47_windows_core_closeout/calibration/cb29/est.csv</c>),
     /// so a later change to the counting is seen against the calibration.
     /// A_list's rules have four selectors each, so a count of rules in place
-    /// of branches is a quarter of it.</summary>
+    /// of branches is a quarter of it; A_desc's descendant step weighs one
+    /// more walk of the tree.</summary>
     [Theory]
     [MemberData(nameof(CalibratedDocuments))]
     public void EstimatesTrackTheCalibration(string label, double calibratedMilliseconds)
