@@ -960,6 +960,31 @@ internal static class SlowSvgDocuments
                     }
                     break;
                 }
+            case "U_flat":
+                {
+                    // Codex's round 2: R rules of general siblings (Q=1,
+                    // rect ~ rect) or first-of-type (Q=2) over a symbol of T
+                    // sibling rects that U uses draw.
+                    int t = P(p, "T", 300);
+                    int u = P(p, "U", 20);
+                    string sel = P(p, "Q", 1) == 1 ? "rect ~ rect" : "rect:first-of-type";
+                    s.Append("<style>");
+                    for (int j = 0; j < r; j++)
+                    {
+                        s.Append($"{sel}{{fill:{Hex(j)}}}");
+                    }
+                    s.Append("</style><defs><symbol id='s'>");
+                    for (int i = 0; i < t; i++)
+                    {
+                        s.Append(RectAt(i, ""));
+                    }
+                    s.Append("</symbol></defs>");
+                    for (int i = 0; i < u; i++)
+                    {
+                        s.Append($"<use href='#s' x='{i % 40 * 10}' y='{i / 40 * 10}'/>");
+                    }
+                    break;
+                }
             case "A_keyframes":
                 {
                     // The red team's M2: an animation export's shape, one

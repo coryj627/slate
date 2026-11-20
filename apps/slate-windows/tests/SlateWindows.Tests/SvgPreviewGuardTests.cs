@@ -436,6 +436,30 @@ public sealed class SvgPreviewGuardTests
             $"one rule of 1,000 branches: {branches:F0} ms; 1,000 rules: {rules:F0} ms");
     }
 
+    public static TheoryData<string> CombinatorKinds() =>
+    [
+        "U_desc K=4 R=10 D=32",
+        "U_flat Q=1 R=50 T=300",
+        "U_flat Q=2 R=50 T=300",
+    ];
+
+    /// <summary>#1610 (Codex's round 2): each use render re-runs the
+    /// stylesheet's combinator work over its instance (measured for
+    /// descendant chains, about 0.35 s an instance of a symbol whose own
+    /// estimate is 0.5 s), so 20 uses of a symbol whose stylesheet work is
+    /// mostly descendant chains, sibling reads or of-type reads add at least
+    /// half of 20 times the document's own stylesheet term.</summary>
+    [Theory]
+    [MemberData(nameof(CombinatorKinds))]
+    public void AUseInstanceTakesItsSubtreesCombinatorWork(string shape)
+    {
+        SvgDecodeEstimate alone = EstimateOf(SlowSvgDocuments.Generate(shape + " U=0"));
+        SvgDecodeEstimate used = EstimateOf(SlowSvgDocuments.Generate(shape + " U=20"));
+        double added = used.Milliseconds - alone.Milliseconds;
+        double floor = 20 * 0.5 * alone.StylesheetMicroseconds / 1000;
+        Assert.True(added >= floor, $"{shape}: 20 uses add {added:F0} ms, under {floor:F0} ms");
+    }
+
     public static TheoryData<char> WalkingCombinators() => ['>', '+'];
 
     /// <summary>#1610 (the red team's m1): a child or adjacent-sibling step
