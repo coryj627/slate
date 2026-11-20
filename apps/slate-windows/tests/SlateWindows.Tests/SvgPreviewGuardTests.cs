@@ -224,14 +224,17 @@ public sealed class SvgPreviewGuardTests
     {
         { "T_varrule B=320000 V=32000", nameof(SvgRefusal.None) },
         { "T_dupid N=16000", nameof(SvgRefusal.RenderedElements) },
+        { "T_prelude K=20000 U=1000", nameof(SvgRefusal.None) },
     };
 
     /// <summary>
     /// #1610 (the red team's B1): the guard runs on the caller, so its own
     /// time is bounded on the shapes that made it super-linear: one rule of
     /// 320,000 branches and 32,000 var() declarations (1.1 MB, 16.7 s of
-    /// guard), and 16,000 references to an id 16,000 elements share
-    /// (480 KB, 2.7 s). Each is judged in under a second, the median of
+    /// guard), 16,000 references to an id 16,000 elements share (480 KB,
+    /// 2.7 s), and one block of 20,000 classes whose 1,000 declarations
+    /// name url() targets (the same product through a stylesheet's keys,
+    /// found on the way). Each is judged in under a second, the median of
     /// <see cref="WallClockBudget"/>'s warm readings.
     /// </summary>
     [Theory]

@@ -864,6 +864,22 @@ internal static class SlowSvgDocuments
                     }
                     break;
                 }
+            case "T_prelude":
+                {
+                    // One block whose prelude lists K classes and whose U
+                    // declarations name eight ids, one of which a group carries.
+                    int k = P(p, "K", 100);
+                    int u = P(p, "U", 10);
+                    s.Append("<style>");
+                    s.Append(string.Join(",", Enumerable.Range(0, k).Select(i => $".k{i}")));
+                    s.Append('{');
+                    for (int j = 0; j < u; j++)
+                    {
+                        s.Append($"p{j}:url(#t{j % 8});");
+                    }
+                    s.Append("}</style><g id='t0'/>");
+                    break;
+                }
             case "A_keyframes":
                 {
                     // The red team's M2: an animation export's shape, one
