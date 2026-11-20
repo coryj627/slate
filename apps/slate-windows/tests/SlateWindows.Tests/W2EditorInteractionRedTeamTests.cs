@@ -1261,6 +1261,59 @@ public sealed class W2EditorInteractionRedTeamTests
         Assert.Equal(key, Key(7));
     }
 
+    /// <summary>#1610 (the delta merge judge's minor 4, stage 11): the
+    /// guard's cost refusals and the decodes that timed out are remembered
+    /// apart, each up to its own capacity, so a note of more than 256
+    /// SVGs refused for their cost cannot evict a timeout, each of which
+    /// is worth a 5 s decode and an abandoned slot. The newest 256 cost
+    /// refusals are kept.</summary>
+    [Fact]
+    public void SvgPreview_CostRefusalsCannotEvictATimeout()
+    {
+        var memory = new EditorInteractionCoordinator.SvgDecodeTimeoutMemory();
+        static string Key(int index) =>
+            EditorInteractionCoordinator.SvgDecodeTimeoutMemory.KeyOf(Encoding.UTF8.GetBytes(FilledSvg($"#{index:x6}")));
+        memory.Remember(Key(0));
+        for (int index = 1; index <= 1_000; index++)
+        {
+            memory.Remember(Key(index), forCost: true);
+        }
+        Assert.True(memory.TryRecall(Key(0), out bool timeoutForCost));
+        Assert.False(timeoutForCost);
+        Assert.False(memory.Contains(Key(744)));
+        Assert.True(memory.TryRecall(Key(745), out bool oldestKept) && oldestKept);
+        Assert.True(memory.TryRecall(Key(1_000), out bool newest) && newest);
+        Assert.Equal(257, memory.Count);
+    }
+
+    /// <summary>#1610 (the delta merge judge's nit 5, stage 11): the hash an
+    /// SVG is remembered by is charged to its projection's deadline with
+    /// whatever follows it, so a remembered refusal's hash is charged too,
+    /// and no path hashes for free. The seam charges each check 5 ms of a
+    /// 1,000 ms deadline.</summary>
+    [Fact]
+    public void SvgPreview_ARememberedRefusalsHashIsChargedToTheDeadline()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        byte[] svg = Encoding.UTF8.GetBytes(FilledSvg("teal"));
+        slots.TimeoutMemory.Remember(EditorInteractionCoordinator.SvgDecodeTimeoutMemory.KeyOf(svg));
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(1_000);
+        EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+        EditorInteractionCoordinator.SvgGuardChargeForTests = _ => TimeSpan.FromMilliseconds(5);
+        try
+        {
+            Assert.Equal(
+                EditorInteractionCoordinator.SvgDecodeTimeExceededMessage,
+                EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(svg, deadline));
+            Assert.Equal(TimeSpan.FromMilliseconds(995), deadline.Left);
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgGuardChargeForTests = null;
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+        }
+    }
+
     /// <summary>#1635: of the decodes that start, only one abandoned at its
     /// own whole budget is remembered (the guard's refusals for cost are
     /// too, before any decode, #1610). An ordinary failure, a wait that
