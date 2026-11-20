@@ -1631,7 +1631,8 @@ public sealed class SvgPreviewGuardTests
     /// #1610 (the delta merge judge's major 1, stage 11): the guard drops
     /// what the decoder drops, closed by a differential sweep. Each of 34
     /// fill spellings (the dropped ones, readable forms the guard does not
-    /// read, through var(), the CSS-wide keywords and readable controls)
+    /// read, through var(), the CSS-wide keywords and readable controls;
+    /// 38 since stage 12)
     /// stands against a pattern at every other tier and place: the
     /// attribute, earlier in the same style attribute, a rule of lower
     /// specificity, an earlier rule of the same, !important on both sides,
@@ -1642,7 +1643,7 @@ public sealed class SvgPreviewGuardTests
     /// (the delta merge judge's major A) adds a reference followed by a
     /// value, written three ways (after a missing reference, with and
     /// without a space, and after a present gradient), at the same places
-    /// and three through var(): 23 values that stand for the judge's 459,
+    /// and three through var(): 24 values that stand for the judge's 459,
     /// one or more from each class of what the decoder and the guard do
     /// with them across the judge's eight templates (the calibration
     /// record's stage 12 section says how they were chosen).
@@ -1656,13 +1657,13 @@ public sealed class SvgPreviewGuardTests
             "url(#missing) bogus", "url(var(--f))", "url(var(--b))", "var(--none)", "var(--none,bogus)", "var(--none,)",
             "var(--none,inherit)", "var(--b)", "var(--e)", "var(--r)", "var(--k)", "inherit", "INHERIT", "unset", "initial",
             "revert", "blue", "none", "currentColor", "url(#missing)", "url(#missing) blue", "context-fill", "transparent",
-            "#00f", "rgb(1,2,3)",
+            "#00f", "rgb(1,2,3)", "url(#missing", "rgb(var(--q),2,3)", "url(#p) foo", "url(#p) red",
         ];
         string[] fallbacks =
         [
             "red", "none", "inherit", "INHERIT", "inherit ", "unset", "initial", "revert", "revert-layer", "context-fill",
             "currentColor", "transparent", "#00f", "#ff000", "hsl(240,100%,50%)", "ThreeDFace", "foo", "", "url(#missing",
-            "url(#p) red", "rgb(var(--q),2,3)", "var(--b)", "var(--k)",
+            "url(#p) red", "url(#p) foo", "rgb(var(--q),2,3)", "var(--b)", "var(--k)",
         ];
         const string P = "url(#p)";
         const string Gradient =
@@ -1730,7 +1731,7 @@ public sealed class SvgPreviewGuardTests
                 hidden.Add(body);
             }
         }
-        Assert.Equal(558 + (23 * 3 * 18), bodies.Count);
+        Assert.Equal((38 * 15) + (24 * 3 * 18) + (12 * 4), bodies.Count);
         Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
     }
 

@@ -2074,7 +2074,14 @@ internal static class SvgPreviewGuard
         /// (<see cref="DrawsOwnPaint"/>) clears it; and anything else keeps
         /// the parent's paint, <c>inherit</c> and a context paint among
         /// them. A <c>url()</c> whose argument holds a <c>var()</c> may name
-        /// any pattern once the decoder substitutes it (stage 11).
+        /// any pattern once the decoder substitutes it (stage 11). A
+        /// reference to no pattern whose fallback is <c>inherit</c> is a
+        /// paint the decoder reads, never drops: it draws what the reference
+        /// names, or keeps the parent's paint where the reference names no
+        /// paint (the delta merge judge's major A, stage 12). The decoder
+        /// drops a reference followed by any other word it cannot read,
+        /// <c>unset</c>, <c>initial</c>, <c>revert</c> and a context paint
+        /// among them (measured), as the drop rule has it.
         /// </summary>
         private static byte Literal(string text, HashSet<string> patternIds)
         {
@@ -2089,6 +2096,10 @@ internal static class SvgPreviewGuard
             if (UrlsIn(text).Exists(patternIds.Contains))
             {
                 return PatternMask;
+            }
+            if (ReferenceFallback(text) is { } fallback && fallback.Equals("inherit", StringComparison.OrdinalIgnoreCase))
+            {
+                return KeepsMask | ClearsMask;
             }
             return DrawsOwnPaint(text) ? ClearsMask : KeepsMask;
         }
@@ -5079,15 +5090,23 @@ internal static class SvgPreviewGuard
     {
         if (text.StartsWith("url(", StringComparison.Ordinal))
         {
-            int end = UrlArgumentEnd(text, 4);
-            if (end >= text.Length || text[end] != ')')
-            {
-                return false;
-            }
-            string rest = text[(end + 1)..].Trim();
-            return rest.Length == 0 || IsColour(rest);
+            return ReferenceFallback(text) is { } rest && (rest.Length == 0 || IsColour(rest));
         }
         return IsColour(text);
+    }
+
+    /// <summary>What follows a reference that opens <paramref name="text"/>
+    /// (<c>url(</c>, as the decoder writes it), trimmed: its fallback, or
+    /// nothing; null when the text opens with no reference or its
+    /// reference does not close.</summary>
+    private static string? ReferenceFallback(string text)
+    {
+        if (!text.StartsWith("url(", StringComparison.Ordinal))
+        {
+            return null;
+        }
+        int end = UrlArgumentEnd(text, 4);
+        return end >= text.Length || text[end] != ')' ? null : text[(end + 1)..].Trim();
     }
 
     /// <summary>Whether <paramref name="text"/> (trimmed, not empty) is
