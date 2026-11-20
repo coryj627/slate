@@ -16,7 +16,9 @@ namespace SlateWindows.Tests;
 /// an invalid search query no longer adds "Search query is invalid: ". The
 /// graph config's read-only notice reads its error's typed fields, in the
 /// words the FFI crate's own Display gives them, never "@version=" or
-/// "@reason=".
+/// "@reason=". Since the owner's call of 2026-11-20 ("Plain words."), the
+/// detail of a search core's index refuses is core's plain sentence, not
+/// SQLite's text.
 /// </summary>
 public sealed class GraphSearchFailureDetailTests
 {
@@ -30,13 +32,29 @@ public sealed class GraphSearchFailureDetailTests
 
     // ---- Search -------------------------------------------------------------
 
-    /// <summary>A query core's full-text index cannot parse, typed into the
-    /// overlay over a real vault: the summary and the spoken line are
-    /// "Search error: " and core's detail, with no host lead of their
+    /// <summary>What a reader hears when core's full-text index refuses a
+    /// search as a query: core's plain sentence after the template's lead
+    /// (the owner, 2026-11-20: "Plain words. Please change it.").</summary>
+    private const string RefusedSearch =
+        "Search error: Check the quotes, symbols and operators in your search.";
+
+    /// <summary>A query core's full-text index refuses, typed into the
+    /// overlay over a real vault, one of each kind plan 47's step 0 found
+    /// (an operator, a quote, an open NEAR, a special query, a tag, a
+    /// contraction, a column filter, a hyphenated word, a NEAR distance):
+    /// the summary and the spoken line are "Search error: " and core's
+    /// detail, core's plain sentence, with no host lead of their
     /// own.</summary>
     [Theory]
     [InlineData("AND")]
     [InlineData("unbalanced\"")]
+    [InlineData("NEAR(alpha beta")]
+    [InlineData("*")]
+    [InlineData("#project")]
+    [InlineData("don't")]
+    [InlineData("foo:bar")]
+    [InlineData("well-known")]
+    [InlineData("NEAR(alpha, beta)")]
     public void AnInvalidQuerySaysCoresDetailWithNoLeadOfItsOwn(string query)
     {
         using FixtureVault vault = FixtureVault.Create(3, "search-failure-detail");
@@ -62,9 +80,43 @@ public sealed class GraphSearchFailureDetailTests
         string expected = "Search error: " + SlateUniffiMethods.VaultErrorDetail(refused);
         Assert.Equal(expected, overlay.Summary);
         Assert.Equal(expected, Render(Assert.IsType<A11yEvent.SearchFailed>(announcements.Last())));
-        Assert.StartsWith("Search error: FTS5 could not parse ", overlay.Summary, StringComparison.Ordinal);
+        Assert.Equal(RefusedSearch, overlay.Summary);
         Assert.DoesNotContain("Search query is invalid", overlay.Summary, StringComparison.Ordinal);
         Assert.DoesNotMatch(FieldToken, overlay.Summary);
+    }
+
+    /// <summary>A second refused search in the same open overlay says the
+    /// same sentence, so it is not announced again: the overlay announces
+    /// a summary only when it changes (contract S7, as for two searches
+    /// with the same result count). The panel still shows the line, and a
+    /// search that runs is announced as before.</summary>
+    [Fact]
+    public void ASecondRefusedSearchIsNotAnnouncedAgain()
+    {
+        using FixtureVault vault = FixtureVault.Create(3, "search-refused-twice");
+        using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+        using (var scan = new CancelToken())
+        {
+            session.ScanInitial(scan);
+        }
+        var announcements = new List<A11yEvent>();
+        var overlay = new SearchOverlayViewModel(
+            new VaultSearchSource(() => session, () => vault.Root), announcements.Add, debounceSearches: false);
+        overlay.Open();
+
+        overlay.Query = "AND";
+        overlay.Query = "#project";
+
+        Assert.Equal(SearchOverlayState.Error, overlay.State);
+        Assert.Equal(RefusedSearch, overlay.Summary);
+        Assert.Equal(
+            new[] { RefusedSearch },
+            announcements.OfType<A11yEvent.SearchFailed>().Select(Render).ToArray());
+
+        overlay.Query = "zzzabsentterm";
+
+        Assert.Equal(SearchOverlayState.Results, overlay.State);
+        Assert.Equal("Search returned no results.", Render(announcements.Last()));
     }
 
     /// <summary>Every other variant says core's detail: a vault error the

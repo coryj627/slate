@@ -233,10 +233,11 @@ pub enum VaultError {
     #[error("file at {path:?} is {size} bytes, larger than the configured refuse threshold")]
     FileTooLarge { path: String, size: u64 },
 
-    /// User-supplied query string didn't parse as FTS5 syntax.
-    /// Returned from `full_text_search` so the UI can render a
-    /// "bad query" message without conflating it with a corrupt
-    /// cache (which would surface as `Db`).
+    /// A query string the caller supplied was refused. From
+    /// `full_text_search` it is a query FTS5 refuses, kept apart from a
+    /// corrupt cache (which surfaces as `Db`), and its message is core's
+    /// plain sentence (`a11y::SEARCH_QUERY_UNREADABLE`). Other producers
+    /// (the sidebar filter, tag edits) carry their own message.
     #[error("invalid search query: {message}")]
     InvalidQuery { message: String },
 

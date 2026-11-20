@@ -103,6 +103,47 @@ final class SearchOverlayVoiceTests: XCTestCase {
             summaryPosts(recorder), ["Search returned 3 results.", "Search returned 1 result."])
     }
 
+    /// A second refused search in an open overlay says the same line, so it
+    /// is not posted again: the overlay announces the summary only when it
+    /// changes (contract 29 S7, and SD-6's amendment for the owner's "Plain
+    /// words" call of 2026-11-20). A search that runs is posted as before.
+    /// The Windows twin has this name (GraphSearchFailureDetailTests).
+    func testASecondRefusedSearchIsNotAnnouncedAgain() async throws {
+        let recorder = RecordingAnnouncer()
+        let (state, root) = try await openVault(
+            files: ["a.md": "# A\n\nfindme one\n"], announcer: recorder)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Every publication of a non-empty summary, identical ones included
+        // (`@Published` emits on each assignment): the waits key off these.
+        var summaryPublications = 0
+        let watcher = state.$searchSummary.dropFirst().sink { summary in
+            if !summary.isEmpty { summaryPublications += 1 }
+        }
+        defer { watcher.cancel() }
+        let hosted = host(state)
+        defer { hosted.close() }
+
+        state.toggleSearchOverlay()
+        await pump(0.3)
+        state.searchQuery = "AND"
+        state.bumpSearchQuery()
+        await waitUntil { errorPosts(recorder).count == 1 }
+        let publicationsBefore = summaryPublications
+
+        state.searchQuery = "#project"
+        state.bumpSearchQuery()
+        await waitUntil { summaryPublications > publicationsBefore }
+        await pump(0.3)
+        XCTAssertEqual(
+            errorPosts(recorder),
+            ["Search error: Check the quotes, symbols and operators in your search."])
+
+        state.searchQuery = "findme"
+        state.bumpSearchQuery()
+        await waitUntil { summaryPosts(recorder).count == 1 }
+        XCTAssertEqual(summaryPosts(recorder), ["Search returned 1 result."])
+    }
+
     /// A focus move has no announcement of its own. VoiceOver reads the
     /// focused row itself, so `RowSelected` or `RecentSearchFocused` posted
     /// as well would speak the row twice (VoiceOver pass 2026-10-16). Rows
@@ -149,6 +190,10 @@ final class SearchOverlayVoiceTests: XCTestCase {
 
     private func summaryPosts(_ recorder: RecordingAnnouncer) -> [String] {
         recorder.posts.filter { $0.hasPrefix("Search returned") }
+    }
+
+    private func errorPosts(_ recorder: RecordingAnnouncer) -> [String] {
+        recorder.posts.filter { $0.hasPrefix("Search error") }
     }
 
     private func openVault(

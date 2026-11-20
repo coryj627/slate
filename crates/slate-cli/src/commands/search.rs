@@ -23,9 +23,10 @@
 //!   "hits": [{ "path": String, "snippet": String, "score": f64,
 //!              "match_ranges": [{ "start": u64, "end": u64 }] }] }
 //! ```
-//! `InvalidQuery` (FTS5 syntax error) surfaces as exit 1 with the query
-//! error message verbatim (via the standard `VaultError` Display path in
-//! `main`).
+//! A query FTS5 refuses comes back as `InvalidQuery`, whose message is
+//! core's plain sentence (`a11y::SEARCH_QUERY_UNREADABLE`), not SQLite's
+//! text. It surfaces as exit 1 through the standard `VaultError` Display
+//! path in `main`: `invalid search query: ` and the sentence.
 
 use slate_core::SearchScope;
 use slate_core::search_db::{SNIPPET_HIT_END, SNIPPET_HIT_START};
@@ -60,9 +61,10 @@ pub fn run(
 ) -> Result<(String, CommandOutput), CliError> {
     let (session, abs_path) = open_and_scan(raw_path, cancel)?;
 
-    // Vault-wide search. An FTS5 syntax error comes back as
-    // `VaultError::InvalidQuery`, which `map_vault_error` leaves as a
-    // plain `Vault(_)` → exit 1 with the message verbatim.
+    // Vault-wide search. A query FTS5 refuses comes back as
+    // `VaultError::InvalidQuery` carrying core's plain sentence, which
+    // `map_vault_error` leaves as a plain `Vault(_)` → exit 1 with
+    // `invalid search query: ` and the sentence.
     let result = session
         .full_text_search(query, &SearchScope::Vault, cancel)
         .map_err(map_vault_error)?;
