@@ -375,7 +375,7 @@ internal static class SvgPreviewGuard
         private readonly List<int> vertices = [];
         private readonly List<MarkerDeclaration> elementMarkers = [];
         private readonly List<(string Name, string Value)> customDefinitions = [];
-        private readonly List<string> attributeVarUses = [];
+        private readonly List<(int Element, string Value)> attributeVarUses = [];
         private readonly List<(int Element, string? Target)> uses = [];
         private readonly List<int> order = [];
 
@@ -400,8 +400,17 @@ internal static class SvgPreviewGuard
         internal IReadOnlyList<(string Name, string Value)> CustomDefinitions => customDefinitions;
 
         /// <summary>Attribute and style declaration values holding var(),
-        /// custom-property definitions aside.</summary>
-        internal IReadOnlyList<string> AttributeVarUses => attributeVarUses;
+        /// custom-property definitions aside, and the element each is
+        /// on.</summary>
+        internal IReadOnlyList<(int Element, string Value)> AttributeVarUses => attributeVarUses;
+
+        /// <summary>The stylesheet's rules, read once for Measure and the
+        /// estimate.</summary>
+        internal List<StyleRule> Rules { get; private set; } = [];
+
+        /// <summary>The url() targets each custom property can resolve to
+        /// (Codex's review, stage 4), built by Measure.</summary>
+        internal VarReach? Reach { get; private set; }
 
         /// <summary>Every use element and the id its href names.</summary>
         internal IReadOnlyList<(int Element, string? Target)> Uses => uses;
@@ -412,7 +421,8 @@ internal static class SvgPreviewGuard
         internal string Stylesheet { get; private set; } = string.Empty;
 
         /// <summary>Measure's graph: the elements, then one node per rule
-        /// key, one node per id a reference names and one node per rule
+        /// key, one node per id a reference names, one node per component
+        /// of custom properties that reaches one, and one node per rule
         /// block several keys share, and each node's edges.</summary>
         internal List<int>?[] Next { get; private set; } = [];
 
@@ -450,7 +460,12 @@ internal static class SvgPreviewGuard
             // nests what the next one holds: the joined text is the one
             // that is checked.
             Stylesheet = styleText.ToString();
-            return ReadStylesheet(Stylesheet);
+            SvgRefusal sheet = ReadStylesheet(Stylesheet);
+            if (sheet == SvgRefusal.None)
+            {
+                Rules = StyleRules(CssText(Stylesheet), steps);
+            }
+            return sheet;
         }
 
         private SvgRefusal AppendStyle(string text)
@@ -639,7 +654,7 @@ internal static class SvgPreviewGuard
             }
             if (value.Contains("var(", StringComparison.OrdinalIgnoreCase))
             {
-                attributeVarUses.Add(value);
+                attributeVarUses.Add((index, value));
             }
             if (element == "use" && attribute.Equals("href", StringComparison.OrdinalIgnoreCase)
                 && value.Trim() is { Length: > 1 } target && target[0] == '#')
@@ -680,14 +695,14 @@ internal static class SvgPreviewGuard
                 }
                 if (declared.Contains("var(", StringComparison.OrdinalIgnoreCase))
                 {
-                    attributeVarUses.Add(declared);
+                    attributeVarUses.Add((index, declared));
                 }
             }
         }
 
         private void AddMarker(int index, int slots, string value)
         {
-            if (ReadMarkerValue(value, out string? target, out bool throughVar))
+            if (ReadMarkerValue(value, out string? target, out string? throughVar))
             {
                 elementMarkers.Add(new MarkerDeclaration(index, slots, target, throughVar));
             }
@@ -866,35 +881,45 @@ internal static class SvgPreviewGuard
         {
             if (ruleBlocks.Count == 0 || !ReferenceEquals(prelude, keyedPrelude))
             {
-                var keys = new List<string>();
-                var seen = new HashSet<string>(StringComparer.Ordinal);
-                foreach (string selector in (prelude ?? string.Empty).Split(','))
-                {
-                    steps.Spend(1);
-                    if (SimpleSelectorKey(selector) is not { } key)
-                    {
-                        keys = [AnyElementKey];
-                        break;
-                    }
-                    if (seen.Add(key))
-                    {
-                        keys.Add(key);
-                    }
-                }
-                ruleBlocks.Add(new RuleBlock(keys));
+                ruleBlocks.Add(new RuleBlock(KeysOf(prelude)));
                 keyedPrelude = prelude;
             }
             steps.Spend(1);
             ruleBlocks[^1].Targets.Add(target);
         }
 
-        /// <summary>A stylesheet block's keys and the ids its
-        /// <c>url()</c> references name.</summary>
+        /// <summary>The key of every selector in <paramref name="prelude"/>,
+        /// each once, or every element's when the prelude is not a list of
+        /// simple selectors.</summary>
+        private List<string> KeysOf(string? prelude)
+        {
+            var keys = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string selector in (prelude ?? string.Empty).Split(','))
+            {
+                steps.Spend(1);
+                if (SimpleSelectorKey(selector) is not { } key)
+                {
+                    return [AnyElementKey];
+                }
+                if (seen.Add(key))
+                {
+                    keys.Add(key);
+                }
+            }
+            return keys;
+        }
+
+        /// <summary>A stylesheet block's keys, the ids its <c>url()</c>
+        /// references name, and the custom-property components its
+        /// <c>var()</c> references reach (Codex's review, stage 4).</summary>
         private sealed class RuleBlock(List<string> keys)
         {
             internal List<string> Keys { get; } = keys;
 
             internal HashSet<string> Targets { get; } = new(StringComparer.Ordinal);
+
+            internal HashSet<int> Components { get; } = [];
         }
 
         /// <summary>
@@ -907,7 +932,10 @@ internal static class SvgPreviewGuard
         /// targets through one node per block, so the edges stay linear in
         /// the document when many elements share an id or many selectors
         /// share a block. The render counts are the same as an edge from
-        /// each key to each distinct target filed under it.
+        /// each key to each distinct target filed under it. An element or a
+        /// rule that names a custom property reaches what the property can
+        /// resolve to, as if its value named those targets (Codex's review,
+        /// stage 4).
         /// </summary>
         internal SvgRefusal Measure()
         {
@@ -923,6 +951,64 @@ internal static class SvgPreviewGuard
                         byId[id] = named = [];
                     }
                     named.Add(i);
+                }
+            }
+            // Custom properties (Codex's review, stage 4): an element or a
+            // rule whose value names one reaches every url() target the
+            // property can resolve to, through one node per component of
+            // properties that reaches a target that draws.
+            bool Draws(string id) =>
+                byId.TryGetValue(id, out List<int>? named) && named.Exists(target => !IsGradient(names[target]));
+            var reach = new VarReach(
+                customDefinitions.Concat(Rules
+                    .Where(rule => rule.Prelude is not null)
+                    .SelectMany(rule => rule.Declarations)
+                    .Where(declaration => declaration.Name.StartsWith("--", StringComparison.Ordinal))),
+                steps);
+            Reach = reach;
+            var reaches = new bool[reach.Count];
+            for (int c = 0; c < reach.Count; c++)
+            {
+                steps.Spend(1 + reach.Urls[c].Count + reach.Named[c].Count);
+                reaches[c] = reach.Urls[c].Exists(Draws) || reach.Named[c].Exists(other => reaches[other]);
+            }
+            HashSet<int> Reached(string value)
+            {
+                var found = new HashSet<int>();
+                foreach (string name in NamesIn(value))
+                {
+                    steps.Spend(1);
+                    if (reach.ComponentOf(name) is var c and >= 0 && reaches[c])
+                    {
+                        found.Add(c);
+                    }
+                }
+                return found;
+            }
+            foreach (StyleRule rule in Rules)
+            {
+                if (rule.Prelude is null)
+                {
+                    continue;
+                }
+                RuleBlock? block = null;
+                foreach ((string name, string value) in rule.Declarations)
+                {
+                    steps.Spend(1);
+                    if (name.StartsWith("--", StringComparison.Ordinal)
+                        || !value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    foreach (int c in Reached(value))
+                    {
+                        block ??= new RuleBlock(KeysOf(rule.Prelude));
+                        block.Components.Add(c);
+                    }
+                }
+                if (block is not null)
+                {
+                    ruleBlocks.Add(block);
                 }
             }
             var keyNodes = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -972,8 +1058,25 @@ internal static class SvgPreviewGuard
                     NameNode(id);
                 }
             }
+            for (int c = 0; c < reach.Count; c++)
+            {
+                if (reaches[c])
+                {
+                    foreach (string id in reach.Urls[c])
+                    {
+                        NameNode(id);
+                    }
+                }
+            }
+            int firstComponentNode = elements + keyNodes.Count + idNodes.Count;
+            var componentNodes = new int[reach.Count];
+            int componentNodeCount = 0;
+            for (int c = 0; c < reach.Count; c++)
+            {
+                componentNodes[c] = reaches[c] ? firstComponentNode + componentNodeCount++ : -1;
+            }
             // One node per block that two or more keys file alone.
-            int firstRuleNode = elements + keyNodes.Count + idNodes.Count;
+            int firstRuleNode = firstComponentNode + componentNodeCount;
             var ruleNodes = new int[ruleBlocks.Count];
             int ruleNodeCount = 0;
             for (int b = 0; b < ruleBlocks.Count; b++)
@@ -1023,6 +1126,47 @@ internal static class SvgPreviewGuard
             {
                 Edge(from, to);
             }
+            for (int c = 0; c < reach.Count; c++)
+            {
+                if (componentNodes[c] < 0)
+                {
+                    continue;
+                }
+                foreach (string id in reach.Urls[c])
+                {
+                    Reference(componentNodes[c], id);
+                }
+                foreach (int other in reach.Named[c])
+                {
+                    if (componentNodes[other] >= 0)
+                    {
+                        Edge(componentNodes[c], componentNodes[other]);
+                    }
+                }
+            }
+            foreach ((int element, string value) in attributeVarUses)
+            {
+                foreach (int c in Reached(value))
+                {
+                    Edge(element, componentNodes[c]);
+                }
+            }
+            List<int> TargetNodes(RuleBlock block)
+            {
+                var found = new List<int>(block.Targets.Count + block.Components.Count);
+                foreach (string id in block.Targets)
+                {
+                    if (idNodes.TryGetValue(id, out int node))
+                    {
+                        found.Add(node);
+                    }
+                }
+                foreach (int c in block.Components)
+                {
+                    found.Add(componentNodes[c]);
+                }
+                return found;
+            }
             // A key filed in several blocks reaches each distinct target of
             // its blocks once.
             var keyTargets = new Dictionary<int, HashSet<int>>();
@@ -1030,11 +1174,12 @@ internal static class SvgPreviewGuard
             {
                 RuleBlock block = ruleBlocks[b];
                 int ruleNode = ruleNodes[b];
+                List<int> targets = TargetNodes(block);
                 if (ruleNode >= 0)
                 {
-                    foreach (string id in block.Targets)
+                    foreach (int node in targets)
                     {
-                        Reference(ruleNode, id);
+                        Edge(ruleNode, node);
                     }
                 }
                 foreach (string key in block.Keys)
@@ -1046,12 +1191,12 @@ internal static class SvgPreviewGuard
                         {
                             keyTargets[keyNode] = filed = [];
                         }
-                        foreach (string id in block.Targets)
+                        foreach (int node in targets)
                         {
                             steps.Spend(1);
-                            if (idNodes.TryGetValue(id, out int idNode) && filed.Add(idNode))
+                            if (filed.Add(node))
                             {
-                                Edge(keyNode, idNode);
+                                Edge(keyNode, node);
                             }
                         }
                     }
@@ -1061,9 +1206,9 @@ internal static class SvgPreviewGuard
                     }
                     else
                     {
-                        foreach (string id in block.Targets)
+                        foreach (int node in targets)
                         {
-                            Reference(keyNode, id);
+                            Edge(keyNode, node);
                         }
                     }
                 }
@@ -1171,8 +1316,9 @@ internal static class SvgPreviewGuard
 
     /// <summary>#1610 (CB-29): a marker property an element or a rule sets:
     /// its slots (1 start, 2 mid, 4 end), the marker id it names, or
-    /// neither for <c>none</c>, or a value read through <c>var()</c>.</summary>
-    private readonly record struct MarkerDeclaration(int Element, int Slots, string? Target, bool ThroughVar);
+    /// neither for <c>none</c>, or the value when it is read through
+    /// <c>var()</c>.</summary>
+    private readonly record struct MarkerDeclaration(int Element, int Slots, string? Target, string? ThroughVar);
 
     /// <summary>The slots a marker property sets, or null for any other
     /// property.</summary>
@@ -1185,12 +1331,13 @@ internal static class SvgPreviewGuard
 
     /// <summary>Whether a marker property's value places or clears a
     /// marker: <c>none</c>, a <c>url(#id)</c>, or anything through
-    /// <c>var()</c>, which Svg.Custom resolves. Any other value is
+    /// <c>var()</c>, which Svg.Custom resolves (the value is kept, to read
+    /// every <c>url()</c> it can reach). Any other value is
     /// ignored.</summary>
-    private static bool ReadMarkerValue(string value, out string? target, out bool throughVar)
+    private static bool ReadMarkerValue(string value, out string? target, out string? throughVar)
     {
         target = null;
-        throughVar = false;
+        throughVar = null;
         string text = value.Trim();
         if (text.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
@@ -1198,7 +1345,7 @@ internal static class SvgPreviewGuard
         }
         if (text.Contains("var(", StringComparison.OrdinalIgnoreCase))
         {
-            throughVar = true;
+            throughVar = text;
             return true;
         }
         int url = text.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
@@ -1209,6 +1356,53 @@ internal static class SvgPreviewGuard
         int end = UrlArgumentEnd(text, url + 4);
         target = Fragment(text, url + 4, end < text.Length && text[end] == ')' ? end : text.Length);
         return target is not null;
+    }
+
+    /// <summary>Every element id a value's <c>url()</c> references name, in
+    /// its own text: a <c>var()</c> fallback's, at any depth, among
+    /// them.</summary>
+    private static List<string> UrlsIn(string value)
+    {
+        var found = new List<string>();
+        for (int url = value.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
+            url >= 0;
+            url = value.IndexOf("url(", url + 4, StringComparison.OrdinalIgnoreCase))
+        {
+            int end = UrlArgumentEnd(value, url + 4);
+            if (Fragment(value, url + 4, end < value.Length && value[end] == ')' ? end : value.Length) is { } id)
+            {
+                found.Add(id);
+            }
+        }
+        return found;
+    }
+
+    /// <summary>The custom properties a value's <c>var()</c> references
+    /// name, fallbacks' among them.</summary>
+    private static List<string> NamesIn(string value)
+    {
+        var found = new List<string>();
+        for (int at = value.IndexOf("var(", StringComparison.OrdinalIgnoreCase);
+            at >= 0;
+            at = value.IndexOf("var(", at + 4, StringComparison.OrdinalIgnoreCase))
+        {
+            int start = at + 4;
+            while (start < value.Length && char.IsWhiteSpace(value[start]))
+            {
+                start++;
+            }
+            int end = start;
+            if (end + 1 < value.Length && value[end] == '-' && value[end + 1] == '-')
+            {
+                end += 2;
+                while (end < value.Length && IsNameCharacter(value[end]))
+                {
+                    end++;
+                }
+                found.Add(value[start..end]);
+            }
+        }
+        return found;
     }
 
     /// <summary>The numbers in <paramref name="text"/>[start, end), as an
@@ -1466,6 +1660,237 @@ internal static class SvgPreviewGuard
         return text.ToString();
     }
 
+    /// <summary>A stylesheet rule: its prelude and declarations, or a null
+    /// prelude for a block at-rule other than <c>@media</c>.</summary>
+    private sealed record StyleRule(string? Prelude, List<(string Name, string Value)> Declarations);
+
+    /// <summary>Every qualified rule of a stylesheet, as <see cref="CssText"/>
+    /// gives it, and those of each <c>@media</c> block, which Svg.Custom
+    /// applies. Any other block at-rule (an animation export's
+    /// <c>@keyframes</c>, the red team's M2) is one rule ExCSS parses and
+    /// Svg.Custom does not apply.</summary>
+    private static List<StyleRule> StyleRules(string text, GuardSteps steps)
+    {
+        var found = new List<StyleRule>();
+        var blocks = new Stack<(int Start, int End)>();
+        blocks.Push((0, text.Length));
+        while (blocks.TryPop(out (int Start, int End) block))
+        {
+            int i = block.Start;
+            while (i < block.End)
+            {
+                steps.Spend(1);
+                int open = i;
+                while (open < block.End && text[open] != '{')
+                {
+                    open = text[open] is '"' or '\'' ? CssStringEnd(text, open) : open + 1;
+                }
+                if (open >= block.End)
+                {
+                    break;
+                }
+                int depth = 1;
+                int k = open + 1;
+                while (k < block.End && depth > 0)
+                {
+                    char c = text[k];
+                    if (c is '"' or '\'')
+                    {
+                        k = CssStringEnd(text, k);
+                        continue;
+                    }
+                    depth += c == '{' ? 1 : c == '}' ? -1 : 0;
+                    k++;
+                }
+                string prelude = text[i..open];
+                int semicolon = prelude.LastIndexOf(';');
+                prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
+                int bodyEnd = Math.Max(open + 1, k - 1);
+                if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
+                    {
+                        blocks.Push((open + 1, bodyEnd));
+                    }
+                }
+                else if (prelude.StartsWith('@'))
+                {
+                    found.Add(new StyleRule(null, []));
+                }
+                else
+                {
+                    found.Add(new StyleRule(prelude, Declarations(text[(open + 1)..bodyEnd])));
+                }
+                i = k;
+            }
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// #1610 (Codex's review, stage 4): the <c>url()</c> targets each custom
+    /// property can resolve to. A property reaches the ids its definitions'
+    /// values name in their own text (a <c>var()</c> fallback's at any
+    /// depth among them, which Svg.Custom resolves when a lookup fails) and
+    /// those every property it names reaches, through any chain. Properties
+    /// that name each other in a cycle form one component, so a cycle of
+    /// names is one node of Measure's graph, never a render cycle.
+    /// Components are numbered so that each names only lower ones.
+    /// </summary>
+    private sealed class VarReach
+    {
+        private readonly Dictionary<string, int> names = new(StringComparer.Ordinal);
+        private readonly int[] component;
+
+        internal VarReach(IEnumerable<(string Name, string Value)> definitions, GuardSteps steps)
+        {
+            var urls = new List<List<string>>();
+            var values = new List<(int Name, string Value)>();
+            foreach ((string name, string value) in definitions)
+            {
+                steps.Spend(1);
+                if (!names.TryGetValue(name, out int id))
+                {
+                    names[name] = id = names.Count;
+                    urls.Add([]);
+                }
+                List<string> named = UrlsIn(value);
+                steps.Spend(named.Count);
+                urls[id].AddRange(named);
+                values.Add((id, value));
+            }
+            int count = names.Count;
+            var refs = new List<int>[count];
+            for (int id = 0; id < count; id++)
+            {
+                refs[id] = [];
+            }
+            foreach ((int id, string value) in values)
+            {
+                List<string> named = NamesIn(value);
+                steps.Spend(named.Count);
+                foreach (string other in named)
+                {
+                    if (names.TryGetValue(other, out int target))
+                    {
+                        refs[id].Add(target);
+                    }
+                }
+            }
+            component = Components(refs, steps, out int components);
+            Count = components;
+            Urls = new List<string>[components];
+            Named = new List<int>[components];
+            var urlSets = new HashSet<string>[components];
+            var namedSets = new HashSet<int>[components];
+            for (int c = 0; c < components; c++)
+            {
+                urlSets[c] = new HashSet<string>(StringComparer.Ordinal);
+                namedSets[c] = [];
+                Urls[c] = [];
+                Named[c] = [];
+            }
+            for (int id = 0; id < count; id++)
+            {
+                int c = component[id];
+                foreach (string url in urls[id])
+                {
+                    if (urlSets[c].Add(url))
+                    {
+                        Urls[c].Add(url);
+                    }
+                }
+                foreach (int target in refs[id])
+                {
+                    int other = component[target];
+                    if (other != c && namedSets[c].Add(other))
+                    {
+                        Named[c].Add(other);
+                    }
+                }
+            }
+        }
+
+        internal int Count { get; }
+
+        /// <summary>Each component's ids, in its definitions' own text.</summary>
+        internal List<string>[] Urls { get; }
+
+        /// <summary>The other components each component names, all lower
+        /// than it.</summary>
+        internal List<int>[] Named { get; }
+
+        internal int ComponentOf(string name) =>
+            names.TryGetValue(name, out int id) ? component[id] : -1;
+
+        /// <summary>Tarjan's strongly connected components, with an explicit
+        /// stack: a component is numbered once every component it reaches
+        /// is.</summary>
+        private static int[] Components(List<int>[] refs, GuardSteps steps, out int components)
+        {
+            int count = refs.Length;
+            var index = new int[count];
+            var low = new int[count];
+            var onStack = new bool[count];
+            var found = new int[count];
+            Array.Fill(index, -1);
+            var open = new Stack<int>();
+            var calls = new Stack<(int Node, int Edge)>();
+            int next = 0;
+            components = 0;
+            for (int root = 0; root < count; root++)
+            {
+                if (index[root] >= 0)
+                {
+                    continue;
+                }
+                index[root] = low[root] = next++;
+                open.Push(root);
+                onStack[root] = true;
+                calls.Push((root, 0));
+                while (calls.TryPop(out (int Node, int Edge) call))
+                {
+                    steps.Spend(1);
+                    int node = call.Node;
+                    if (call.Edge < refs[node].Count)
+                    {
+                        calls.Push((node, call.Edge + 1));
+                        int target = refs[node][call.Edge];
+                        if (index[target] < 0)
+                        {
+                            index[target] = low[target] = next++;
+                            open.Push(target);
+                            onStack[target] = true;
+                            calls.Push((target, 0));
+                        }
+                        else if (onStack[target])
+                        {
+                            low[node] = Math.Min(low[node], index[target]);
+                        }
+                        continue;
+                    }
+                    if (low[node] == index[node])
+                    {
+                        int member;
+                        do
+                        {
+                            member = open.Pop();
+                            onStack[member] = false;
+                            found[member] = components;
+                        }
+                        while (member != node);
+                        components++;
+                    }
+                    if (calls.TryPeek(out (int Node, int Edge) parent))
+                    {
+                        low[parent.Node] = Math.Min(low[parent.Node], low[node]);
+                    }
+                }
+            }
+            return found;
+        }
+    }
+
     /// <summary>The <c>name: value</c> declarations of a declaration block,
     /// split at the semicolons outside strings and brackets.</summary>
     private static List<(string Name, string Value)> Declarations(string block)
@@ -1583,6 +2008,8 @@ internal static class SvgPreviewGuard
         private readonly List<(string Name, string Value)> ruleDefinitions = [];
         private readonly HashSet<string> attributeNames = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> widestById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> widestThroughVar = new(ReferenceEqualityComparer.Instance);
+        private int[]? widestByComponent;
         private readonly Dictionary<int, double[]> choiceRows = [];
         private double queriedPasses;
         private int rules;
@@ -1591,7 +2018,7 @@ internal static class SvgPreviewGuard
         internal SvgDecodeEstimate Estimate()
         {
             int elements = document.Names.Count;
-            ReadRules(CssText(document.Stylesheet));
+            ReadRules();
             renders = Renders();
             Family family = Families(elements);
             double markerUnits = VisitElements(family, ReadAttributeKeys());
@@ -1617,71 +2044,25 @@ internal static class SvgPreviewGuard
         // The stylesheet
         // ------------------------------------------------------------------
 
-        /// <summary>Reads every qualified rule of the joined stylesheet, as
-        /// <see cref="CssText"/> gives it, and those of each <c>@media</c>
-        /// block, which Svg.Custom applies. Any other block at-rule (an
-        /// animation export's <c>@keyframes</c>, the red team's M2) is one
-        /// rule ExCSS parses and Svg.Custom does not apply.</summary>
-        private void ReadRules(string text)
+        /// <summary>Reads every rule <see cref="DocumentShape.Rules"/>
+        /// holds.</summary>
+        private void ReadRules()
         {
-            var blocks = new Stack<(int Start, int End)>();
-            blocks.Push((0, text.Length));
-            while (blocks.TryPop(out (int Start, int End) block))
+            foreach (StyleRule rule in document.Rules)
             {
-                int i = block.Start;
-                while (i < block.End)
+                if (rule.Prelude is null)
                 {
-                    steps.Spend(1);
-                    int open = i;
-                    while (open < block.End && text[open] != '{')
-                    {
-                        open = text[open] is '"' or '\'' ? CssStringEnd(text, open) : open + 1;
-                    }
-                    if (open >= block.End)
-                    {
-                        break;
-                    }
-                    int depth = 1;
-                    int k = open + 1;
-                    while (k < block.End && depth > 0)
-                    {
-                        char c = text[k];
-                        if (c is '"' or '\'')
-                        {
-                            k = CssStringEnd(text, k);
-                            continue;
-                        }
-                        depth += c == '{' ? 1 : c == '}' ? -1 : 0;
-                        k++;
-                    }
-                    string prelude = text[i..open];
-                    int semicolon = prelude.LastIndexOf(';');
-                    prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
-                    int bodyEnd = Math.Max(open + 1, k - 1);
-                    if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
-                        {
-                            blocks.Push((open + 1, bodyEnd));
-                        }
-                    }
-                    else if (prelude.StartsWith('@'))
-                    {
-                        rules++;
-                    }
-                    else
-                    {
-                        ReadRule(prelude, text[(open + 1)..bodyEnd]);
-                    }
-                    i = k;
+                    rules++;
+                    continue;
                 }
+                ReadRule(rule.Prelude, rule.Declarations);
             }
         }
 
-        private void ReadRule(string prelude, string body)
+        private void ReadRule(string prelude, List<(string Name, string Value)> read)
         {
             rules++;
-            List<(string Name, string Value)> declarations = Distinct(Declarations(body));
+            List<(string Name, string Value)> declarations = Distinct(read);
             List<string> branches = SplitTop(prelude, ',');
             steps.Spend(declarations.Count + branches.Count);
             if (declarations.Count == 0 || branches.Count == 0)
@@ -1717,7 +2098,7 @@ internal static class SvgPreviewGuard
                     pathVertices = Math.Max(pathVertices, CssPathVertices(value));
                 }
                 if (MarkerSlots(name) is { } slots
-                    && ReadMarkerValue(value, out string? target, out bool throughVar))
+                    && ReadMarkerValue(value, out string? target, out string? throughVar))
                 {
                     (markers ??= []).Add(new MarkerDeclaration(-1, slots, target, throughVar));
                 }
@@ -2264,11 +2645,11 @@ internal static class SvgPreviewGuard
             int elements = document.Names.Count;
             double[] siblings = family.Siblings;
             double[] descendants = family.Descendants;
-            int throughVar = WidestVarMarker();
+
             foreach (KeyStats key in keys.Values)
             {
                 steps.Spend(1);
-                key.ResolveMarkers(this, throughVar);
+                key.ResolveMarkers(this);
             }
             var effective = new int[elements * Slots];
             var best = new int[Slots];
@@ -2328,7 +2709,7 @@ internal static class SvgPreviewGuard
                 while (nextDeclaration < declared.Count && declared[nextDeclaration].Element == i)
                 {
                     MarkerDeclaration declaration = declared[nextDeclaration++];
-                    int marker = Resolve(declaration, throughVar);
+                    int marker = Resolve(declaration);
                     for (int slot = 0; slot < Slots; slot++)
                     {
                         if ((declaration.Slots & (1 << slot)) != 0)
@@ -2400,10 +2781,10 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>The element a marker declaration places: the element
-        /// its id names, the widest marker any custom property names when it
-        /// is read through <c>var()</c>, or none.</summary>
-        private int Resolve(MarkerDeclaration declaration, int throughVar) =>
-            declaration.ThroughVar ? throughVar
+        /// its id names, the widest marker a value read through
+        /// <c>var()</c> can reach, or none.</summary>
+        private int Resolve(MarkerDeclaration declaration) =>
+            declaration.ThroughVar is { } value ? WidestThroughVar(value)
             : declaration.Target is { } target ? WidestWithId(target)
             : -1;
 
@@ -2432,29 +2813,75 @@ internal static class SvgPreviewGuard
             return widest;
         }
 
-        /// <summary>The widest marker a custom property's value names, which
-        /// a marker property read through <c>var()</c> may resolve to
-        /// (#1610, the red team's M7).</summary>
-        private int WidestVarMarker()
+        /// <summary>
+        /// The widest marker a marker property read through <c>var()</c> can
+        /// place (#1610, the red team's M7 and Codex's review, stage 4):
+        /// of every <c>url()</c> its own text names, a fallback's at any
+        /// depth among them (Svg.Custom resolves a fallback when a lookup
+        /// fails), and every one a custom property it names reaches, through
+        /// any chain. Found once per value: a rule's value is shared by its
+        /// branches.
+        /// </summary>
+        private int WidestThroughVar(string value)
         {
-            int widest = -1;
-            foreach ((string _, string value) in document.CustomDefinitions.Concat(ruleDefinitions))
+            if (widestThroughVar.TryGetValue(value, out int found))
             {
-                for (int url = value.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
-                    url >= 0;
-                    url = value.IndexOf("url(", url + 4, StringComparison.OrdinalIgnoreCase))
+                return found;
+            }
+            int widest = -1;
+            void Consider(int marker)
+            {
+                if (marker >= 0 && (widest < 0 || renders[marker] > renders[widest]))
                 {
-                    steps.Spend(1);
-                    int end = UrlArgumentEnd(value, url + 4);
-                    if (Fragment(value, url + 4, end < value.Length && value[end] == ')' ? end : value.Length) is { } id
-                        && WidestWithId(id) is var marker and >= 0
-                        && (widest < 0 || renders[marker] > renders[widest]))
+                    widest = marker;
+                }
+            }
+            List<string> urls = UrlsIn(value);
+            steps.Spend(1 + urls.Count);
+            foreach (string id in urls)
+            {
+                Consider(WidestWithId(id));
+            }
+            if (document.Reach is { } reach)
+            {
+                int[] byComponent = WidestByComponent(reach);
+                List<string> named = NamesIn(value);
+                steps.Spend(named.Count);
+                foreach (string name in named)
+                {
+                    if (reach.ComponentOf(name) is var c and >= 0)
                     {
-                        widest = marker;
+                        Consider(byComponent[c]);
                     }
                 }
             }
+            widestThroughVar[value] = widest;
             return widest;
+        }
+
+        /// <summary>Each component of custom properties' widest reachable
+        /// marker, lower components first.</summary>
+        private int[] WidestByComponent(VarReach reach)
+        {
+            if (widestByComponent is { } done)
+            {
+                return done;
+            }
+            var widest = new int[reach.Count];
+            for (int c = 0; c < reach.Count; c++)
+            {
+                int best = -1;
+                steps.Spend(1 + reach.Urls[c].Count + reach.Named[c].Count);
+                foreach (int marker in reach.Urls[c].Select(WidestWithId).Concat(reach.Named[c].Select(other => widest[other])))
+                {
+                    if (marker >= 0 && (best < 0 || renders[marker] > renders[best]))
+                    {
+                        best = marker;
+                    }
+                }
+                widest[c] = best;
+            }
+            return widestByComponent = widest;
         }
 
         /// <summary>Each node's renders: itself (a key node is not drawn)
@@ -2540,7 +2967,7 @@ internal static class SvgPreviewGuard
             }
             var table = new VarTable(document.CustomDefinitions.Concat(ruleDefinitions), steps);
             double lookups = 0;
-            foreach (string value in document.AttributeVarUses)
+            foreach ((int _, string value) in document.AttributeVarUses)
             {
                 lookups = Cap(lookups + table.Resolve(value));
             }
@@ -2578,7 +3005,7 @@ internal static class SvgPreviewGuard
 
             /// <summary>Each slot's widest marker among the rules filed
             /// here.</summary>
-            internal void ResolveMarkers(DecodeCostEstimator estimator, int throughVar)
+            internal void ResolveMarkers(DecodeCostEstimator estimator)
             {
                 if (Markers is null)
                 {
@@ -2589,7 +3016,7 @@ internal static class SvgPreviewGuard
                 var widest = new double[] { -1, -1, -1 };
                 foreach (MarkerDeclaration declaration in Markers)
                 {
-                    int marker = estimator.Resolve(declaration, throughVar);
+                    int marker = estimator.Resolve(declaration);
                     double markerRenders = marker >= 0 ? estimator.renders[marker] : 0;
                     for (int slot = 0; slot < Slots; slot++)
                     {
