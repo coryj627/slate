@@ -216,11 +216,9 @@ internal static class SvgPreviewGuard
 
     /// <summary>#1610 (CB-29): the longest decode a preview admits, as
     /// <see cref="SvgDecodeEstimate"/> estimates it at
-    /// <see cref="SvgDecodeRates"/>. 2,000 ms is a PLACEHOLDER: the
-    /// recommendation of CB-29's calibration table, built in until the owner
-    /// picks the limit from that table (CD20's second step). It is not the
-    /// owner's pick.</summary>
-    internal const int MaxEstimatedDecodeMilliseconds = 2_000;
+    /// <see cref="SvgDecodeRates"/>: 3,000 ms, the owner's pick from CB-29's
+    /// calibration table (CD20, 2026-11-20).</summary>
+    internal const int MaxEstimatedDecodeMilliseconds = 3_000;
 
     /// <summary>
     /// #1610 (the red team's B1, closed in stage 6): the most steps one
