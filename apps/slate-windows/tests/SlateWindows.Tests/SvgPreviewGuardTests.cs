@@ -1386,6 +1386,90 @@ public sealed class SvgPreviewGuardTests
         Assert.True(failures.Count == 0, "the guard clears what the decoder keeps:\n" + string.Join("\n", failures));
     }
 
+    /// <summary>A 1,000-rect marker the group's marker-mid sets, over a
+    /// 3,000-vertex polyline that writes <paramref name="line"/>: the
+    /// documents stage 10 decoded.</summary>
+    private static string MarkedLine(string group, string line)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'>");
+        s.Append("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>");
+        for (int i = 0; i < 1_000; i++)
+        {
+            s.Append($"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1' fill='red'/>");
+        }
+        s.Append($"</marker></defs><g{group}><polyline fill='none' stroke='black'{line} points='");
+        for (int i = 0; i < 3_000; i++)
+        {
+            s.Append(i % 400).Append(',').Append(i / 400 % 400).Append(' ');
+        }
+        return s.Append("'/></g></svg>").ToString();
+    }
+
+    private const string MarkerMid = " marker-mid='url(#m)'";
+
+    public static TheoryData<string> MarkerValueCases() => [.. MarkerValue.Keys];
+
+    /// <summary>
+    /// #1610 (stage 10, the audit after Codex's round 7): a marker value
+    /// keeps the parent's marker where the decoder keeps it, and the marker
+    /// term counts it: <c>inherit</c>, <c>unset</c>, nothing, a reference
+    /// with a word after it, and a <c>var()</c> that can give one of those.
+    /// A <c>var()</c> that cannot (no value, <c>none</c>, a word) places
+    /// only what it reaches. Each row was decoded once in stage 10.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MarkerValueCases))]
+    public void AMarkerValueKeepsTheParentsMarkerWhereTheDecoderDoes(string name)
+    {
+        (Func<string> build, string expected) = MarkerValue[name];
+        SvgRefusal verdict = SvgPreviewGuard.Check(build(), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double marker = estimate.MarkerMicroseconds / 1000;
+        if (expected == "counted")
+        {
+            Assert.True(marker > 1_000, $"{name}: the marker term is {marker:F1} ms");
+        }
+        else
+        {
+            Assert.True(marker == 0, $"{name}: the marker term is {marker:F1} ms");
+            Assert.Equal(SvgRefusal.None, verdict);
+        }
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> MarkerValue = new()
+    {
+        // The line keeps the group's marker: written nowhere 8,663 ms,
+        // inherit 9,460 ms, unset 9,150 ms, an empty attribute 9,418 ms or
+        // style declaration 9,138 ms.
+        ["the line sets no marker-mid"] = (() => MarkedLine(MarkerMid, ""), "counted"),
+        ["inherit"] = (() => MarkedLine(MarkerMid, " marker-mid='inherit'"), "counted"),
+        ["unset"] = (() => MarkedLine(MarkerMid, " marker-mid='unset'"), "counted"),
+        ["an empty attribute"] = (() => MarkedLine(MarkerMid, " marker-mid=''"), "counted"),
+        ["an empty style declaration"] = (() => MarkedLine(MarkerMid, " style='marker-mid:'"), "counted"),
+        // So does a fallback that gives inherit (9,406 ms) and a reference
+        // with a word after it (9,105 ms), which the guard cleared.
+        ["var(--missing, inherit)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing, inherit)'"), "counted"),
+        ["url(#missing) none"] = (() => MarkedLine(MarkerMid, " marker-mid='url(#missing) none'"), "counted"),
+        // What clears it: none 50 ms, NONE 96 ms, None 22 ms, a missing
+        // reference 52 ms; a var() with no value 34 ms, a none fallback
+        // 23 ms, a word fallback 24 ms, a property that holds none 25 ms or
+        // a word 26 ms.
+        ["none"] = (() => MarkedLine(MarkerMid, " marker-mid='none'"), "cleared"),
+        ["NONE"] = (() => MarkedLine(MarkerMid, " marker-mid='NONE'"), "cleared"),
+        ["None"] = (() => MarkedLine(MarkerMid, " marker-mid='None'"), "cleared"),
+        ["url(#missing)"] = (() => MarkedLine(MarkerMid, " marker-mid='url(#missing)'"), "cleared"),
+        ["var(--missing)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing)'"), "cleared"),
+        ["var(--missing, none)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing, none)'"), "cleared"),
+        ["marker-mid:var(--missing, foo) in the style attribute"] = (
+            () => MarkedLine(MarkerMid, " style='marker-mid:var(--missing, foo)'"),
+            "cleared"),
+        ["var(--c) with --c:none on the group"] = (() => MarkedLine(MarkerMid + " style='--c:none'", " marker-mid='var(--c)'"), "cleared"),
+        ["var(--c) with --c:foo on the group"] = (() => MarkedLine(MarkerMid + " style='--c:foo'", " marker-mid='var(--c)'"), "cleared"),
+        // A word clears it in the decoder (40 ms); the guard takes a value
+        // it does not read to keep the parent's marker, which only counts
+        // more.
+        ["foo"] = (() => MarkedLine(MarkerMid, " marker-mid='foo'"), "counted"),
+    };
+
     /// <summary>#1610 (stage 9, the lead's ruling): 3,000 rects drawn in
     /// <c>currentColor</c> under a group whose fill is the pattern decode in
     /// 46 to 81 ms, the decoder drawing the colour, so they are admitted
