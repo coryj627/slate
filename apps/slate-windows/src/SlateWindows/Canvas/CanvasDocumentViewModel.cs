@@ -961,7 +961,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         catch (VaultException exception)
         {
             context = null;
-            detail = exception.Message;
+            detail = FailureDetail.Of(exception);
             return false;
         }
     }
@@ -2567,7 +2567,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.NewCard, e.Message));
+                        CanvasFailedAction.NewCard, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -2712,7 +2712,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.NewGroup, e.Message));
+                        CanvasFailedAction.NewGroup, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -2853,7 +2853,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.MoveIntoGroup, e.Message));
+                        CanvasFailedAction.MoveIntoGroup, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -3151,7 +3151,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.Create, e.Message));
+                        CanvasFailedAction.Create, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -3213,7 +3213,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.Create, e.Message));
+                        CanvasFailedAction.Create, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -3784,7 +3784,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.RemoveFromGroup, e.Message));
+                        CanvasFailedAction.RemoveFromGroup, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -3855,7 +3855,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.CreateConnectedCard, e.Message));
+                        CanvasFailedAction.CreateConnectedCard, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -4004,7 +4004,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.Duplicate, e.Message));
+                        CanvasFailedAction.Duplicate, FailureDetail.Of(e)));
                     return null;
                 }
             },
@@ -4134,7 +4134,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 }
                 catch (VaultException e)
                 {
-                    Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteReadFailed(e.Message)));
+                    Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteReadFailed(FailureDetail.Of(e))));
                     return null;
                 }
                 if (text is null)
@@ -4238,7 +4238,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             }
             catch (VaultException e)
             {
-                failure = e.Message;
+                failure = FailureDetail.Of(e);
             }
             Post(() =>
             {
@@ -4888,7 +4888,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.CanvasAction, e.Message ?? string.Empty));
+                        CanvasFailedAction.CanvasAction, FailureDetail.Of(e)));
                     return null;
                 }
                 if (ordered.Length == 0)
@@ -4989,7 +4989,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 catch (VaultException e)
                 {
                     Speak(new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.NewGroup, e.Message ?? string.Empty));
+                        CanvasFailedAction.NewGroup, FailureDetail.Of(e)));
                     return null;
                 }
                 if (frame is null)
@@ -5500,7 +5500,7 @@ internal static class CanvasPhrase
     public static string ConnectionHint => "Opens the connected card's row.";
 
     public static string OpenFailed(string path, Exception exception) =>
-        $"This canvas could not be opened: {exception.Message} ({path})";
+        $"This canvas could not be opened: {FailureDetail.Of(exception)} ({path})";
 
     /// <summary>§H TH-6 (IH-17, IH-40): the reopen failure is core's
     /// <c>ReopenFailed</c> sentence, rendered with the move as its message
@@ -5509,7 +5509,7 @@ internal static class CanvasPhrase
     public static string RetargetAbsent(string from, string to, Exception exception) =>
         CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
             new CanvasBlockedReason.ReopenFailed(
-                $"{from} moved to {to}: {exception.Message}")));
+                $"{from} moved to {to}: {FailureDetail.Of(exception)}")));
 }
 
 /// <summary>§E TE-5c: the connection editor's direction radio, mapped
