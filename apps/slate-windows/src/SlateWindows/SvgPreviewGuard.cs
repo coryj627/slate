@@ -218,12 +218,12 @@ internal static class SvgPreviewGuard
     /// element, attribute, edge, rule, branch, declaration, key visit or
     /// var() lookup. The guard runs on the caller before any decoder slot,
     /// so past this budget it stops and refuses the document for its cost,
-    /// whatever made it slow. 10,000,000 is 4.4 times the most steps any
-    /// real or calibration document takes (2,251,392, 8 MiB of rects) and
-    /// above every 8 MiB shape measured but one (a var() definition of a
-    /// million references); at the costliest step measured, about 40 ns,
-    /// it adds at most about 0.4 s to an 8 MiB read (CB-29's calibration,
-    /// section 6).</summary>
+    /// whatever made it slow. 10,000,000 is 4.2 times the most steps any
+    /// real or calibration document takes (2,401,485, 8 MiB of rects); of
+    /// the 8 MiB shapes measured, the three past it are webs of var()
+    /// definitions built to spend it. At the costliest step measured, about
+    /// 40 ns, it adds at most about 0.4 s to an 8 MiB read (CB-29's
+    /// calibration, section 6).</summary>
     internal const long MaxGuardSteps = 10_000_000;
 
     [ThreadStatic]

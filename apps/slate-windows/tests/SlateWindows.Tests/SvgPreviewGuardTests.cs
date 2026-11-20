@@ -389,7 +389,7 @@ public sealed class SvgPreviewGuardTests
     }
 
     /// <summary>#1610 (the red team's B1): the step budget admits the
-    /// document the most steps were measured on, 8 MiB of rects (2.25 M
+    /// document the most steps were measured on, 8 MiB of rects (2.40 M
     /// steps), by a margin of four: the budget only ends a check no real or
     /// calibration document comes near.</summary>
     [Fact]
