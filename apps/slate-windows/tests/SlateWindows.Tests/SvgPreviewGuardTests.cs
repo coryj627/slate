@@ -1433,57 +1433,61 @@ public sealed class SvgPreviewGuardTests
     /// cannot read (nothing, a word, a broken colour) and applies the next
     /// one, so a pattern it displaced is painted. The judge's inputs and
     /// the sweep's controls, each rendered by Svg.Skia here: the guard
-    /// counts the pattern exactly where the decoder paints it.
+    /// counts the pattern where the decoder paints it, and also where the
+    /// decoder reads a colour form the guard does not (<c>hsl()</c>),
+    /// which the guard takes as dropped.
     /// </summary>
     [Theory]
     [MemberData(nameof(DroppedDeclarationCases))]
     public void ADeclarationTheDecoderDropsLeavesTheNextOneToApply(string name)
     {
-        (string body, bool painted) = DroppedDeclaration[name];
+        (string body, bool painted, bool counted) = DroppedDeclaration[name];
         string source = Tile(body);
         Assert.Equal(painted, DecoderPaintsTile(source));
         SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
         Assert.True(
-            painted == estimate.PatternMicroseconds > 0,
+            counted == estimate.PatternMicroseconds > 0,
             $"{name}: the decoder {(painted ? "paints" : "does not paint")} the pattern; the term is {estimate.PatternMicroseconds:F1} us");
     }
 
     private const string Rect20 = " width='20' height='20'";
 
-    internal static readonly Dictionary<string, (string Body, bool Painted)> DroppedDeclaration = new()
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> DroppedDeclaration = new()
     {
         // The judge's inputs: the dropped declaration leaves the pattern.
-        ["a word in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:bogus'/>", true),
-        ["nothing in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:'/>", true),
-        ["the pattern then a word in one style attribute"] = ($"<rect{Rect20} style='fill:url(#p);fill:x'/>", true),
-        ["the pattern then a word, both !important"] = ($"<rect{Rect20} style='fill:url(#p) !important;fill:x !important'/>", true),
-        ["a class rule's pattern then a word"] = ($"<style>.a{{fill:url(#p)}} .a{{fill:bogus}}</style><rect class='a'{Rect20}/>", true),
-        ["a type rule's pattern then a word"] = ($"<style>rect{{fill:url(#p)}} rect{{fill:bogus}}</style><rect{Rect20}/>", true),
-        ["a word rule over the pattern attribute"] = ($"<style>.a{{fill:bogus}}</style><rect class='a'{Rect20} fill='url(#p)'/>", true),
+        ["a word in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:bogus'/>", true, true),
+        ["nothing in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:'/>", true, true),
+        ["the pattern then a word in one style attribute"] = ($"<rect{Rect20} style='fill:url(#p);fill:x'/>", true, true),
+        ["the pattern then a word, both !important"] = ($"<rect{Rect20} style='fill:url(#p) !important;fill:x !important'/>", true, true),
+        ["a class rule's pattern then a word"] = ($"<style>.a{{fill:url(#p)}} .a{{fill:bogus}}</style><rect class='a'{Rect20}/>", true, true),
+        ["a type rule's pattern then a word"] = ($"<style>rect{{fill:url(#p)}} rect{{fill:bogus}}</style><rect{Rect20}/>", true, true),
+        ["a word rule over the pattern attribute"] = ($"<style>.a{{fill:bogus}}</style><rect class='a'{Rect20} fill='url(#p)'/>", true, true),
         ["a word !important rule over the pattern in the style attribute"] = (
             $"<style>.a{{fill:x !important}}</style><rect class='a'{Rect20} style='fill:url(#p)'/>",
-            true),
+            true, true),
         // The sweep's other dropped spellings.
-        ["rgb() of two numbers over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:rgb(1,2)'/>", true),
-        ["five hex digits over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#ff000'/>", true),
-        ["a reference and a word over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) bogus'/>", true),
+        ["rgb() of two numbers over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:rgb(1,2)'/>", true, true),
+        ["five hex digits over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#ff000'/>", true, true),
+        ["a reference and a word over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) bogus'/>", true, true),
         // A rule definition with an unclosed url( is dropped too.
         ["a rule's --c pattern, then --c:url( in a later rule"] = (
             $"<style>.a{{--c:url(#p)}} .a{{--c:url(}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
-            true),
+            true, true),
         // What the decoder applies: a colour it reads, a CSS-wide keyword,
-        // anything through var(), a context paint.
-        ["hsl() over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:hsl(120,100%,25%)'/>", false),
-        ["blue over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue'/>", false),
-        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false),
-        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false),
-        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false),
-        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false),
+        // anything through var(), a context paint. hsl() is a colour the
+        // guard does not read, so it takes it as dropped and counts the
+        // pattern under it.
+        ["hsl() over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:hsl(120,100%,25%)'/>", false, true),
+        ["blue over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue'/>", false, false),
+        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false, false),
+        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false, false),
+        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false, false),
+        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false, false),
         // Under a pattern group, a dropped word leaves the rect's own blue;
         // var(--none) keeps the group's pattern.
-        ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false),
-        ["nothing over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:'/></g>", false),
-        ["var(--none) over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:var(--none)'/></g>", true),
+        ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false, false),
+        ["nothing over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:'/></g>", false, false),
+        ["var(--none) over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:var(--none)'/></g>", true, true),
     };
 
     /// <summary>

@@ -1475,6 +1475,11 @@ internal static class SvgPreviewGuard
         /// the parent's paint where a fill or a stroke reads it.</summary>
         private const byte FailsMask = 8;
 
+        /// <summary>#1610 (the delta merge judge's major 1, stage 11): the
+        /// decoder may drop the declaration, so the next one in the cascade
+        /// applies.</summary>
+        private const byte DropsMask = 16;
+
         /// <summary>
         /// #1610 (Codex's rounds 5 to 7, stages 8 to 10): each element's own
         /// fill and stroke, each on its own, as the decoder's cascade gives
@@ -1813,35 +1818,46 @@ internal static class SvgPreviewGuard
         /// property that certainly apply, or <paramref name="none"/> when none
         /// does; then each that may apply and could win (a rule of a tier at
         /// least the winner's) taken to apply and to win, adding what it can
-        /// give. For a paint, one that can only clear the paint is left out;
-        /// for a custom property, one that may not apply leaves the parent's
-        /// value possible, so it adds to it.
+        /// give. A winner the decoder may drop (<see cref="DropsMask"/>)
+        /// leaves the next one to apply, in the cascade's order, adding what
+        /// it gives if it is kept (the delta merge judge's major 1, stage
+        /// 11). For a paint, one that may apply but can only clear the paint
+        /// is left out; for a custom property, one that may not apply leaves
+        /// the parent's value possible, so it adds to it.
         /// </summary>
         private byte Cascade(
             List<Declaration> declarations, byte none, bool isPaint, Dictionary<string, byte>? scope, HashSet<string> patternIds)
         {
-            Declaration? best = null;
-            foreach (Declaration declaration in declarations)
+            List<Declaration> certain = declarations.FindAll(declaration => declaration.Certain);
+            steps.Spend(1 + certain.Count);
+            certain.Sort((a, b) =>
+                a.Tier != b.Tier ? b.Tier.CompareTo(a.Tier)
+                : a.Specificity != b.Specificity ? b.Specificity.CompareTo(a.Specificity)
+                : b.Order.CompareTo(a.Order));
+            byte result = 0;
+            int winnerTier = -1;
+            foreach (Declaration declaration in certain)
             {
-                if (declaration.Certain
-                    && (best is not { } current
-                        || declaration.Tier > current.Tier
-                        || (declaration.Tier == current.Tier
-                            && (declaration.Specificity > current.Specificity
-                                || (declaration.Specificity == current.Specificity && declaration.Order > current.Order)))))
+                byte value = Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds);
+                result |= (byte)(value & ~DropsMask);
+                if ((value & DropsMask) == 0)
                 {
-                    best = declaration;
+                    winnerTier = declaration.Tier;
+                    break;
                 }
             }
-            byte result = best is { } winner ? Evaluate(winner.Value, isPaint, winner.Tier == 0, none, scope, patternIds) : none;
+            if (winnerTier < 0)
+            {
+                result |= none;
+            }
             foreach (Declaration declaration in declarations)
             {
-                if (declaration.Certain || (best is { } current && declaration.Tier < current.Tier))
+                if (declaration.Certain || declaration.Tier < winnerTier)
                 {
                     continue;
                 }
-                byte value = Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds);
-                if (isPaint && value == ClearsMask)
+                byte value = (byte)(Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds) & ~DropsMask);
+                if (isPaint && (value & ~ClearsMask) == 0)
                 {
                     continue;
                 }
@@ -1857,11 +1873,20 @@ internal static class SvgPreviewGuard
         /// and <c>revert</c> the parent's value or the word itself, which
         /// the decoder may take either way (measured: never no value); any
         /// other value is held as written, and a fill or a stroke that reads
-        /// it gives what the same literal gives. Nothing written clears the
-        /// paint, but in the style attribute or a rule, where the decoder
-        /// drops the declaration (measured in stage 10). A <c>var()</c> is
+        /// it gives what the same literal gives. A <c>var()</c> is
         /// substituted (<see cref="Substitute"/>), and in a fill or a stroke,
-        /// no value keeps the parent's paint.
+        /// no value keeps the parent's paint. Nothing written clears the
+        /// paint in the fill attribute. In the style attribute or a rule
+        /// (stage 11, measured by the differential sweep), the decoder drops
+        /// a fill or a stroke written as nothing, or as a literal it cannot
+        /// read that is no CSS-wide keyword and no context paint, and applies
+        /// the next declaration; a form it reads that the guard does not
+        /// (<c>hsl()</c>) is a colour, so such a value gives
+        /// <see cref="DropsMask"/> with <see cref="ClearsMask"/>. A value
+        /// through <c>var()</c> is never dropped: what it cannot read keeps
+        /// the parent's paint. In a rule, a declaration whose brackets or
+        /// quotes do not close may be dropped, a custom property's among
+        /// them.
         /// </summary>
         private byte Evaluate(
             string raw, bool isPaint, bool attribute, byte parent, Dictionary<string, byte>? scope, HashSet<string> patternIds)
@@ -1887,12 +1912,58 @@ internal static class SvgPreviewGuard
             }
             if (value.Length == 0)
             {
-                return isPaint && !attribute ? KeepsMask : ClearsMask;
+                return isPaint && !attribute ? DropsMask : ClearsMask;
             }
-            byte can = value.Contains("var(", StringComparison.OrdinalIgnoreCase)
-                ? Substitute(value, scope, patternIds)
-                : Literal(value, patternIds);
+            bool substituted = value.Contains("var(", StringComparison.OrdinalIgnoreCase);
+            byte can = substituted ? Substitute(value, scope, patternIds) : Literal(value, patternIds);
+            if (isPaint && !attribute && !substituted && can == KeepsMask && !IsCssWideKeyword(value)
+                && !value.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
+            {
+                can = DropsMask | ClearsMask;
+            }
+            if (!attribute && !IsBalanced(value))
+            {
+                can |= DropsMask;
+            }
             return isPaint && (can & FailsMask) != 0 ? (byte)((can & ~FailsMask) | KeepsMask) : can;
+        }
+
+        /// <summary>Whether <paramref name="value"/> is a CSS-wide keyword,
+        /// which the decoder applies, never drops.</summary>
+        private static bool IsCssWideKeyword(string value) =>
+            value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("unset", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("initial", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("revert", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("revert-layer", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Whether every bracket in <paramref name="value"/> closes
+        /// and every quote ends.</summary>
+        private static bool IsBalanced(string value)
+        {
+            int depth = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c is '"' or '\'')
+                {
+                    int end = value.IndexOf(c, i + 1);
+                    if (end < 0)
+                    {
+                        return false;
+                    }
+                    i = end;
+                }
+                else if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')' && --depth < 0)
+                {
+                    return false;
+                }
+            }
+            return depth == 0;
         }
 
         /// <summary>
