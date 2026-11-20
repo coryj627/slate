@@ -1027,12 +1027,14 @@ public sealed class SvgPreviewGuardTests
         // The var() in the rect's style attribute 33 ms or a rule 61 ms; the
         // rect's own --c pattern over the group's colour 3,012 ms;
         // currentColor with color on the group 56 ms.
+        // Since stage 13 a var() in the style attribute or a rule is no paint
+        // the guard is sure of, so the group's pattern stays counted.
         ["fill:var(--c) in the rect's style attribute"] = (
             () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='fill:var(--c)'"),
-            "cleared"),
+            "counted"),
         ["fill:var(--c) from a rule on the rect"] = (
             () => ScopedGroup(".v{fill:var(--c)}", "", "", PatternFill + " style='--c:red'", " class='v'"),
-            "cleared"),
+            "counted"),
         ["the rect's own --c pattern over the group's --c colour"] = (
             () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:url(#pat)'" + ReadsC),
             "counted"),
@@ -1133,8 +1135,8 @@ public sealed class SvgPreviewGuardTests
         // style attribute 3,467 ms or a rule 2,521 ms keeps the parent's,
         // the decoder dropping the declaration.
         ["var(--missing,) in the fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing,)'"), "cleared"),
-        ["fill:var(--missing,) in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:var(--missing,)'"), "cleared"),
-        ["fill:var(--missing,) from a rule"] = (() => ScopedGroup(".v{fill:var(--missing,)}", "", "", PatternFill, " class='v'"), "cleared"),
+        ["fill:var(--missing,) in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:var(--missing,)'"), "counted"),
+        ["fill:var(--missing,) from a rule"] = (() => ScopedGroup(".v{fill:var(--missing,)}", "", "", PatternFill, " class='v'"), "counted"),
         ["an empty fill in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:'"), "counted"),
         ["an empty fill from a rule"] = (() => ScopedGroup(".v{fill:;}", "", "", PatternFill, " class='v'"), "counted"),
         // A fallback inside a definition: inherit passed on, read by the
@@ -1605,15 +1607,16 @@ public sealed class SvgPreviewGuardTests
             $"<style>.a{{--c:url(#p)}} .a{{--c:url(}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
             true, true),
         // What the decoder applies: a colour it reads, a CSS-wide keyword,
-        // anything through var(), a context paint. hsl() is a colour the
-        // guard does not read, so it takes it as dropped and counts the
-        // pattern under it.
+        // anything through var(), a context paint. Since stage 13 the guard
+        // counts the pattern under each of them but a colour it is sure of
+        // (blue), as the lead's ruling has it; hsl() is a colour the guard
+        // does not read.
         ["hsl() over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:hsl(120,100%,25%)'/>", false, true),
         ["blue over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue'/>", false, false),
-        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false, false),
-        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false, false),
-        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false, false),
-        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false, false),
+        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false, true),
+        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false, true),
+        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false, true),
+        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false, true),
         // Under a pattern group, a dropped word leaves the rect's own blue;
         // var(--none) keeps the group's pattern.
         ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false, false),

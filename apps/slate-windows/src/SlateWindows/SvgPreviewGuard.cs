@@ -456,7 +456,7 @@ internal static class SvgPreviewGuard
         // each style attribute as ExCSS reads it, kept unread: only a
         // document with a pattern reads them (PaintCascade).
         private readonly List<(int Element, bool Stroke, string Value)> paintAttributes = [];
-        private readonly List<(int Element, string Text)> styleTexts = [];
+        private readonly List<(int Element, string Text, bool Plain)> styleTexts = [];
         private readonly List<RuleBlock> ruleBlocks = [];
         private readonly List<int> open = [];
         private readonly List<FilterInputs?> openFilters = [];
@@ -796,7 +796,7 @@ internal static class SvgPreviewGuard
         {
             string text = CssText(value);
             Scanned(3L * text.Length);
-            styleTexts.Add((index, text));
+            styleTexts.Add((index, text, IsPlainCss(value)));
             bool path = element == "path";
             if (!path
                 && !text.Contains("--", StringComparison.Ordinal)
@@ -1525,9 +1525,24 @@ internal static class SvgPreviewGuard
                 || property.Equals("stroke", StringComparison.OrdinalIgnoreCase);
 
             var styleOf = new Dictionary<int, List<(string Name, string Value)>>();
-            foreach ((int element, string text) in styleTexts)
+            var plainStyle = new HashSet<int>();
+            foreach ((int element, string text, bool plain) in styleTexts)
             {
                 styleOf[element] = Declarations(text);
+                if (plain)
+                {
+                    plainStyle.Add(element);
+                }
+            }
+            bool plainRules = IsPlainCss(Stylesheet);
+            gradientIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach ((string id, List<int> named) in byId)
+            {
+                steps.Spend(1);
+                if (named.Count == 1 && IsGradient(names[named[0]]))
+                {
+                    gradientIds.Add(id);
+                }
             }
 
             // The custom properties a fill or a stroke reads, and those their
@@ -1675,7 +1690,7 @@ internal static class SvgPreviewGuard
                 var own = new List<Declaration>();
                 foreach ((int _, bool stroke, string value) in OwnAttributes(i))
                 {
-                    own.Add(new Declaration(stroke ? "stroke" : "fill", 0, 0, 0, true, value));
+                    own.Add(new Declaration(stroke ? "stroke" : "fill", 0, 0, 0, true, value, true));
                 }
                 int position = 0;
                 foreach ((string name, string value) in styleOf.GetValueOrDefault(i) ?? [])
@@ -1685,12 +1700,12 @@ internal static class SvgPreviewGuard
                     if (paint || relevant.Contains(name))
                     {
                         string plain = WithoutImportant(value, out bool important);
-                        own.Add(new Declaration(paint ? name.ToLowerInvariant() : name, important ? 4 : 2, 0, ++position, true, plain));
+                        own.Add(new Declaration(paint ? name.ToLowerInvariant() : name, important ? 4 : 2, 0, ++position, true, plain, plainStyle.Contains(i)));
                     }
                 }
                 foreach ((RuleDeclaration rule, bool certain) in matched)
                 {
-                    own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain, rule.Value));
+                    own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain, rule.Value, plainRules));
                 }
 
                 CustomScopeLink? inherited = parents[i] >= 0 ? scopes[parents[i]] : null;
@@ -1782,6 +1797,13 @@ internal static class SvgPreviewGuard
             if (defined is null)
             {
                 return inherited;
+            }
+
+            // The delta merge judge's nit F (stage 13): definitions more than
+            // the cap has left are refused before anything is built for them.
+            if (defined.Count > MaxCustomScopeEntries - scopeEntries)
+            {
+                throw new GuardStepsSpentException();
             }
             steps.Spend(1 + defined.Count);
             var held = new Dictionary<string, byte>(defined.Count, StringComparer.Ordinal);
@@ -1914,6 +1936,40 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>
+        /// #1610 (the lead's ruling, stage 13): whether a fill or a stroke
+        /// written in the style attribute or a rule is one the guard is sure
+        /// the decoder reads as a paint of its own, so it clears every
+        /// declaration below it: written plainly (no escape, no comment), it
+        /// is a colour form the guard parses, <c>none</c> or
+        /// <c>currentColor</c> (<see cref="IsColour"/>), or a reference, in
+        /// any case, with nothing after it, to the one element that carries
+        /// its id, a gradient.
+        /// </summary>
+        private bool ClearsSurely(Declaration declaration, byte value)
+        {
+            if (!declaration.Plain || value != ClearsMask)
+            {
+                return false;
+            }
+            string text = declaration.Value.Trim();
+            Scanned(2L * text.Length);
+            if (text.Length == 0)
+            {
+                return false;
+            }
+            if (ReferenceFallback(text) is { } rest)
+            {
+                int end = UrlArgumentEnd(text, 4);
+                return rest.Length == 0 && Fragment(text, 4, end) is { } id && gradientIds.Contains(id);
+            }
+            return IsColour(text);
+        }
+
+        /// <summary>The ids that one element carries, a gradient: what a
+        /// reference the guard is sure of names (stage 13).</summary>
+        private HashSet<string> gradientIds = [];
+
+        /// <summary>
         /// The cascade's winner among <paramref name="declarations"/> of one
         /// property that certainly apply, or <paramref name="none"/> when none
         /// does; then each that may apply and could win (a rule of a tier at
@@ -1921,9 +1977,15 @@ internal static class SvgPreviewGuard
         /// give. A winner the decoder may drop (<see cref="DropsMask"/>)
         /// leaves the next one to apply, in the cascade's order, adding what
         /// it gives if it is kept (the delta merge judge's major 1, stage
-        /// 11). For a paint, one that may apply but can only clear the paint
-        /// is left out; for a custom property, one that may not apply leaves
-        /// the parent's value possible, so it adds to it.
+        /// 11). For a paint, a winner in the style attribute or a rule ends
+        /// the walk only when the guard is sure the decoder reads it as a
+        /// paint of its own (<see cref="ClearsSurely"/>) or it names a
+        /// pattern; any other leaves what every declaration below it gives
+        /// counted too (the lead's ruling, stage 13), and the presentation
+        /// attribute keeps its own reading. For a paint, one that may apply
+        /// but can only clear the paint is left out; for a custom property,
+        /// one that may not apply leaves the parent's value possible, so it
+        /// adds to it.
         /// </summary>
         private byte Cascade(
             List<Declaration> declarations, byte none, bool isPaint, CustomScopeLink? scope, HashSet<string> patternIds)
@@ -1940,7 +2002,10 @@ internal static class SvgPreviewGuard
             {
                 byte value = Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds);
                 result |= (byte)(value & ~DropsMask);
-                if ((value & DropsMask) == 0)
+                bool ends = !isPaint
+                    ? (value & DropsMask) == 0
+                    : declaration.Tier == 0 || (value & PatternMask) != 0 || ClearsSurely(declaration, value);
+                if (ends)
                 {
                     winnerTier = declaration.Tier;
                     break;
@@ -2158,9 +2223,10 @@ internal static class SvgPreviewGuard
         /// gives it: its tier (0 the presentation attribute, 1 a rule, 2 the
         /// style attribute, 3 an <c>!important</c> rule, 4 the style
         /// attribute's <c>!important</c>), specificity and place, whether it
-        /// certainly applies, and its value.</summary>
+        /// certainly applies, its value, and whether the text it came from is
+        /// written plainly, with no escape or comment (stage 13).</summary>
         private readonly record struct Declaration(
-            string Property, int Tier, int Specificity, int Order, bool Certain, string Value);
+            string Property, int Tier, int Specificity, int Order, bool Certain, string Value, bool Plain);
 
         /// <summary>A rule's fill, stroke or read custom property, filed by
         /// one of its selectors: tier 1, or 3 when <c>!important</c>; the
@@ -2596,6 +2662,16 @@ internal static class SvgPreviewGuard
             }
         }
         return text.ToString();
+    }
+
+    /// <summary>#1610 (the lead's ruling, stage 13): whether CSS text is
+    /// written plainly, with no escape and no comment, so the guard may be
+    /// sure of a paint read from it. The decoder drops every escaped paint
+    /// in the style attribute (the delta merge judge's E2).</summary>
+    private static bool IsPlainCss(string raw)
+    {
+        Scanned(2L * raw.Length);
+        return !raw.Contains('\\', StringComparison.Ordinal) && !raw.Contains("/*", StringComparison.Ordinal);
     }
 
     /// <summary>A stylesheet rule: its prelude and declarations, or a null
@@ -5138,7 +5214,7 @@ internal static class SvgPreviewGuard
     /// </summary>
     private static bool DrawsOwnPaint(string text)
     {
-        if (text.StartsWith("url(", StringComparison.Ordinal))
+        if (text.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
         {
             return ReferenceFallback(text) is { } rest && (rest.Length == 0 || IsColour(rest));
         }
@@ -5146,12 +5222,13 @@ internal static class SvgPreviewGuard
     }
 
     /// <summary>What follows a reference that opens <paramref name="text"/>
-    /// (<c>url(</c>, as the decoder writes it), trimmed: its fallback, or
+    /// (<c>url(</c> in any case, as the decoder reads it: the delta merge
+    /// judge's E1, stage 13), trimmed: its fallback, or
     /// nothing; null when the text opens with no reference or its
     /// reference does not close.</summary>
     private static string? ReferenceFallback(string text)
     {
-        if (!text.StartsWith("url(", StringComparison.Ordinal))
+        if (!text.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
