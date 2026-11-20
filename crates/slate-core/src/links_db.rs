@@ -21,7 +21,7 @@ use rusqlite::{Connection, Transaction, params};
 
 use crate::VaultError;
 use crate::file_meta_db::{FileMetaParseArtifact, FileMetaPreviewObserver};
-use crate::graph::{GraphLinkRow, InboundRow};
+use crate::graph::{GraphLinkRow, GraphOp, GraphOpSink, InboundRow};
 use crate::link_resolver::{
     CandidateProbe, InMemoryVaultIndex, LinkCandidateSelector, ResolvedLink, VaultIndex,
     resolve_link, resolve_link_through,
@@ -89,7 +89,8 @@ thread_local! {
     /// #1295 test seam: the paths [`replace_links_for_file`]'s own link
     /// resolution offered to its selectors on this thread — the rows a
     /// save's resolution visits, apart from any other resolution the same
-    /// operation runs (a create's ghost-link heal).
+    /// operation runs (the heal a path's first index runs,
+    /// [`heal_rows_naming_first_indexed`]).
     pub(crate) static RESOLUTION_ROWS_VISITED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
     /// #1295 test seam: while set, the save lookup's statement fails to
@@ -113,13 +114,19 @@ thread_local! {
     pub(crate) static FOLDED_CANDIDATE_READS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
     /// #1426 test seam: dangling rows [`re_resolve_unresolved_links_naming`]
-    /// read on this thread — the rows a create's heal visits.
+    /// read on this thread — the rows the heal of a path's first index
+    /// visits (#1704).
     pub(crate) static HEAL_ROWS_VISITED: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
-    /// #1426 test seam: while set, a create on this thread heals through the
-    /// vault-wide [`re_resolve_unresolved_links`], so a fact can compare the
-    /// two heals on twin vaults.
-    pub(crate) static CREATE_HEAL_VAULT_WIDE: std::cell::Cell<bool> =
+    /// #1704 test seam: the heals of a first-indexed path run on this
+    /// thread, counted on entry, so a fact can tell "no heal ran" from "a
+    /// heal ran and read nothing" (a heal reads only rows still dangling).
+    pub(crate) static FIRST_INDEX_HEALS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1426 test seam: while set, a first index on this thread heals
+    /// through the vault-wide [`re_resolve_unresolved_links`], so a fact
+    /// can compare the two heals on twin vaults.
+    pub(crate) static FIRST_INDEX_HEAL_VAULT_WIDE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
 
@@ -129,9 +136,10 @@ thread_local! {
 /// [`LinkCandidateSelector`] and its tiebreaks, each distinct target of a
 /// note resolved once ([`resolve_remembered`]). Scan and rename draw on the
 /// snapshot of `files` they captured ([`InMemoryVaultIndex`]); a save, a
-/// create and the `open_base` repair draw on [`FoldedNameLookup`], which
-/// reads only the rows a target's probe names. Both offer only those rows
-/// (#1429), so a link costs its own candidates, not the vault.
+/// create, a repair and the `open_base` repair draw on
+/// [`FoldedNameLookup`], which reads only the rows a target's probe names,
+/// as the heal of a path's first index does (#1704). Both offer only those
+/// rows (#1429), so a link costs its own candidates, not the vault.
 pub(crate) trait LinkCandidates {
     /// Offer `selector` the indexed paths its target could match: at least
     /// every path its probe ([`LinkCandidateSelector::probe`]) names — an
@@ -190,8 +198,9 @@ pub(crate) fn indexed_paths_in_path_order(conn: &Connection) -> Result<Vec<Strin
 /// [`indexed_paths_in_path_order`]'s statement.
 const INDEXED_PATHS_SQL: &str = "SELECT path FROM files ORDER BY path";
 
-/// The folded-name lookup a save, a create and the `open_base` repair draw
-/// candidates from (#1295; locked decision 05 §4 and §9.3.1): the rows a
+/// The folded-name lookup a save, a create, a repair, the `open_base`
+/// repair and the heal of a path's first index (#1704) draw candidates
+/// from (#1295; locked decision 05 §4 and §9.3.1): the rows a
 /// target's probe names, looked up by the registered Unicode fold through
 /// `idx_files_path_fold` or `idx_files_name_fold` — the lookup #1279 gave
 /// the embed resolver — so a save reads its own targets' candidate rows,
@@ -535,17 +544,56 @@ pub(crate) fn re_resolve_unresolved_links_under(
     Ok(affected)
 }
 
-/// The heal a create runs inside its own transaction (W6-2 PR B, #746):
-/// [`re_resolve_unresolved_links_naming`] for the created path.
-pub(crate) fn heal_after_create(
+/// The heal a path's first index runs inside its own transaction (#1704):
+/// the dangling rows whose authored target could name `path` re-resolve
+/// ([`re_resolve_unresolved_links_naming`], WB-19's targeted heal, #1426),
+/// and each source a row healed in has its linkset staged for the graph,
+/// so the graph replays SQLite as it does after a rename or a move.
+///
+/// Every route that writes a path's first `files` row outside a scan calls
+/// it, after the row exists: a save or a create (`index_saved_file`), a
+/// repair (`reindex_path_locked`, which the host repairs and the
+/// abandoned-intent sweep reach), `open_base`'s repair and `open_canvas`.
+/// A path that already had a row is not healed here. A scan never calls
+/// it: the scan heals once, at its tail, over the whole index, because a
+/// heal per file during the walk would resolve against only the files
+/// walked so far, and the tail re-resolves only rows still dangling.
+///
+/// Until #1704 only a create healed (W6-2 PR B, #746: a note created from
+/// a graph row's ghost stayed unresolved until the next full scan, which
+/// the mac runs after every structural mutation and the Windows shell does
+/// not). A failed read or lookup is the caller's error, so the first index
+/// fails with its whole transaction: never skipped, never written
+/// unresolved.
+pub(crate) fn heal_rows_naming_first_indexed(
     tx: &Transaction,
-    created_path: &str,
-) -> Result<Vec<String>, VaultError> {
+    path: &str,
+    graph_sink: &mut GraphOpSink,
+) -> Result<(), VaultError> {
     #[cfg(test)]
-    if CREATE_HEAL_VAULT_WIDE.with(std::cell::Cell::get) {
+    FIRST_INDEX_HEALS.with(|heals| heals.set(heals.get() + 1));
+    let healed_sources = rows_naming_first_indexed(tx, path)?;
+    if graph_sink.live() {
+        for source in &healed_sources {
+            graph_sink.stage_with(|| {
+                Ok(GraphOp::LinksetChanged {
+                    source_path: source.clone(),
+                    rows: graph_linkset_for(tx, source)?,
+                })
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// [`heal_rows_naming_first_indexed`]'s rows: the targeted heal, or the
+/// vault-wide one under the test seam that compares the two.
+fn rows_naming_first_indexed(tx: &Transaction, path: &str) -> Result<Vec<String>, VaultError> {
+    #[cfg(test)]
+    if FIRST_INDEX_HEAL_VAULT_WIDE.with(std::cell::Cell::get) {
         return re_resolve_unresolved_links(tx);
     }
-    re_resolve_unresolved_links_naming(tx, created_path)
+    re_resolve_unresolved_links_naming(tx, path)
 }
 
 /// Which of migration 041's partial indexes a heal statement reads (#1426).
@@ -591,10 +639,12 @@ fn without_implied_extension(form: &str) -> Option<&str> {
     .then_some(stem)
 }
 
-/// A create's heal (#1426): only the dangling rows whose authored target
-/// could name `created_path`, each resolved through the folded-name lookup
-/// in `tx`. The keys invert the selector's two modes. An exact target is
-/// found by the created path, and a bare name by its final component. Each
+/// The targeted heal of a path's first index (#1426; every first index
+/// since #1704, [`heal_rows_naming_first_indexed`]): only the dangling rows
+/// whose authored target could name `path`, each resolved through the
+/// folded-name lookup in `tx`. The keys invert the selector's two modes. An
+/// exact target is found by the path, and a bare name by its final
+/// component. Each
 /// form is also tried without a trailing Markdown extension, because the
 /// selector implies one. The fold (NFC, then lowercase) is a superset of
 /// the selector's lowercase comparison, and the selector still decides, so
@@ -603,7 +653,7 @@ fn without_implied_extension(form: &str) -> Option<&str> {
 /// never written unresolved.
 pub(crate) fn re_resolve_unresolved_links_naming(
     tx: &Transaction,
-    created_path: &str,
+    path: &str,
 ) -> Result<Vec<String>, VaultError> {
     // The stem without its extension both before and after folding:
     // lowercasing reads context (a sigma before `.md` folds medial, alone
@@ -622,9 +672,9 @@ pub(crate) fn re_resolve_unresolved_links_naming(
         keys.dedup();
         keys
     };
-    let name = crate::link_resolver::final_component(created_path);
+    let name = crate::link_resolver::final_component(path);
     let mut rows: Vec<(i64, String, String, Option<String>)> = Vec::new();
-    for (key, form) in [(HealKey::Path, created_path), (HealKey::Name, name)] {
+    for (key, form) in [(HealKey::Path, path), (HealKey::Name, name)] {
         let keys = keys_of(form);
         let mut select = tx.prepare_cached(&heal_rows_sql(key, keys.len()))?;
         let found = select

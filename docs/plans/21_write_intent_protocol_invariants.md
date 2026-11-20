@@ -248,7 +248,11 @@ Checked against the invariants:
   store is what a scan's prune does. The removal is not announced by an
   event: a host is told only that the stored note was read again
   (`Modified`). It is therefore recorded in the change feed as a scan's
-  removal is, not as an own write.
+  removal is, not as an own write. *Amended by #1704 (CB-31, the lead's
+  ruling 4 of 2026-11-19):* where no row stood under the stored spelling
+  (a mover stopped after the volume applied its case-only rename, so the
+  only row was under the alias), the repair writes the stored spelling's
+  first row, and the host hears `Created` instead.
 - **Cost.** One stored-spelling lookup for each SELECTED path (a path's
   tokens are one candidate), and one more, inside the transaction, for a
   path that is an alias. A query with no marker, a fresh marker and a scan
@@ -307,7 +311,12 @@ convergence to deletion announced as `Modified` left hosts showing the note
 as existing. A read that finds the content already indexed still announces
 `Modified`: the content hash cannot say "unchanged", because a quarantined
 row keeps its hash while its task rows are gone, and its heal must be
-announced.
+announced. *Amended by #1704 (CB-31, the lead's ruling 4 of 2026-11-19):* a
+repair that writes the path's first `files` row (no row stood under the
+path: a file the index never held, or a create or save that landed
+unindexed) announces `Created`, as a save of a new path does, and heals the
+dangling links that name the path in the same commit. A host re-seats a tab
+missing at that path on `Created`, which it does not do on `Modified`.
 
 Checked against the invariants:
 
