@@ -1615,9 +1615,11 @@ public sealed class SvgPreviewGuardTests
     /// define one (738 KB), made the guard allocate 1,761 MiB on 7ae94ac1,
     /// each child copying its parent's whole scope. A scope now holds only
     /// its element's own definitions and a link to its parent's, and past
-    /// a cap on the definitions in scope the check is refused as spent. The bound, 64 MiB, is about
-    /// twice what the check allocates now, most of it the read of the
-    /// document's 30,000 declarations.
+    /// a cap on the definitions in scope the check is refused as spent. The
+    /// check now allocates 51.9 MiB here, about 70 bytes per byte read,
+    /// within the 13 to 145 bytes per byte it allocates on the
+    /// calibration's large documents. The bound, 96 MiB, is under twice
+    /// that and a twentieth of the copies' 1,761 MiB.
     /// </summary>
     [Fact]
     public void CustomPropertiesInScopeAllocateABoundedAmount()
@@ -1628,7 +1630,7 @@ public sealed class SvgPreviewGuardTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(SvgRefusal.DecodeCost, verdict);
         Assert.True(estimate.StepsSpent, "refused for its steps");
-        Assert.True(allocated < 64L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
     }
 
     /// <summary>A 1,000-rect marker the group's marker-mid sets, over a

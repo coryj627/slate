@@ -220,6 +220,15 @@ internal static class SvgPreviewGuard
     /// calibration table (CD20, 2026-11-20).</summary>
     internal const int MaxEstimatedDecodeMilliseconds = 3_000;
 
+    /// <summary>#1610 (the delta merge judge's major 2, stage 11): the most
+    /// custom-property definitions the paint cascade's scopes hold in one
+    /// document, past which the check is refused as spent. Each definition
+    /// and each scope cost the guard a few hundred bytes at most, so the
+    /// scopes stay within a few MiB, where copying them per element had
+    /// reached 1.7 GiB. A document with a pattern whose fills and strokes
+    /// read more custom properties than this is refused.</summary>
+    internal const int MaxCustomScopeEntries = 20_000;
+
     /// <summary>
     /// #1610 (the red team's B1, closed in stage 6): the most steps one
     /// check may take across its read, Measure and the estimate. A step is
@@ -1617,7 +1626,7 @@ internal static class SvgPreviewGuard
                 }
             }
 
-            var scopes = new Dictionary<string, byte>?[elements];
+            var scopes = new CustomScopeLink?[elements];
             var ownFill = new byte[elements];
             var ownStroke = new byte[elements];
             var matched = new List<(RuleDeclaration Rule, bool Certain)>();
@@ -1678,7 +1687,7 @@ internal static class SvgPreviewGuard
                     own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain, rule.Value));
                 }
 
-                Dictionary<string, byte>? inherited = parents[i] >= 0 ? scopes[parents[i]] : null;
+                CustomScopeLink? inherited = parents[i] >= 0 ? scopes[parents[i]] : null;
                 scopes[i] = CustomScope(own, inherited, patternIds);
                 ownFill[i] = OwnPaint(own, "fill", scopes[i], patternIds);
                 ownStroke[i] = OwnPaint(own, "stroke", scopes[i], patternIds);
@@ -1736,10 +1745,16 @@ internal static class SvgPreviewGuard
         /// with no value, so a chain resolves and a cycle has no value: a
         /// definition that reads itself takes its fallback, never the
         /// parent's value (measured in stage 10). The parent's scope is
-        /// shared when the element defines nothing it reads.
+        /// shared when the element defines nothing it reads. A scope holds
+        /// only the element's own definitions and a link to its parent's
+        /// (the delta merge judge's major 2, stage 11): no scope is copied,
+        /// a lookup walks the links and spends a step on each, and past
+        /// <see cref="MaxCustomScopeEntries"/> definitions held in all the
+        /// document's scopes the check is refused as spent, so what the
+        /// scopes hold stays bounded.
         /// </summary>
-        private Dictionary<string, byte>? CustomScope(
-            List<Declaration> own, Dictionary<string, byte>? inherited, HashSet<string> patternIds)
+        private CustomScopeLink? CustomScope(
+            List<Declaration> own, CustomScopeLink? inherited, HashSet<string> patternIds)
         {
             Dictionary<string, List<Declaration>>? defined = null;
             foreach (Declaration declaration in own)
@@ -1758,13 +1773,17 @@ internal static class SvgPreviewGuard
             {
                 return inherited;
             }
-            steps.Spend(1 + (inherited?.Count ?? 0));
-            var scope = inherited is null
-                ? new Dictionary<string, byte>(StringComparer.Ordinal)
-                : new Dictionary<string, byte>(inherited, StringComparer.Ordinal);
+            scopeEntries += defined.Count;
+            if (scopeEntries > MaxCustomScopeEntries)
+            {
+                throw new GuardStepsSpentException();
+            }
+            steps.Spend(1 + defined.Count);
+            var held = new Dictionary<string, byte>(defined.Count, StringComparer.Ordinal);
+            var scope = new CustomScopeLink(held, inherited);
             foreach (string name in defined.Keys)
             {
-                scope[name] = FailsMask;
+                held[name] = FailsMask;
             }
             for (int pass = 0; pass <= defined.Count; pass++)
             {
@@ -1772,11 +1791,11 @@ internal static class SvgPreviewGuard
                 foreach ((string name, List<Declaration> declarations) in defined)
                 {
                     steps.Spend(declarations.Count);
-                    byte parent = inherited is not null && inherited.TryGetValue(name, out byte held) ? held : FailsMask;
+                    byte parent = Lookup(inherited, name);
                     byte value = Cascade(declarations, parent, isPaint: false, scope, patternIds);
-                    if (scope[name] != value)
+                    if (held[name] != value)
                     {
-                        scope[name] = value;
+                        held[name] = value;
                         changed = true;
                     }
                 }
@@ -1788,12 +1807,43 @@ internal static class SvgPreviewGuard
             return scope;
         }
 
+        /// <summary>What <paramref name="name"/> holds in
+        /// <paramref name="scope"/>: the nearest definition along its links,
+        /// a step for each scope read, or no value.</summary>
+        private byte Lookup(CustomScopeLink? scope, string name)
+        {
+            for (CustomScopeLink? link = scope; link is not null; link = link.Parent)
+            {
+                steps.Spend(1);
+                if (link.Held.TryGetValue(name, out byte value))
+                {
+                    return value;
+                }
+            }
+            return FailsMask;
+        }
+
+        /// <summary>The definitions in all the scopes made so far, against
+        /// <see cref="MaxCustomScopeEntries"/>.</summary>
+        private int scopeEntries;
+
+        /// <summary>#1610 (the delta merge judge's major 2, stage 11): the
+        /// custom properties one element defines (what each can give a
+        /// <c>var()</c>) and the scope of its parent in the document, which
+        /// is linked, never copied.</summary>
+        private sealed class CustomScopeLink(Dictionary<string, byte> held, CustomScopeLink? parent)
+        {
+            internal Dictionary<string, byte> Held { get; } = held;
+
+            internal CustomScopeLink? Parent { get; } = parent;
+        }
+
         /// <summary>One paint property's own value for an element, in its
         /// scope: <see cref="KeepsPaint"/> when it declares none, else the
         /// widest of what its cascade can give, a pattern, then the
         /// parent's paint, then a paint of its own.</summary>
         private byte OwnPaint(
-            List<Declaration> own, string property, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+            List<Declaration> own, string property, CustomScopeLink? scope, HashSet<string> patternIds)
         {
             List<Declaration>? declarations = null;
             foreach (Declaration declaration in own)
@@ -1826,7 +1876,7 @@ internal static class SvgPreviewGuard
         /// the parent's value possible, so it adds to it.
         /// </summary>
         private byte Cascade(
-            List<Declaration> declarations, byte none, bool isPaint, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+            List<Declaration> declarations, byte none, bool isPaint, CustomScopeLink? scope, HashSet<string> patternIds)
         {
             List<Declaration> certain = declarations.FindAll(declaration => declaration.Certain);
             steps.Spend(1 + certain.Count);
@@ -1889,7 +1939,7 @@ internal static class SvgPreviewGuard
         /// them.
         /// </summary>
         private byte Evaluate(
-            string raw, bool isPaint, bool attribute, byte parent, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+            string raw, bool isPaint, bool attribute, byte parent, CustomScopeLink? scope, HashSet<string> patternIds)
         {
             string value = raw.Trim();
             Scanned(2L * value.Length);
@@ -1980,7 +2030,7 @@ internal static class SvgPreviewGuard
         /// wrongly (no name, or text between its name and its comma) may give
         /// anything.
         /// </summary>
-        private byte Substitute(string value, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        private byte Substitute(string value, CustomScopeLink? scope, HashSet<string> patternIds)
         {
             List<VarLevel> levels = VarLevels(value, patternIds);
 
@@ -1999,7 +2049,7 @@ internal static class SvgPreviewGuard
                 }
                 else
                 {
-                    byte held = scope is not null && scope.TryGetValue(level.Name, out byte found) ? found : FailsMask;
+                    byte held = Lookup(scope, level.Name);
                     result = level.Fallback < 0 || (held & FailsMask) == 0
                         ? held
                         : (byte)((held & ~FailsMask) | Content(level));
