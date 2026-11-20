@@ -1188,6 +1188,164 @@ fn an_open_canvas_whose_heal_fails_opens_nothing_and_commits_nothing() {
     );
 }
 
+/// How many `files` rows stand under `path`.
+fn files_rows(session: &VaultSession, path: &str) -> i64 {
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = ?1",
+            [path],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// #1704, fact 6c: a repair whose heal fails indexes nothing: an error from
+/// both host repair routes, no `files` row, and the row that names the file
+/// still dangling. `repair_or_contain_path` contains only file conditions,
+/// so a database failure stays loud. With the fault gone, the next repair
+/// indexes the file and heals the row.
+#[test]
+fn a_repair_whose_heal_fails_indexes_nothing_and_commits_nothing() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("A.md", b"# A\n\n[[Draft]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session
+        .provider
+        .write_file("Draft.md", b"# Draft\n")
+        .unwrap();
+
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let reindexed = session.reindex_path("Draft.md");
+    let repaired = session.repair_or_contain_path("Draft.md");
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    assert!(
+        reindexed.is_err(),
+        "reindex_path succeeded although its heal failed"
+    );
+    assert!(
+        repaired.is_err(),
+        "repair_or_contain_path answered {repaired:?} although its heal failed"
+    );
+    assert_eq!(
+        files_rows(&session, "Draft.md"),
+        0,
+        "a failed repair committed its row"
+    );
+    assert_eq!(outgoing_targets(&session, "A.md"), [None]);
+
+    session.reindex_path("Draft.md").unwrap();
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        [Some("Draft.md".to_string())]
+    );
+}
+
+/// #1704, fact 6c (the sweep): the abandoned-intent sweep's repair whose
+/// heal fails fails the task query and keeps the save's marker, so a later
+/// query repairs it again; no `files` row, and the row still dangles.
+#[test]
+fn a_swept_repair_whose_heal_fails_fails_the_query_and_keeps_the_marker() {
+    let mut env = fault_guard();
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("A.md", b"# A\n\n[[SweptFault1704]]\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    env.set("SLATE_TEST_FAULT_AFTER_WRITE", "SweptFault1704");
+    let saved = session.save_text("SweptFault1704.md", "# swept\n", None);
+    env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
+    assert!(
+        matches!(saved, Err(VaultError::SavedButUnindexed { .. })),
+        "premise: the save landed unindexed: {saved:?}"
+    );
+    let markers = |session: &VaultSession| -> i64 {
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'SweptFault1704.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(markers(&session), 1, "premise: the save's marker stands");
+
+    env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "SweptFault1704");
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let queried = session.note_tasks("SweptFault1704.md", 10);
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    assert!(
+        queried.is_err(),
+        "the task query succeeded although its repair's heal failed"
+    );
+    assert_eq!(markers(&session), 1, "the failed repair cleared the marker");
+    assert_eq!(files_rows(&session, "SweptFault1704.md"), 0);
+    assert_eq!(outgoing_targets(&session, "A.md"), [None]);
+
+    session.note_tasks("SweptFault1704.md", 10).unwrap();
+    env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
+    assert_eq!(
+        markers(&session),
+        0,
+        "the next query's repair cleared the marker"
+    );
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        [Some("SweptFault1704.md".to_string())]
+    );
+}
+
+/// #1704, fact 6d: an open base whose heal fails opens nothing: an error,
+/// no `files` row, no handle, and the row that names it still dangling.
+/// With the fault gone, the next open succeeds and heals.
+#[test]
+fn an_open_base_whose_heal_fails_opens_nothing_and_commits_nothing() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("A.md", b"# A\n\n[[Table.base]]\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session
+        .provider
+        .write_file("Table.base", FIRST_INDEX_BASE)
+        .unwrap();
+
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let opened = session.open_base("Table.base");
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    assert!(
+        opened.is_err(),
+        "the open succeeded although its heal failed: {opened:?}"
+    );
+    assert_eq!(
+        files_rows(&session, "Table.base"),
+        0,
+        "the failed open committed its row"
+    );
+    assert!(
+        session.bases.lock().unwrap().is_empty(),
+        "the failed open registered a handle"
+    );
+    assert_eq!(outgoing_targets(&session, "A.md"), [None]);
+
+    session.open_base("Table.base").unwrap();
+    assert_eq!(
+        outgoing_targets(&session, "A.md"),
+        [Some("Table.base".to_string())]
+    );
+}
+
 /// #1704, fact 7 (guard): a save, repair or open of a path that already
 /// had a row runs no heal. The fact sets `A.md`'s three resolved rows back
 /// to NULL itself (rows only a heal or a scan would touch), so a heal run
