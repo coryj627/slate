@@ -1586,6 +1586,51 @@ public sealed class SvgPreviewGuardTests
         Assert.Equal(SvgRefusal.DecodeCost, verdict);
     }
 
+    /// <summary>The delta merge judge's major 2 document: a pattern, then
+    /// a group that defines <paramref name="properties"/> custom properties
+    /// and whose fill reads every one, holding
+    /// <paramref name="children"/> groups that each define the
+    /// first.</summary>
+    private static string ScopeDocument(int properties, int children)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='20' height='20'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><g style='");
+        for (int i = 0; i < properties; i++)
+        {
+            s.Append("--a").Append(i).Append(":1;");
+        }
+        s.Append("' fill='");
+        for (int i = 0; i < properties; i++)
+        {
+            s.Append("var(--a").Append(i).Append(')');
+        }
+        s.Append("'>").Append(Repeat("<g style='--a0:1'/>", children));
+        return s.Append("</g></svg>").ToString();
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 2, stage 11): custom properties
+    /// in scope cost the guard a bounded allocation. The judge's document,
+    /// 30,000 properties read by one fill and 2,100 children that each
+    /// define one (738 KB), made the guard allocate 1,761 MiB on 7ae94ac1,
+    /// each child copying its parent's whole scope. A scope now holds only
+    /// its element's own definitions and a link to its parent's, and past
+    /// a cap on the definitions in scope the check is refused as spent. The bound, 64 MiB, is about
+    /// twice what the check allocates now, most of it the read of the
+    /// document's 30,000 declarations.
+    /// </summary>
+    [Fact]
+    public void CustomPropertiesInScopeAllocateABoundedAmount()
+    {
+        string source = ScopeDocument(30_000, 2_100);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+        Assert.True(estimate.StepsSpent, "refused for its steps");
+        Assert.True(allocated < 64L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
     /// <summary>A 1,000-rect marker the group's marker-mid sets, over a
     /// 3,000-vertex polyline that writes <paramref name="line"/>: the
     /// documents stage 10 decoded.</summary>
