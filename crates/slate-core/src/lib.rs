@@ -237,7 +237,7 @@ pub enum VaultError {
     /// `full_text_search` it is a query FTS5 refuses, kept apart from a
     /// corrupt cache (which surfaces as `Db`), and its message is core's
     /// plain sentence (`a11y::SEARCH_QUERY_UNREADABLE`). Other producers
-    /// (the sidebar filter, the tag tree) carry their own message.
+    /// (the sidebar filter, tag edits) carry their own message.
     #[error("invalid search query: {message}")]
     InvalidQuery { message: String },
 

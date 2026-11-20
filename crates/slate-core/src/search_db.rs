@@ -383,14 +383,17 @@ fn tag_scoped_list_all(
 /// parser raises (`sqlite3Fts5ParseError` in the bundled `sqlite3.c`) and
 /// its cursor's special-query check. FTS5's corruption texts also begin
 /// "fts5:" ("fts5: corruption found reading blob …", "fts5: missing row
-/// …"), so that bare prefix is not one of them.
+/// …"), so that bare prefix is not one of them. The parser's two refusals
+/// of a column or phrase query under a `detail=` option are left out: the
+/// index's default `detail=full` cannot raise them, and a later `detail=`
+/// change would show here as a `Db` error.
 const FTS5_QUERY_REFUSALS: &[&str] = &[
     // An operator with nothing to join, a symbol FTS5 does not read
     // (`#`, an apostrophe, a period, a comma), a stray parenthesis.
     "syntax error",
     // A quote left open.
     "unterminated string",
-    // A bare `*`, or a `*` before a word.
+    // A query that begins with `*` (`*`, `*foo`, `**bold**`).
     "unknown special query",
     // Groups nested deeper than the parser's stack.
     "parser stack overflow",
@@ -417,10 +420,12 @@ const FTS5_QUERY_REFUSALS: &[&str] = &[
 ///
 /// Only the MATCH cursor's errors arrive here: the outer statement is
 /// prepared before the cursor runs, so a schema error in it fails at
-/// prepare as `Db`. FTS5 prepares its own content-table statement during
-/// the step and passes that statement's error text out, so a `files`
-/// table without `body_text` would read "no such column" here; the
-/// migrations rule that out.
+/// prepare as `Db`. Two routes could still bring a schema error here, and
+/// the migrations, which run before any search, rule out both: SQLite
+/// re-prepares a cached statement inside the step after a schema change,
+/// and FTS5 prepares its own content-table statement during the step and
+/// passes that statement's error text out, so a `files` table without
+/// `body_text` would read "no such column".
 fn map_fts5_error(err: rusqlite::Error) -> VaultError {
     let message = err.to_string();
     if FTS5_QUERY_REFUSALS

@@ -2600,10 +2600,11 @@ const FILE_MATCHES_REFUSED: &str =
     "file.matches: Check the quotes, symbols and operators in your search.";
 
 /// A refused `file.matches` query fails the view with the same words on
-/// both of its paths: the pushed-down top-level conjunct, and the
-/// interpreter, which runs it with pushdown off and under `or:` (where the
-/// view error also names the row being evaluated). A query FTS5 refuses
-/// for a colon or a hyphen is a view error too, not a failed execute.
+/// both of its paths: the pushed-down top-level conjunct, which names no
+/// row, and the interpreter, which runs it with pushdown off and under
+/// `or:` and names the row it was evaluating, as every evaluation error
+/// does. A query FTS5 refuses for a colon or a hyphen is a view error too,
+/// not a failed execute.
 #[test]
 fn file_matches_refused_query_says_the_same_on_every_path() {
     let conn = migrated_conn();
@@ -2638,6 +2639,16 @@ fn file_matches_refused_query_says_the_same_on_every_path() {
                 .error
                 .unwrap_or_else(|| panic!("{refused:?} {shape}: the view should fail"));
             assert_eq!(error.construct, FILE_MATCHES_REFUSED, "{refused:?} {shape}");
+            if pushdown && shape.starts_with("top-level") {
+                assert_eq!(error.row_path, "", "{refused:?} {shape}");
+            } else {
+                assert!(
+                    ["Projects/Alpha.md", "Projects/Beta.md", "Notes/Gamma.md"]
+                        .contains(&error.row_path.as_str()),
+                    "{refused:?} {shape}: {:?}",
+                    error.row_path
+                );
+            }
             assert!(result.rows.is_empty(), "{refused:?} {shape}");
         }
     }

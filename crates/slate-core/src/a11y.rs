@@ -3605,7 +3605,8 @@ pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system giv
 /// What a reader hears when core's full-text index refuses a search as a
 /// query (the owner, 2026-11-20: "Plain words. Please change it."): an
 /// operator with nothing to join, a quote left open, or a symbol the query
-/// syntax does not read (`#`, an apostrophe, a period, a colon, a hyphen).
+/// syntax refuses (`#`, an apostrophe, a period) or reads as an operator (a
+/// colon or a hyphen, read as a column filter).
 /// It completes the lead it lands after ("Search error: ",
 /// "file.matches: ") and never restates the failure. Core's copy, carried
 /// in a `VaultError::InvalidQuery` whose message crosses the FFI verbatim,

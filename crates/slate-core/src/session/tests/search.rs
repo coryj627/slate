@@ -144,16 +144,17 @@ fn a_column_filter_hyphen_date_link_or_near_distance_is_refused_as_a_query() {
 }
 
 /// A damaged full-text index is a database error, never a refused query:
-/// FTS5's corruption texts begin "fts5:" as its parse failures do, and a
-/// reader told to check a search that is fine would edit it forever.
+/// FTS5's corruption texts begin "fts5:" as some of its parse failures do,
+/// and a reader told to check a search that is fine would edit it forever.
 #[test]
 fn a_damaged_full_text_index_is_a_database_error_not_a_refused_query() {
     let (_tmp, session) = refusal_vault();
     assert_eq!(fts_match_count(&session, "alpha"), 1, "premise: indexed");
     {
         let conn = session.conn.lock().unwrap();
-        // FTS5 keeps its structure record at id 1 and its averages at id
-        // 10; the leaves have larger ids.
+        // FTS5 keeps its averages at id 1 and its structure record at id
+        // 10 (FTS5_AVERAGES_ROWID, FTS5_STRUCTURE_ROWID); the leaves have
+        // larger ids.
         let zeroed = conn
             .execute(
                 "UPDATE files_fts_data SET block = X'0000000000000000' WHERE id > 10",
@@ -173,8 +174,10 @@ fn a_damaged_full_text_index_is_a_database_error_not_a_refused_query() {
     }
 }
 
-/// The queries step 0 saw FTS5 read still run: the refusal markers catch
-/// no operator used as FTS5 means it, no prefix, no phrase, no word.
+/// FTS5 runs these queries, which step 0 saw it read: an operator used as
+/// FTS5 means it, a prefix, a phrase, a word, the parser's and the
+/// expression tree's depth within their limits. A refused text runs once
+/// its words are in double quotes.
 #[test]
 fn every_query_fts5_reads_still_runs() {
     let (_tmp, session) = refusal_vault();
