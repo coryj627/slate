@@ -132,6 +132,11 @@ internal readonly record struct SvgDecodeEstimate(
 
     internal double Milliseconds => Microseconds / 1000;
 
+    /// <summary>Whether the guard spent its step budget before it finished
+    /// counting (#1610, the red team's B1): the document is refused for its
+    /// cost whatever the terms say.</summary>
+    internal bool StepsSpent { get; init; }
+
     /// <summary>The largest term's name, for the log: <c>stylesheet</c>,
     /// <c>use</c>, <c>var</c> or <c>marker</c>.</summary>
     internal string LargestTerm
@@ -196,6 +201,17 @@ internal static class SvgPreviewGuard
     /// picks the limit from that table (CD20's second step). It is not the
     /// owner's pick.</summary>
     internal const int MaxEstimatedDecodeMilliseconds = 2_000;
+
+    [ThreadStatic]
+    private static long? stepBudgetForTests;
+
+    /// <summary>Test seam: the guard's step budget for checks on this
+    /// thread (#1610, the red team's B1), in place of the app's.</summary>
+    internal static long? StepBudgetForTests
+    {
+        get => stepBudgetForTests;
+        set => stepBudgetForTests = value;
+    }
 
     /// <summary>The key of a stylesheet rule that applies to every element.</summary>
     private const string AnyElementKey = "*";

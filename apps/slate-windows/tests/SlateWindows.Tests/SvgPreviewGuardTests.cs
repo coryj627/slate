@@ -168,10 +168,162 @@ public sealed class SvgPreviewGuardTests
         // The follow-up: marker-mid:var(--m) costs what the attribute does.
         ["a 2,000-rect marker set through var() on a 10,000-vertex polyline"] = (() => SlowSvgDocuments.Generate("D_var M=2000 V=10000"), false),
         ["four var() references per level at 15 levels"] = (() => SlowSvgDocuments.Generate("C_kary K=4 D=15 E=1"), true),
-        ["six descendant steps over 254 nested groups"] = (
-            () => Svg("<style>g g g g g g rect{fill:red}</style>" + Repeat("<g>", 254) + Square + Repeat("</g>", 254)),
-            true),
+        ["six descendant steps over 254 nested groups"] = (() => DeepDescendant("", ""), true),
+        // The red team's M1: the stylesheet and a style attribute are read as
+        // ExCSS reads them. A comment marker inside a string or a url()
+        // argument opens no comment; a comment, even one holding a
+        // semicolon, separates nothing; an escape names what it resolves to.
+        ["six descendant steps after a string that holds /*"] = (() => DeepDescendant("rect{x:\"/*\"} ", " /*\"*/"), false),
+        ["six descendant steps after a url() that holds /*"] = (() => DeepDescendant("rect{fill:url(/*)} ", " /**/"), false),
+        ["a var() fallback chain defined after a string that holds /*"] = (
+            () => SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000")
+                .Replace("<style>svg{", "<style>a{b:\"/*\"} svg{", StringComparison.Ordinal)
+                .Replace("}</style>", "} /**/</style>", StringComparison.Ordinal),
+            false),
+        ["a marker set after an empty comment in a style attribute"] = (() => StyledMarker("/**/marker-mid:url(#m)"), false),
+        ["a marker set after a comment that holds ; in a style attribute"] = (() => StyledMarker("/* ; */marker-mid:url(#m)"), false),
+        ["a marker set by an escaped property name in a style attribute"] = (() => StyledMarker("m\\61rker-mid:url(#m)"), false),
+        // The red team's m4 and m6: vertices from arcs with compact flags
+        // and from a CSS d:path(), the widest of two markers sharing an id,
+        // and a marker set through var() in a style attribute.
+        ["a 2,000-rect marker on 10,000 arcs written with compact flags"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' d='M0 0"
+                + string.Concat(Enumerable.Range(0, 10_000).Select(i => $" A1 1 0 00{i % 400} {i / 400}")) + "'/>"),
+            false),
+        ["a 2,000-rect marker on a path a CSS d:path() draws through 10,000 vertices"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='d:path(\"M0 0"
+                + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}")) + "\")'/>"),
+            false),
+        ["a 2,000-rect marker named by the second of two elements with its id"] = (
+            () => SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+                .Replace("<defs>", "<defs><marker id='m'><rect width='1' height='1'/></marker>", StringComparison.Ordinal),
+            false),
+        ["a 2,000-rect marker set through var() in a style attribute"] = (() => SlowSvgDocuments.Generate("D_varinline M=2000 V=10000"), false),
     };
+
+    /// <summary>Six descendant steps over 254 nested groups, the rule placed
+    /// between <paramref name="before"/> and <paramref name="after"/>.</summary>
+    private static string DeepDescendant(string before, string after) =>
+        Svg("<style>" + before + "g g g g g g rect{fill:red}" + after + "</style>"
+            + Repeat("<g>", 254) + Square + Repeat("</g>", 254));
+
+    /// <summary>#1581's marker row with the marker set by a style attribute
+    /// of <paramref name="style"/> in place of the marker-mid attribute.</summary>
+    private static string StyledMarker(string style) =>
+        SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+            .Replace(" marker-mid='url(#m)'", $" style='{style}'", StringComparison.Ordinal);
+
+    /// <summary>A marker of 2,000 rects with the id <c>m</c>, then
+    /// <paramref name="shape"/>.</summary>
+    private static string MarkedShape(string shape) =>
+        Svg("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>"
+            + string.Concat(Enumerable.Range(0, 2_000).Select(i => $"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1' fill='red'/>"))
+            + "</marker></defs>" + shape);
+
+    public static TheoryData<string, string> HostileShapes() => new()
+    {
+        { "T_varrule B=320000 V=32000", nameof(SvgRefusal.None) },
+        { "T_dupid N=16000", nameof(SvgRefusal.RenderedElements) },
+    };
+
+    /// <summary>
+    /// #1610 (the red team's B1): the guard runs on the caller, so its own
+    /// time is bounded on the shapes that made it super-linear: one rule of
+    /// 320,000 branches and 32,000 var() declarations (1.1 MB, 16.7 s of
+    /// guard), and 16,000 references to an id 16,000 elements share
+    /// (480 KB, 2.7 s). Each is judged in under a second, the median of
+    /// <see cref="WallClockBudget"/>'s warm readings.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(HostileShapes))]
+    public void TheGuardsOwnTimeStaysBounded(string label, string verdict)
+    {
+        string source = SlowSvgDocuments.Generate(label);
+        TimeSpan guardTime = WallClockBudget.WarmMedian(() =>
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            string said = Check(source);
+            stopwatch.Stop();
+            Assert.Equal(verdict, said);
+            return stopwatch.Elapsed;
+        });
+        Assert.True(
+            guardTime < TimeSpan.FromSeconds(1),
+            $"{label}: the guard took {guardTime.TotalMilliseconds:F1} ms");
+    }
+
+    /// <summary>#1610 (the red team's B1): past its step budget the guard
+    /// stops counting and refuses for the document's cost, naming the guard
+    /// as the term, so any path that grows past linear ends in bounded time
+    /// on the caller.</summary>
+    [Fact]
+    public void PastItsStepBudgetTheGuardRefusesForTheCost()
+    {
+        string source = SlowSvgDocuments.Generate("G_scatter N=500");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        SvgPreviewGuard.StepBudgetForTests = 1_000;
+        try
+        {
+            SvgRefusal refusal = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            Assert.Equal(SvgRefusal.DecodeCost, refusal);
+            Assert.True(estimate.StepsSpent);
+            Assert.Equal("guard", estimate.LargestTerm);
+        }
+        finally
+        {
+            SvgPreviewGuard.StepBudgetForTests = null;
+        }
+    }
+
+    public static TheoryData<char> WalkingCombinators() => ['>', '+'];
+
+    /// <summary>#1610 (the red team's m1): a child or adjacent-sibling step
+    /// is weighed as one more walk of the document per pass, wide: ExCSS
+    /// reads a level or a sibling for each element the walk reaches.</summary>
+    [Theory]
+    [MemberData(nameof(WalkingCombinators))]
+    public void AChildOrAdjacentStepWeighsOneMoreWalk(char combinator)
+    {
+        static string Document(string selector) =>
+            Svg("<style>" + Repeat(selector + "{fill:red}", 100) + "</style><g>"
+                + Repeat("<rect width='1' height='1'/>", 1_000) + "</g>");
+        double plain = EstimateOf(Document("rect")).Microseconds;
+        double stepped = EstimateOf(Document("g" + combinator + "rect")).Microseconds;
+        double walk = 100 * 1_003 * SvgDecodeRates.QueryPerBranchElement;
+        Assert.InRange(stepped - plain, walk * 0.99, walk * 1.01);
+    }
+
+    public static TheoryData<string> RareLeftCompounds() =>
+    [
+        // Ten general-sibling rules whose left compound one rect of 10,000
+        // carries: the wide count reads every sibling list for every rect
+        // (14 s); the left compound's matches read one (1.4 ms).
+        "sibling",
+        // Ten descendant rules whose left compound only the innermost of 200
+        // nested groups carries, 50 rects in each: the depth bound counts
+        // every ancestor of every rect (0.6 s); the left compound's
+        // descendants are 50.
+        "descendant",
+    ];
+
+    /// <summary>#1610 (the red team's m2): a branch of one step counts only
+    /// what its left compound's matches read: for a descendant step their
+    /// descendants, for a general-sibling step their sibling lists.</summary>
+    [Theory]
+    [MemberData(nameof(RareLeftCompounds))]
+    public void AOneStepBranchCountsWhatItsLeftCompoundMatchesRead(string shape)
+    {
+        string source = shape == "sibling"
+            ? Svg("<style>" + Repeat(".a ~ rect{fill:red}", 10) + "</style><rect class='a' width='1' height='1'/>"
+                + Repeat("<rect width='1' height='1'/>", 9_999))
+            : Svg("<style>" + Repeat(".a rect{fill:red}", 10) + "</style>"
+                + string.Concat(Enumerable.Range(1, 200).Select(depth =>
+                    (depth == 200 ? "<g class='a'>" : "<g>") + Repeat("<rect width='1' height='1'/>", 50)))
+                + Repeat("</g>", 200));
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate < 200, $"{shape}: estimated at {estimate:F1} ms");
+    }
 
     public static TheoryData<string, double> CalibratedDocuments() => new()
     {
@@ -233,19 +385,24 @@ public sealed class SvgPreviewGuardTests
         // references per level at 15 levels over 100 rects decode in 7 ms
         // (counting every var( as a copy gives 275 s).
         { "C_fb F=2 D=15 E=100", 200 },
-        // The follow-up's selector counts admit what decodes under the
-        // limit: four descendant steps over 64 nested groups, 1.09 s to
-        // decode, about 1.12 s; one general-sibling step over 10,000 rects,
-        // 1.89 s, about 1.45 s; ten first-of-type rules over 3,000 rects,
-        // 1.90 s, about 1.83 s.
-        { "N_desc K=4 R=1 D=64", 1500 },
-        { "N_sib K=2 R=1 N=10000", 1800 },
-        { "N_nth Q=1 R=10 N=3000", 1950 },
+        // The follow-up's selector counts admit what decodes quickly: ten
+        // rules of four descendant steps over 32 nested groups, 363 ms to
+        // decode, about 370 ms; one general-sibling step over 3,000 rects,
+        // 241 ms, about 133 ms; one first-of-type rule over 3,000 rects,
+        // 223 ms, about 182 ms.
+        { "N_desc K=4 R=10 D=32", 600 },
+        { "N_sib K=2 R=1 N=3000", 600 },
+        { "N_nth Q=1 R=1 N=3000", 600 },
+        // The red team's M2: Svg.Custom reads @media and skips every other
+        // block at-rule, so keyframe stops are not rules filed under every
+        // element: 300 animated rects among 1,000.
+        { "A_keyframes A=300 E=1000", 300 },
     };
 
     /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist
     /// for are admitted, each estimated under its own bound, which sits
-    /// between the row's estimate and the decode limit.</summary>
+    /// above the row's estimate and under a second, so the row holds at any
+    /// limit the owner picks.</summary>
     [Theory]
     [MemberData(nameof(QuickDocuments))]
     public void AdmitsWhatDecodesQuickly(string label, double boundMilliseconds)

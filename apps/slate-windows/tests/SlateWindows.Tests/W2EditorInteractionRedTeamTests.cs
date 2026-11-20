@@ -673,6 +673,66 @@ public sealed class W2EditorInteractionRedTeamTests
             });
     }
 
+    /// <summary>#1610 (the red team's B1): a guard that spends its step
+    /// budget refuses the document for its cost on the caller, says core's
+    /// sentence, starts no decode and logs the guard as the term.</summary>
+    [Fact]
+    public void SvgPreview_AGuardPastItsStepBudgetSaysTheCostSentence()
+    {
+        using var lines = new DiagnosticLines();
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] svg = Encoding.UTF8.GetBytes(SlowSvgDocuments.Generate("G_scatter N=500"));
+        SvgPreviewGuard.StepBudgetForTests = 1_000;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: decodes.Ending,
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                    Assert.Equal(TooLongToDecode, reason);
+                    Assert.Equal(0, decodes.Runs);
+                });
+        }
+        finally
+        {
+            SvgPreviewGuard.StepBudgetForTests = null;
+        }
+        Assert.Contains($"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedForCost} (term=guard)", lines.Snapshot);
+    }
+
+    /// <summary>#1610 (the red team's m6): the embeds leaf's card and the
+    /// Ctrl+E popover's card show core's cost sentence as a warning in place
+    /// of an SVG refused for its cost, and nothing reaches the
+    /// decoder.</summary>
+    [Fact]
+    public void SvgPreview_TheLeafAndThePopoverSayTheCostSentence()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[] costly = CostlySvg();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: decodes.Ending,
+            () =>
+            {
+                EditorEmbedPreviewNode leaf = EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                    new EmbedResolution.Image("slow.svg", costly, "image/svg+xml", null));
+                Assert.Null(leaf.Image);
+                Assert.True(leaf.IsWarning);
+                Assert.Equal(TooLongToDecode, Assert.Single(leaf.Parts).Text);
+
+                EditorEmbedPreviewNode popover = EditorInteractionCoordinator.BuildEmbedPreviewForTests(
+                    GalleryCard([costly]), truncated: false);
+                ParkedSvgDecodes.AssertSaid(ImageSentences(popover), TooLongToDecode);
+                Assert.Equal(0, decodes.Runs);
+            });
+    }
+
     /// <summary>#1610 (CB-29): bytes that sniff as an SVG but are not UTF-8
     /// give no image and no reason, and no exception reaches the caller,
     /// wherever the decode reads them.</summary>

@@ -834,6 +834,60 @@ internal static class SlowSvgDocuments
                     s.Append("</style><rect width='4' height='4' class='c1'/>");
                     break;
                 }
+            case "T_varrule":
+                {
+                    // The red team's B1: one rule of B branches and V var()
+                    // declarations, over one rect.
+                    int b = P(p, "B", 100);
+                    int v = P(p, "V", 10);
+                    s.Append("<style>svg{--x:1}");
+                    s.Append(string.Join(",", Enumerable.Repeat("a", b)));
+                    s.Append('{');
+                    for (int j = 0; j < v; j++)
+                    {
+                        s.Append($"p{j}:var(--x);");
+                    }
+                    s.Append("}</style><rect width='1' height='1'/>");
+                    break;
+                }
+            case "T_dupid":
+                {
+                    // The red team's B1: N references to an id N elements share.
+                    int n = P(p, "N", 100);
+                    for (int i = 0; i < n; i++)
+                    {
+                        s.Append("<g fill='url(#x)'/>");
+                    }
+                    for (int i = 0; i < n; i++)
+                    {
+                        s.Append("<g id='x'/>");
+                    }
+                    break;
+                }
+            case "A_keyframes":
+                {
+                    // The red team's M2: an animation export's shape, one
+                    // @keyframes of five stops per animated element, A of
+                    // them, over E rects.
+                    int a = P(p, "A", 100);
+                    int total = P(p, "E", 1000);
+                    s.Append("<style>");
+                    for (int k = 0; k < a; k++)
+                    {
+                        s.Append($"#e{k}{{animation:k{k} 2s infinite}}@keyframes k{k}{{");
+                        foreach (string stop in (string[])["0%", "25%", "50%", "75%", "100%"])
+                        {
+                            s.Append($"{stop}{{transform:translate({k % 7}px,0);opacity:0.5}}");
+                        }
+                        s.Append('}');
+                    }
+                    s.Append("</style>");
+                    for (int i = 0; i < total; i++)
+                    {
+                        s.Append($"<rect id='e{i}' x='{i % 40}' y='{i / 40}' width='1' height='1'/>");
+                    }
+                    break;
+                }
             default:
                 throw new ArgumentException("unknown kind " + kind, nameof(kind));
         }
