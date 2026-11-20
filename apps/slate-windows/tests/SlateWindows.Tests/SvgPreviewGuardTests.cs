@@ -741,6 +741,31 @@ public sealed class SvgPreviewGuardTests
     }
 
     /// <summary>
+    /// #1610 (the merge judge's minor 1): the decode limit is the
+    /// calibration's 2,000 ms placeholder until the owner picks one (CD20's
+    /// second step), and it is where the verdict turns: a plotting scatter
+    /// estimated within 1% under it is admitted, and the scatter of one
+    /// point more, within 1% over it, is refused. When the owner picks, the
+    /// limit and the pair's two sizes are the only numbers that move (the
+    /// largest scatter admitted at 3 s has 3,425 points, at 5 s 4,440).
+    /// </summary>
+    [Fact]
+    public void TheDecodeLimitIsWhereTheVerdictTurns()
+    {
+        const int limit = 2_000;
+        const int points = 2_785;
+        Assert.Equal(limit, SvgPreviewGuard.MaxEstimatedDecodeMilliseconds);
+        string under = SlowSvgDocuments.Generate($"G_scatter N={points}");
+        string over = SlowSvgDocuments.Generate($"G_scatter N={points + 1}");
+        double below = EstimateOf(under).Milliseconds;
+        double above = EstimateOf(over).Milliseconds;
+        Assert.True(below > limit * 0.99 && below <= limit, $"{points} points: estimated at {below:F1} ms");
+        Assert.True(above > limit && above <= limit * 1.01, $"{points + 1} points: estimated at {above:F1} ms");
+        Assert.Equal(nameof(SvgRefusal.None), Check(under));
+        Assert.Equal(nameof(SvgRefusal.DecodeCost), Check(over));
+    }
+
+    /// <summary>
     /// #1610 (CB-29): core's renders of the dialects whose edges carry
     /// markers, the only cost a rendered diagram has, sized to render in
     /// under a second each so core's 5-second budget never cuts them, are
