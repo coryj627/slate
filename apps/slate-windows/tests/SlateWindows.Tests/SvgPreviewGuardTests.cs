@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Text;
+using System.Text.RegularExpressions;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -223,7 +224,64 @@ public sealed class SvgPreviewGuardTests
         ["a 2,000-rect marker named by a declared property's own var() fallback"] = (
             () => MarkerSetBy(" marker-mid='var(--p)'", "svg{--p:var(--undefined, url(#m))}"),
             false),
+        // Codex's round 1 (stage 4), equivalent inputs whose estimate fell:
+        // path geometry a custom property draws, inline, in a stylesheet and
+        // behind a definition's own fallback;
+        ["a 2,000-rect marker on a path whose d a style attribute's custom property draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--p:path(\"" + LongPathData + "\");d:var(--p)'/>"),
+            false),
+        ["a 2,000-rect marker on a path whose d a stylesheet's custom property draws"] = (
+            () => MarkedShape("<style>svg{--p:path(\"" + LongPathData + "\")} path{d:var(--p)}</style>"
+                + "<path fill='none' stroke='black' marker-mid='url(#m)'/>"),
+            false),
+        ["a 2,000-rect marker on a path whose d a custom property's own fallback draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--p:var(--undefined, path(\""
+                + LongPathData + "\"));d:var(--p)'/>"),
+            false),
+        // a marker a use sets, which the shapes of its instance inherit;
+        ["a 2,000-rect marker a use sets on the polyline it draws"] = (
+            () => MarkedShape("<defs><polyline id='p' fill='none' stroke='black' points='" + LongPoints + "'/></defs>"
+                + "<use href='#p' marker-mid='url(#m)'/>"),
+            false),
+        ["a 2,000-rect marker a use sets on the polyline of the group it draws"] = (
+            () => MarkedShape("<defs><g id='p'><polyline fill='none' stroke='black' points='" + LongPoints + "'/></g></defs>"
+                + "<use href='#p' marker-mid='url(#m)'/>"),
+            false),
+        // a fallback chain beside another element's literal definitions of
+        // its names, which do not erase the chain's fallback cost;
+        ["a var() fallback chain beside a group that defines its names as literals"] = (
+            () => BeforeEnd(
+                SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000"),
+                "<g style='" + string.Concat(Enumerable.Range(1, 16).Select(k => $"--v{k}:1;")) + "'/>"),
+            false),
+        // and custom-property names that end in a valid escaped character,
+        // which name the same property wherever they are written.
+        ["var() doubling at 15 levels over names ending in an escaped private-use character"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\E000 "),
+            false),
+        ["var() doubling at 15 levels over names ending in an escaped semicolon"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\;"),
+            false),
+        ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
+            false),
     };
+
+    /// <summary>Path data of 10,001 vertices.</summary>
+    private static readonly string LongPathData =
+        "M0 0" + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}"));
+
+    /// <summary>A polyline's 10,000 points.</summary>
+    private static readonly string LongPoints =
+        string.Concat(Enumerable.Range(0, 10_000).Select(i => $"{i % 400},{i / 400} "));
+
+    /// <summary><paramref name="source"/> with <paramref name="markup"/>
+    /// before its closing tag.</summary>
+    private static string BeforeEnd(string source, string markup)
+    {
+        int end = source.LastIndexOf("</svg>", StringComparison.Ordinal);
+        return source[..end] + markup + source[end..];
+    }
 
     /// <summary>#1581's marker row (a 2,000-rect marker on a 10,000-vertex
     /// polyline) with its marker-mid attribute replaced by
