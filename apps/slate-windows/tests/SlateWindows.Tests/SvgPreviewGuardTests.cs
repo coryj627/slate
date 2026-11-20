@@ -281,6 +281,11 @@ public sealed class SvgPreviewGuardTests
         ["one rule of 3,000 class branches over a symbol of 100 rects that 500 uses draw"] = (
             () => SlowSvgDocuments.Generate("U_branches B=3000 T=100 U=500 S=1"),
             false),
+        // Measured: each instance runs the descendant chains again over its
+        // own nesting, about 0.35 s an instance here (18.1 s in all).
+        ["ten rules of four descendant steps over a symbol of 32 nested groups that 50 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_desc K=4 R=10 D=32 U=50"),
+            false),
         ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
             false),

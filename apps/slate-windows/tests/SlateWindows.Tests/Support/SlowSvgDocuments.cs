@@ -930,6 +930,36 @@ internal static class SlowSvgDocuments
                     }
                     break;
                 }
+            case "U_desc":
+                {
+                    // Codex's round 2: R rules of K descendant-chained g
+                    // compounds then rect, over a symbol of D nested g (a rect
+                    // in each) that U uses draw.
+                    int k = P(p, "K", 4);
+                    int d = P(p, "D", 32);
+                    int u = P(p, "U", 100);
+                    string sel = string.Join(" ", Enumerable.Repeat("g", k)) + " rect";
+                    s.Append("<style>");
+                    for (int j = 0; j < r; j++)
+                    {
+                        s.Append($"{sel}{{fill:{Hex(j)}}}");
+                    }
+                    s.Append("</style><defs><symbol id='s'>");
+                    for (int i = 0; i < d; i++)
+                    {
+                        s.Append("<g>").Append(RectAt(i, ""));
+                    }
+                    for (int i = 0; i < d; i++)
+                    {
+                        s.Append("</g>");
+                    }
+                    s.Append("</symbol></defs>");
+                    for (int i = 0; i < u; i++)
+                    {
+                        s.Append($"<use href='#s' x='{i % 40 * 10}' y='{i / 40 * 10}'/>");
+                    }
+                    break;
+                }
             case "A_keyframes":
                 {
                     // The red team's M2: an animation export's shape, one
