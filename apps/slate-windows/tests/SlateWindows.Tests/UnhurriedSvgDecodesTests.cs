@@ -39,6 +39,43 @@ public sealed class UnhurriedSvgDecodesTests
         }
     }
 
+    /// <summary>#1610 (the merge judge's minor 2): the host charges a
+    /// projection's deadline nothing for the guard's checks, so #1635's
+    /// exact waits hold; with the seams cleared, as in the app, a check is
+    /// charged the time it took. A document the guard takes some
+    /// milliseconds over is charged more than nothing and no more than the
+    /// call around it took.</summary>
+    [Fact]
+    public void TheHostChargesNoGuardTimeAndTheAppChargesWhatTheCheckTook()
+    {
+        Assert.NotNull(EditorInteractionCoordinator.SvgGuardChargeDefaultForTests);
+        Assert.Equal(
+            TimeSpan.Zero,
+            EditorInteractionCoordinator.SvgGuardChargeDefaultForTests!(TimeSpan.FromSeconds(1)));
+
+        byte[] costly = Encoding.UTF8.GetBytes(SlowSvgDocuments.Generate("A_star_g R=3000 E=13000"));
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(60_000);
+        EditorInteractionCoordinator.SvgDecodeSlotsForTests = new EditorInteractionCoordinator.SvgDecodeSlots();
+        EditorInteractionCoordinator.SvgGuardChargeForTests = null;
+        EditorInteractionCoordinator.SvgGuardChargeDefaultForTests = null;
+        try
+        {
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            string? refusal = EditorInteractionCoordinator.SvgDecodeRefusalBeforeDecoding(costly, deadline);
+            TimeSpan took = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            Assert.Equal(EditorInteractionCoordinator.SvgDecodeCostRefusedMessage, refusal);
+            TimeSpan charged = TimeSpan.FromMilliseconds(60_000) - deadline.Left;
+            Assert.True(
+                charged > TimeSpan.Zero && charged <= took,
+                $"a check that took {took.TotalMilliseconds:F1} ms was charged {charged.TotalMilliseconds:F1} ms");
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+            UnhurriedSvgDecodes.LetEveryRealDecodeFinish();
+        }
+    }
+
     /// <summary>With the memory on, as in the app, the process's own decoder
     /// slots remember a decode that ran out its budget: the same bytes
     /// decoded again never reach the decoder.</summary>

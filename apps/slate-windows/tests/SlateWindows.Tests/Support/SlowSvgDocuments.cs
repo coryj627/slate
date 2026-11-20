@@ -1097,6 +1097,64 @@ internal static class SlowSvgDocuments
                     }
                     break;
                 }
+            case "P_paint":
+                {
+                    // The merge judge's register check (stage 7): K rects
+                    // painted with a pattern swatch of ten children, by a fill
+                    // each, by a group they inherit it from (I=1), by a
+                    // stylesheet rule (S=1) or through var() (V=1), drawn
+                    // once, or held by a symbol that U uses draw; then X
+                    // plain rects.
+                    int k = P(p, "K", 1000);
+                    int u = P(p, "U", 0);
+                    bool inherit = P(p, "I", 0) == 1;
+                    string paint = inherit ? ""
+                        : P(p, "S", 0) == 1 ? " class='p'"
+                        : P(p, "V", 0) == 1 ? " style='fill:var(--p)'"
+                        : " fill='url(#pat)'";
+                    if (P(p, "S", 0) == 1)
+                    {
+                        s.Append("<style>rect.p{fill:url(#pat)}</style>");
+                    }
+                    if (P(p, "V", 0) == 1)
+                    {
+                        s.Append("<style>svg{--p:url(#pat)}</style>");
+                    }
+                    var painted = new StringBuilder(inherit
+                        ? "<g fill='url(#pat)' stroke='#333' stroke-width='0.5'>"
+                        : "<g stroke='#333' stroke-width='0.5'>");
+                    for (int i = 0; i < k; i++)
+                    {
+                        painted.Append(RectAt(i, paint));
+                    }
+                    painted.Append("</g>");
+                    s.Append("<defs><pattern id='pat' width='12' height='12' patternUnits='userSpaceOnUse'>")
+                        .Append("<rect width='12' height='12' fill='#f4f1e8'/>")
+                        .Append("<path d='M 0 12 L 12 0' stroke='#5b4a3a' stroke-width='0.8'/>")
+                        .Append("<path d='M -3 3 L 3 -3' stroke='#5b4a3a' stroke-width='0.8'/>")
+                        .Append("<path d='M 9 15 L 15 9' stroke='#5b4a3a' stroke-width='0.8'/>")
+                        .Append("<path d='M 0 6 L 6 0' stroke='#8a7a6a' stroke-width='0.4'/>")
+                        .Append("<circle cx='3' cy='9' r='1' fill='#2f6f8f'/><circle cx='9' cy='3' r='1' fill='#2f6f8f'/>")
+                        .Append("<circle cx='9' cy='9' r='0.6' fill='#8f2f4f'/><circle cx='3' cy='3' r='0.6' fill='#8f2f4f'/>")
+                        .Append("<polygon points='5,5 7,5 6,7' fill='#3a5b4a'/></pattern>");
+                    if (u > 0)
+                    {
+                        s.Append("<symbol id='s'>").Append(painted).Append("</symbol></defs>");
+                        for (int i = 0; i < u; i++)
+                        {
+                            s.Append("<use href='#s'/>");
+                        }
+                    }
+                    else
+                    {
+                        s.Append("</defs>").Append(painted);
+                    }
+                    for (int i = 0; i < P(p, "X", 0); i++)
+                    {
+                        s.Append(RectAt(i, " fill='#cc9'"));
+                    }
+                    break;
+                }
             default:
                 throw new ArgumentException("unknown kind " + kind, nameof(kind));
         }

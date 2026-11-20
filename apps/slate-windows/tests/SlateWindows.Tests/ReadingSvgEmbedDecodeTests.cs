@@ -195,6 +195,60 @@ public sealed class ReadingSvgEmbedDecodeTests
         }
     }
 
+    /// <summary>#1610 (the merge judge's minor 2): an SVG refused for its cost
+    /// is remembered by its bytes, as a timeout is (#1635), so a refresh after
+    /// the first runs no guard over it and its card still says the cost
+    /// sentence. The small SVG beside it is checked and decoded on every
+    /// refresh.</summary>
+    [Fact]
+    public void ASecondRefreshNeverRunsTheGuardOverAnSvgRefusedForItsCost()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "reading-svg-embed-cost-remembered");
+        string small = FilledSvg("teal");
+        File.WriteAllText(Path.Combine(fixture.Root, "slow.svg"), CostlySvg());
+        File.WriteAllText(Path.Combine(fixture.Root, "ok.svg"), small);
+        File.WriteAllText(Path.Combine(fixture.Root, "host.md"), "![[slow.svg]]\n\n![[ok.svg]]\n");
+        StaThread.Run(() =>
+        {
+            using VaultSession session = Scanned(fixture.Root);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            var decodes = new ParkedSvgDecodes();
+            int checks = 0;
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = (bytes, reserve) =>
+            {
+                decodes.Ending(bytes, reserve);
+                return TinyPng;
+            };
+            SvgPreviewGuard.CheckProbeForTests = () => checks++;
+            try
+            {
+                using WorkspaceTabViewModel tab = ReadingTab(session, "host.md");
+                ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
+                ParkedSvgDecodes.AssertSaid(CardSentences(reading.Document!, "slow.svg", "ok.svg"), TooLongToDecode, string.Empty);
+                Assert.Equal(2, checks);
+
+                for (int refresh = 1; refresh <= 2; refresh++)
+                {
+                    reading.Refresh();
+                    ParkedSvgDecodes.AssertSaid(
+                        CardSentences(reading.Document!, "slow.svg", "ok.svg"), TooLongToDecode, string.Empty);
+                    Assert.Equal(2 + refresh, checks);
+                    Assert.Equal(1 + refresh, decodes.RunsOf(small));
+                }
+            }
+            finally
+            {
+                SvgPreviewGuard.CheckProbeForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)),
+                    "a decoder never ended");
+            }
+        });
+    }
+
     /// <summary>#1635 (Codex round 2): once the projection's pixel pool is
     /// spent a later SVG never enters the decoder, but one its decoder slots
     /// remember as timed out still says so, not the pool notice. The real

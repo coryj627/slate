@@ -115,8 +115,9 @@ public sealed class SvgPreviewGuardTests
     /// markers inherited from a group, each selector shape whose query is not
     /// linear (descendant chains over nested groups, general siblings,
     /// of-type pseudo-classes), a <c>var()</c> fallback that re-resolves past
-    /// the depth limit, declarations on elements that draw nothing, and a
-    /// marker set through <c>var()</c>. The two rows that expand
+    /// the depth limit, declarations on elements that draw nothing, a
+    /// marker set through <c>var()</c>, and a pattern that paints many
+    /// shapes, however it reaches them. The two rows that expand
     /// exponentially (four <c>var()</c> references per level at 15 levels,
     /// about 1.07e9 lookups; six descendant steps over 254 nested groups,
     /// hours by arithmetic) cost the guard itself under 100 ms on this
@@ -313,6 +314,27 @@ public sealed class SvgPreviewGuardTests
             false),
         ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
+            false),
+        // The merge judge's register check (stage 7): each shape a pattern
+        // paints costs about 0.34 us per element of the document, whatever
+        // the pattern holds, so a swatch an exporter writes is slow on many
+        // shapes. Measured, one decode each: 36.7 s, 33.2 s, 14.4 s, 11.0 s,
+        // 10.3 s and 39.2 s.
+        ["a pattern swatch that 10,000 rects fill"] = (() => SlowSvgDocuments.Generate("P_paint K=10000"), false),
+        ["a pattern swatch that 10,000 rects inherit from their group"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=10000 I=1"),
+            false),
+        ["a pattern swatch that 3,000 rects fill among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000"),
+            false),
+        ["a pattern swatch a stylesheet rule sets on 3,000 rects among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000 S=1"),
+            false),
+        ["a pattern swatch 3,000 rects fill through var() among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000 V=1"),
+            false),
+        ["a symbol of 100 rects filling a pattern swatch that 100 uses draw, among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=100 U=100 X=10000"),
             false),
     };
 
@@ -692,6 +714,12 @@ public sealed class SvgPreviewGuardTests
         // block at-rule, so keyframe stops are not rules filed under every
         // element: 300 animated rects among 1,000.
         { "A_keyframes A=300 E=1000", 300 },
+        // Stage 7: a pattern swatch on 1,000 rects decodes in about 0.45 s, and
+        // one that paints ten shapes among 20,000 plain rects in 0.46 s, its
+        // drawing; neither the swatch's content nor an unpainted shape counts
+        // as a paint.
+        { "P_paint K=1000", 600 },
+        { "P_paint K=10 X=20000", 200 },
     };
 
     /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist

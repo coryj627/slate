@@ -241,6 +241,18 @@ internal static class SvgPreviewGuard
         set => stepBudgetForTests = value;
     }
 
+    [ThreadStatic]
+    private static Action? checkProbeForTests;
+
+    /// <summary>Test seam: run as each check on this thread starts, so a
+    /// fact counts the checks a refresh makes (#1610, the merge judge's
+    /// minor 2).</summary>
+    internal static Action? CheckProbeForTests
+    {
+        get => checkProbeForTests;
+        set => checkProbeForTests = value;
+    }
+
     /// <summary>The key of a stylesheet rule that applies to every element.</summary>
     private const string AnyElementKey = "*";
 
@@ -263,6 +275,7 @@ internal static class SvgPreviewGuard
     internal static SvgRefusal Check(string source, int maxCharacters, out SvgDecodeEstimate estimate)
     {
         estimate = default;
+        CheckProbeForTests?.Invoke();
         var steps = new GuardSteps(StepBudgetForTests ?? MaxGuardSteps);
         GuardSteps? outer = scanning;
         scanning = steps;

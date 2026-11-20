@@ -3500,6 +3500,25 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// later fact. Never set by the app.</summary>
     internal static bool SvgDecodeProcessMemoryOffForTests { get; set; }
 
+    [ThreadStatic]
+    private static Func<TimeSpan, TimeSpan>? svgGuardChargeForTests;
+
+    /// <summary>Test seam: what a projection's deadline is charged for one
+    /// guard check, given the time the check took, per caller thread (#1610,
+    /// the merge judge's minor 2).</summary>
+    internal static Func<TimeSpan, TimeSpan>? SvgGuardChargeForTests
+    {
+        get => svgGuardChargeForTests;
+        set => svgGuardChargeForTests = value;
+    }
+
+    /// <summary>Test seam: <see cref="SvgGuardChargeForTests"/> for every
+    /// caller thread that hasn't set its own. The unit-test host sets it to
+    /// charge nothing as it loads, so the exact waits #1635's facts read are
+    /// not moved by a check's microseconds; the facts about the charge set
+    /// their own. Never set by the app.</summary>
+    internal static Func<TimeSpan, TimeSpan>? SvgGuardChargeDefaultForTests { get; set; }
+
     /// <summary>#1635: the sentence an SVG decode would refuse these bytes
     /// with before it decodes anything, or null. The memory first, so a
     /// remembered image says what it said the first time whatever was decoded

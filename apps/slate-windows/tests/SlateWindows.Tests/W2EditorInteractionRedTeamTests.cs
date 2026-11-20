@@ -553,9 +553,10 @@ public sealed class W2EditorInteractionRedTeamTests
 
     /// <summary>#1610 (CB-29): a document the guard refuses for its cost says
     /// core's sentence at once and never reaches the decoder: no slot, no
-    /// thread, no body run. It is not remembered, so a second request is
-    /// refused the same way, and each refusal is logged with its estimate and
-    /// its largest term.</summary>
+    /// thread, no body run. The refusal is logged with its estimate and its
+    /// largest term, and remembered by the bytes' hash in the slots' memory,
+    /// as a timeout is (the merge judge's minor 2): a second request says the
+    /// cost sentence from the memory and runs no guard.</summary>
     [Fact]
     public void SvgPreview_ADocumentRefusedForItsCostSaysCoresSentenceAndStartsNoDecode()
     {
@@ -563,27 +564,41 @@ public sealed class W2EditorInteractionRedTeamTests
         var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
         var decodes = new ParkedSvgDecodes();
         byte[] svg = CostlySvg();
-        WithSvgDecodeSeams(
-            slots,
-            budgetMilliseconds: null,
-            body: decodes.Ending,
-            () =>
-            {
-                for (int decode = 0; decode < 2; decode++)
+        int checks = 0;
+        SvgPreviewGuard.CheckProbeForTests = () => checks++;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: decodes.Ending,
+                () =>
                 {
-                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
-                    Assert.Equal(TooLongToDecode, reason);
-                    Assert.Equal(0, decodes.Runs);
-                    Assert.Equal(0, Volatile.Read(ref slots.Live));
-                    Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
-                    Assert.Equal(0, slots.TimeoutMemory.Count);
-                }
-            });
+                    for (int decode = 1; decode <= 2; decode++)
+                    {
+                        Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
+                        Assert.Equal(TooLongToDecode, reason);
+                        Assert.Equal(1, checks);
+                        Assert.Equal(0, decodes.Runs);
+                        Assert.Equal(0, Volatile.Read(ref slots.Live));
+                        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+                        Assert.Equal(1, slots.TimeoutMemory.Count);
+                    }
+                });
+        }
+        finally
+        {
+            SvgPreviewGuard.CheckProbeForTests = null;
+        }
         Assert.Equal(
-            2,
+            1,
             lines.Snapshot.Count(line =>
                 line.StartsWith($"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedForCost} (estimateMs=", StringComparison.Ordinal)
                 && line.EndsWith(", term=stylesheet)", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            lines.Snapshot.Count(
+                line => line == $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedRemembered} (bytes={svg.Length}, cost)"));
     }
 
     /// <summary>#1610 (CB-29): the guard runs before the decoder slots, so a
@@ -619,7 +634,8 @@ public sealed class W2EditorInteractionRedTeamTests
     /// <summary>#1610 (CB-29): a document the guard refuses for anything but
     /// its cost (a script, a reference outside the document) starts no
     /// decode either, and still carries no reason, so the caller says its
-    /// own "Could not decode image" sentence.</summary>
+    /// own "Could not decode image" sentence. It is not remembered: only a
+    /// refusal for cost is.</summary>
     [Fact]
     public void SvgPreview_AStructuralRefusalStartsNoDecodeAndKeepsTheCorruptImageSentence()
     {
@@ -647,12 +663,15 @@ public sealed class W2EditorInteractionRedTeamTests
                 }
                 Assert.Equal(0, decodes.Runs);
                 Assert.Equal(0, Volatile.Read(ref slots.Live));
+                Assert.Equal(0, slots.TimeoutMemory.Count);
             });
     }
 
     /// <summary>#1610 (CB-29, Call 6): a document past the guard's render cap
     /// bounds the same work the cost refusal does, so it says the cost
-    /// sentence, not that the image may be corrupt.</summary>
+    /// sentence, not that the image may be corrupt, and is remembered as a
+    /// cost refusal is (the merge judge's minor 2): the second request runs
+    /// no guard.</summary>
     [Fact]
     public void SvgPreview_ARenderedElementsRefusalSaysTheCostSentence()
     {
@@ -660,22 +679,38 @@ public sealed class W2EditorInteractionRedTeamTests
         var decodes = new ParkedSvgDecodes();
         string fanOut = SvgPreviewGuardTests.Refusals["exponential use fan-out"].Build();
         Assert.Equal(SvgRefusal.RenderedElements, SvgPreviewGuard.Check(fanOut, 8 * 1024 * 1024));
-        WithSvgDecodeSeams(
-            slots,
-            budgetMilliseconds: null,
-            body: decodes.Ending,
-            () =>
-            {
-                Assert.Null(EditorInteractionCoordinator.DecodeImage(
-                    Encoding.UTF8.GetBytes(fanOut), "image/svg+xml", out string? reason));
-                Assert.Equal(TooLongToDecode, reason);
-                Assert.Equal(0, decodes.Runs);
-            });
+        int checks = 0;
+        SvgPreviewGuard.CheckProbeForTests = () => checks++;
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: decodes.Ending,
+                () =>
+                {
+                    for (int decode = 1; decode <= 2; decode++)
+                    {
+                        Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                            Encoding.UTF8.GetBytes(fanOut), "image/svg+xml", out string? reason));
+                        Assert.Equal(TooLongToDecode, reason);
+                        Assert.Equal(0, decodes.Runs);
+                        Assert.Equal(1, checks);
+                    }
+                });
+        }
+        finally
+        {
+            SvgPreviewGuard.CheckProbeForTests = null;
+        }
     }
 
     /// <summary>#1610 (the red team's B1): a guard that spends its step
     /// budget refuses the document for its cost on the caller, says core's
-    /// sentence, starts no decode and logs the guard as the term.</summary>
+    /// sentence, starts no decode and logs the guard as the term. The
+    /// refusal is remembered (the merge judge's minor 2): asked again with
+    /// the app's budget, the same bytes say the cost sentence from the
+    /// memory, and no guard runs.</summary>
     [Fact]
     public void SvgPreview_AGuardPastItsStepBudgetSaysTheCostSentence()
     {
@@ -683,7 +718,9 @@ public sealed class W2EditorInteractionRedTeamTests
         var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
         var decodes = new ParkedSvgDecodes();
         byte[] svg = Encoding.UTF8.GetBytes(SlowSvgDocuments.Generate("G_scatter N=500"));
+        int checks = 0;
         SvgPreviewGuard.StepBudgetForTests = 1_000;
+        SvgPreviewGuard.CheckProbeForTests = () => checks++;
         try
         {
             WithSvgDecodeSeams(
@@ -695,13 +732,79 @@ public sealed class W2EditorInteractionRedTeamTests
                     Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? reason));
                     Assert.Equal(TooLongToDecode, reason);
                     Assert.Equal(0, decodes.Runs);
+
+                    SvgPreviewGuard.StepBudgetForTests = null;
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? again));
+                    Assert.Equal(TooLongToDecode, again);
+                    Assert.Equal(1, checks);
+                    Assert.Equal(0, decodes.Runs);
                 });
         }
         finally
         {
             SvgPreviewGuard.StepBudgetForTests = null;
+            SvgPreviewGuard.CheckProbeForTests = null;
         }
         Assert.Contains($"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedForCost} (term=guard)", lines.Snapshot);
+        Assert.Contains(
+            $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedRemembered} (bytes={svg.Length}, cost)",
+            lines.Snapshot);
+    }
+
+    /// <summary>#1610 (the merge judge's minor 2): the guard's own time is
+    /// charged to its projection's decode deadline, as the decodes are, so a
+    /// note of images that are slow to check costs a refresh at most the
+    /// deadline and one more check. Each check here is charged 600 ms of a
+    /// 1,000 ms deadline: the first image's check leaves 400 ms and it
+    /// decodes; the second's check spends the rest, so it says the
+    /// deadline's sentence without a decoder; the third says it before its
+    /// guard runs.</summary>
+    [Fact]
+    public void SvgPreview_TheGuardsTimeIsChargedToTheProjectionsDeadline()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        var decodes = new ParkedSvgDecodes();
+        byte[][] svgs = GallerySvgs("teal", "navy", "olive");
+        var deadline = new EditorInteractionCoordinator.SvgDecodeDeadline(1_000);
+        int checks = 0;
+        SvgPreviewGuard.CheckProbeForTests = () => checks++;
+        EditorInteractionCoordinator.SvgGuardChargeForTests = _ => TimeSpan.FromMilliseconds(600);
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: decodes.Ending,
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        svgs[0], "image/svg+xml", null, deadline, out _, out string? first));
+                    Assert.Null(first);
+                    Assert.Equal(1, decodes.RunsOf(svgs[0]));
+                    Assert.True(
+                        deadline.Left <= TimeSpan.FromMilliseconds(400),
+                        $"a check charged 600 ms left the deadline at {deadline.Left}");
+
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        svgs[1], "image/svg+xml", null, deadline, out _, out string? second));
+                    Assert.Equal(ProjectionSpent, second);
+                    Assert.Equal(2, checks);
+                    Assert.Equal(0, decodes.RunsOf(svgs[1]));
+                    Assert.True(deadline.IsSpent);
+
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        svgs[2], "image/svg+xml", null, deadline, out _, out string? third));
+                    Assert.Equal(ProjectionSpent, third);
+                    Assert.Equal(2, checks);
+                    Assert.Equal(0, decodes.RunsOf(svgs[2]));
+                    Assert.Equal(0, Volatile.Read(ref slots.Live));
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgGuardChargeForTests = null;
+            SvgPreviewGuard.CheckProbeForTests = null;
+        }
     }
 
     /// <summary>#1610 (the red team's m6): the embeds leaf's card and the
@@ -861,8 +964,9 @@ public sealed class W2EditorInteractionRedTeamTests
     /// <summary>#1635 (Codex round 2): the checks a decode makes before it
     /// decodes, asked on their own as the reading view's spent pixel pool asks
     /// them, give the remembered sentence, then the spent deadline's, or
-    /// nothing; and they take nothing: no deadline time, no decoder slot, no
-    /// decoder run.</summary>
+    /// nothing; and they take no decoder slot and no decoder run. Of the
+    /// deadline they take only the guard's check (#1610), which this host
+    /// charges nothing (<see cref="UnhurriedSvgDecodes"/>).</summary>
     [Fact]
     public void SvgPreview_TheChecksBeforeDecodingTakeNothing()
     {
@@ -898,9 +1002,11 @@ public sealed class W2EditorInteractionRedTeamTests
             });
     }
 
-    /// <summary>#1635: the deadline is charged only by a decode that started a
-    /// decoder. A busy refusal and a remembered refusal leave it as it was; a
-    /// decode that ends is charged the time it took, however short.</summary>
+    /// <summary>#1635: of the decodes, the deadline is charged only by one
+    /// that started a decoder. A busy refusal and a remembered refusal leave
+    /// it as it was; a decode that ends is charged the time it took, however
+    /// short. The guard's checks are charged too (#1610), which this host
+    /// charges nothing (<see cref="UnhurriedSvgDecodes"/>).</summary>
     [Fact]
     public void SvgPreview_TheDeadlineChargesOnlyDecodesThatStarted()
     {
@@ -1148,12 +1254,13 @@ public sealed class W2EditorInteractionRedTeamTests
         Assert.Equal(key, Key(7));
     }
 
-    /// <summary>#1635: only a decode abandoned at its own whole budget is
-    /// remembered. An ordinary failure, a wait that fails, a decode that
-    /// finishes as its budget ends and a wait the projection's deadline cut
-    /// short each leave the same bytes free to reach the decoder again; the
-    /// cut one says the projection's sentence, since it never had its 5
-    /// seconds.</summary>
+    /// <summary>#1635: of the decodes that start, only one abandoned at its
+    /// own whole budget is remembered (the guard's refusals for cost are
+    /// too, before any decode, #1610). An ordinary failure, a wait that
+    /// fails, a decode that finishes as its budget ends and a wait the
+    /// projection's deadline cut short each leave the same bytes free to
+    /// reach the decoder again; the cut one says the projection's sentence,
+    /// since it never had its 5 seconds.</summary>
     [Fact]
     public void SvgPreview_OnlyATimeoutAtTheFullBudgetIsRemembered()
     {
