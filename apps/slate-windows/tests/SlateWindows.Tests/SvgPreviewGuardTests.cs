@@ -513,7 +513,8 @@ public sealed class SvgPreviewGuardTests
     /// scan charges the characters it touches, so the guard's own time is
     /// linear in its input; fed its largest admitted input (a document of
     /// about the 8 MiB cap made of what the scan reads), each scan's
-    /// check stays inside half the step budget.
+    /// check stays inside half the step budget, and charges every
+    /// character it reads.
     /// </summary>
     [Theory]
     [MemberData(nameof(LargestAdmittedInputs))]
@@ -526,6 +527,10 @@ public sealed class SvgPreviewGuardTests
         Assert.True(
             estimate.Steps <= SvgPreviewGuard.MaxGuardSteps / 2,
             $"{scan}: {estimate.Steps:N0} steps of {SvgPreviewGuard.MaxGuardSteps:N0}");
+        // Every character read is charged, at most 16 to a step.
+        Assert.True(
+            estimate.Steps * 16 >= source.Length,
+            $"{scan}: {estimate.Steps:N0} steps for {source.Length:N0} characters");
     }
 
     /// <summary>A document of about the 8 MiB cap made of what one scan
