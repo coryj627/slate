@@ -771,6 +771,158 @@ public sealed class SvgPreviewGuardTests
         Assert.Equal(nameof(SvgRefusal.DecodeCost), Check(over));
     }
 
+    /// <summary>A drawing program's pattern swatch of ten children.</summary>
+    private const string Swatch =
+        "<pattern id='pat' width='12' height='12' patternUnits='userSpaceOnUse'>"
+        + "<rect width='12' height='12' fill='#f4f1e8'/>"
+        + "<path d='M 0 12 L 12 0' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M -3 3 L 3 -3' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M 9 15 L 15 9' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M 0 6 L 6 0' stroke='#8a7a6a' stroke-width='0.4'/>"
+        + "<circle cx='3' cy='9' r='1' fill='#2f6f8f'/>"
+        + "<circle cx='9' cy='3' r='1' fill='#2f6f8f'/>"
+        + "<circle cx='9' cy='9' r='0.6' fill='#8f2f4f'/>"
+        + "<circle cx='3' cy='3' r='0.6' fill='#8f2f4f'/>"
+        + "<polygon points='5,5 7,5 6,7' fill='#3a5b4a'/>"
+        + "</pattern>";
+
+    /// <summary>3,000 rects in a group, each with <paramref name="rect"/>'s
+    /// attributes for its index, under <paramref name="stylesheet"/>, beside
+    /// <see cref="Swatch"/>: the documents stage 8 decoded. With every rect
+    /// painting the swatch, the pattern term is about 3.07 s.</summary>
+    private static string PaintedGroup(string stylesheet, string group, Func<int, string> rect)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        if (stylesheet.Length > 0)
+        {
+            s.Append("<style>").Append(stylesheet).Append("</style>");
+        }
+        s.Append($"<g{group}>");
+        for (int i = 0; i < 3_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{rect(i)}/>");
+        }
+        return s.Append("</g></svg>").ToString();
+    }
+
+    private static string PaintedGroup(string stylesheet, string group, string rect) =>
+        PaintedGroup(stylesheet, group, _ => rect);
+
+    public static TheoryData<string> PaintCascadeCases() => [.. PaintCascade.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 5, stage 8): a shape's own fill and stroke follow
+    /// the cascade the decoder uses, each property on its own. Each case
+    /// either leaves the pattern term at 0 with the verdict None, or counts
+    /// the pattern. Its decode, one each in stage 8, is in its row's
+    /// comment.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PaintCascadeCases))]
+    public void AShapesOwnPaintFollowsTheDecodersCascade(string name)
+    {
+        (Func<string> build, bool counted) = PaintCascade[name];
+        string source = build();
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        if (counted)
+        {
+            Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+        }
+        else
+        {
+            Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+            Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        }
+    }
+
+    private const string PatternFill = " fill='url(#pat)'";
+
+    internal static readonly Dictionary<string, (Func<string> Build, bool Counted)> PaintCascade = new()
+    {
+        // Each source of a colour clears the group's pattern: 44, 108, 52
+        // and 66 ms to decode, where the rects that keep it take 3.3 s.
+        ["a colour in the presentation attribute"] = (() => PaintedGroup("", PatternFill, " fill='red'"), false),
+        ["a colour in the style attribute"] = (() => PaintedGroup("", PatternFill, " style='fill:red'"), false),
+        ["a colour from a type rule"] = (() => PaintedGroup("rect{fill:red}", PatternFill, ""), false),
+        ["a colour from a class rule"] = (() => PaintedGroup(".s{fill:red}", PatternFill, " class='s'"), false),
+        // none, a missing reference and a defined var(): 47, 41 and 73 ms.
+        ["none"] = (() => PaintedGroup("", PatternFill, " fill='none'"), false),
+        ["a reference to no element"] = (() => PaintedGroup("", PatternFill, " fill='url(#missing)'"), false),
+        ["a var() the root defines as a colour"] = (() => PaintedGroup("svg{--c:red}", PatternFill, " fill='var(--c)'"), false),
+        ["a var() with a colour fallback"] = (() => PaintedGroup("", PatternFill, " fill='var(--undefined, red)'"), false),
+        // Stroke on its own, and both: 33 and 47 ms; the kept stroke, 3.2 s.
+        ["a stroke of none under a pattern stroke"] = (() => PaintedGroup("", " stroke='url(#pat)'", " stroke='none'"), false),
+        ["a pattern stroke kept"] = (() => PaintedGroup("", " stroke='url(#pat)'", ""), true),
+        ["both cleared under a pattern fill and stroke"] = (
+            () => PaintedGroup("", " fill='url(#pat)' stroke='url(#pat)'", " fill='red' stroke='red'"),
+            false),
+        // What keeps the parent's paint: inherit (3.2 s), a var() nothing
+        // defines (3.2 s), and currentColor, which the lead's rule keeps
+        // although this decoder draws it as the colour (81 ms).
+        ["inherit"] = (() => PaintedGroup("", PatternFill, " fill='inherit'"), true),
+        ["a var() nothing defines"] = (() => PaintedGroup("", PatternFill, " fill='var(--undefined)'"), true),
+        ["a var() nothing defines, in the style attribute"] = (
+            () => PaintedGroup("", PatternFill, " style='fill:var(--undefined)'"),
+            true),
+        ["currentColor"] = (() => PaintedGroup("", PatternFill, " fill='currentColor'"), true),
+        // The reverse: a rule sets the pattern under a solid group.
+        ["a class rule that sets the pattern under a red group"] = (
+            () => PaintedGroup(".p{fill:url(#pat)}", " fill='red'", " class='p'"),
+            true),
+        // The cascade: the style attribute beats a rule, a rule beats the
+        // presentation attribute, and an !important rule beats the style
+        // attribute.
+        ["the style attribute over a pattern rule"] = (
+            () => PaintedGroup(".p{fill:url(#pat)}", "", " class='p' style='fill:red'"),
+            false),
+        ["a colour rule over a pattern attribute"] = (
+            () => PaintedGroup(".p{fill:red}", "", " class='p' fill='url(#pat)'"),
+            false),
+        ["an !important pattern rule over the style attribute"] = (
+            () => PaintedGroup(".p{fill:url(#pat) !important}", "", " class='p' style='fill:red'"),
+            true),
+        // Specificity, then source order.
+        ["a compound colour rule over a class pattern rule"] = (
+            () => PaintedGroup(".p{fill:url(#pat)} rect.p{fill:red}", "", " class='p'"),
+            false),
+        ["a later pattern rule over an earlier colour rule of the same specificity"] = (
+            () => PaintedGroup(".p{fill:red} .p{fill:url(#pat)}", "", " class='p'"),
+            true),
+        // Where the guard cannot tell a rule matches, it counts the pattern:
+        // a selector with a combinator (55 ms), and an id many elements
+        // share, which the decoder renames on all but one.
+        ["a colour rule whose selector has a combinator"] = (() => PaintedGroup("g > rect{fill:red}", PatternFill, ""), true),
+        ["a colour rule naming an id 3,000 rects share"] = (() => PaintedGroup("#i{fill:red}", PatternFill, " id='i'"), true),
+        // A use's own colour clears the group's pattern for its instance.
+        ["a colour a use sets on its instance"] = (
+            () => Svg("<defs>" + Swatch + "<symbol id='s'>" + Repeat("<rect width='7' height='7'/>", 100)
+                + "</symbol></defs><g fill='url(#pat)'>" + Repeat("<use href='#s' fill='red'/>", 3_000 / 100)
+                + "</g>" + Repeat("<rect width='1' height='1' fill='red'/>", 20_000)),
+            false),
+        ["a use's instance that keeps the group's pattern"] = (
+            () => Svg("<defs>" + Swatch + "<symbol id='s'>" + Repeat("<rect width='7' height='7'/>", 100)
+                + "</symbol></defs><g fill='url(#pat)'>" + Repeat("<use href='#s'/>", 3_000 / 100)
+                + "</g>" + Repeat("<rect width='1' height='1' fill='red'/>", 20_000)),
+            true),
+    };
+
+    /// <summary>#1610 (Codex's round 5, stage 8): under a group whose fill is
+    /// the pattern, the rects that set a colour clear it and the rest keep
+    /// it, so the term counts the keepers alone: half of 3,000 here, each
+    /// across the document's 3,014 elements.</summary>
+    [Fact]
+    public void AGroupsPatternCountsOnlyTheShapesThatKeepIt()
+    {
+        string source = PaintedGroup("", PatternFill, i => i % 2 == 0 ? " fill='red'" : "");
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double expected = SvgDecodeRates.PatternPaintElement * 1_500 * 3_014;
+        Assert.True(
+            Math.Abs(estimate.PatternMicroseconds - expected) < 1,
+            $"the pattern term is {estimate.PatternMicroseconds:F0} us; 1,500 keepers give {expected:F0} us");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+    }
+
     /// <summary>
     /// #1610 (CB-29): core's renders of the dialects whose edges carry
     /// markers, the only cost a rendered diagram has, sized to render in
