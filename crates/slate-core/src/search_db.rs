@@ -410,28 +410,41 @@ const FTS5_QUERY_REFUSALS: &[&str] = &[
 /// core's plain sentence.
 ///
 /// SQLite raises FTS5's refusals as `rusqlite::Error::SqliteFailure` with
-/// code `Unknown` and no typed variant, so the text is matched against
-/// SQLite's own refusal texts ([`FTS5_QUERY_REFUSALS`]). A refusal is
-/// `InvalidQuery` carrying [`crate::a11y::SEARCH_QUERY_UNREADABLE`], the
-/// sentence a host speaks (the owner, 2026-11-20: "Plain words."):
-/// SQLite's text and the query are not kept, and the reader has the query
-/// in the field. Anything else is `Db`, a damaged full-text index
-/// included, so a reader is never told to check a search that is fine.
+/// code `Unknown` (SQLITE_ERROR) and no typed variant, so a failure with
+/// that code is matched against SQLite's own refusal texts
+/// ([`FTS5_QUERY_REFUSALS`]). A refusal is `InvalidQuery` carrying
+/// [`crate::a11y::SEARCH_QUERY_UNREADABLE`], the sentence a host speaks
+/// (the owner, 2026-11-20: "Plain words."): SQLite's text and the query
+/// are not kept, and the reader has the query in the field. Anything else
+/// is `Db`, so a reader is never told to check a search that is fine.
+///
+/// The code check comes first because a damaged database's message can
+/// hold a refusal text too: a cached statement is re-prepared inside the
+/// step after the schema changes, and a damaged `sqlite_schema` row fails
+/// that with SQLITE_CORRUPT and "malformed database schema (…) - near
+/// …: syntax error". A damaged full-text index fails with
+/// SQLITE_CORRUPT_VTAB and texts that begin "fts5:".
 ///
 /// Only the MATCH cursor's errors arrive here: the outer statement is
 /// prepared before the cursor runs, so a schema error in it fails at
-/// prepare as `Db`. Two routes could still bring a schema error here, and
-/// the migrations, which run before any search, rule out both: SQLite
-/// re-prepares a cached statement inside the step after a schema change,
-/// and FTS5 prepares its own content-table statement during the step and
-/// passes that statement's error text out, so a `files` table without
-/// `body_text` would read "no such column".
+/// prepare as `Db`. One SQLITE_ERROR could still read as a refusal: FTS5
+/// prepares its own content-table statement during the step and passes
+/// that statement's error text out, so a `files` table without
+/// `body_text` would read "no such column". The migrations, which run
+/// before any search, rule that out.
 fn map_fts5_error(err: rusqlite::Error) -> VaultError {
-    let message = err.to_string();
-    if FTS5_QUERY_REFUSALS
-        .iter()
-        .any(|refusal| message.contains(refusal))
-    {
+    let refused = match &err {
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ErrorCode::Unknown =>
+        {
+            let message = err.to_string();
+            FTS5_QUERY_REFUSALS
+                .iter()
+                .any(|refusal| message.contains(refusal))
+        }
+        _ => false,
+    };
+    if refused {
         VaultError::InvalidQuery {
             message: crate::a11y::SEARCH_QUERY_UNREADABLE.to_owned(),
         }
