@@ -1885,12 +1885,15 @@ public sealed class SvgPreviewGuardTests
     /// value their parent's scope or a sibling's already holds, so they
     /// share that scope and add nothing against the cap. 7ae94ac1 admitted
     /// both documents and the decoder draws them in 0.66 and 0.60 s; the
-    /// cap had refused them as spent. Each is admitted within the judge's
-    /// allocation bound.
+    /// cap had refused them as spent. A universal rule gives each rect the
+    /// value its root's scope holds, so each reads that scope (1.0 s to
+    /// decode). Each is admitted within the judge's allocation
+    /// bound.
     /// </summary>
     [Theory]
     [InlineData("rect{--c:#336699}")]
     [InlineData(":root{--c:#336699}")]
+    [InlineData("*{--c:#336699}")]
     public void ARuleThatGivesEveryRectTheSamePropertyIsAdmitted(string rule)
     {
         string source = RuleScopeDocument(rule, 20_500);
