@@ -985,6 +985,94 @@ internal static class SlowSvgDocuments
                     }
                     break;
                 }
+            case "T_urlnest":
+                {
+                    // Codex's round 3: one custom property whose quoted url()
+                    // argument holds N more url( openings.
+                    int n = P(p, "N", 100);
+                    s.Append("<style>svg{--x:url(\"");
+                    for (int i = 0; i < n; i++)
+                    {
+                        s.Append("url(");
+                    }
+                    s.Append("\")}</style><rect width='1' height='1'/>");
+                    break;
+                }
+            case "M_use":
+                {
+                    // Codex's round 3: R class rules, E rects, and a polyline of
+                    // V vertices whose marker holds a use of a rect (U=1) or
+                    // the rect itself (U=0).
+                    int e2 = P(p, "E", 1000);
+                    int v = P(p, "V", 2000);
+                    s.Append("<style>");
+                    for (int j = 0; j < r; j++)
+                    {
+                        s.Append($".c{j}{{fill:{Hex(j)}}}");
+                    }
+                    // N=2: the marker's use draws a group that holds a use of
+                    // the rect.
+                    s.Append("</style><defs><rect id='r' width='1' height='1'/><g id='g'><use href='#r'/></g>");
+                    s.Append("<marker id='m' markerWidth='4' markerHeight='4' refX='0' refY='0' markerUnits='userSpaceOnUse'>");
+                    s.Append(P(p, "U", 1) == 0 ? "<rect width='1' height='1'/>"
+                        : P(p, "N", 1) == 2 ? "<use href='#g'/>" : "<use href='#r'/>");
+                    s.Append("</marker></defs>");
+                    for (int i = 0; i < e2; i++)
+                    {
+                        s.Append(RectAt(i, ""));
+                    }
+                    s.Append("<polyline fill='none' stroke='black' marker-mid='url(#m)' points='");
+                    for (int i = 0; i < v; i++)
+                    {
+                        s.Append(i % 400).Append(',').Append(i / 400 % 400).Append(' ');
+                    }
+                    s.Append("'/>");
+                    break;
+                }
+            case "U_decls":
+                {
+                    // Codex's round 3: one rule of D custom properties over a
+                    // symbol of T rects that U uses draw.
+                    int d = P(p, "D", 100);
+                    int t = P(p, "T", 100);
+                    int u = P(p, "U", 100);
+                    s.Append("<style>rect{");
+                    for (int j = 0; j < d; j++)
+                    {
+                        s.Append($"--p{j}:{j};");
+                    }
+                    s.Append("}</style><defs><symbol id='s'>");
+                    for (int i = 0; i < t; i++)
+                    {
+                        s.Append(RectAt(i, ""));
+                    }
+                    s.Append("</symbol></defs>");
+                    for (int i = 0; i < u; i++)
+                    {
+                        s.Append($"<use href='#s' x='{i % 40 * 10}' y='{i / 40 * 10}'/>");
+                    }
+                    break;
+                }
+            case "P_use":
+                {
+                    // R class rules, and a pattern holding a use of a rect
+                    // (U=1) or the rect (U=0) that K rects are painted with.
+                    int k = P(p, "K", 100);
+                    s.Append("<style>");
+                    for (int j = 0; j < r; j++)
+                    {
+                        s.Append($".c{j}{{fill:{Hex(j)}}}");
+                    }
+                    s.Append("</style><defs><rect id='r' width='1' height='1'/>");
+                    s.Append("<pattern id='p' width='4' height='4' patternUnits='userSpaceOnUse'>");
+                    s.Append(P(p, "U", 1) == 1 ? "<use href='#r'/>" : "<rect width='1' height='1'/>");
+                    s.Append("</pattern></defs>");
+                    for (int i = 0; i < k; i++)
+                    {
+                        s.Append(RectAt(i, " fill='url(#p)'"));
+                    }
+                    break;
+                }
             case "A_keyframes":
                 {
                     // The red team's M2: an animation export's shape, one

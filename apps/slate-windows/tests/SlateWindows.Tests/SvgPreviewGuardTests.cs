@@ -286,6 +286,31 @@ public sealed class SvgPreviewGuardTests
         ["ten rules of four descendant steps over a symbol of 32 nested groups that 50 uses draw"] = (
             () => SlowSvgDocuments.Generate("U_desc K=4 R=10 D=32 U=50"),
             false),
+        // Codex's round 3: marker content recompiles at every placement, a
+        // use's stylesheet scope in it included, and each instance takes
+        // the declarations its rules land.
+        ["a marker holding a use under 1,000 rules on a 4,000-vertex polyline"] = (
+            () => SlowSvgDocuments.Generate("M_use R=1000 E=1000 V=4000 U=1"),
+            false),
+        ["a marker holding a use of a group that holds a use, under 1,000 rules on a 4,000-vertex polyline"] = (
+            () => SlowSvgDocuments.Generate("M_use R=1000 E=1000 V=4000 U=1 N=2"),
+            false),
+        // Pins: content cloned through a pattern (measured: a pattern's use
+        // costs again for each painted element, 784 ms at 200 against 60 ms
+        // at 1) and a marker on a shape inside a use's instance.
+        ["a pattern holding a use under 1,000 rules that 3,000 rects are painted with"] = (
+            () => SlowSvgDocuments.Generate("P_use R=1000 K=3000 U=1"),
+            false),
+        ["a 2,000-rect marker on a 1,000-vertex polyline in a symbol that 10 uses draw"] = (
+            () => Svg("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>"
+                + string.Concat(Enumerable.Range(0, 2_000).Select(i => $"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1'/>"))
+                + "</marker><symbol id='s'><polyline fill='none' stroke='black' marker-mid='url(#m)' points='"
+                + string.Concat(Enumerable.Range(0, 1_000).Select(i => $"{i % 400},{i / 400} ")) + "'/></symbol></defs>"
+                + Repeat("<use href='#s'/>", 10)),
+            false),
+        ["one rule of 1,000 custom properties over a symbol of 100 rects that 300 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_decls D=1000 T=100 U=300"),
+            false),
         ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
             false),
@@ -347,6 +372,9 @@ public sealed class SvgPreviewGuardTests
         // Codex's round 2: 50,000 gradients sharing one id that 50,000
         // distinct custom properties name (2 MB).
         { "T_gradvar N=50000", nameof(SvgRefusal.None) },
+        // Codex's round 3: one custom property whose quoted url() argument
+        // holds 128,000 more url( openings (512 KB).
+        { "T_urlnest N=128000", nameof(SvgRefusal.None) },
     };
 
     /// <summary>
@@ -458,6 +486,20 @@ public sealed class SvgPreviewGuardTests
         double added = used.Milliseconds - alone.Milliseconds;
         double floor = 20 * 0.5 * alone.StylesheetMicroseconds / 1000;
         Assert.True(added >= floor, $"{shape}: 20 uses add {added:F0} ms, under {floor:F0} ms");
+    }
+
+    /// <summary>#1610 (Codex's round 3): each use render applies its rules'
+    /// declarations to the instance's elements again, so with the rules and
+    /// branches fixed, 990 more custom properties in the one rule over a
+    /// symbol of 100 rects that 150 uses draw add at least half of what they
+    /// land on every instance.</summary>
+    [Fact]
+    public void AUseInstanceTakesTheDeclarationsItsRulesLand()
+    {
+        double few = EstimateOf(SlowSvgDocuments.Generate("U_decls D=10 T=100 U=150")).Milliseconds;
+        double many = EstimateOf(SlowSvgDocuments.Generate("U_decls D=1000 T=100 U=150")).Milliseconds;
+        double floor = 0.5 * 150 * 100 * 990 * SvgDecodeRates.MatchedCustomDeclaration / 1000;
+        Assert.True(many - few >= floor, $"990 more declarations add {many - few:F0} ms, under {floor:F0} ms");
     }
 
     public static TheoryData<char> WalkingCombinators() => ['>', '+'];
