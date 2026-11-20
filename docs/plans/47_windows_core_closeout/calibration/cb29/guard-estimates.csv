@@ -4,7 +4,7 @@ step0,A_type R=300 E=1000,A_type,47971,352,None,338.5,338.5,0.0,0.0,0.0,43776
 step0,A_class R=300 E=3000,A_class,172001,206,None,88.6,88.6,0.0,0.0,0.0,142791
 step0,A_class R=1000 E=3000,A_class,186071,293,None,288.3,288.3,0.0,0.0,0.0,164180
 step0,A_class R=2000 E=5000,A_class,321511,913,None,949.5,949.5,0.0,0.0,0.0,289288
-step0,A_class R=5000 E=6000,A_class,440341,2622,DecodeCost,2834.6,2834.6,0.0,0.0,0.0,430503
+step0,A_class R=5000 E=6000,A_class,440341,2622,None,2834.6,2834.6,0.0,0.0,0.0,430503
 step0,A_class R=10000 E=10000,A_class,772331,9223,DecodeCost,9407.2,9407.2,0.0,0.0,0.0,774849
 step0,A_class R=5000 E=20000,A_class,1243401,10087,DecodeCost,9394.0,9394.0,0.0,0.0,0.0,1084782
 step0,A_class R=20000 E=5000,A_class,693731,8475,DecodeCost,9448.9,9448.9,0.0,0.0,0.0,865674
@@ -48,7 +48,7 @@ step0,C_root R=10000 E=10000,C_root,980116,9639,DecodeCost,9410.7,9408.7,0.0,1.9
 step0,C_root_inline R=3000 E=5000,C_root_inline,390626,121,None,3.4,2.4,0.0,1.0,0.0,514097
 step0,C_inline E=10000,C_inline,774536,129,None,1.9,0.0,0.0,1.9,0.0,978040
 step0,C_per_rule R=1000 E=2000,C_per_rule,142961,378,None,381.3,380.9,0.0,0.4,0.0,161089
-step0,C_per_rule R=3000 E=5000,C_per_rule,381621,2557,DecodeCost,2825.6,2824.6,0.0,1.0,0.0,448312
+step0,C_per_rule R=3000 E=5000,C_per_rule,381621,2557,None,2825.6,2824.6,0.0,1.0,0.0,448312
 step0,C_per_rule R=8000 E=10000,C_per_rule,835221,14650,DecodeCost,15010.9,15009.0,0.0,1.9,0.0,1049675
 step0,C_rule_all R=500 E=2000,C_rule_all,92709,351,None,502.0,501.6,0.0,0.4,0.0,100366
 step0,C_rule_all R=2000 E=5000,C_rule_all,246870,2935,DecodeCost,5004.9,5003.9,0.0,1.0,0.0,297591
@@ -56,7 +56,7 @@ step0,C_rule_all R=5000 E=10000,C_rule_all,513470,15729,DecodeCost,25009.7,25007
 step0,C_typevar R=300 E=1000,C_typevar,51871,155,None,415.2,357.6,0.0,57.6,0.0,56470
 step0,C_typevar R=1000 E=3000,C_typevar,159511,1395,DecodeCost,4141.9,3565.9,0.0,576.0,0.0,176965
 step0,C_typevar R=3000 E=5000,C_typevar,308951,7388,DecodeCost,20699.6,17819.6,0.0,2880.0,0.0,388135
-step0,C_typedecl R=1000 E=3000,C_typedecl,148421,3038,DecodeCost,2068.2,2067.7,0.0,0.6,0.0,175045
+step0,C_typedecl R=1000 E=3000,C_typedecl,148421,3038,None,2068.2,2067.7,0.0,0.6,0.0,175045
 step0,C_typedecl R=3000 E=5000,C_typedecl,277861,13428,DecodeCost,10323.6,10322.6,0.0,1.0,0.0,384840
 step0,C_chain D=30 E=1000,C_chain,67080,44,None,0.4,0.2,0.0,0.2,0.0,68020
 step0,C_chain D=100 E=5000,C_chain,342651,185,None,2.0,1.0,0.0,1.0,0.0,345213
@@ -103,19 +103,19 @@ step0,D_rects_inherit M=100 N=1000,D_rects_inherit,47917,2594,None,1798.9,0.0,0.
 step0,D_use_poly M=100 V=1000 U=10,D_use_poly,11462,2937,DecodeCost,3387.4,0.0,0.0,0.0,3387.4,9446
 step0,D_use_poly M=100 V=1000 U=30,D_use_poly,12042,8772,DecodeCost,9546.4,0.0,0.0,0.0,9546.4,10106
 step0,A_use R=1 G=4 U=1000,A_use,31350,429,None,367.7,0.1,367.6,0.0,0.0,37101
-step0,A_use R=1 G=4 U=3000,A_use,94150,2759,DecodeCost,2582.2,0.3,2581.9,0.0,0.0,111376
+step0,A_use R=1 G=4 U=3000,A_use,94150,2759,None,2582.2,0.3,2581.9,0.0,0.0,111376
 step0,A_use R=1 G=4 U=10000,A_use,314400,30305,DecodeCost,25862.2,0.9,25861.2,0.0,0.0,371704
 step0,A_use R=1 G=4 U=3000 X=20000,A_use,962950,16568,DecodeCost,17374.0,2.2,17371.9,0.0,0.0,842276
 step0,A_use R=1 G=40 U=3000,A_use,96037,5159,DecodeCost,5124.9,0.3,5124.5,0.0,0.0,112911
 step0,A_use_nostyle G=4 U=10000,A_use_nostyle,314384,2020,None,0.0,0.0,0.0,0.0,0.0,347905
 step0,G_scatter N=1000,G_scatter,79973,265,None,277.9,2.2,275.8,0.0,0.0,80717
-step0,G_scatter N=3000,G_scatter,238873,1752,DecodeCost,2312.7,6.5,2306.3,0.0,0.0,241198
+step0,G_scatter N=3000,G_scatter,238873,1752,None,2312.7,6.5,2306.3,0.0,0.0,241198
 step0,G_scatter N=10000,G_scatter,795025,17438,DecodeCost,24964.1,21.6,24942.6,0.0,0.0,802884
 step0,G_scatter N=10000 nostyle=1,G_scatter,794950,998,None,0.0,0.0,0.0,0.0,0.0,769029
 step0,D_marker M=10 V=10 L=1000,D_marker,126465,553,None,659.9,0.0,0.0,0.0,659.9,106786
 step0,D_marker M=10 V=8002 L=1,D_marker,50644,411,None,631.9,0.0,0.0,0.0,631.9,44189
-step0,D_marker M=100 V=10 L=1000,D_marker,131125,5219,DecodeCost,2723.8,0.0,0.0,0.0,2723.8,110325
-step0,D_marker M=100 V=8002 L=1,D_marker,55304,2541,DecodeCost,2466.7,0.0,0.0,0.0,2466.7,47728
+step0,D_marker M=100 V=10 L=1000,D_marker,131125,5219,None,2723.8,0.0,0.0,0.0,2723.8,110325
+step0,D_marker M=100 V=8002 L=1,D_marker,55304,2541,None,2466.7,0.0,0.0,0.0,2466.7,47728
 step0,D_paths M=1 N=10000 X=20000,D_paths,1463504,1283,None,611.5,0.0,0.0,0.0,611.5,1256199
 step0,D_paths M=1 N=5000,D_paths,296104,362,None,305.8,0.0,0.0,0.0,305.8,276524
 step0,D_paths M=100 N=1000,D_paths,63773,603,None,565.7,0.0,0.0,0.0,565.7,58646
@@ -243,11 +243,11 @@ followup2,N_sib K=3 R=1 N=1000,N_sib,42603,5435,DecodeCost,7230.0,7230.0,0.0,0.0
 followup2,N_sib K=3 R=1 N=3000,N_sib,128543,60014,DecodeCost,194662.7,194662.7,0.0,0.0,0.0,108189
 followup2,N_nth Q=1 R=1 N=1000,N_nth,42603,77,None,21.0,21.0,0.0,0.0,0.0,35862
 followup2,N_nth Q=1 R=1 N=3000,N_nth,128543,223,None,182.5,182.5,0.0,0.0,0.0,108188
-followup2,N_nth Q=1 R=1 N=10000,N_nth,434583,2235,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,365596
+followup2,N_nth Q=1 R=1 N=10000,N_nth,434583,2235,None,2001.4,2001.4,0.0,0.0,0.0,365596
 followup2,N_nth Q=1 R=10 N=1000,N_nth,42891,242,None,210.5,210.5,0.0,0.0,0.0,36353
 followup2,N_nth Q=1 R=10 N=3000,N_nth,128831,1898,None,1825.3,1825.3,0.0,0.0,0.0,108679
 followup2,N_nth Q=1 R=10 N=10000,N_nth,434871,20641,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,366087
-followup2,N_nth Q=1 R=100 N=1000,N_nth,45771,2106,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,41264
+followup2,N_nth Q=1 R=100 N=1000,N_nth,45771,2106,None,2104.8,2104.8,0.0,0.0,0.0,41264
 followup2,N_nth Q=1 R=100 N=3000,N_nth,131711,18743,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,113590
 followup2,N_nth Q=1 R=100 N=10000,N_nth,437751,60009,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,370997
 followup2,N_nth Q=2 R=1 N=1000,N_nth,42603,17,None,1.1,1.1,0.0,0.0,0.0,35858
@@ -261,11 +261,11 @@ followup2,N_nth Q=2 R=100 N=3000,N_nth,131711,116,None,337.5,337.5,0.0,0.0,0.0,1
 followup2,N_nth Q=2 R=100 N=10000,N_nth,437751,195,None,1124.0,1124.0,0.0,0.0,0.0,370560
 followup2,N_nth Q=3 R=1 N=1000,N_nth,42604,73,None,21.0,21.0,0.0,0.0,0.0,35864
 followup2,N_nth Q=3 R=1 N=3000,N_nth,128544,324,None,182.5,182.5,0.0,0.0,0.0,108190
-followup2,N_nth Q=3 R=1 N=10000,N_nth,434584,1831,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,365598
+followup2,N_nth Q=3 R=1 N=10000,N_nth,434584,1831,None,2001.4,2001.4,0.0,0.0,0.0,365598
 followup2,N_nth Q=3 R=10 N=1000,N_nth,42901,189,None,210.5,210.5,0.0,0.0,0.0,36372
 followup2,N_nth Q=3 R=10 N=3000,N_nth,128841,1615,None,1825.3,1825.3,0.0,0.0,0.0,108698
 followup2,N_nth Q=3 R=10 N=10000,N_nth,434881,17169,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,366106
-followup2,N_nth Q=3 R=100 N=1000,N_nth,45871,1781,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,41451
+followup2,N_nth Q=3 R=100 N=1000,N_nth,45871,1781,None,2104.8,2104.8,0.0,0.0,0.0,41451
 followup2,N_nth Q=3 R=100 N=3000,N_nth,131811,15096,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,113777
 followup2,N_nth Q=3 R=100 N=10000,N_nth,437851,60015,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,371185
 followup2,N_desc K=2 R=1 D=16,N_desc,938,6,None,0.1,0.1,0.0,0.0,0.0,1309
