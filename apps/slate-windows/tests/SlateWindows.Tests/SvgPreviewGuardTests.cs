@@ -1508,7 +1508,9 @@ public sealed class SvgPreviewGuardTests
     /// nested groups that each define <c>--x</c> fill with <c>--x</c> and
     /// stroke with <c>--x</c>, found at the first link, or with
     /// <c>--y</c>, which no link holds: the second spends at least a step
-    /// for each of the 199 more links each stroke's lookup reads.
+    /// for each of the 199 more links each stroke's lookup reads. The
+    /// groups' values alternate between a colour and a word, so no group's
+    /// scope is its parent's (stage 12).
     /// </summary>
     [Fact]
     public void ALookupSpendsAStepForEachScopeItReads()
@@ -1516,7 +1518,7 @@ public sealed class SvgPreviewGuardTests
         static string Chain(string read)
         {
             var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g fill='url(#pat)'>");
-            s.Append(Repeat("<g style='--x:red'>", 200));
+            s.Append(Repeat("<g style='--x:red'><g style='--x:foo'>", 100));
             s.Append(Repeat($"<rect width='7' height='7' fill='var(--x)' stroke='var({read})'/>", 500));
             s.Append(Repeat("</g>", 200));
             return s.Append("</g></svg>").ToString();
@@ -1818,10 +1820,12 @@ public sealed class SvgPreviewGuardTests
     /// each child copying its parent's whole scope. A scope now holds only
     /// its element's own definitions and a link to its parent's, and past
     /// a cap on the definitions in scope the check is refused as spent. The
-    /// check now allocates 51.9 MiB here, about 70 bytes per byte read,
-    /// within the 13 to 145 bytes per byte it allocates on the
-    /// calibration's large documents. The bound, 96 MiB, is under twice
-    /// that and a twentieth of the copies' 1,761 MiB.
+    /// check allocated 51.9 MiB here in stage 11, about 70 bytes per byte
+    /// read, within the 13 to 145 bytes per byte it allocates on the
+    /// calibration's large documents, and 68.8 MiB since stage 12, which
+    /// resolves the root's 30,000 definitions before it reads the cap. The
+    /// bound, 96 MiB, is under twice the first and a twentieth of the
+    /// copies' 1,761 MiB.
     /// </summary>
     [Fact]
     public void CustomPropertiesInScopeAllocateABoundedAmount()

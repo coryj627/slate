@@ -222,11 +222,17 @@ internal static class SvgPreviewGuard
 
     /// <summary>#1610 (the delta merge judge's major 2, stage 11): the most
     /// custom-property definitions the paint cascade's scopes hold in one
-    /// document, past which the check is refused as spent. Each definition
-    /// and each scope cost the guard a few hundred bytes at most, so the
-    /// scopes stay within a few MiB, where copying them per element had
-    /// reached 1.7 GiB. A document with a pattern whose fills and strokes
-    /// read more custom properties than this is refused.</summary>
+    /// document, past which the check is refused as spent. A definition
+    /// held costs about 40 bytes (its dictionary entry and bucket; the
+    /// name is the document's own string) and a scope about 250 more (the
+    /// link, its dictionary and its place among the scopes made), and every
+    /// scope holds one definition or more, so the scopes stay under
+    /// 20,000 x 290 bytes, about 5.5 MiB, where copying them per element
+    /// had reached 1.7 GiB. Only definitions that differ count (the delta
+    /// merge judge's minor B, stage 12): a scope its parent's or a
+    /// sibling's already matches adds nothing. A document with a pattern
+    /// whose fills and strokes read more distinct definitions than this
+    /// is refused.</summary>
     internal const int MaxCustomScopeEntries = 20_000;
 
     /// <summary>
@@ -1751,7 +1757,11 @@ internal static class SvgPreviewGuard
         /// a lookup walks the links and spends a step on each, and past
         /// <see cref="MaxCustomScopeEntries"/> definitions held in all the
         /// document's scopes the check is refused as spent, so what the
-        /// scopes hold stays bounded.
+        /// scopes hold stays bounded. An element whose values its parent's
+        /// scope already holds reads that scope, and one whose values a
+        /// scope already made over the same parent holds shares it: neither
+        /// counts against the cap (the delta merge judge's minor B, stage
+        /// 12).
         /// </summary>
         private CustomScopeLink? CustomScope(
             List<Declaration> own, CustomScopeLink? inherited, HashSet<string> patternIds)
@@ -1772,11 +1782,6 @@ internal static class SvgPreviewGuard
             if (defined is null)
             {
                 return inherited;
-            }
-            scopeEntries += defined.Count;
-            if (scopeEntries > MaxCustomScopeEntries)
-            {
-                throw new GuardStepsSpentException();
             }
             steps.Spend(1 + defined.Count);
             var held = new Dictionary<string, byte>(defined.Count, StringComparer.Ordinal);
@@ -1804,8 +1809,53 @@ internal static class SvgPreviewGuard
                     break;
                 }
             }
+
+            // The delta merge judge's minor B (stage 12): values the parent's
+            // scope already holds add nothing, so the element reads its
+            // parent's scope; values a scope already made holds over the
+            // same parent (a sibling's, as a rule that matches every rect
+            // gives) add nothing either, so the element shares it. Only a
+            // scope made anew counts its definitions against the cap.
+            bool asParent = true;
+            int hash = 0;
+            foreach ((string name, byte value) in held)
+            {
+                asParent &= Lookup(inherited, name) == value;
+                hash += HashCode.Combine(name, value);
+            }
+            if (asParent)
+            {
+                return inherited;
+            }
+            if (madeScopes.TryGetValue((inherited, hash), out List<CustomScopeLink>? made))
+            {
+                foreach (CustomScopeLink other in made)
+                {
+                    steps.Spend(1 + held.Count);
+                    if (other.Held.Count == held.Count
+                        && held.All(pair => other.Held.TryGetValue(pair.Key, out byte value) && value == pair.Value))
+                    {
+                        return other;
+                    }
+                }
+            }
+            else
+            {
+                madeScopes[(inherited, hash)] = made = [];
+            }
+            scopeEntries += held.Count;
+            if (scopeEntries > MaxCustomScopeEntries)
+            {
+                throw new GuardStepsSpentException();
+            }
+            made.Add(scope);
             return scope;
         }
+
+        /// <summary>The scopes made so far, by their parent and a hash of
+        /// what they hold, for an element whose values one of them already
+        /// holds to share it.</summary>
+        private readonly Dictionary<(CustomScopeLink? Parent, int Hash), List<CustomScopeLink>> madeScopes = [];
 
         /// <summary>What <paramref name="name"/> holds in
         /// <paramref name="scope"/>: the nearest definition along its links,
