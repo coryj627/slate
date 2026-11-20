@@ -526,6 +526,10 @@ internal static class SvgPreviewGuard
         /// Measure.</summary>
         internal int[] OwnPatternPaints { get; private set; } = [];
 
+        /// <summary>Whether any element sets a pattern paint itself, so a
+        /// document without one spends nothing on the pattern term.</summary>
+        internal bool AnyPatternPaint { get; private set; }
+
         internal Dictionary<string, List<int>> ElementsById { get; private set; } = new(StringComparer.Ordinal);
 
         internal SvgRefusal Read(XmlReader reader)
@@ -1088,6 +1092,8 @@ internal static class SvgPreviewGuard
             // index is built (Codex's round 2): an id only gradients carry
             // reaches nothing, and no later question rescans its elements.
             var drawing = new HashSet<string>(StringComparer.Ordinal);
+            // #1610 (stage 7): the ids patterns carry, for the pattern term.
+            var patternIds = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < elements; i++)
             {
                 steps.Spend(1);
@@ -1101,6 +1107,10 @@ internal static class SvgPreviewGuard
                     if (!IsGradient(names[i]))
                     {
                         drawing.Add(id);
+                    }
+                    if (names[i] == "pattern")
+                    {
+                        patternIds.Add(id);
                     }
                 }
             }
@@ -1183,15 +1193,6 @@ internal static class SvgPreviewGuard
             // property's definition aside.
             var ownPatternPaints = new int[elements];
             var keyPatternPaints = new int[keyNodes.Count];
-            var patternIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach ((string id, List<int> named) in byId)
-            {
-                steps.Spend(named.Count);
-                if (named.Exists(element => names[element] == "pattern"))
-                {
-                    patternIds.Add(id);
-                }
-            }
             var leadsToPattern = new bool[reach.Count];
             if (patternIds.Count > 0)
             {
@@ -1458,9 +1459,14 @@ internal static class SvgPreviewGuard
                     }
                 }
             }
-            for (int i = 0; i < elements; i++)
+            if (patternIds.Count > 0)
             {
-                ownPatternPaints[i] = Math.Min(2, ownPatternPaints[i]);
+                for (int i = 0; i < elements; i++)
+                {
+                    steps.Spend(1);
+                    ownPatternPaints[i] = Math.Min(2, ownPatternPaints[i]);
+                    AnyPatternPaint |= ownPatternPaints[i] > 0;
+                }
             }
             OwnPatternPaints = ownPatternPaints;
 
@@ -2343,19 +2349,13 @@ internal static class SvgPreviewGuard
         /// </summary>
         private double PatternPaints()
         {
-            IReadOnlyList<string> names = document.Names;
-            int elements = names.Count;
-            int[] own = document.OwnPatternPaints;
-            bool anyPaint = false;
-            for (int i = 0; i < elements && !anyPaint; i++)
-            {
-                steps.Spend(1);
-                anyPaint = own[i] > 0;
-            }
-            if (!anyPaint)
+            if (!document.AnyPatternPaint)
             {
                 return 0;
             }
+            IReadOnlyList<string> names = document.Names;
+            int elements = names.Count;
+            int[] own = document.OwnPatternPaints;
             List<int>?[] next = document.Next;
             IReadOnlyList<int> order = document.Order;
             var drawnBy = new Dictionary<int, string>();
