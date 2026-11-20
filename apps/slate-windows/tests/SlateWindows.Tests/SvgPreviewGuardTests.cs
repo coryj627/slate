@@ -1396,9 +1396,11 @@ public sealed class SvgPreviewGuardTests
         + "<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs>"
         + body + "</svg>";
 
-    /// <summary>Whether Svg.Skia, given the app's secure parse, paints the
-    /// pattern's colour at (5, 5) of a <see cref="Tile"/> document.</summary>
-    private static bool DecoderPaintsTile(string source)
+    /// <summary>Whether Svg.Skia, given the app's secure parse, paints
+    /// #13579b at (<paramref name="x"/>, <paramref name="y"/>) of a 20-pixel
+    /// document: the pattern's tile of a <see cref="Tile"/> document, or a
+    /// marker's square.</summary>
+    private static bool DecoderPaintsTile(string source, int x = 5, int y = 5)
     {
         var parameters = new global::Svg.Model.SvgParameters(
             null,
@@ -1421,9 +1423,67 @@ public sealed class SvgPreviewGuardTests
             canvas.Clear(SkiaSharp.SKColors.Transparent);
             canvas.DrawPicture(svg.Picture);
         }
-        SkiaSharp.SKColor pixel = bitmap.GetPixel(5, 5);
+        SkiaSharp.SKColor pixel = bitmap.GetPixel(x, y);
         return Math.Abs(pixel.Red - 0x13) < 6 && Math.Abs(pixel.Green - 0x57) < 6 && Math.Abs(pixel.Blue - 0x9b) < 6;
     }
+
+    /// <summary>A 20-pixel document with a marker whose square is #13579b,
+    /// placed at (10, 10) if <paramref name="body"/>'s polyline marks its
+    /// middle vertex.</summary>
+    private static string MarkerTile(string body) =>
+        $"<svg {Ns} width='20' height='20'><defs><marker id='m' markerWidth='8' markerHeight='8' refX='3' refY='3' markerUnits='userSpaceOnUse'>"
+        + "<rect width='6' height='6' fill='#13579b'/></marker></defs>" + body + "</svg>";
+
+    private const string Line20 = " points='2,2 10,10 18,18' fill='none' stroke='none'";
+
+    public static TheoryData<string> ReferenceThroughVarCases() => [.. ReferenceThroughVar.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor 3, stage 11): the decoder
+    /// substitutes a <c>var()</c> as text, so a reference it builds paints
+    /// (<c>url(var(--f))</c> with <c>--f:#p</c>, or <c>var(--u)rl(#p)</c>
+    /// with <c>--u:u</c>), in the fill attribute and the style attribute,
+    /// and a marker the same way; in a rule it does not. A reference whose
+    /// argument holds <c>var()</c>, and a value of several pieces, may name
+    /// a pattern or any marker. Each row rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ReferenceThroughVarCases))]
+    public void AReferenceBuiltThroughVarCountsAsAPossiblePattern(string name)
+    {
+        (string source, bool marker, bool painted, bool counted) = ReferenceThroughVar[name];
+        Assert.Equal(painted, marker ? DecoderPaintsTile(source, 10, 10) : DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double term = marker ? estimate.MarkerMicroseconds : estimate.PatternMicroseconds;
+        Assert.True(counted == term > 0, $"{name}: the term is {term:F1} us");
+    }
+
+    internal static readonly Dictionary<string, (string Source, bool Marker, bool Painted, bool Counted)> ReferenceThroughVar = new()
+    {
+        ["url(var(--f)) in the style attribute"] = (Tile($"<rect{Rect20} style='--f:#p;fill:url(var(--f))'/>"), false, true, true),
+        ["var(--u)rl(#p) in the style attribute"] = (Tile($"<rect{Rect20} style='--u:u;fill:var(--u)rl(#p)'/>"), false, true, true),
+        ["url(var(--f)) in the fill attribute"] = (Tile($"<g style='--f:#p'><rect{Rect20} fill='url(var(--f))'/></g>"), false, true, true),
+        ["var(--u)rl(#p) in the fill attribute"] = (Tile($"<g style='--u:u'><rect{Rect20} fill='var(--u)rl(#p)'/></g>"), false, true, true),
+        ["url(var(--f)) in a fallback"] = (Tile($"<rect{Rect20} style='--f:#p;fill:var(--none, url(var(--f)))'/>"), false, true, true),
+        ["url(var(--f)) in a definition the fill reads"] = (Tile($"<rect{Rect20} style='--f:#p;--g:url(var(--f));fill:var(--g)'/>"), false, true, true),
+        // A rule reads url( as one token before any var() is substituted.
+        ["url(var(--f)) in a rule"] = (Tile($"<style>rect{{--f:#p;fill:url(var(--f))}}</style><rect{Rect20}/>"), false, false, true),
+        ["a marker at url(var(--f)) in the style attribute"] = (
+            MarkerTile($"<polyline{Line20} style='--f:#m;marker-mid:url(var(--f))'/>"),
+            true,
+            true,
+            true),
+        ["a marker at var(--u)rl(#m) in the style attribute"] = (
+            MarkerTile($"<polyline{Line20} style='--u:u;marker-mid:var(--u)rl(#m)'/>"),
+            true,
+            true,
+            true),
+        ["a marker at url(var(--f)) in its attribute"] = (
+            MarkerTile($"<g style='--f:#m'><polyline{Line20} marker-mid='url(var(--f))'/></g>"),
+            true,
+            true,
+            true),
+    };
 
     public static TheoryData<string> DroppedDeclarationCases() => [.. DroppedDeclaration.Keys];
 
