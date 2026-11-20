@@ -1385,6 +1385,203 @@ public sealed class SvgPreviewGuardTests
         Assert.True(failures.Count == 0, "the guard clears what the decoder keeps:\n" + string.Join("\n", failures));
     }
 
+    /// <summary>A 20-pixel document whose pattern tile is one colour,
+    /// #13579b, no fill spelling here can give, around
+    /// <paramref name="body"/>, with three custom properties on the root:
+    /// <c>--b</c> a word, <c>--e</c> nothing, <c>--k</c>
+    /// <c>inherit</c>.</summary>
+    private static string Tile(string body) =>
+        $"<svg {Ns} width='20' height='20'><style>svg{{--b:bogus;--e:;--k:inherit}}</style>"
+        + "<defs><pattern id='p' width='10' height='10' patternUnits='userSpaceOnUse'>"
+        + "<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs>"
+        + body + "</svg>";
+
+    /// <summary>Whether Svg.Skia, given the app's secure parse, paints the
+    /// pattern's colour at (5, 5) of a <see cref="Tile"/> document.</summary>
+    private static bool DecoderPaintsTile(string source)
+    {
+        var parameters = new global::Svg.Model.SvgParameters(
+            null,
+            null,
+            null,
+            new global::Svg.SvgDocumentLoadOptions
+            {
+                ProcessingMode = global::Svg.SvgProcessingMode.SecureStatic,
+                ExternalResources = global::Svg.SvgExternalResourcePolicy.Disabled,
+                PreserveUnknownElements = false,
+            });
+        global::Svg.SvgDocument document = global::Svg.Model.Services.SvgService.FromSvg(source, parameters)!;
+        using var svg = new global::Svg.Skia.SKSvg();
+        svg.Settings.EnableJavaScript = false;
+        Assert.NotNull(svg.FromSvgDocument(document));
+        using var bitmap = new SkiaSharp.SKBitmap(
+            new SkiaSharp.SKImageInfo(20, 20, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
+        using (var canvas = new SkiaSharp.SKCanvas(bitmap))
+        {
+            canvas.Clear(SkiaSharp.SKColors.Transparent);
+            canvas.DrawPicture(svg.Picture);
+        }
+        SkiaSharp.SKColor pixel = bitmap.GetPixel(5, 5);
+        return Math.Abs(pixel.Red - 0x13) < 6 && Math.Abs(pixel.Green - 0x57) < 6 && Math.Abs(pixel.Blue - 0x9b) < 6;
+    }
+
+    public static TheoryData<string> DroppedDeclarationCases() => [.. DroppedDeclaration.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1, stage 11): in the style
+    /// attribute or a rule, the decoder drops a declaration whose value it
+    /// cannot read (nothing, a word, a broken colour) and applies the next
+    /// one, so a pattern it displaced is painted. The judge's inputs and
+    /// the sweep's controls, each rendered by Svg.Skia here: the guard
+    /// counts the pattern exactly where the decoder paints it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(DroppedDeclarationCases))]
+    public void ADeclarationTheDecoderDropsLeavesTheNextOneToApply(string name)
+    {
+        (string body, bool painted) = DroppedDeclaration[name];
+        string source = Tile(body);
+        Assert.Equal(painted, DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            painted == estimate.PatternMicroseconds > 0,
+            $"{name}: the decoder {(painted ? "paints" : "does not paint")} the pattern; the term is {estimate.PatternMicroseconds:F1} us");
+    }
+
+    private const string Rect20 = " width='20' height='20'";
+
+    internal static readonly Dictionary<string, (string Body, bool Painted)> DroppedDeclaration = new()
+    {
+        // The judge's inputs: the dropped declaration leaves the pattern.
+        ["a word in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:bogus'/>", true),
+        ["nothing in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:'/>", true),
+        ["the pattern then a word in one style attribute"] = ($"<rect{Rect20} style='fill:url(#p);fill:x'/>", true),
+        ["the pattern then a word, both !important"] = ($"<rect{Rect20} style='fill:url(#p) !important;fill:x !important'/>", true),
+        ["a class rule's pattern then a word"] = ($"<style>.a{{fill:url(#p)}} .a{{fill:bogus}}</style><rect class='a'{Rect20}/>", true),
+        ["a type rule's pattern then a word"] = ($"<style>rect{{fill:url(#p)}} rect{{fill:bogus}}</style><rect{Rect20}/>", true),
+        ["a word rule over the pattern attribute"] = ($"<style>.a{{fill:bogus}}</style><rect class='a'{Rect20} fill='url(#p)'/>", true),
+        ["a word !important rule over the pattern in the style attribute"] = (
+            $"<style>.a{{fill:x !important}}</style><rect class='a'{Rect20} style='fill:url(#p)'/>",
+            true),
+        // The sweep's other dropped spellings.
+        ["rgb() of two numbers over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:rgb(1,2)'/>", true),
+        ["five hex digits over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#ff000'/>", true),
+        ["a reference and a word over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) bogus'/>", true),
+        // A rule definition with an unclosed url( is dropped too.
+        ["a rule's --c pattern, then --c:url( in a later rule"] = (
+            $"<style>.a{{--c:url(#p)}} .a{{--c:url(}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
+            true),
+        // What the decoder applies: a colour it reads, a CSS-wide keyword,
+        // anything through var(), a context paint.
+        ["hsl() over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:hsl(120,100%,25%)'/>", false),
+        ["blue over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue'/>", false),
+        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false),
+        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false),
+        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false),
+        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false),
+        // Under a pattern group, a dropped word leaves the rect's own blue;
+        // var(--none) keeps the group's pattern.
+        ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false),
+        ["nothing over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:'/></g>", false),
+        ["var(--none) over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:var(--none)'/></g>", true),
+    };
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1, stage 11): the guard drops
+    /// what the decoder drops, closed by a differential sweep. Each of 34
+    /// fill spellings (the dropped ones, readable forms the guard does not
+    /// read, through var(), the CSS-wide keywords and readable controls)
+    /// stands against a pattern at every other tier and place: the
+    /// attribute, earlier in the same style attribute, a rule of lower
+    /// specificity, an earlier rule of the same, !important on both sides,
+    /// and a pattern group around it; and 12 definitions stand against an
+    /// earlier pattern definition. Svg.Skia renders each 20-pixel
+    /// document; wherever it paints the pattern, the guard counts it or
+    /// refuses the document. The guard may count more, never less.
+    /// </summary>
+    [Fact]
+    public void NoDeclarationTheDecoderDropsHidesAPatternFromTheGuard()
+    {
+        string[] spellings =
+        [
+            "", "bogus", "hsl(120,100%,25%)", "hsl(0,100%,50%)", "rgb(1,2)", "rgb(1 2 3)", "#ff000", "Grey", "ThreeDFace",
+            "url(#missing) bogus", "url(var(--f))", "url(var(--b))", "var(--none)", "var(--none,bogus)", "var(--none,)",
+            "var(--none,inherit)", "var(--b)", "var(--e)", "var(--r)", "var(--k)", "inherit", "INHERIT", "unset", "initial",
+            "revert", "blue", "none", "currentColor", "url(#missing)", "url(#missing) blue", "context-fill", "transparent",
+            "#00f", "rgb(1,2,3)",
+        ];
+        const string P = "url(#p)";
+        var bodies = new List<string>();
+        foreach (string d in spellings)
+        {
+            string imp = d.Length == 0 ? "!important" : d + " !important";
+            bodies.AddRange(
+            [
+                $"<rect{Rect20} fill='{P}' style='fill:{d}'/>",
+                $"<rect{Rect20} style='fill:{P};fill:{d}'/>",
+                $"<style>rect{{fill:{P}}} .a{{fill:{d}}}</style><rect class='a'{Rect20}/>",
+                $"<style>.a{{fill:{P}}} .a{{fill:{d}}}</style><rect class='a'{Rect20}/>",
+                $"<rect{Rect20} style='fill:{P} !important;fill:{imp}'/>",
+                $"<style>.a{{fill:{P} !important}} .a{{fill:{imp}}}</style><rect class='a'{Rect20}/>",
+                $"<style>.a{{fill:{P}}}</style><rect class='a'{Rect20} style='fill:{d}'/>",
+                $"<style>.a{{fill:{imp}}}</style><rect class='a'{Rect20} style='fill:{P}'/>",
+                $"<style>.a{{fill:{d}}}</style><rect class='a'{Rect20} fill='{P}'/>",
+                $"<style>.a{{fill:{imp}}}</style><rect class='a'{Rect20} fill='{P}'/>",
+                $"<style>.a{{fill:{P} !important}}</style><rect class='a'{Rect20} style='fill:{imp}'/>",
+                $"<g fill='{P}'><rect{Rect20} fill='blue' style='fill:{d}'/></g>",
+                $"<style>.a{{fill:{d}}}</style><g fill='{P}'><rect class='a'{Rect20}/></g>",
+                $"<g fill='{P}'><rect{Rect20} fill='{d}'/></g>",
+                $"<g fill='{P}'><rect{Rect20} style='fill:{d}'/></g>",
+            ]);
+        }
+        string[] definitions = ["", "bogus", "url(", ")", "x}", "!important", "url(#q", "inherit", "initial", "unset", "blue", "var(--none)"];
+        foreach (string x in definitions)
+        {
+            bodies.AddRange(
+            [
+                $"<rect{Rect20} style='--c:{P};--c:{x};fill:var(--c)'/>",
+                $"<style>.a{{--c:{P}}} .a{{--c:{x}}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
+                $"<style>.a{{--c:{P}}}</style><rect class='a'{Rect20} style='--c:{x}' fill='var(--c)'/>",
+                $"<g style='--c:{P}'><rect{Rect20} style='--c:{x}' fill='var(--c)'/></g>",
+            ]);
+        }
+        var hidden = new List<string>();
+        foreach (string body in bodies)
+        {
+            string source = Tile(body);
+            SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            bool admitted = verdict is SvgRefusal.None or SvgRefusal.DecodeCost;
+            if (admitted && estimate.PatternMicroseconds == 0 && DecoderPaintsTile(source))
+            {
+                hidden.Add(body);
+            }
+        }
+        Assert.Equal(558, bodies.Count);
+        Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1): 6,000 rects that each write
+    /// the pattern in the fill attribute and a word in the style attribute,
+    /// which the decoder drops, are refused for their cost, as the same
+    /// rects without the word are.
+    /// </summary>
+    [Fact]
+    public void SixThousandRectsWhoseStyleWordTheDecoderDropsAreRefused()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='url(#pat)' style='fill:x'/>");
+        }
+        string source = s.Append("</svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
     /// <summary>A 1,000-rect marker the group's marker-mid sets, over a
     /// 3,000-vertex polyline that writes <paramref name="line"/>: the
     /// documents stage 10 decoded.</summary>
