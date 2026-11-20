@@ -13,7 +13,7 @@ Issue #1610, plan 47 wave C8, chunk CB-29. Measured 2026-11-19 between 12:35 and
 - **Markers.** Svg.Skia compiles the marker's whole subtree anew at every placement. **2.65 us per (placement x marker render)** on long polylines. Many small markers on many elements cost more than that product says: the fit across all marker shapes is **2.55 us per unit of positions x (renders + 20) + marked elements x renders** (geometric sd 1.37). Markers set by a stylesheet rule, the `marker` shorthand and inheritance from a `<g>` cost the same as the attribute, and Svg.Skia also draws markers on rect, circle and ellipse.
 - **#1581's four rows are reproduced** within a factor of two, each at about the issue's size (table below).
 - **Real documents sit far below every limit.** Core renders five mermaid dialects; none of their outputs has a `<style>`, a `<use>` or a `var()`. The largest marker count, a 1,093-message sequence diagram, is 1/13 of the 1 s marker count with the +20 placement weight (1/140 with the plain product).
-- **The guard's own cost** is small: at most 184 ms on an 8 MiB document (150,092 rects), 65 ms on an 8 MiB stylesheet, 38 ms on an 8 MiB polyline, and 17 ms or less on the largest document of every sweep.
+- **The guard's own cost** is small: at most 184 ms on an 8 MiB document (150,092 rects), 65 ms on an 8 MiB stylesheet, 38 ms on an 8 MiB polyline, and 17 ms or less on the largest document of every sweep. That is `main`'s guard; the guard CB-29 ships, with its estimate and its step budget, is measured in section 6 too.
 
 ## Context
 
@@ -388,6 +388,58 @@ Real-world classes missing (no SVG downloaded; these are guesses, marked as such
 
 Every other sweep document: under 10 ms. The probe's naive guard-shaped counter (`ReaderCounts`: one XmlReader pass counting elements, `points` and `d` vertices, rules, selectors and `--` declarations) took 14 ms on 8 MiB of rects, 22 ms on the 8 MiB polyline and 99 ms on the 8 MiB stylesheet (it re-splits the stylesheet; folded into `ScanCss` the count is a few comparisons per character already visited). Today `Check` runs inside the decode thread (`RenderSvgToPng`, `EditorInteractions.cs:3783`), so moving it before the slot is taken moves at most 0.2 s at the 8 MiB cap, and under 20 ms for any document below 2 MB, onto the caller's worker.
 
+### The guard CB-29 ships
+
+The table above measured `main`'s guard, before CB-29 added its estimate. The red team's review of CB-29's diff (B1) found that guard's own work super-linear in a document's shape, on the caller's thread: one rule of 320,000 branches and 32,000 `var()` declarations (1.1 MB) took it 23.3 s, because each declaration summed the rule's branches again; 16,000 references to an id 16,000 elements share (480 KB) took 3.1 s, because each reference had an edge to each element; and, found on the way, one block of 20,000 classes whose 1,000 declarations name `url()` targets (163 KB) took 6.0 s, because each target was filed under each class. CB-29 now sums a rule's elements once for all its `var()` values, reaches the elements an id names through one node per id, and reaches a block's targets through one node per block. Those three shapes take 51, 18 and 8 ms in the table below (`TheGuardsOwnTimeStaysBounded` holds each under a second).
+
+Every check also spends from a step budget, `SvgPreviewGuard.MaxGuardSteps`: a step is one element, attribute, edge, rule, branch, declaration, key visit or `var()` lookup, across the read, `Measure` and the estimate. Past the budget the guard stops and refuses the document for its cost, and the caller logs `term=guard`. **The budget is 10,000,000 steps.** The most steps any document of this record or follow-up 2 takes, of the core outputs and the repository's pie, is 2,251,392 (Big_rects, 8 MiB of rects); the largest real document takes 239,647 (mermaid ER n=451). So the budget is 4.4 times the most. Of the 8 MiB shapes below, one passes it: one `var()` definition of a million references (14.9 M steps without the budget), refused for its cost in 90 ms. The step that costs most was measured at about 40 ns (the `var()` table, from the guard's time at budgets of 4, 8 and 16 million), so the budget adds at most about 0.4 s to reading an 8 MiB document.
+
+`SvgPreviewGuard.Check` on CB-29's head, median of three (of five for the first three rows), on this desktop:
+
+| document | bytes | verdict | steps | Check ms |
+|---|---|---|---|---|
+| T_varrule B=320000 V=32000 | 1,141,080 | None | 1,088,059 | 50.7 |
+| T_dupid N=16000 | 480,136 | RenderedElements | 288,022 | 18.3 |
+| T_prelude K=20000 U=1000 | 162,944 | None | 202,053 | 7.5 |
+| Big_rects N=150092 | 8,278,686 | None | 2,251,392 | 88.8 |
+| Big_style N=383126 | 8,317,852 | None | 1,915,667 | 228.8 |
+| Big_points N=1119023 | 8,336,588 | None | 25 | 34.9 |
+| A_class R=105720 E=105720 | 8,386,552 | DecodeCost | 2,220,143 | 153.8 |
+| A_type R=136514 E=136514 | 8,386,582 | DecodeCost | 2,593,790 | 107.7 |
+| A_attr R=95093 E=95093 | 8,386,580 | DecodeCost | 2,567,544 | 161.1 |
+| A_desc R=103194 E=103194 | 8,386,538 | DecodeCost | 2,373,757 | 182.1 |
+| A_use G=4 X=0 R=2654 U=265434 | 8,386,572 | RenderedElements | 800,003 | 89.9 |
+| G_scatter N=105551 | 8,386,549 | RenderedElements | 1,372,204 | 106.2 |
+| C_root R=82320 E=82320 | 8,386,589 | DecodeCost | 3,457,468 | 257.1 |
+| C_double D=8 E=106924 | 8,386,600 | DecodeCost | 1,925,141 | 104.7 |
+| C_kary K=4 D=15 E=105576 | 8,386,576 | DecodeCost | 1,901,448 | 94.6 |
+| C_fb F=1 D=16 E=105579 | 8,386,550 | DecodeCost | 1,795,840 | 101.7 |
+| D_marker M=66192 V=661927 | 8,386,589 | DecodeCost | 992,942 | 34.1 |
+| D_paths M=4 X=0 N=141104 | 8,386,578 | RenderedElements | 1,693,318 | 141.9 |
+| D_varinline M=66192 V=661927 | 8,386,608 | DecodeCost | 992,962 | 36.2 |
+| N_desc K=4 D=200 R=100679 | 2,627,549 | DecodeCost | 915,351 | 53.1 |
+| N_sib K=2 R=1919 N=191994 | 8,386,608 | DecodeCost | 2,891,453 | 72.6 |
+| N_nth Q=1 R=1916 N=191680 | 8,386,527 | DecodeCost | 2,884,804 | 75.3 |
+| N_unstyled T=1 Q=1 D=101040 N=1010408 | 8,386,561 | RenderedElements | 200,006 | 14.2 |
+| A_keyframes A=10226 E=102269 | 8,386,320 | DecodeCost | 1,605,640 | 108.0 |
+| T_varrule B=2296622 V=229662 | 8,386,578 | None | 7,808,573 | 403.7 |
+| T_dupid N=279548 | 8,386,576 | RenderedElements | 400,005 | 69.2 |
+| T5 8 MiB of 'g g g g g g rect{fill:red}' rules | 8,388,079 | DecodeCost | 3,554,420 | 185.8 |
+| T5 8 MiB of rects, *{fill:red} | 8,386,685 | RenderedElements | 600,000 | 48.6 |
+| T5 8 MiB of rects with style var() | 8,386,717 | RenderedElements | 400,002 | 85.4 |
+| T5 8 MiB of attribute rules over 2,000 rects | 8,367,528 | DecodeCost | 1,590,559 | 270.0 |
+| T5 rules of 1, 2, 3, ... descendant steps to 8 MiB | 8,379,567 | DecodeCost | 4,931,415 | 111.3 |
+| T5 rules of 1, 2, 3, ... sibling steps, 600 families | 8,128,577 | DecodeCost | 1,448,024 | 66.7 |
+| T6 8 MiB of var() definitions in one rule | 8,386,671 | None | 5,677,352 | 250.2 |
+| T6 8 MiB of class rules defining and using var() | 8,386,679 | None | 9,140,903 | 428.7 |
+| T6 8 MiB of marker rules over 20,000 groups | 8,466,645 | Malformed | 28,855 | 13.5 |
+| T2a 4 MiB of url(#x) class rules, elements sharing id x | 6,382,320 | DecodeCost | 5,525,151 | 466.6 |
+| Prelude of 300,000 classes naming url() targets | 8,386,571 | None | 3,414,165 | 345.8 |
+| 8 MiB definition of one million var() references | 8,386,537 | DecodeCost, budget spent | 10,000,000 | 90.3 |
+| 199,000 groups using var() in a style attribute | 5,174,096 | None | 2,786,043 | 111.4 |
+
+The rows after the first three are the calibration's three 8 MiB documents, each generator kind grown to the 8 MiB cap (the probe's search for N_desc's size stopped at 2.6 MB), the red team's shapes (T_varrule and T_dupid grown to the cap, T5 and T6 rebuilt from its harness, and its T2a grown to 6.4 MB), and three of this run's own (one prelude of 300,000 classes naming url() targets, one var() definition of a million references, and 199,000 groups using var() in a style attribute); the slowest check is 467 ms (the red team's url() class rules over elements sharing an id, 6.4 MB), and 525 ms in an earlier run of the same table. The red team's 8 MiB of marker rules is 8,466,645 bytes, past the reader's 8 MiB cap, and is refused as malformed before any count.
+
 ## 7. What the source reading changes for the guard design
 
 1. **A stylesheet has two costs, and the issue's product is the cheaper one.** Selector branches x all elements (0.093 us) bounds the query; matched declarations (1.03 us for paint) bounds the application, and dominates whenever rules match many elements. Count selector branches, not rules, and all elements, not styled elements (the query walks every descendant). Count a custom-property rule or a geometry-property rule as two or three passes.
@@ -396,6 +448,32 @@ Every other sweep document: under 10 ms. The probe's naive guard-shaped counter 
 4. **Markers are wider than the attribute**: inheritance, the `marker` shorthand, stylesheet rules, rect/circle/ellipse, and use multiplicity all place markers at full cost. The guard today counts an inherited marker once (D_rects_inherit M=100 N=1000 passes and takes 2.6 s, while the same rects with attributes are refused by `RenderedElements`).
 5. **A per-placement constant matters** for many small markers: weigh each placement as about 20 renders more than its subtree, and each marked element as one more subtree.
 6. **One limit or several.** All four products convert to microseconds with the rates above, so the guard could sum them into one estimated decode time and refuse past one number (the owner's limit in seconds), or keep a limit per product. The rates differ by a factor of 30 between products, so a single unweighted count cannot serve.
+
+## 8. The guard's own verdicts on every regenerated document
+
+`guard-estimates.csv` in this folder holds what CB-29's guard says (its verdict, its estimate and each of the four terms, and the steps it took) for each document this record decoded (174) and each document follow-up 2 decoded (139), regenerated byte for byte by the generators or read from the core outputs and the repository's pie. It was generated with the guard of 8edf1636, after the red team's fixes. A document is refused at a limit when the guard refuses it for anything (a cap, or its estimate past the limit). No check spent its step budget.
+
+**Step 0 documents** (174):
+
+| Limit | Refused, decodes under 5 s (under 1 s) | Admitted, decodes past 5 s (past 20 s) | Refused in all | Margin to the largest real document |
+|---|---|---|---|---|
+| 1 s | 34 (0) | 0 (0) | 76 | 13x |
+| 2 s | 16 (0) | 0 (0) | 58 | 26x |
+| 3 s | 10 (0) | 1 (0) | 51 | 39x |
+| 5 s | 2 (0) | 2 (0) | 42 | 65x |
+| 10 s | 0 (0) | 18 (0) | 24 | 131x |
+
+**Step 0 and follow-up 2 documents** (313):
+
+| Limit | Refused, decodes under 5 s (under 1 s) | Admitted, decodes past 5 s (past 20 s) | Refused in all | Margin to the largest real document |
+|---|---|---|---|---|
+| 1 s | 55 (4) | 0 (0) | 112 | 13x |
+| 2 s | 25 (0) | 0 (0) | 82 | 26x |
+| 3 s | 15 (0) | 1 (0) | 71 | 39x |
+| 5 s | 5 (0) | 2 (0) | 60 | 65x |
+| 10 s | 0 (0) | 20 (0) | 37 | 131x |
+
+The margin is the limit over the largest estimate of a real document, 76.4 ms (mermaid sequence n=1093). Every step 0 estimate equals `est2Ms` within 0.1% but two: A_desc R=2000 E=5000 and A_desc R=5000 E=10000 are 0.82 of it, since a branch of one descendant step now counts only the descendants of its left compound's matches (the red team's m2). That admits the first at 2 s (it decodes in 1.8 s) and the second at 10 s (9.7 s). The four refused under 1 s at a 1 s limit are follow-up 2's N_nth Q=2 R=100 N=10000 (195 ms, estimated at 1.12 s) and N_desc K=2, 3 and 4 R=100 F=1 N=10000 (216 to 264 ms, 1.30 s each), where the selector counts err wide; the two admitted past 5 s at a 5 s limit are A_compound R=5000 E=10000 (5.3 s, estimated at 4.7 s) and D_marker M=100 V=10 L=1000 (5.2 s, 2.7 s).
 
 ## Not verified
 
@@ -408,7 +486,9 @@ Every other sweep document: under 10 ms. The probe's naive guard-shaped counter 
 - The mermaid "largest" sizes come from 1.6x growth and four bisections near a 5 s budget whose renders vary; the true boundary may sit a few percent higher.
 - The test host's .NET patch (10.0.15) is inferred from the installed runtimes, not logged from the process.
 
-## Files in this folder
+## Files
+
+This folder holds `calibration.md`, `decision-tables.md`, `est.py`, `est.csv`, `followup2.md`, `f2-est-depth.csv` and `guard-estimates.csv` (section 8). The other files below stayed in the chunk's working notes.
 
 - `calibration.md` (this file), `tables.md` (every sweep row), `fits.md` (every fit).
 - CSVs: `sweep-A.csv`, `sweep-C.csv`, `sweep-D.csv`, `sweep-X.csv`, `sweep-big.csv`, `real.csv`, `real-mermaid.csv`, `mermaid-renders.csv`, `guardcost.csv`, `explore.csv` to `explore4.csv`, `smoke.csv`. Logs beside each (`*.log`), and `ci-state.log` (the pool state before and after every run).
