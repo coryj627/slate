@@ -880,6 +880,56 @@ internal static class SlowSvgDocuments
                     s.Append("}</style><g id='t0'/>");
                     break;
                 }
+            case "T_gradvar":
+                {
+                    // Codex's round 2: N gradients sharing one id, and N
+                    // distinct custom properties naming it.
+                    int n = P(p, "N", 100);
+                    s.Append("<style>svg{");
+                    for (int i = 0; i < n; i++)
+                    {
+                        s.Append($"--p{i}:url(#x);");
+                    }
+                    s.Append("}</style><defs>");
+                    for (int i = 0; i < n; i++)
+                    {
+                        s.Append("<linearGradient id='x'/>");
+                    }
+                    s.Append("</defs>");
+                    break;
+                }
+            case "U_branches":
+                {
+                    // Codex's round 2: B class selectors, in one rule (S=1)
+                    // or B rules (S=0), over a symbol of T rects that U uses
+                    // draw.
+                    int b = P(p, "B", 100);
+                    int t = P(p, "T", 100);
+                    int u = P(p, "U", 100);
+                    s.Append("<style>");
+                    if (P(p, "S", 1) == 1)
+                    {
+                        s.Append(string.Join(",", Enumerable.Range(0, b).Select(i => $".c{i}"))).Append("{fill:red}");
+                    }
+                    else
+                    {
+                        for (int i = 0; i < b; i++)
+                        {
+                            s.Append($".c{i}{{fill:red}}");
+                        }
+                    }
+                    s.Append("</style><defs><symbol id='s'>");
+                    for (int i = 0; i < t; i++)
+                    {
+                        s.Append(RectAt(i, ""));
+                    }
+                    s.Append("</symbol></defs>");
+                    for (int i = 0; i < u; i++)
+                    {
+                        s.Append($"<use href='#s' x='{i % 40 * 10}' y='{i / 40 * 10}'/>");
+                    }
+                    break;
+                }
             case "A_keyframes":
                 {
                     // The red team's M2: an animation export's shape, one

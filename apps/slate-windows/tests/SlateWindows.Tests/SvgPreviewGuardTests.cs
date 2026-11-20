@@ -277,6 +277,10 @@ public sealed class SvgPreviewGuardTests
         ["var() doubling at 15 levels over names ending in an escaped semicolon"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\;"),
             false),
+        // Codex's round 2: a use's instance runs every selector branch again.
+        ["one rule of 3,000 class branches over a symbol of 100 rects that 500 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_branches B=3000 T=100 U=500 S=1"),
+            false),
         ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
             false),
@@ -335,6 +339,9 @@ public sealed class SvgPreviewGuardTests
         { "T_varrule B=320000 V=32000", nameof(SvgRefusal.None) },
         { "T_dupid N=16000", nameof(SvgRefusal.RenderedElements) },
         { "T_prelude K=20000 U=1000", nameof(SvgRefusal.None) },
+        // Codex's round 2: 50,000 gradients sharing one id that 50,000
+        // distinct custom properties name (2 MB).
+        { "T_gradvar N=50000", nameof(SvgRefusal.None) },
     };
 
     /// <summary>
@@ -407,6 +414,21 @@ public sealed class SvgPreviewGuardTests
         {
             SvgPreviewGuard.StepBudgetForTests = null;
         }
+    }
+
+    /// <summary>#1610 (Codex's round 2): each use render re-applies the
+    /// stylesheet to its instance, and every selector branch queries the
+    /// instance's elements, so one rule of 1,000 class branches over a
+    /// symbol 500 uses draw weighs about what 1,000 one-branch rules
+    /// do.</summary>
+    [Fact]
+    public void AUseInstanceQueriesEveryBranchOfARule()
+    {
+        double branches = EstimateOf(SlowSvgDocuments.Generate("U_branches B=1000 T=100 U=500 S=1")).Milliseconds;
+        double rules = EstimateOf(SlowSvgDocuments.Generate("U_branches B=1000 T=100 U=500 S=0")).Milliseconds;
+        Assert.True(
+            branches / rules is >= 0.5 and <= 2,
+            $"one rule of 1,000 branches: {branches:F0} ms; 1,000 rules: {rules:F0} ms");
     }
 
     public static TheoryData<char> WalkingCombinators() => ['>', '+'];
