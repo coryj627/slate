@@ -1483,7 +1483,43 @@ public sealed class SvgPreviewGuardTests
             true,
             true,
             true),
+        ["a marker read through --g:url(var(--f))"] = (
+            MarkerTile($"<g style='--f:#m;--g:url(var(--f))'><polyline{Line20} marker-mid='var(--g)'/></g>"),
+            true,
+            true,
+            true),
+        ["a marker read through --g:var(--u)rl(#m)"] = (
+            MarkerTile($"<g style='--u:u;--g:var(--u)rl(#m)'><polyline{Line20} marker-mid='var(--g)'/></g>"),
+            true,
+            true,
+            true),
     };
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 2, stage 11): a lookup walks
+    /// the scope's links and spends a step on each. 500 rects under 200
+    /// nested groups that each define <c>--x</c> fill with <c>--x</c> and
+    /// stroke with <c>--x</c>, found at the first link, or with
+    /// <c>--y</c>, which no link holds: the second spends at least a step
+    /// for each of the 199 more links each stroke's lookup reads.
+    /// </summary>
+    [Fact]
+    public void ALookupSpendsAStepForEachScopeItReads()
+    {
+        static string Chain(string read)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g fill='url(#pat)'>");
+            s.Append(Repeat("<g style='--x:red'>", 200));
+            s.Append(Repeat($"<rect width='7' height='7' fill='var(--x)' stroke='var({read})'/>", 500));
+            s.Append(Repeat("</g>", 200));
+            return s.Append("</g></svg>").ToString();
+        }
+        SvgPreviewGuard.Check(Chain("--x"), 8 * 1024 * 1024, out SvgDecodeEstimate near);
+        SvgPreviewGuard.Check(Chain("--y"), 8 * 1024 * 1024, out SvgDecodeEstimate far);
+        Assert.True(
+            far.Steps - near.Steps >= 500L * 199,
+            $"reading past 199 more links took {far.Steps - near.Steps} more steps");
+    }
 
     public static TheoryData<string> DroppedDeclarationCases() => [.. DroppedDeclaration.Keys];
 
