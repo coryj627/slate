@@ -1101,7 +1101,8 @@ internal static class SlowSvgDocuments
                 {
                     // The merge judge's register check (stage 7): K rects
                     // painted with a pattern swatch of ten children, by a fill
-                    // each, by a group they inherit it from (I=1), by a
+                    // each, by a group they inherit it from (I=1; with U, the
+                    // uses that draw them carry it), by a
                     // stylesheet rule (S=1) or through var() (V=1, a
                     // stylesheet's definition; V=2, a group's style attribute
                     // around everything), drawn once, or held by a symbol
@@ -1126,7 +1127,7 @@ internal static class SlowSvgDocuments
                     {
                         s.Append("<g style='--p:url(#pat)'>");
                     }
-                    var painted = new StringBuilder(inherit
+                    var painted = new StringBuilder(inherit && u == 0
                         ? "<g fill='url(#pat)' stroke='#333' stroke-width='0.5'>"
                         : "<g stroke='#333' stroke-width='0.5'>");
                     for (int i = 0; i < k; i++)
@@ -1148,7 +1149,7 @@ internal static class SlowSvgDocuments
                         s.Append("<symbol id='s'>").Append(painted).Append("</symbol></defs>");
                         for (int i = 0; i < u; i++)
                         {
-                            s.Append("<use href='#s'/>");
+                            s.Append(inherit ? "<use href='#s' fill='url(#pat)'/>" : "<use href='#s'/>");
                         }
                     }
                     else

@@ -336,6 +336,12 @@ public sealed class SvgPreviewGuardTests
         ["a symbol of 100 rects filling a pattern swatch that 100 uses draw, among 10,000 plain rects"] = (
             () => SlowSvgDocuments.Generate("P_paint K=100 U=100 X=10000"),
             false),
+        // The same rects inherit the swatch from the 100 uses that draw
+        // them: 41.2 s, added after a mutation that drops a use's paint
+        // escaped the rows above.
+        ["a symbol of 100 rects that inherit a pattern swatch from each of 100 uses, among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=100 U=100 X=10000 I=1"),
+            false),
     };
 
     /// <summary>Path data of 10,001 vertices.</summary>
