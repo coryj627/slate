@@ -204,7 +204,39 @@ public sealed class SvgPreviewGuardTests
                 .Replace("<defs>", "<defs><marker id='m'><rect width='1' height='1'/></marker>", StringComparison.Ordinal),
             false),
         ["a 2,000-rect marker set through var() in a style attribute"] = (() => SlowSvgDocuments.Generate("D_varinline M=2000 V=10000"), false),
+        // Codex's review (stage 4): a var() whose name nothing defines
+        // resolves its fallback, so a marker named in a fallback, at any
+        // depth, or in a declared property's own fallback, is placed at
+        // full cost, whichever route sets it.
+        ["a 2,000-rect marker set by a var() fallback in a presentation attribute"] = (
+            () => MarkerSetBy(" marker-mid='var(--undefined, url(#m))'"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback in a style attribute"] = (
+            () => StyledMarker("marker-mid:var(--undefined, url(#m))"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback in a stylesheet rule"] = (
+            () => MarkerSetBy("", "polyline{marker-mid:var(--undefined, url(#m))}"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback nested one level"] = (
+            () => MarkerSetBy(" marker-mid='var(--a, var(--b, url(#m)))'"),
+            false),
+        ["a 2,000-rect marker named by a declared property's own var() fallback"] = (
+            () => MarkerSetBy(" marker-mid='var(--p)'", "svg{--p:var(--undefined, url(#m))}"),
+            false),
     };
+
+    /// <summary>#1581's marker row (a 2,000-rect marker on a 10,000-vertex
+    /// polyline) with its marker-mid attribute replaced by
+    /// <paramref name="attribute"/>, under a stylesheet of
+    /// <paramref name="stylesheet"/> when it is not empty.</summary>
+    private static string MarkerSetBy(string attribute, string stylesheet = "")
+    {
+        string source = SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+            .Replace(" marker-mid='url(#m)'", attribute, StringComparison.Ordinal);
+        return stylesheet.Length == 0
+            ? source
+            : source.Replace("<defs>", "<style>" + stylesheet + "</style><defs>", StringComparison.Ordinal);
+    }
 
     /// <summary>Six descendant steps over 254 nested groups, the rule placed
     /// between <paramref name="before"/> and <paramref name="after"/>.</summary>
@@ -537,8 +569,48 @@ public sealed class SvgPreviewGuardTests
         Assert.Equal(expected.ToString(), Check(build()));
     }
 
+    /// <summary>A pattern of 40 rects that fills 10,000 rects, each set as
+    /// <paramref name="fill"/>, under a stylesheet of
+    /// <paramref name="stylesheet"/>; drawn through
+    /// <c>fill='url(#pat)'</c> it renders 420,000 elements.</summary>
+    private static string PatternFills(string stylesheet, string fill, string open = "", string close = "") =>
+        Svg((stylesheet.Length == 0 ? "" : "<style>" + stylesheet + "</style>")
+            + "<defs><pattern id='pat' width='4' height='4' patternUnits='userSpaceOnUse'>"
+            + Repeat("<rect width='1' height='1'/>", 40) + "</pattern></defs>"
+            + open + Repeat($"<rect width='4' height='4'{fill}/>", 10_000) + close);
+
     internal static readonly Dictionary<string, (Func<string> Build, SvgRefusal Expected)> Refusals = new()
     {
+        // Codex's review (stage 4): an element reaches every url() a var()
+        // in its paint can resolve to, through each custom property it
+        // names, so a pattern drawn through one counts as drawn through
+        // url(): one per filled element.
+        ["a pattern drawn through a custom property in an attribute"] = (
+            () => PatternFills("svg{--p:url(#pat)}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property in a style attribute"] = (
+            () => PatternFills("svg{--p:url(#pat)}", " style='fill:var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property in a stylesheet rule"] = (
+            () => PatternFills("svg{--p:url(#pat)} .u{fill:var(--p)}", " class='u'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a chain of two custom properties"] = (
+            () => PatternFills("svg{--q:url(#pat);--p:var(--q)}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a declared property's own var() fallback"] = (
+            () => PatternFills("svg{--p:var(--undefined, url(#pat))}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property a group's style attribute defines"] = (
+            () => PatternFills("", " fill='var(--p)'", "<g style='--p:url(#pat)'>", "</g>"),
+            SvgRefusal.RenderedElements),
+        // Pins: a fallback in the element's own value or in the rule's own
+        // declaration is a url() the guard already reads.
+        ["a pattern drawn through a var() fallback in an attribute"] = (
+            () => PatternFills("", " fill='var(--undefined, url(#pat))'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a var() fallback in a stylesheet rule"] = (
+            () => PatternFills(".u{fill:var(--undefined, url(#pat))}", " class='u'"),
+            SvgRefusal.RenderedElements),
         ["url references in an attribute"] = (
             () => Svg($"<rect width='16' height='16' fill='{Repeat("url(#a)", SvgPreviewGuard.MaxUrlReferencesPerValue + 1)}'/>"),
             SvgRefusal.UrlReferences),
