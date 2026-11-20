@@ -268,6 +268,12 @@ public sealed class SvgPreviewGuardTests
         ["var() doubling at 15 levels over names ending in an escaped private-use character"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\E000 "),
             false),
+        ["a 2,000-rect marker named through an escaped private-use character in its id"] = (
+            () => StyledMarker("marker-mid:url(#m\\E000 )").Replace("<marker id='m'", "<marker id='m&#xE000;'", StringComparison.Ordinal),
+            false),
+        ["a 2,000-rect marker named through an escaped supplementary character in its id"] = (
+            () => StyledMarker("marker-mid:url(#m\\1F600 )").Replace("<marker id='m'", "<marker id='m&#x1F600;'", StringComparison.Ordinal),
+            false),
         ["var() doubling at 15 levels over names ending in an escaped semicolon"] = (
             () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\;"),
             false),
