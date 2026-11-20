@@ -1591,6 +1591,40 @@ public sealed class SvgPreviewGuardTests
         ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false, false),
         ["nothing over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:'/></g>", false, false),
         ["var(--none) over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:var(--none)'/></g>", true, true),
+        // Stage 12 (the delta merge judge's major A): a reference whose
+        // fallback is inherit is kept, never dropped, and keeps the
+        // group's pattern, written any way: in the style attribute or a
+        // rule, INHERIT, no space, a trailing space, after a colour.
+        ["url(#missing) inherit in the style attribute over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) inherit'/></g>",
+            true,
+            true),
+        ["url(#missing) inherit from a rule over navy under a pattern group"] = (
+            $"<style>.s{{fill:url(#missing) inherit}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["url(#missing) INHERIT over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) INHERIT'/></g>",
+            true,
+            true),
+        ["url(#missing)inherit over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing)inherit'/></g>",
+            true,
+            true),
+        ["url(#missing) inherit and a space over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) inherit '/></g>",
+            true,
+            true),
+        ["navy then url(#missing) inherit in one style attribute under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:url(#missing) inherit'/></g>",
+            true,
+            true),
+        // The other keywords after a reference are dropped (the judge's
+        // measure), so the rect's navy applies.
+        ["url(#missing) unset over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) unset'/></g>",
+            false,
+            false),
     };
 
     /// <summary>
@@ -1604,7 +1638,14 @@ public sealed class SvgPreviewGuardTests
     /// and a pattern group around it; and 12 definitions stand against an
     /// earlier pattern definition. Svg.Skia renders each 20-pixel
     /// document; wherever it paints the pattern, the guard counts it or
-    /// refuses the document. The guard may count more, never less.
+    /// refuses the document. The guard may count more, never less. Stage 12
+    /// (the delta merge judge's major A) adds a reference followed by a
+    /// value, written three ways (after a missing reference, with and
+    /// without a space, and after a present gradient), at the same places
+    /// and three through var(): 23 values that stand for the judge's 459,
+    /// one or more from each class of what the decoder and the guard do
+    /// with them across the judge's eight templates (the calibration
+    /// record's stage 12 section says how they were chosen).
     /// </summary>
     [Fact]
     public void NoDeclarationTheDecoderDropsHidesAPatternFromTheGuard()
@@ -1617,13 +1658,22 @@ public sealed class SvgPreviewGuardTests
             "revert", "blue", "none", "currentColor", "url(#missing)", "url(#missing) blue", "context-fill", "transparent",
             "#00f", "rgb(1,2,3)",
         ];
+        string[] fallbacks =
+        [
+            "red", "none", "inherit", "INHERIT", "inherit ", "unset", "initial", "revert", "revert-layer", "context-fill",
+            "currentColor", "transparent", "#00f", "#ff000", "hsl(240,100%,50%)", "ThreeDFace", "foo", "", "url(#missing",
+            "url(#p) red", "rgb(var(--q),2,3)", "var(--b)", "var(--k)",
+        ];
         const string P = "url(#p)";
+        const string Gradient =
+            "<defs><linearGradient id='g'><stop offset='0' stop-color='#336600'/><stop offset='1' stop-color='#336600'/></linearGradient></defs>";
         var bodies = new List<string>();
-        foreach (string d in spellings)
+        void AddPlaces(string d, string defs)
         {
             string imp = d.Length == 0 ? "!important" : d + " !important";
             bodies.AddRange(
-            [
+            new[]
+            {
                 $"<rect{Rect20} fill='{P}' style='fill:{d}'/>",
                 $"<rect{Rect20} style='fill:{P};fill:{d}'/>",
                 $"<style>rect{{fill:{P}}} .a{{fill:{d}}}</style><rect class='a'{Rect20}/>",
@@ -1639,7 +1689,24 @@ public sealed class SvgPreviewGuardTests
                 $"<style>.a{{fill:{d}}}</style><g fill='{P}'><rect class='a'{Rect20}/></g>",
                 $"<g fill='{P}'><rect{Rect20} fill='{d}'/></g>",
                 $"<g fill='{P}'><rect{Rect20} style='fill:{d}'/></g>",
-            ]);
+            }.Select(body => defs + body));
+        }
+        foreach (string d in spellings)
+        {
+            AddPlaces(d, "");
+        }
+        foreach (string v in fallbacks)
+        {
+            foreach ((string d, string defs) in new[] { ($"url(#missing) {v}", ""), ($"url(#missing){v}", ""), ($"url(#g) {v}", Gradient) })
+            {
+                AddPlaces(d, defs);
+                bodies.AddRange(
+                [
+                    $"{defs}<rect{Rect20} fill='{P}' style='--a:{d};fill:var(--a)'/>",
+                    $"{defs}<g fill='{P}'><rect{Rect20} fill='#000080' style='--a:{d};fill:var(--a)'/></g>",
+                    $"{defs}<style>.s{{--a:{d};fill:var(--a)}}</style><rect class='s'{Rect20} fill='{P}'/>",
+                ]);
+            }
         }
         string[] definitions = ["", "bogus", "url(", ")", "x}", "!important", "url(#q", "inherit", "initial", "unset", "blue", "var(--none)"];
         foreach (string x in definitions)
@@ -1663,7 +1730,7 @@ public sealed class SvgPreviewGuardTests
                 hidden.Add(body);
             }
         }
-        Assert.Equal(558, bodies.Count);
+        Assert.Equal(558 + (23 * 3 * 18), bodies.Count);
         Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
     }
 
@@ -1682,6 +1749,37 @@ public sealed class SvgPreviewGuardTests
             s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='url(#pat)' style='fill:x'/>");
         }
         string source = s.Append("</svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major A, stage 12): 6,000 navy rects
+    /// under a group whose fill is the pattern, each written over by a
+    /// reference whose fallback is inherit, in the style attribute (11.0 s
+    /// to decode, the judge's measurement) or a rule (7.5 s), keep the
+    /// pattern and are refused for their cost.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SixThousandRectsWhoseReferenceFallsBackToInheritAreRefused(bool styleAttribute)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        if (!styleAttribute)
+        {
+            s.Append("<style>.s{fill:url(#x) inherit}</style>");
+        }
+        s.Append("<g fill='url(#pat)'>");
+        string own = styleAttribute ? " style='fill:url(#x) inherit'" : " class='s'";
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='#000080'{own}/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
         SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
         Assert.True(
             estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
