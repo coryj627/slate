@@ -3309,10 +3309,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         s_svgProjectionDecodeDeadlineMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
             "note-images", SvgProjectionDecodeDeadlineSeconds);
 
-    /// <summary>#1635 (CD19): how many refused decodes a memory keeps, timed
-    /// out or refused for their cost. Remembering one more drops the
-    /// oldest.</summary>
+    /// <summary>#1635 (CD19): how many decodes that timed out a memory keeps.
+    /// Remembering one more drops the oldest of them.</summary>
     internal const int MaxRememberedSvgDecodeTimeouts = 256;
+
+    /// <summary>#1610 (the delta merge judge's minor 4, stage 11): how many
+    /// SVGs the guard refused for their cost a memory keeps, apart from the
+    /// timeouts, so no number of cost refusals evicts a timeout. Remembering
+    /// one more drops the oldest of them.</summary>
+    internal const int MaxRememberedSvgCostRefusals = 256;
 
     /// <summary>#1635 (CD19): the SVG decodes that ran out their whole budget,
     /// and (#1610, the merge judge's minor 2) the SVGs the guard refused for
@@ -3330,7 +3335,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         /// <summary>Each key, and whether the guard refused it for its cost
         /// rather than its decode timing out.</summary>
         private readonly Dictionary<string, bool> _keys = new(StringComparer.Ordinal);
-        private readonly Queue<string> _arrivals = new();
+
+        /// <summary>The timeouts and the cost refusals, each oldest first,
+        /// each evicted only by its own kind.</summary>
+        private readonly Queue<string> _timeouts = new();
+        private readonly Queue<string> _costRefusals = new();
 
         /// <summary>The key a decode is remembered by: the upper-case hex of
         /// its bytes' SHA-256, a string, so the set compares by value.</summary>
@@ -3369,7 +3378,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         /// <summary>Remembers <paramref name="key"/> as a decode that timed
         /// out, or with <paramref name="forCost"/> as an SVG the guard
         /// refused for its cost (#1610). A key already held changes nothing;
-        /// one past the capacity drops the oldest.</summary>
+        /// one past its kind's capacity drops the oldest of that kind.</summary>
         internal void Remember(string key, bool forCost = false)
         {
             lock (_gate)
@@ -3378,10 +3387,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 {
                     return;
                 }
-                _arrivals.Enqueue(key);
-                if (_arrivals.Count > MaxRememberedSvgDecodeTimeouts)
+                Queue<string> arrivals = forCost ? _costRefusals : _timeouts;
+                arrivals.Enqueue(key);
+                if (arrivals.Count > (forCost ? MaxRememberedSvgCostRefusals : MaxRememberedSvgDecodeTimeouts))
                 {
-                    _keys.Remove(_arrivals.Dequeue());
+                    _keys.Remove(arrivals.Dequeue());
                 }
             }
         }
@@ -3566,9 +3576,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         memory = SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
             ? null
             : slots.TimeoutMemory;
+        // #1610 (the delta merge judge's nit 5): the hash the memory is read
+        // by is charged to the projection's deadline with whatever follows
+        // it, on every path, so no path hashes for free.
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
         key = memory is null ? null : SvgDecodeTimeoutMemory.KeyOf(bytes);
         if (key is not null && memory!.TryRecall(key, out bool rememberedForCost))
         {
+            deadline?.Charge(GuardCharge(System.Diagnostics.Stopwatch.GetElapsedTime(started)));
             HostLog.WriteDetail(
                 HostDiagnosticEvent.SvgDecodeRefusedRemembered,
                 rememberedForCost ? $"bytes={bytes.Length}, cost" : $"bytes={bytes.Length}");
@@ -3576,14 +3591,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         if (deadline is { IsSpent: true })
         {
+            deadline.Charge(GuardCharge(System.Diagnostics.Stopwatch.GetElapsedTime(started)));
             HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
             return SvgProjectionDecodeDeadlineMessage;
         }
         // #1610 (the merge judge's minor 2): the guard runs on the caller,
-        // before any slot, so its own time is charged to the projection's
-        // deadline as a decode's is, and a refusal for cost is remembered, so
-        // a note's next refresh says it without checking again.
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        // before any slot, so its own time (and the hash's) is charged to the
+        // projection's deadline as a decode's is, and a refusal for cost is
+        // remembered, so a note's next refresh says it without checking
+        // again.
         string? refusal;
         bool forCost = false;
         try

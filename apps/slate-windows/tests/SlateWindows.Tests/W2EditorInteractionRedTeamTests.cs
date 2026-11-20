@@ -1270,6 +1270,7 @@ public sealed class W2EditorInteractionRedTeamTests
     [Fact]
     public void SvgPreview_CostRefusalsCannotEvictATimeout()
     {
+        Assert.Equal(256, EditorInteractionCoordinator.MaxRememberedSvgCostRefusals);
         var memory = new EditorInteractionCoordinator.SvgDecodeTimeoutMemory();
         static string Key(int index) =>
             EditorInteractionCoordinator.SvgDecodeTimeoutMemory.KeyOf(Encoding.UTF8.GetBytes(FilledSvg($"#{index:x6}")));
