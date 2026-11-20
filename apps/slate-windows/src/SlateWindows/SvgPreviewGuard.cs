@@ -1472,8 +1472,7 @@ internal static class SvgPreviewGuard
         /// the parent's paint. Anything else is not a pattern. A rule whose
         /// selector the guard cannot match exactly (a combinator, a
         /// pseudo-class, an attribute selector, an id several elements share,
-        /// which the decoder renames on all but one, or a name in another
-        /// case) may apply or not: where it would set or keep a pattern it is
+        /// or a name in another case) may apply or not: where it would set or keep a pattern it is
         /// taken to apply and to win among the rules, and where it would
         /// clear one it is left out, so the count errs toward the pattern.
         /// Only a document with a pattern is read this way.

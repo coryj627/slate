@@ -882,17 +882,21 @@ public sealed class SvgPreviewGuardTests
         ["an !important pattern rule over the style attribute"] = (
             () => PaintedGroup(".p{fill:url(#pat) !important}", "", " class='p' style='fill:red'"),
             true),
-        // Specificity (46 ms), then source order (2.6 s).
-        ["a compound colour rule over a class pattern rule"] = (
-            () => PaintedGroup(".p{fill:url(#pat)} rect.p{fill:red}", "", " class='p'"),
+        // Specificity over source order (46 ms), then source order (2.6 s).
+        ["a compound colour rule over a later class pattern rule"] = (
+            () => PaintedGroup("rect.p{fill:red} .p{fill:url(#pat)}", "", " class='p'"),
             false),
         ["a later pattern rule over an earlier colour rule of the same specificity"] = (
             () => PaintedGroup(".p{fill:red} .p{fill:url(#pat)}", "", " class='p'"),
             true),
         // Where the guard cannot tell a rule matches, it counts the pattern:
         // a selector with a combinator (55 ms), and an id many elements
-        // share, which the decoder renames on all but one (3.9 s).
+        // share, under a pattern group with a colour rule (3.7 to 3.9 s) and
+        // under a red group with a pattern rule (2.0 s).
         ["a colour rule whose selector has a combinator"] = (() => PaintedGroup("g > rect{fill:red}", PatternFill, ""), true),
+        ["a pattern rule naming an id 3,000 rects share, under a red group"] = (
+            () => PaintedGroup("#i{fill:url(#pat)}", " fill='red'", " id='i'"),
+            true),
         ["a colour rule naming an id 3,000 rects share"] = (() => PaintedGroup("#i{fill:red}", PatternFill, " id='i'"), true),
         // A use's own colour clears the group's pattern for its instance
         // (160 ms; 23.1 s where the instance keeps it).
