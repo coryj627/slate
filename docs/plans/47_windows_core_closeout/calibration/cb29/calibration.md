@@ -630,7 +630,48 @@ Codex's fifth round found the pattern term counting paints that never happen: 3,
 | a pattern stroke and `stroke='none'`; the pattern stroke kept; a pattern fill and stroke both cleared | 33, 3,184, 47 ms | each property on its own |
 | uses of a plain symbol under the pattern group, each with `fill='red'`; without | 35, 408 ms | a use's colour reaches its instance |
 
-The guard now gives each element's own fill and stroke the decoder's way: an `!important` rule beats the style attribute, which beats the other rules, which beat the presentation attribute, and among rules the higher specificity, then the later rule, wins. A value that names a pattern, directly or through a custom property, is a pattern. `inherit`, a context paint, and a `var()` that may resolve to nothing keep the parent's paint (`currentColor` did too in stage 8, by the lead's first rule; stage 9 follows the decoder and reads it as a colour); a `var()` resolves for certain when it has a fallback, or names a property an `svg` or universal rule or the root's style attribute defines as a value without `var()`. Anything else clears the pattern. A rule whose selector the guard cannot match exactly (a combinator, a pseudo-class, an attribute selector, an id several elements share, a name in another case) is taken to apply where it would set or keep a pattern and left out where it would clear one, so the count errs toward the pattern. Fill and stroke are then followed down the tree and through uses on their own. The documents of `AShapesOwnPaintFollowsTheDecodersCascade`, one decode each: every cleared row 43 to 160 ms, estimated 0 to 7 ms, `currentColor` (46 ms) among them since stage 9; every counted row 2.0 to 23.1 s, but the combinator colour rule (61 ms), which counts by design; half the rects overriding the group, 1,627 ms, estimated 1,537 ms. A document without a pattern reads none of this, so no step count of section 6 or row of section 8 moves.
+The guard now gives each element's own fill and stroke the decoder's way: an `!important` rule beats the style attribute, which beats the other rules, which beat the presentation attribute, and among rules the higher specificity, then the later rule, wins. A value that names a pattern, directly or through a custom property, is a pattern. `inherit`, a context paint, and a `var()` that may resolve to nothing keep the parent's paint (`currentColor` did too in stage 8, by the lead's first rule; stage 9 follows the decoder and reads it as a colour); stage 8 took a `var()` to resolve only when it had a fallback or named a property the root defines, which stage 9 replaces with the element's scope (below). Anything else clears the pattern. A rule whose selector the guard cannot match exactly (a combinator, a pseudo-class, an attribute selector, an id several elements share, a name in another case) is taken to apply where it would set or keep a pattern and left out where it would clear one, so the count errs toward the pattern. Fill and stroke are then followed down the tree and through uses on their own. The documents of `AShapesOwnPaintFollowsTheDecodersCascade`, one decode each: every cleared row 43 to 160 ms, estimated 0 to 7 ms, `currentColor` (46 ms) among them since stage 9; every counted row 2.0 to 23.1 s, but the combinator colour rule (61 ms), which counts by design; half the rects overriding the group, 1,627 ms, estimated 1,537 ms. A document without a pattern reads none of this, so no step count of section 6 or row of section 8 moves.
+
+### A var()'s scope (Codex's round 6, stage 9)
+
+Codex's sixth round found the same false refusal through `var()`: 3,000 rects with `fill='var(--c)'` in a group that defines `--c:red` and fills with the pattern were refused at 3,065 ms, because a `var()` counted as resolving only to a property the root defines. The lead set stage 9 to close the whole class. The decoder was measured first, with the same group of 3,000 rects beside the swatch (the Skia half, one decode each), and the guard's verdict is given on 3a1c582f, before the change, and on 8fe01d58, after it:
+
+| case | decode | decoder | guard before | guard after |
+|---|---|---|---|---|
+| the rects keep the group's pattern (baseline) | 3,498 ms | pattern | refused | refused |
+| the rects red (baseline) | 50 ms | colour | admitted | admitted |
+| `--c:red` in an ancestor's style attribute | 69 ms | colour | refused | admitted |
+| `--c='red'` as an ancestor's attribute | 1 ms | not XML, nothing drawn | malformed | malformed |
+| `--c:red` from a type rule on an ancestor | 69 ms | colour | refused | admitted |
+| `--c:red` from a class rule on an ancestor | 90 ms | colour | refused | admitted |
+| `--c:red` from a combinator rule on an ancestor | 63 ms | colour | refused | refused (the guard cannot match it) |
+| `var(--c, red)`, `--c` undefined | 116 ms | colour | admitted | admitted |
+| `var(--c, red)`, `--c` a pattern, the group red | 3,248 ms | pattern | refused | refused |
+| `var(--c, red)`, `--c` a colour | 61 ms | colour | admitted | admitted |
+| `--a:var(--b)`, `--b` a colour | 52 ms | colour | refused | admitted |
+| `--a:var(--b)`, `--b` a pattern, the group red | 3,275 ms | pattern | refused | refused |
+| `--a:var(--b)`, `--b` on an outer group | 54 ms | colour | refused | admitted |
+| `--a:var(--b)`, `--b` undefined | 3,296 ms | keeps the parent's | refused | refused |
+| `--a` and `--b` reading each other | 3,241 ms | keeps the parent's | refused | refused |
+| an inner `--c` colour over an outer `--c` pattern | 48 ms | colour | refused | admitted |
+| an inner `--c` pattern over an outer `--c` colour, the group red | 3,152 ms | pattern | refused | refused |
+| `--c:red` in the rect's own style attribute | 37 ms | colour | refused | admitted |
+| `--c:red` from a rule on the rect | 44 ms | colour | refused | admitted |
+| `--c:red` two levels up | 38 ms | colour | refused | admitted |
+| `--c:red` on a sibling branch only | 3,246 ms | keeps the parent's | refused | refused |
+| `--c:red` on the root, by `svg{--c:red}` | 37 ms | colour | admitted | admitted |
+| `currentColor`, `color='red'` on the group | 56 ms | colour | admitted | admitted |
+| `fill:var(--c)` in the rect's style attribute, `--c:red` on the group | 33 ms | colour | refused | admitted |
+| `fill:var(--c)` from a rule on the rect, `--c:red` on the group | 61 ms | colour | refused | admitted |
+| the rect's own `--c` pattern over the group's `--c` colour, the group red | 3,012 ms | pattern | refused | refused |
+| 30 uses of a symbol of 100 rects, beside 20,000 plain rects, no definition | 23,858 ms | keeps the parent's | refused | refused |
+| the same, `--c:red` on a group around the uses | 23,419 ms | keeps the parent's | refused | refused |
+| the same, `--c:red` on each use | 23,216 ms | keeps the parent's | refused | refused |
+| the same, `--c:red` on the symbol | 238 ms | colour | refused | admitted |
+| the same, `--c:red` on a group around the symbol in `defs` | 135 ms | colour | refused | admitted |
+| the same, `--c:red` on `defs` | 241 ms | colour | refused | admitted |
+
+The decoder resolves custom properties as CSS does, with one turn: a use's instance reads the properties of the element it draws and that element's ancestors in the document, not the use's or its ancestors' (the decoder resolves them before it draws the use), although a use's own fill does reach its instance (stage 8). The guard now carries, for a document with a pattern, each element's custom properties in scope: its parent's in the document, with each property it defines itself (in its style attribute or by rules, through the cascade that decides its fill) in place of the parent's. Only the properties a fill or a stroke reads, and those their definitions read in turn, are carried; an element that defines none of them shares its parent's scope, so the work is linear in the document but for the elements that define one. A definition that reads the element's own properties is resolved over at most one pass more than there are: a chain resolves, and a cycle stays unresolved. A `var()` then takes what its property holds: a pattern makes the paint a pattern; a property that may resolve to nothing (undefined, a chain to nothing, a cycle) keeps the parent's paint unless the `var()` has a fallback; anything else is a colour. A definition from a rule the guard cannot match exactly may apply or not, so it widens with the parent's value: the combinator row stays counted, the one row where the guard and the decoder differ, under the register's line for such rules. Each row is a row of `AVarTakesWhatItsPropertyHoldsInTheElementsScope`.
 
 ## Not verified
 
