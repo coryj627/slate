@@ -194,6 +194,11 @@ public sealed class SvgPreviewGuardTests
             () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='d:path(\"M0 0"
                 + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}")) + "\")'/>"),
             false),
+        ["a 2,000-rect marker on a path a stylesheet d:path() draws through 10,000 vertices"] = (
+            () => MarkedShape("<style>path{d:path(\"M0 0"
+                + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}"))
+                + "\")}</style><path fill='none' stroke='black' marker-mid='url(#m)'/>"),
+            false),
         ["a 2,000-rect marker named by the second of two elements with its id"] = (
             () => SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
                 .Replace("<defs>", "<defs><marker id='m'><rect width='1' height='1'/></marker>", StringComparison.Ordinal),
