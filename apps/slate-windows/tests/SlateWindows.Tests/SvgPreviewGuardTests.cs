@@ -717,9 +717,13 @@ public sealed class SvgPreviewGuardTests
         // Stage 7: a pattern swatch on 1,000 rects decodes in about 0.45 s, and
         // one that paints ten shapes among 20,000 plain rects in 0.46 s, its
         // drawing; neither the swatch's content nor an unpainted shape counts
-        // as a paint.
+        // as a paint. A custom property that holds the pattern paints only
+        // the shapes that use it, not the element that defines it, in a
+        // stylesheet or in a style attribute around every shape.
         { "P_paint K=1000", 600 },
         { "P_paint K=10 X=20000", 200 },
+        { "P_paint K=10 X=5000 V=1", 200 },
+        { "P_paint K=10 X=5000 V=2", 200 },
     };
 
     /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist

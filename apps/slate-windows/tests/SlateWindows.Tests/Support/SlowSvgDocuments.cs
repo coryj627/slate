@@ -1102,23 +1102,29 @@ internal static class SlowSvgDocuments
                     // The merge judge's register check (stage 7): K rects
                     // painted with a pattern swatch of ten children, by a fill
                     // each, by a group they inherit it from (I=1), by a
-                    // stylesheet rule (S=1) or through var() (V=1), drawn
-                    // once, or held by a symbol that U uses draw; then X
-                    // plain rects.
+                    // stylesheet rule (S=1) or through var() (V=1, a
+                    // stylesheet's definition; V=2, a group's style attribute
+                    // around everything), drawn once, or held by a symbol
+                    // that U uses draw; then X plain rects.
                     int k = P(p, "K", 1000);
                     int u = P(p, "U", 0);
+                    int throughVar = P(p, "V", 0);
                     bool inherit = P(p, "I", 0) == 1;
                     string paint = inherit ? ""
                         : P(p, "S", 0) == 1 ? " class='p'"
-                        : P(p, "V", 0) == 1 ? " style='fill:var(--p)'"
+                        : throughVar > 0 ? " style='fill:var(--p)'"
                         : " fill='url(#pat)'";
                     if (P(p, "S", 0) == 1)
                     {
                         s.Append("<style>rect.p{fill:url(#pat)}</style>");
                     }
-                    if (P(p, "V", 0) == 1)
+                    if (throughVar == 1)
                     {
                         s.Append("<style>svg{--p:url(#pat)}</style>");
+                    }
+                    if (throughVar == 2)
+                    {
+                        s.Append("<g style='--p:url(#pat)'>");
                     }
                     var painted = new StringBuilder(inherit
                         ? "<g fill='url(#pat)' stroke='#333' stroke-width='0.5'>"
@@ -1152,6 +1158,10 @@ internal static class SlowSvgDocuments
                     for (int i = 0; i < P(p, "X", 0); i++)
                     {
                         s.Append(RectAt(i, " fill='#cc9'"));
+                    }
+                    if (throughVar == 2)
+                    {
+                        s.Append("</g>");
                     }
                     break;
                 }

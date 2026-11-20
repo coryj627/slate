@@ -771,10 +771,14 @@ public sealed class W2EditorInteractionRedTeamTests
         EditorInteractionCoordinator.SvgGuardChargeForTests = _ => TimeSpan.FromMilliseconds(600);
         try
         {
+            // The second image's body would park, so a decoder started for
+            // it holds its slot.
             WithSvgDecodeSeams(
                 slots,
                 budgetMilliseconds: null,
-                body: decodes.Ending,
+                body: (bytes, reserve) => ReferenceEquals(bytes, svgs[1])
+                    ? decodes.Parked(bytes, reserve)
+                    : decodes.Ending(bytes, reserve),
                 () =>
                 {
                     Assert.Null(EditorInteractionCoordinator.DecodeImage(
@@ -789,6 +793,7 @@ public sealed class W2EditorInteractionRedTeamTests
                         svgs[1], "image/svg+xml", null, deadline, out _, out string? second));
                     Assert.Equal(ProjectionSpent, second);
                     Assert.Equal(2, checks);
+                    Assert.Equal(0, Volatile.Read(ref slots.Live));
                     Assert.Equal(0, decodes.RunsOf(svgs[1]));
                     Assert.True(deadline.IsSpent);
 
@@ -804,6 +809,8 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             EditorInteractionCoordinator.SvgGuardChargeForTests = null;
             SvgPreviewGuard.CheckProbeForTests = null;
+            decodes.Release();
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
         }
     }
 
