@@ -952,6 +952,10 @@ internal static class SvgPreviewGuard
         {
             int elements = names.Count;
             var byId = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            // The ids an element that draws carries, found once while the
+            // index is built (Codex's round 2): an id only gradients carry
+            // reaches nothing, and no later question rescans its elements.
+            var drawing = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < elements; i++)
             {
                 steps.Spend(1);
@@ -962,14 +966,17 @@ internal static class SvgPreviewGuard
                         byId[id] = named = [];
                     }
                     named.Add(i);
+                    if (!IsGradient(names[i]))
+                    {
+                        drawing.Add(id);
+                    }
                 }
             }
             // Custom properties (Codex's review, stage 4): an element or a
             // rule whose value names one reaches every url() target the
             // property can resolve to, through one node per component of
             // properties that reaches a target that draws.
-            bool Draws(string id) =>
-                byId.TryGetValue(id, out List<int>? named) && named.Exists(target => !IsGradient(names[target]));
+            bool Draws(string id) => drawing.Contains(id);
             var reach = new VarReach(
                 customDefinitions.Concat(Rules
                     .Where(rule => rule.Prelude is not null)
@@ -1048,8 +1055,7 @@ internal static class SvgPreviewGuard
                 {
                     return;
                 }
-                if (byId.TryGetValue(id, out List<int>? named)
-                    && named.Exists(target => !IsGradient(names[target])))
+                if (Draws(id))
                 {
                     idNodes[id] = elements + keyNodes.Count + idNodes.Count;
                 }
@@ -1114,6 +1120,7 @@ internal static class SvgPreviewGuard
             }
             foreach ((string id, int node) in idNodes)
             {
+                steps.Spend(byId[id].Count);
                 foreach (int target in byId[id])
                 {
                     if (!IsGradient(names[target]))
@@ -2068,6 +2075,8 @@ internal static class SvgPreviewGuard
         private int[]? widestByComponent;
         private readonly Dictionary<int, double[]> choiceRows = [];
         private double queriedPasses;
+        private int queriedRules;
+        private double[]? ofTypeShare;
         private int rules;
         private double[] renders = [];
 
@@ -2077,10 +2086,17 @@ internal static class SvgPreviewGuard
             ReadRules();
             renders = Renders();
             Family family = Families(elements);
+            foreach (SelectorBranch branch in selectorBranches)
+            {
+                foreach (KeyStats key in branch.OfType ?? [])
+                {
+                    key.OfTypeWeight += branch.Passes * SvgDecodeRates.OfTypeSiblingRead;
+                }
+            }
             double markerUnits = VisitElements(family, ReadAttributeKeys());
             return new SvgDecodeEstimate(
                 Cap(StylesheetMicroseconds(elements, family)),
-                Cap(UseMicroseconds(elements)),
+                Cap(UseMicroseconds(elements, family)),
                 Cap(SvgDecodeRates.VarCopy * VarLookups()),
                 Cap(SvgDecodeRates.MarkerUnit * markerUnits));
         }
@@ -2125,6 +2141,7 @@ internal static class SvgPreviewGuard
             {
                 return;
             }
+            queriedRules++;
             bool custom = false;
             bool geometry = false;
             double landing = 0;
@@ -2624,14 +2641,14 @@ internal static class SvgPreviewGuard
                     descendants[parents[i]] += descendants[i] + 1;
                 }
             }
-            return new Family(atDepth, families, siblings, descendants);
+            return new Family(atDepth, families, siblings, descendants, depths);
         }
 
         /// <summary>Elements by depth, parents by their number of children
         /// (children, parents), and each element's sibling-list size and
         /// descendants.</summary>
         private sealed record Family(
-            double[] AtDepth, Dictionary<int, int> Parents, double[] Siblings, double[] Descendants);
+            double[] AtDepth, Dictionary<int, int> Parents, double[] Siblings, double[] Descendants, int[] Depths);
 
         // ------------------------------------------------------------------
         // Elements: their keys, and the markers they place
@@ -2708,7 +2725,7 @@ internal static class SvgPreviewGuard
 
             foreach (KeyStats key in keys.Values)
             {
-                steps.Spend(1);
+                steps.Spend(1 + (key.Markers?.Count ?? 0));
                 key.ResolveMarkers(this);
             }
             const int NotSet = -2;
@@ -2760,6 +2777,10 @@ internal static class SvgPreviewGuard
                     stats.Count++;
                     stats.FamilySum += siblings[i];
                     stats.DescendantSum += descendants[i];
+                    if (stats.OfTypeWeight > 0)
+                    {
+                        (ofTypeShare ??= new double[elements])[i] += stats.OfTypeWeight * siblings[i];
+                    }
                     if (path)
                     {
                         vertexCount = Math.Max(vertexCount, stats.PathVertices);
@@ -3038,10 +3059,21 @@ internal static class SvgPreviewGuard
         // Uses
         // ------------------------------------------------------------------
 
-        /// <summary>Under any <c>&lt;style&gt;</c>, each use render
-        /// re-applies the stylesheet to the document and to its instance's
-        /// elements.</summary>
-        private double UseMicroseconds(int elements)
+        /// <summary>
+        /// Under any <c>&lt;style&gt;</c>, each use render re-applies the
+        /// stylesheet to the document and to its instance's elements. The
+        /// fitted per-rule weights cover one branch query of each rule per
+        /// instance (the calibration's use sweep had one branch a rule).
+        /// Svg.Custom's scoped application queries the instance's elements
+        /// (Codex's round 2), so each render also takes every further branch
+        /// query (more branches, custom and geometry passes, child and
+        /// adjacent walks) over the instance's elements, and the combinator
+        /// work of the instance's own subtree: its descendant chains,
+        /// sibling reads and of-type reads, counted as the stylesheet term
+        /// counts them, over the target's elements (measured: about 0.35 s
+        /// an instance where this counts 0.5 s).
+        /// </summary>
+        private double UseMicroseconds(int elements, Family family)
         {
             if (!document.HasStyleElement)
             {
@@ -3049,6 +3081,8 @@ internal static class SvgPreviewGuard
             }
             double useRenders = 0;
             double instanceElements = 0;
+            double instanceCombinators = 0;
+            double[]? subtreeCombinators = null;
             foreach ((int element, string? target) in document.Uses)
             {
                 steps.Spend(1);
@@ -3057,12 +3091,72 @@ internal static class SvgPreviewGuard
                 if (target is not null && WidestWithId(target) is var instance and >= 0)
                 {
                     instanceElements = Cap(instanceElements + (paths * renders[instance]));
+                    subtreeCombinators ??= SubtreeCombinators(family);
+                    instanceCombinators = Cap(instanceCombinators + (paths * subtreeCombinators[instance]));
                 }
             }
+            double furtherQueries = Math.Max(0, queriedPasses - queriedRules);
             return Cap(SvgDecodeRates.UseRenderElement * useRenders
                     * (elements + (SvgDecodeRates.UseRenderRuleWeight * rules)))
                 + Cap(instanceElements
-                    * (SvgDecodeRates.UseInstanceElement + (SvgDecodeRates.UseInstanceElementRule * rules)));
+                    * (SvgDecodeRates.UseInstanceElement + (SvgDecodeRates.UseInstanceElementRule * rules)))
+                + Cap(instanceElements * SvgDecodeRates.QueryPerBranchElement * furtherQueries)
+                + instanceCombinators;
+        }
+
+        /// <summary>
+        /// Each element's subtree's combinator work (Codex's round 2): an
+        /// element's own is what the stylesheet term counts for it (the ways
+        /// to pick 1 to k of its ancestors for each descendant branch, its
+        /// sibling list's reads for each general-sibling branch, its sibling
+        /// list for each of-type key it is filed under), a left compound's
+        /// narrowing aside, which errs wide; a subtree's is the sum.
+        /// </summary>
+        private double[] SubtreeCombinators(Family family)
+        {
+            int elements = document.Names.Count;
+            var descendantWeights = new Dictionary<int, double>();
+            var siblingWeights = new Dictionary<int, double>();
+            foreach (SelectorBranch branch in selectorBranches)
+            {
+                steps.Spend(1);
+                if (branch.Descendants > 0)
+                {
+                    descendantWeights[branch.Descendants] = descendantWeights.GetValueOrDefault(branch.Descendants)
+                        + (branch.Passes * SvgDecodeRates.DescendantChainUnit);
+                }
+                if (branch.Siblings > 0)
+                {
+                    siblingWeights[branch.Siblings] = siblingWeights.GetValueOrDefault(branch.Siblings)
+                        + (branch.Passes * SvgDecodeRates.SiblingListRead);
+                }
+            }
+            var share = new double[elements];
+            for (int i = 0; i < elements; i++)
+            {
+                steps.Spend(1 + descendantWeights.Count + siblingWeights.Count);
+                double own = ofTypeShare?[i] ?? 0;
+                int depth = Math.Min(family.Depths[i], MaxRenderDepth);
+                foreach ((int chain, double weight) in descendantWeights)
+                {
+                    own = Cap(own + (weight * Choices(depth, chain)));
+                }
+                int siblings = (int)family.Siblings[i];
+                foreach ((int chain, double weight) in siblingWeights)
+                {
+                    own = Cap(own + (weight * Choices(siblings, chain)));
+                }
+                share[i] = own;
+            }
+            // Children follow their parent in document order.
+            for (int i = elements - 1; i >= 0; i--)
+            {
+                if (document.Parents[i] is var parent and >= 0)
+                {
+                    share[parent] = Cap(share[parent] + share[i]);
+                }
+            }
+            return share;
         }
 
         // ------------------------------------------------------------------
@@ -3121,6 +3215,7 @@ internal static class SvgPreviewGuard
             internal double Count;
             internal double FamilySum;
             internal double DescendantSum;
+            internal double OfTypeWeight;
             internal int PathVertices;
             internal double DeclarationMicroseconds;
             internal List<MarkerDeclaration>? Markers;
@@ -3224,7 +3319,7 @@ internal static class SvgPreviewGuard
             {
                 for (int id = 0; id < parsed.Length; id++)
                 {
-                    steps.Spend(1);
+                    steps.Spend(1 + parsed[id].Count);
                     int row = tableRow[id];
                     if (row < 0)
                     {
