@@ -1388,7 +1388,7 @@ internal static class SvgPreviewGuard
             }
             if (patternIds.Count > 0)
             {
-                PaintCascade(byId, patternIds, Reached);
+                PaintCascade(byId, patternIds);
             }
 
             // Only elements are levels of a chain and renders; a key node is
@@ -1459,143 +1459,105 @@ internal static class SvgPreviewGuard
         internal const byte PatternPaint = 2;
 
         /// <summary>
-        /// #1610 (Codex's round 5, stage 8): each element's own fill and
-        /// stroke, each on its own, as the decoder's cascade gives them
-        /// (measured in stage 8): an <c>!important</c> rule beats the style
+        /// #1610 (Codex's rounds 5 and 6, stages 8 and 9): each element's own
+        /// fill and stroke, each on its own, as the decoder's cascade gives
+        /// them (measured): an <c>!important</c> rule beats the style
         /// attribute, which beats the other rules, which beat the
         /// presentation attribute, and among rules the higher specificity,
-        /// then the later rule, wins. A value that names a pattern, directly
-        /// or through a custom property, is a pattern. <c>inherit</c>, a
-        /// context paint, and a <c>var()</c> that may resolve to nothing
-        /// (measured: the decoder then keeps the parent's paint) keep the
-        /// parent's paint. Anything else is not a pattern, <c>currentColor</c>
-        /// among them: the decoder draws it as the colour (stage 9). A rule
-        /// whose selector the guard cannot match exactly (a combinator, a
-        /// pseudo-class, an attribute selector, an id several elements share,
-        /// or a name in another case) may apply or not: where it would set or
-        /// keep a pattern it is taken to apply and to win among the rules,
-        /// and where it would clear one it is left out, so the count errs
-        /// toward the pattern.
-        /// Only a document with a pattern is read this way.
+        /// then the later rule, wins. A value that names a pattern is a
+        /// pattern; <c>inherit</c> and a context paint keep the parent's
+        /// paint; <c>currentColor</c> and anything else are a colour. A
+        /// <c>var()</c> takes what its custom property holds in the element's
+        /// scope (<see cref="CustomScope"/>): a pattern makes it a pattern, a
+        /// property that may resolve to nothing keeps the parent's paint
+        /// unless the <c>var()</c> has a fallback, and anything else is a
+        /// colour. A rule whose selector the guard cannot match exactly (a
+        /// combinator, a pseudo-class, an attribute selector, an id several
+        /// elements share, or a name in another case) may apply or not: where
+        /// it would set or keep a pattern it is taken to apply and to win
+        /// among the rules, and where it would clear one it is left out, so
+        /// the count errs toward the pattern. Only a document with a pattern
+        /// is read this way.
         /// </summary>
-        private void PaintCascade(
-            Dictionary<string, List<int>> byId, HashSet<string> patternIds, Func<string, HashSet<int>> reached)
+        private void PaintCascade(Dictionary<string, List<int>> byId, HashSet<string> patternIds)
         {
             int elements = names.Count;
-            VarReach reach = Reach!;
-            var leadsToPattern = new bool[reach.Count];
-            for (int c = 0; c < reach.Count; c++)
+            static bool IsPaint(string property) =>
+                property.Equals("fill", StringComparison.OrdinalIgnoreCase)
+                || property.Equals("stroke", StringComparison.OrdinalIgnoreCase);
+
+            var styleOf = new Dictionary<int, List<(string Name, string Value)>>();
+            foreach ((int element, string text) in styleTexts)
             {
-                steps.Spend(1 + reach.Urls[c].Count + reach.Named[c].Count);
-                leadsToPattern[c] = reach.Urls[c].Exists(patternIds.Contains)
-                    || reach.Named[c].Exists(other => leadsToPattern[other]);
+                styleOf[element] = Declarations(text);
             }
 
-            // The custom properties every element resolves: those an svg or
-            // universal rule, or the root's style attribute, defines as a value
-            // without var().
-            var rootDefined = new HashSet<string>(StringComparer.Ordinal);
-            void Define(string name, string value)
+            // The custom properties a fill or a stroke reads, and those their
+            // definitions read in turn, found once through a queue.
+            var definitions = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var relevant = new HashSet<string>(StringComparer.Ordinal);
+            var unread = new Queue<string>();
+            void Reads(string value)
+            {
+                foreach (string name in NamesIn(value))
+                {
+                    steps.Spend(1);
+                    if (relevant.Add(name))
+                    {
+                        unread.Enqueue(name);
+                    }
+                }
+            }
+            void Sorts(string name, string value)
             {
                 steps.Spend(1);
-                Scanned(value.Length);
-                if (name.StartsWith("--", StringComparison.Ordinal)
-                    && !value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                if (IsPaint(name))
                 {
-                    rootDefined.Add(name);
+                    Reads(value);
+                }
+                else if (name.StartsWith("--", StringComparison.Ordinal))
+                {
+                    if (!definitions.TryGetValue(name, out List<string>? values))
+                    {
+                        definitions[name] = values = [];
+                    }
+                    values.Add(value);
+                }
+            }
+            foreach ((int _, bool _, string value) in paintAttributes)
+            {
+                Reads(value);
+            }
+            foreach (List<(string Name, string Value)> declared in styleOf.Values)
+            {
+                foreach ((string name, string value) in declared)
+                {
+                    Sorts(name, value);
                 }
             }
             foreach (StyleRule rule in Rules)
             {
-                steps.Spend(1);
-                if (rule.Prelude?.Trim() is "svg" or "*")
+                if (rule.Prelude is null)
                 {
-                    foreach ((string name, string value) in rule.Declarations)
-                    {
-                        Define(name, value);
-                    }
+                    continue;
+                }
+                foreach ((string name, string value) in rule.Declarations)
+                {
+                    Sorts(name, value);
                 }
             }
-            var styles = new List<(int Element, List<(string Name, string Value)> Declared)>(styleTexts.Count);
-            foreach ((int element, string text) in styleTexts)
+            while (unread.TryDequeue(out string? name))
             {
-                List<(string Name, string Value)> declared = Declarations(text);
-                styles.Add((element, declared));
-                if (element == 0)
+                foreach (string value in definitions.GetValueOrDefault(name) ?? [])
                 {
-                    foreach ((string name, string value) in declared)
-                    {
-                        Define(name, value);
-                    }
+                    Reads(value);
                 }
             }
 
-            byte Classify(string raw)
-            {
-                string value = raw.Trim();
-                Scanned(2L * value.Length);
-                if (value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
-                    || value.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
-                {
-                    return KeepsPaint;
-                }
-                if (UrlsIn(value).Exists(patternIds.Contains))
-                {
-                    return PatternPaint;
-                }
-                if (!value.Contains("var(", StringComparison.OrdinalIgnoreCase))
-                {
-                    return OtherPaint;
-                }
-                foreach (int c in reached(value))
-                {
-                    if (leadsToPattern[c])
-                    {
-                        return PatternPaint;
-                    }
-                }
-                return VarMayResolveToNothing(value, rootDefined) ? KeepsPaint : OtherPaint;
-            }
-
-            // Each element's presentation attributes and style attribute, the
-            // last of each kind winning.
-            var declaredFill = new Dictionary<int, Declared>();
-            var declaredStroke = new Dictionary<int, Declared>();
-            void Declare(int element, bool stroke, int tier, string value)
-            {
-                steps.Spend(1);
-                Dictionary<int, Declared> declared = stroke ? declaredStroke : declaredFill;
-                declared.TryGetValue(element, out Declared own);
-                byte paint = Classify(value);
-                declared[element] = tier switch
-                {
-                    0 => own with { Attribute = paint },
-                    2 => own with { Style = paint },
-                    _ => own with { ImportantStyle = paint },
-                };
-            }
-            foreach ((int element, bool stroke, string value) in paintAttributes)
-            {
-                Declare(element, stroke, 0, value);
-            }
-            foreach ((int element, List<(string Name, string Value)> declared) in styles)
-            {
-                foreach ((string name, string value) in declared)
-                {
-                    steps.Spend(1);
-                    bool stroke = name.Equals("stroke", StringComparison.OrdinalIgnoreCase);
-                    if (stroke || name.Equals("fill", StringComparison.OrdinalIgnoreCase))
-                    {
-                        string paint = WithoutImportant(value, out bool important);
-                        Declare(element, stroke, important ? 4 : 2, paint);
-                    }
-                }
-            }
-
-            // Each rule that sets a fill or a stroke, filed under the key of
-            // each of its selectors, or under every element's when a selector
-            // is not a simple one.
-            var byKey = new Dictionary<string, List<PaintRule>>(StringComparer.Ordinal);
+            // Each rule's fill, stroke and read custom properties, filed
+            // under the key of each of its selectors, or under every
+            // element's when a selector is not a simple one.
+            var byKey = new Dictionary<string, List<RuleDeclaration>>(StringComparer.Ordinal);
             int order = 0;
             foreach (StyleRule rule in Rules)
             {
@@ -1607,33 +1569,35 @@ internal static class SvgPreviewGuard
                 foreach ((string name, string value) in rule.Declarations)
                 {
                     steps.Spend(1);
-                    bool stroke = name.Equals("stroke", StringComparison.OrdinalIgnoreCase);
-                    if (!stroke && !name.Equals("fill", StringComparison.OrdinalIgnoreCase))
+                    bool paint = IsPaint(name);
+                    if (!paint && !relevant.Contains(name))
                     {
                         continue;
                     }
-                    byte paint = Classify(WithoutImportant(value, out bool important));
+                    string plain = WithoutImportant(value, out bool important);
                     order++;
                     selectors ??= SplitTop(rule.Prelude, ',')
                         .Select(selector => ReadSelectorParts(selector) is { } parts
                             ? ((SelectorParts?)parts, SimpleSelectorKey(selector) ?? AnyElementKey)
                             : (null, AnyElementKey))
                         .ToList();
+                    string property = paint ? name.ToLowerInvariant() : name;
                     foreach ((SelectorParts? parts, string key) in selectors)
                     {
                         steps.Spend(1);
-                        if (!byKey.TryGetValue(key, out List<PaintRule>? filed))
+                        if (!byKey.TryGetValue(key, out List<RuleDeclaration>? filed))
                         {
                             byKey[key] = filed = [];
                         }
-                        filed.Add(new PaintRule(stroke, important ? 3 : 1, parts?.Specificity ?? 0, order, paint, parts));
+                        filed.Add(new RuleDeclaration(property, important ? 3 : 1, parts?.Specificity ?? 0, order, plain, parts));
                     }
                 }
             }
 
+            var scopes = new Dictionary<string, byte>?[elements];
             var ownFill = new byte[elements];
             var ownStroke = new byte[elements];
-            var matched = new List<(PaintRule Rule, bool Certain)>();
+            var matched = new List<(RuleDeclaration Rule, bool Certain)>();
             for (int i = 0; i < elements; i++)
             {
                 steps.Spend(1);
@@ -1644,11 +1608,11 @@ internal static class SvgPreviewGuard
                     string[] classes = classLists[i]?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) ?? [];
                     void Visit(string key)
                     {
-                        if (!byKey.TryGetValue(key, out List<PaintRule>? filed))
+                        if (!byKey.TryGetValue(key, out List<RuleDeclaration>? filed))
                         {
                             return;
                         }
-                        foreach (PaintRule rule in filed)
+                        foreach (RuleDeclaration rule in filed)
                         {
                             if (Matches(rule.Parts, i, classes, byId) is { } certain)
                             {
@@ -1667,13 +1631,264 @@ internal static class SvgPreviewGuard
                         Visit("." + name.ToLowerInvariant());
                     }
                 }
-                ownFill[i] = Resolve(declaredFill.GetValueOrDefault(i), stroke: false, matched);
-                ownStroke[i] = Resolve(declaredStroke.GetValueOrDefault(i), stroke: true, matched);
+
+                // Every declaration of a property the element makes itself,
+                // with its place in the cascade.
+                var own = new List<Declaration>();
+                foreach ((int _, bool stroke, string value) in OwnAttributes(i))
+                {
+                    own.Add(new Declaration(stroke ? "stroke" : "fill", 0, 0, 0, true, value));
+                }
+                int position = 0;
+                foreach ((string name, string value) in styleOf.GetValueOrDefault(i) ?? [])
+                {
+                    steps.Spend(1);
+                    bool paint = IsPaint(name);
+                    if (paint || relevant.Contains(name))
+                    {
+                        string plain = WithoutImportant(value, out bool important);
+                        own.Add(new Declaration(paint ? name.ToLowerInvariant() : name, important ? 4 : 2, 0, ++position, true, plain));
+                    }
+                }
+                foreach ((RuleDeclaration rule, bool certain) in matched)
+                {
+                    own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain, rule.Value));
+                }
+
+                Dictionary<string, byte>? inherited = parents[i] >= 0 ? scopes[parents[i]] : null;
+                scopes[i] = CustomScope(own, inherited, patternIds);
+                ownFill[i] = OwnPaint(own, "fill", scopes[i], patternIds);
+                ownStroke[i] = OwnPaint(own, "stroke", scopes[i], patternIds);
                 AnyPatternPaint |= ownFill[i] == PatternPaint || ownStroke[i] == PatternPaint;
             }
             OwnFill = ownFill;
             OwnStroke = ownStroke;
         }
+
+        /// <summary>The fill and stroke presentation attributes of element
+        /// <paramref name="i"/>, read from the list the read kept, which is
+        /// in document order.</summary>
+        private IEnumerable<(int Element, bool Stroke, string Value)> OwnAttributes(int i)
+        {
+            for (int at = LowerBound(i); at < paintAttributes.Count && paintAttributes[at].Element == i; at++)
+            {
+                steps.Spend(1);
+                yield return paintAttributes[at];
+            }
+        }
+
+        /// <summary>The first index of <see cref="paintAttributes"/> whose
+        /// element is <paramref name="i"/> or later.</summary>
+        private int LowerBound(int i)
+        {
+            int low = 0;
+            int high = paintAttributes.Count;
+            while (low < high)
+            {
+                steps.Spend(1);
+                int middle = (low + high) / 2;
+                if (paintAttributes[middle].Element < i)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            return low;
+        }
+
+        /// <summary>
+        /// The custom properties in an element's scope (measured in stage 9):
+        /// its parent's in the document, with each property it defines itself
+        /// in place of the parent's, as the cascade gives it. A use's instance
+        /// reads the scope of the element it draws and that element's
+        /// ancestors, not the use's, so a scope follows the document only.
+        /// Each property holds what it can give a <c>var()</c>: a pattern,
+        /// something that may resolve to nothing (<see cref="KeepsPaint"/>),
+        /// or a colour (<see cref="OtherPaint"/>); one no definition gives is
+        /// absent. A definition that reads the element's own properties is
+        /// resolved by passes over them, at most one more than there are, so
+        /// a chain resolves and a cycle stays unresolved. The parent's scope
+        /// is shared when the element defines nothing it reads.
+        /// </summary>
+        private Dictionary<string, byte>? CustomScope(
+            List<Declaration> own, Dictionary<string, byte>? inherited, HashSet<string> patternIds)
+        {
+            Dictionary<string, List<Declaration>>? defined = null;
+            foreach (Declaration declaration in own)
+            {
+                if (declaration.Property.StartsWith("--", StringComparison.Ordinal))
+                {
+                    defined ??= new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
+                    if (!defined.TryGetValue(declaration.Property, out List<Declaration>? list))
+                    {
+                        defined[declaration.Property] = list = [];
+                    }
+                    list.Add(declaration);
+                }
+            }
+            if (defined is null)
+            {
+                return inherited;
+            }
+            steps.Spend(1 + (inherited?.Count ?? 0));
+            var scope = inherited is null
+                ? new Dictionary<string, byte>(StringComparer.Ordinal)
+                : new Dictionary<string, byte>(inherited, StringComparer.Ordinal);
+            foreach (string name in defined.Keys)
+            {
+                scope[name] = KeepsPaint;
+            }
+            for (int pass = 0; pass <= defined.Count; pass++)
+            {
+                bool changed = false;
+                foreach ((string name, List<Declaration> declarations) in defined)
+                {
+                    steps.Spend(declarations.Count);
+                    byte? parent = inherited is not null && inherited.TryGetValue(name, out byte held) ? held : null;
+                    byte? value = Cascade(declarations, parent, isPaint: false, scope, patternIds);
+                    bool present = scope.TryGetValue(name, out byte current);
+                    if (value is { } now)
+                    {
+                        if (!present || current != now)
+                        {
+                            scope[name] = now;
+                            changed = true;
+                        }
+                    }
+                    else if (present)
+                    {
+                        scope.Remove(name);
+                        changed = true;
+                    }
+                }
+                if (!changed)
+                {
+                    break;
+                }
+            }
+            return scope;
+        }
+
+        /// <summary>One paint property's own value for an element, in its
+        /// scope: <see cref="KeepsPaint"/> when it declares none.</summary>
+        private byte OwnPaint(
+            List<Declaration> own, string property, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        {
+            List<Declaration>? declarations = null;
+            foreach (Declaration declaration in own)
+            {
+                if (declaration.Property == property)
+                {
+                    (declarations ??= []).Add(declaration);
+                }
+            }
+            return declarations is null
+                ? KeepsPaint
+                : Cascade(declarations, KeepsPaint, isPaint: true, scope, patternIds) ?? KeepsPaint;
+        }
+
+        /// <summary>
+        /// The cascade's winner among <paramref name="declarations"/> of one
+        /// property that certainly apply, or <paramref name="none"/> when none
+        /// does; then each that may apply and could win (a rule of a tier at
+        /// least the winner's) taken to apply and to win, keeping the wider
+        /// value. For a paint, one that would give a colour is left out; for
+        /// a custom property, one that may not apply leaves the parent's value
+        /// possible, so it widens with it. Null is a custom property no
+        /// declaration gives.
+        /// </summary>
+        private byte? Cascade(
+            List<Declaration> declarations, byte? none, bool isPaint, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        {
+            Declaration? best = null;
+            foreach (Declaration declaration in declarations)
+            {
+                if (declaration.Certain
+                    && (best is not { } current
+                        || declaration.Tier > current.Tier
+                        || (declaration.Tier == current.Tier
+                            && (declaration.Specificity > current.Specificity
+                                || (declaration.Specificity == current.Specificity && declaration.Order > current.Order)))))
+                {
+                    best = declaration;
+                }
+            }
+            byte? result = best is { } winner ? Evaluate(winner.Value, isPaint, none, scope, patternIds) : none;
+            foreach (Declaration declaration in declarations)
+            {
+                if (declaration.Certain || (best is { } current && declaration.Tier < current.Tier))
+                {
+                    continue;
+                }
+                byte? value = Evaluate(declaration.Value, isPaint, none, scope, patternIds);
+                if (isPaint && value == OtherPaint)
+                {
+                    continue;
+                }
+                result = Wider(result ?? KeepsPaint, value ?? KeepsPaint);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What a declared value gives. For a paint: a pattern it names, the
+        /// parent's paint for <c>inherit</c> or a context paint, or a colour.
+        /// For a custom property: the parent's value for <c>inherit</c> and
+        /// <c>unset</c>, nothing for <c>initial</c>, or a pattern it names.
+        /// Either way, each <c>var()</c> in it takes what its property holds
+        /// in <paramref name="scope"/>; one the scope lacks, or that may
+        /// resolve to nothing, keeps the parent's paint unless it has a
+        /// fallback, whose own references are read too.
+        /// </summary>
+        private byte? Evaluate(
+            string raw, bool isPaint, byte? parent, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        {
+            string value = raw.Trim();
+            Scanned(2L * value.Length);
+            if (value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+                || (!isPaint && value.Equals("unset", StringComparison.OrdinalIgnoreCase)))
+            {
+                return isPaint ? KeepsPaint : parent;
+            }
+            if (isPaint && value.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
+            {
+                return KeepsPaint;
+            }
+            if (!isPaint && value.Equals("initial", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            if (UrlsIn(value).Exists(patternIds.Contains))
+            {
+                return PatternPaint;
+            }
+            byte result = OtherPaint;
+            foreach ((string name, bool fallback) in VarReferences(value))
+            {
+                steps.Spend(1);
+                byte held = scope is not null && scope.TryGetValue(name, out byte found) ? found : KeepsPaint;
+                result = Wider(result, held == KeepsPaint && fallback ? OtherPaint : held);
+            }
+            return result;
+        }
+
+        /// <summary>A declaration of one property an element makes or a rule
+        /// gives it: its tier (0 the presentation attribute, 1 a rule, 2 the
+        /// style attribute, 3 an <c>!important</c> rule, 4 the style
+        /// attribute's <c>!important</c>), specificity and place, whether it
+        /// certainly applies, and its value.</summary>
+        private readonly record struct Declaration(
+            string Property, int Tier, int Specificity, int Order, bool Certain, string Value);
+
+        /// <summary>A rule's fill, stroke or read custom property, filed by
+        /// one of its selectors: tier 1, or 3 when <c>!important</c>; the
+        /// selector's specificity and parts, null when it is not a simple
+        /// one; the rule's place in the stylesheet; and the value.</summary>
+        private sealed record RuleDeclaration(
+            string Property, int Tier, int Specificity, int Order, string Value, SelectorParts? Parts);
 
         /// <summary>Whether a rule's selector applies to element
         /// <paramref name="i"/>: true when it certainly does, false when it
@@ -1719,73 +1934,12 @@ internal static class SvgPreviewGuard
             return exact;
         }
 
-        /// <summary>One property's own value for an element: the cascade's
-        /// winner among the declarations that certainly apply, or the
-        /// parent's paint when none does; then each rule that may apply and
-        /// would set or keep a pattern, taken to apply and to win among the
-        /// rules.</summary>
-        private static byte Resolve(Declared declared, bool stroke, List<(PaintRule Rule, bool Certain)> matched)
-        {
-            (int Tier, int Specificity, int Order, byte Paint)? best = null;
-            void Consider(int tier, int specificity, int order, byte paint)
-            {
-                if (best is not { } current
-                    || tier > current.Tier
-                    || (tier == current.Tier
-                        && (specificity > current.Specificity
-                            || (specificity == current.Specificity && order > current.Order))))
-                {
-                    best = (tier, specificity, order, paint);
-                }
-            }
-            if (declared.Attribute is { } attribute)
-            {
-                Consider(0, 0, 0, attribute);
-            }
-            foreach ((PaintRule rule, bool certain) in matched)
-            {
-                if (certain && rule.Stroke == stroke)
-                {
-                    Consider(rule.Tier, rule.Specificity, rule.Order, rule.Paint);
-                }
-            }
-            if (declared.Style is { } style)
-            {
-                Consider(2, 0, 0, style);
-            }
-            if (declared.ImportantStyle is { } importantStyle)
-            {
-                Consider(4, 0, 0, importantStyle);
-            }
-            byte paint = best?.Paint ?? KeepsPaint;
-            foreach ((PaintRule rule, bool certain) in matched)
-            {
-                if (!certain && rule.Stroke == stroke && rule.Paint != OtherPaint
-                    && (best is not { } current || rule.Tier >= current.Tier))
-                {
-                    paint = Wider(paint, rule.Paint);
-                }
-            }
-            return paint;
-        }
-
         /// <summary>The paint that counts the pattern more: a pattern, then
         /// the parent's, then anything else.</summary>
         private static byte Wider(byte a, byte b) =>
             a == PatternPaint || b == PatternPaint ? PatternPaint
             : a == KeepsPaint || b == KeepsPaint ? KeepsPaint
             : OtherPaint;
-
-        /// <summary>The declarations of one property an element makes
-        /// itself: its presentation attribute's, and its style attribute's,
-        /// normal and <c>!important</c>, each classified.</summary>
-        private readonly record struct Declared(byte? Attribute, byte? Style, byte? ImportantStyle);
-
-        /// <summary>A rule's fill or stroke, filed by one of its selectors:
-        /// tier 1, or 3 when <c>!important</c>; the selector's specificity
-        /// and parts, null when it is not a simple one; the rule's place in
-        /// the stylesheet; and the paint, classified.</summary>
-        private sealed record PaintRule(bool Stroke, int Tier, int Specificity, int Order, byte Paint, SelectorParts? Parts);
 
         private sealed class FilterInputs(int owner)
         {
@@ -4328,13 +4482,14 @@ internal static class SvgPreviewGuard
         return important ? value[..bang] : value;
     }
 
-    /// <summary>#1610 (stage 8): whether a <c>var()</c> in
-    /// <paramref name="value"/> may resolve to nothing: one with no fallback
-    /// naming a property <paramref name="defined"/> does not hold. The
-    /// decoder then keeps the parent's paint (measured).</summary>
-    private static bool VarMayResolveToNothing(string value, HashSet<string> defined)
+    /// <summary>#1610 (stage 9): each <c>var()</c> in
+    /// <paramref name="value"/>, its fallbacks' among them, with the name
+    /// it reads and whether it has a fallback (a comma before its own
+    /// closing bracket).</summary>
+    private static List<(string Name, bool Fallback)> VarReferences(string value)
     {
         Scanned(value.Length);
+        var found = new List<(string Name, bool Fallback)>();
         for (int at = value.IndexOf("var(", StringComparison.OrdinalIgnoreCase);
             at >= 0;
             at = value.IndexOf("var(", at + 4, StringComparison.OrdinalIgnoreCase))
@@ -4349,8 +4504,6 @@ internal static class SvgPreviewGuard
             {
                 end++;
             }
-            // A comma before the var()'s own closing bracket opens its
-            // fallback.
             bool fallback = false;
             int depth = 0;
             int k = end;
@@ -4376,12 +4529,9 @@ internal static class SvgPreviewGuard
                 }
             }
             Scanned(k - at);
-            if (!fallback && !defined.Contains(value[start..end]))
-            {
-                return true;
-            }
+            found.Add((value[start..end], fallback));
         }
-        return false;
+        return found;
     }
 
     private static string ReadName(string text, ref int i)
