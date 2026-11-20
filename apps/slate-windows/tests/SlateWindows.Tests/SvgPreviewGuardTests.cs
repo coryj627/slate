@@ -747,19 +747,18 @@ public sealed class SvgPreviewGuardTests
     }
 
     /// <summary>
-    /// #1610 (the merge judge's minor 1): the decode limit is the
-    /// calibration's 2,000 ms placeholder until the owner picks one (CD20's
-    /// second step), and it is where the verdict turns: a plotting scatter
-    /// estimated within 1% under it is admitted, and the scatter of one
-    /// point more, within 1% over it, is refused. When the owner picks, the
-    /// limit and the pair's two sizes are the only numbers that move (the
-    /// largest scatter admitted at 3 s has 3,425 points, at 5 s 4,440).
+    /// #1610 (the merge judge's minor 1): the decode limit is 3,000 ms, the
+    /// owner's pick from the calibration table (CD20, 2026-11-20), and it is
+    /// where the verdict turns: a plotting scatter of 3,425 points,
+    /// estimated within 1% under it (2,999.2 ms), is admitted, and the
+    /// scatter of one point more, within 1% over it (3,000.9 ms), is
+    /// refused.
     /// </summary>
     [Fact]
     public void TheDecodeLimitIsWhereTheVerdictTurns()
     {
-        const int limit = 2_000;
-        const int points = 2_785;
+        const int limit = 3_000;
+        const int points = 3_425;
         Assert.Equal(limit, SvgPreviewGuard.MaxEstimatedDecodeMilliseconds);
         string under = SlowSvgDocuments.Generate($"G_scatter N={points}");
         string over = SlowSvgDocuments.Generate($"G_scatter N={points + 1}");
