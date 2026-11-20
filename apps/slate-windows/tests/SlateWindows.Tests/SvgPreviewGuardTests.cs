@@ -2017,10 +2017,11 @@ public sealed class SvgPreviewGuardTests
     /// a cap on the definitions in scope the check is refused as spent. The
     /// check allocated 51.9 MiB here in stage 11, about 70 bytes per byte
     /// read, within the 13 to 145 bytes per byte it allocates on the
-    /// calibration's large documents, and 68.8 MiB since stage 12, which
-    /// resolves the root's 30,000 definitions before it reads the cap. The
-    /// bound, 96 MiB, is under twice the first and a twentieth of the
-    /// copies' 1,761 MiB.
+    /// calibration's large documents; 68.8 MiB in stage 12, which resolved
+    /// the root's 30,000 definitions before it read the cap; and 52.1 MiB
+    /// since stage 13, which reads the cap before it builds anything for
+    /// them (the delta merge judge's nit F). The bound, 64 MiB, lies between
+    /// the last two.
     /// </summary>
     [Fact]
     public void CustomPropertiesInScopeAllocateABoundedAmount()
@@ -2031,7 +2032,27 @@ public sealed class SvgPreviewGuardTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(SvgRefusal.DecodeCost, verdict);
         Assert.True(estimate.StepsSpent, "refused for its steps");
-        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+        Assert.True(allocated < 64L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's nit F, stage 13): 200,000 properties
+    /// one fill reads (5.0 MB) are refused at the cap before the guard
+    /// builds anything for them. The check allocates 364.9 MiB, most of it
+    /// the read of 200,000 declarations, where building them first took
+    /// 453.3 MiB (478 MiB on 1f31be9a, the judge's measure); the bound,
+    /// 400 MiB, lies between.
+    /// </summary>
+    [Fact]
+    public void TwoHundredThousandPropertiesAreRefusedBeforeTheyAreBuilt()
+    {
+        string source = ScopeDocument(200_000, 2_100);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+        Assert.True(estimate.StepsSpent, "refused for its steps");
+        Assert.True(allocated < 400L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
     }
 
     /// <summary>A pattern beside <paramref name="rects"/> rects that fill
