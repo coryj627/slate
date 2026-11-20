@@ -1448,7 +1448,8 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>An element's own fill or stroke keeps its parent's paint
-        /// (it declares none, or <c>inherit</c>).</summary>
+        /// (it declares none, <c>inherit</c>, or a value the decoder cannot
+        /// read as a paint).</summary>
         internal const byte KeepsPaint = 0;
 
         /// <summary>An element's own fill or stroke is a colour, <c>none</c>
@@ -1458,26 +1459,45 @@ internal static class SvgPreviewGuard
         /// <summary>An element's own fill or stroke is a pattern.</summary>
         internal const byte PatternPaint = 2;
 
+        /// <summary>#1610 (stage 10): what a value can give, as a set: a
+        /// paint the decoder draws (a colour, <c>none</c>,
+        /// <c>currentColor</c>, a reference to no pattern, or
+        /// nothing).</summary>
+        private const byte ClearsMask = 1;
+
+        /// <summary>The parent's paint: <c>inherit</c>, or a value the
+        /// decoder cannot read as a paint.</summary>
+        private const byte KeepsMask = 2;
+
+        /// <summary>A pattern.</summary>
+        private const byte PatternMask = 4;
+
+        /// <summary>No value: a custom property nothing defines, or one whose
+        /// <c>var()</c> has none, which a fallback replaces and which keeps
+        /// the parent's paint where a fill or a stroke reads it.</summary>
+        private const byte FailsMask = 8;
+
         /// <summary>
-        /// #1610 (Codex's rounds 5 and 6, stages 8 and 9): each element's own
+        /// #1610 (Codex's rounds 5 to 7, stages 8 to 10): each element's own
         /// fill and stroke, each on its own, as the decoder's cascade gives
         /// them (measured): an <c>!important</c> rule beats the style
         /// attribute, which beats the other rules, which beat the
         /// presentation attribute, and among rules the higher specificity,
         /// then the later rule, wins. A value that names a pattern is a
-        /// pattern; <c>inherit</c> and a context paint keep the parent's
-        /// paint; <c>currentColor</c> and anything else are a colour. A
-        /// <c>var()</c> takes what its custom property holds in the element's
-        /// scope (<see cref="CustomScope"/>): a pattern makes it a pattern, a
-        /// property that may resolve to nothing keeps the parent's paint
-        /// unless the <c>var()</c> has a fallback, and anything else is a
-        /// colour. A rule whose selector the guard cannot match exactly (a
-        /// combinator, a pseudo-class, an attribute selector, an id several
-        /// elements share, or a name in another case) may apply or not: where
-        /// it would set or keep a pattern it is taken to apply and to win
-        /// among the rules, and where it would clear one it is left out, so
-        /// the count errs toward the pattern. Only a document with a pattern
-        /// is read this way.
+        /// pattern; <c>inherit</c>, a context paint and any value the
+        /// decoder cannot read as a paint keep the parent's paint; a colour,
+        /// <c>none</c>, <c>currentColor</c> and a reference to no pattern
+        /// clear it (<see cref="Literal"/>). A <c>var()</c> takes what its
+        /// custom property holds in the element's scope
+        /// (<see cref="CustomScope"/>), and where that is no value, its
+        /// fallback, read as the same literal would be
+        /// (<see cref="Substitute"/>). A rule whose selector the guard cannot
+        /// match exactly (a combinator, a pseudo-class, an attribute
+        /// selector, an id several elements share, or a name in another
+        /// case) may apply or not: where it would set or keep a pattern it is
+        /// taken to apply and to win among the rules, and where it would only
+        /// clear one it is left out, so the count errs toward the pattern.
+        /// Only a document with a pattern is read this way.
         /// </summary>
         private void PaintCascade(Dictionary<string, List<int>> byId, HashSet<string> patternIds)
         {
@@ -1705,13 +1725,15 @@ internal static class SvgPreviewGuard
         /// in place of the parent's, as the cascade gives it. A use's instance
         /// reads the scope of the element it draws and that element's
         /// ancestors, not the use's, so a scope follows the document only.
-        /// Each property holds what it can give a <c>var()</c>: a pattern,
-        /// something that may resolve to nothing (<see cref="KeepsPaint"/>),
-        /// or a colour (<see cref="OtherPaint"/>); one no definition gives is
-        /// absent. A definition that reads the element's own properties is
-        /// resolved by passes over them, at most one more than there are, so
-        /// a chain resolves and a cycle stays unresolved. The parent's scope
-        /// is shared when the element defines nothing it reads.
+        /// Each property holds the set of what it can give a <c>var()</c>
+        /// (<see cref="ClearsMask"/> and the rest); one no definition gives
+        /// is absent, and has no value (<see cref="FailsMask"/>). A
+        /// definition that reads the element's own properties is resolved by
+        /// passes over them, at most one more than there are, each starting
+        /// with no value, so a chain resolves and a cycle has no value: a
+        /// definition that reads itself takes its fallback, never the
+        /// parent's value (measured in stage 10). The parent's scope is
+        /// shared when the element defines nothing it reads.
         /// </summary>
         private Dictionary<string, byte>? CustomScope(
             List<Declaration> own, Dictionary<string, byte>? inherited, HashSet<string> patternIds)
@@ -1739,7 +1761,7 @@ internal static class SvgPreviewGuard
                 : new Dictionary<string, byte>(inherited, StringComparer.Ordinal);
             foreach (string name in defined.Keys)
             {
-                scope[name] = KeepsPaint;
+                scope[name] = FailsMask;
             }
             for (int pass = 0; pass <= defined.Count; pass++)
             {
@@ -1747,20 +1769,11 @@ internal static class SvgPreviewGuard
                 foreach ((string name, List<Declaration> declarations) in defined)
                 {
                     steps.Spend(declarations.Count);
-                    byte? parent = inherited is not null && inherited.TryGetValue(name, out byte held) ? held : null;
-                    byte? value = Cascade(declarations, parent, isPaint: false, scope, patternIds);
-                    bool present = scope.TryGetValue(name, out byte current);
-                    if (value is { } now)
+                    byte parent = inherited is not null && inherited.TryGetValue(name, out byte held) ? held : FailsMask;
+                    byte value = Cascade(declarations, parent, isPaint: false, scope, patternIds);
+                    if (scope[name] != value)
                     {
-                        if (!present || current != now)
-                        {
-                            scope[name] = now;
-                            changed = true;
-                        }
-                    }
-                    else if (present)
-                    {
-                        scope.Remove(name);
+                        scope[name] = value;
                         changed = true;
                     }
                 }
@@ -1773,7 +1786,9 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>One paint property's own value for an element, in its
-        /// scope: <see cref="KeepsPaint"/> when it declares none.</summary>
+        /// scope: <see cref="KeepsPaint"/> when it declares none, else the
+        /// widest of what its cascade can give, a pattern, then the
+        /// parent's paint, then a paint of its own.</summary>
         private byte OwnPaint(
             List<Declaration> own, string property, Dictionary<string, byte>? scope, HashSet<string> patternIds)
         {
@@ -1785,23 +1800,27 @@ internal static class SvgPreviewGuard
                     (declarations ??= []).Add(declaration);
                 }
             }
-            return declarations is null
-                ? KeepsPaint
-                : Cascade(declarations, KeepsPaint, isPaint: true, scope, patternIds) ?? KeepsPaint;
+            if (declarations is null)
+            {
+                return KeepsPaint;
+            }
+            byte can = Cascade(declarations, KeepsMask, isPaint: true, scope, patternIds);
+            return (can & PatternMask) != 0 ? PatternPaint
+                : (can & KeepsMask) != 0 ? KeepsPaint
+                : OtherPaint;
         }
 
         /// <summary>
         /// The cascade's winner among <paramref name="declarations"/> of one
         /// property that certainly apply, or <paramref name="none"/> when none
         /// does; then each that may apply and could win (a rule of a tier at
-        /// least the winner's) taken to apply and to win, keeping the wider
-        /// value. For a paint, one that would give a colour is left out; for
-        /// a custom property, one that may not apply leaves the parent's value
-        /// possible, so it widens with it. Null is a custom property no
-        /// declaration gives.
+        /// least the winner's) taken to apply and to win, adding what it can
+        /// give. For a paint, one that can only clear the paint is left out;
+        /// for a custom property, one that may not apply leaves the parent's
+        /// value possible, so it adds to it.
         /// </summary>
-        private byte? Cascade(
-            List<Declaration> declarations, byte? none, bool isPaint, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        private byte Cascade(
+            List<Declaration> declarations, byte none, bool isPaint, Dictionary<string, byte>? scope, HashSet<string> patternIds)
         {
             Declaration? best = null;
             foreach (Declaration declaration in declarations)
@@ -1816,63 +1835,269 @@ internal static class SvgPreviewGuard
                     best = declaration;
                 }
             }
-            byte? result = best is { } winner ? Evaluate(winner.Value, isPaint, none, scope, patternIds) : none;
+            byte result = best is { } winner ? Evaluate(winner.Value, isPaint, winner.Tier == 0, none, scope, patternIds) : none;
             foreach (Declaration declaration in declarations)
             {
                 if (declaration.Certain || (best is { } current && declaration.Tier < current.Tier))
                 {
                     continue;
                 }
-                byte? value = Evaluate(declaration.Value, isPaint, none, scope, patternIds);
-                if (isPaint && value == OtherPaint)
+                byte value = Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds);
+                if (isPaint && value == ClearsMask)
                 {
                     continue;
                 }
-                result = Wider(result ?? KeepsPaint, value ?? KeepsPaint);
+                result |= value;
             }
             return result;
         }
 
         /// <summary>
-        /// What a declared value gives. For a paint: a pattern it names, the
-        /// parent's paint for <c>inherit</c> or a context paint, or a colour.
-        /// For a custom property: the parent's value for <c>inherit</c> and
-        /// <c>unset</c>, nothing for <c>initial</c>, or a pattern it names.
-        /// Either way, each <c>var()</c> in it takes what its property holds
-        /// in <paramref name="scope"/>; one the scope lacks, or that may
-        /// resolve to nothing, keeps the parent's paint unless it has a
-        /// fallback, whose own references are read too.
+        /// What a declared value can give, as a set (<see cref="ClearsMask"/>
+        /// and the rest). For a custom property, <c>inherit</c> and
+        /// <c>unset</c> give the parent's value, <c>initial</c> no value,
+        /// and <c>revert</c> the parent's value or the word itself, which
+        /// the decoder may take either way (measured: never no value); any
+        /// other value is held as written, and a fill or a stroke that reads
+        /// it gives what the same literal gives. Nothing written clears the
+        /// paint, but in the style attribute or a rule, where the decoder
+        /// drops the declaration (measured in stage 10). A <c>var()</c> is
+        /// substituted (<see cref="Substitute"/>), and in a fill or a stroke,
+        /// no value keeps the parent's paint.
         /// </summary>
-        private byte? Evaluate(
-            string raw, bool isPaint, byte? parent, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        private byte Evaluate(
+            string raw, bool isPaint, bool attribute, byte parent, Dictionary<string, byte>? scope, HashSet<string> patternIds)
         {
             string value = raw.Trim();
             Scanned(2L * value.Length);
-            if (value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
-                || (!isPaint && value.Equals("unset", StringComparison.OrdinalIgnoreCase)))
+            if (!isPaint)
             {
-                return isPaint ? KeepsPaint : parent;
+                if (value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+                    || value.Equals("unset", StringComparison.OrdinalIgnoreCase))
+                {
+                    return parent;
+                }
+                if (value.Equals("initial", StringComparison.OrdinalIgnoreCase))
+                {
+                    return FailsMask;
+                }
+                if (value.Equals("revert", StringComparison.OrdinalIgnoreCase)
+                    || value.Equals("revert-layer", StringComparison.OrdinalIgnoreCase))
+                {
+                    return (byte)(parent | KeepsMask);
+                }
             }
-            if (isPaint && value.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
+            if (value.Length == 0)
             {
-                return KeepsPaint;
+                return isPaint && !attribute ? KeepsMask : ClearsMask;
             }
-            if (!isPaint && value.Equals("initial", StringComparison.OrdinalIgnoreCase))
+            byte can = value.Contains("var(", StringComparison.OrdinalIgnoreCase)
+                ? Substitute(value, scope, patternIds)
+                : Literal(value, patternIds);
+            return isPaint && (can & FailsMask) != 0 ? (byte)((can & ~FailsMask) | KeepsMask) : can;
+        }
+
+        /// <summary>
+        /// #1610 (Codex's round 7, stage 10): what a value that holds
+        /// <c>var()</c> can give, as the decoder substitutes it. Each
+        /// <c>var()</c> takes what its property holds in
+        /// <paramref name="scope"/>; where that may be no value, its fallback
+        /// is read as the same literal would be (<see cref="Literal"/>), a
+        /// fallback that is one <c>var()</c> as that <c>var()</c>, and a
+        /// fallback of several pieces as anything they could give. The value
+        /// is read in one pass that records each <c>var()</c>'s nesting, and
+        /// the references are resolved from the last to the first, so the
+        /// innermost go first and no depth recurses. A <c>var()</c> written
+        /// wrongly (no name, or text between its name and its comma) may give
+        /// anything.
+        /// </summary>
+        private byte Substitute(string value, Dictionary<string, byte>? scope, HashSet<string> patternIds)
+        {
+            Scanned(value.Length);
+            var levels = new List<VarLevel> { new(null, 0, 0, inContent: true) { Fallback = 0, Close = value.Length } };
+            var open = new List<int>();
+            int depth = 0;
+            void Mark(int owner)
             {
-                return null;
+                if (owner == 0 || levels[owner].Fallback >= 0)
+                {
+                    levels[owner].Text = true;
+                }
+                else
+                {
+                    levels[owner].Junk = true;
+                }
             }
-            if (UrlsIn(value).Exists(patternIds.Contains))
+            for (int i = 0; i < value.Length; i++)
             {
-                return PatternPaint;
+                int owner = open.Count > 0 ? open[^1] : 0;
+                char c = value[i];
+                if (IsUrlAt(value, i))
+                {
+                    int end = UrlArgumentEnd(value, i + 4);
+                    int close = end < value.Length && value[end] == ')' ? end : value.Length;
+                    Mark(owner);
+                    if (Fragment(value, i + 4, close) is { } id && patternIds.Contains(id))
+                    {
+                        levels[owner].Urls = PatternMask;
+                    }
+                    i = end;
+                    continue;
+                }
+                if (i + 4 <= value.Length && value.AsSpan(i, 4).Equals("var(", StringComparison.OrdinalIgnoreCase))
+                {
+                    steps.Spend(1);
+                    int start = i + 4;
+                    while (start < value.Length && char.IsWhiteSpace(value[start]))
+                    {
+                        start++;
+                    }
+                    int nameEnd = start;
+                    if (nameEnd + 1 < value.Length && value[nameEnd] == '-' && value[nameEnd + 1] == '-')
+                    {
+                        nameEnd += 2;
+                        while (nameEnd < value.Length && IsVarNameCharacter(value[nameEnd]))
+                        {
+                            nameEnd++;
+                        }
+                    }
+                    bool inContent = owner == 0 || levels[owner].Fallback >= 0;
+                    if (inContent)
+                    {
+                        levels[owner].Children++;
+                    }
+                    else
+                    {
+                        levels[owner].Junk = true;
+                    }
+                    levels.Add(new VarLevel(nameEnd > start ? value[start..nameEnd] : null, owner, ++depth, inContent));
+                    open.Add(levels.Count - 1);
+                    i = nameEnd - 1;
+                    continue;
+                }
+                if (c == '(')
+                {
+                    depth++;
+                    Mark(owner);
+                }
+                else if (c == ')')
+                {
+                    if (owner > 0 && levels[owner].Depth == depth)
+                    {
+                        levels[owner].Close = i;
+                        open.RemoveAt(open.Count - 1);
+                    }
+                    else
+                    {
+                        Mark(owner);
+                    }
+                    depth = Math.Max(0, depth - 1);
+                }
+                else if (c == ',' && owner > 0 && levels[owner].Depth == depth && levels[owner].Fallback < 0)
+                {
+                    levels[owner].Fallback = i + 1;
+                }
+                else if (!char.IsWhiteSpace(c))
+                {
+                    Mark(owner);
+                }
             }
-            byte result = OtherPaint;
-            foreach ((string name, bool fallback) in VarReferences(value))
+            foreach (int unclosed in open)
+            {
+                levels[unclosed].Close = value.Length;
+            }
+
+            byte Content(VarLevel level) =>
+                level.Children == 0 ? Literal(value[level.Fallback..level.Close].Trim(), patternIds)
+                : level.Children == 1 && !level.Text ? level.Union
+                : (byte)(level.Union | KeepsMask | ClearsMask | level.Urls);
+            for (int k = levels.Count - 1; k > 0; k--)
             {
                 steps.Spend(1);
-                byte held = scope is not null && scope.TryGetValue(name, out byte found) ? found : KeepsPaint;
-                result = Wider(result, held == KeepsPaint && fallback ? OtherPaint : held);
+                VarLevel level = levels[k];
+                byte result;
+                if (level.Name is null || level.Junk)
+                {
+                    result = (byte)(KeepsMask | ClearsMask | level.Nested | level.Urls);
+                }
+                else
+                {
+                    byte held = scope is not null && scope.TryGetValue(level.Name, out byte found) ? found : FailsMask;
+                    result = level.Fallback < 0 || (held & FailsMask) == 0
+                        ? held
+                        : (byte)((held & ~FailsMask) | Content(level));
+                }
+                VarLevel parent = levels[level.Parent];
+                parent.Nested |= (byte)(level.Nested | level.Urls);
+                if (level.InContent)
+                {
+                    parent.Union |= result;
+                }
             }
-            return result;
+            return Content(levels[0]);
+        }
+
+        /// <summary>One <c>var()</c> in a value being substituted, or the
+        /// value itself (the first): the name it reads, its parent's index,
+        /// its bracket depth, and whether it stands in its parent's fallback
+        /// (or the value) rather than before its parent's comma; then where
+        /// its fallback starts (-1 for none) and where it closes, how many
+        /// <c>var()</c> its fallback holds and what they can give, whether
+        /// anything else is written there or before its comma, and the
+        /// pattern references in it and in the <c>var()</c> inside
+        /// it.</summary>
+        private sealed class VarLevel(string? name, int parent, int depth, bool inContent)
+        {
+            internal string? Name { get; } = name;
+
+            internal int Parent { get; } = parent;
+
+            internal int Depth { get; } = depth;
+
+            internal bool InContent { get; } = inContent;
+
+            internal int Fallback { get; set; } = -1;
+
+            internal int Close { get; set; }
+
+            internal int Children { get; set; }
+
+            internal byte Union { get; set; }
+
+            internal bool Text { get; set; }
+
+            internal bool Junk { get; set; }
+
+            internal byte Urls { get; set; }
+
+            internal byte Nested { get; set; }
+        }
+
+        /// <summary>
+        /// #1610 (stage 10): what a literal value (trimmed, no <c>var()</c>)
+        /// gives a fill or a stroke: nothing clears it (a <c>var()</c>'s
+        /// fallback or a custom property that holds nothing);
+        /// <c>inherit</c>, a context paint and any value the decoder cannot
+        /// read as a paint keep the parent's paint; a value that names a
+        /// pattern is one; and a paint the decoder draws
+        /// (<see cref="DrawsOwnPaint"/>) clears it.
+        /// </summary>
+        private static byte Literal(string text, HashSet<string> patternIds)
+        {
+            if (text.Length == 0)
+            {
+                return ClearsMask;
+            }
+            if (text.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+                || text.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
+            {
+                return KeepsMask;
+            }
+            if (UrlsIn(text).Exists(patternIds.Contains))
+            {
+                return PatternMask;
+            }
+            return DrawsOwnPaint(text) ? ClearsMask : KeepsMask;
         }
 
         /// <summary>A declaration of one property an element makes or a rule
@@ -1933,13 +2158,6 @@ internal static class SvgPreviewGuard
             }
             return exact;
         }
-
-        /// <summary>The paint that counts the pattern more: a pattern, then
-        /// the parent's, then anything else.</summary>
-        private static byte Wider(byte a, byte b) =>
-            a == PatternPaint || b == PatternPaint ? PatternPaint
-            : a == KeepsPaint || b == KeepsPaint ? KeepsPaint
-            : OtherPaint;
 
         private sealed class FilterInputs(int owner)
         {
@@ -4482,56 +4700,108 @@ internal static class SvgPreviewGuard
         return important ? value[..bang] : value;
     }
 
-    /// <summary>#1610 (stage 9): each <c>var()</c> in
-    /// <paramref name="value"/>, its fallbacks' among them, with the name
-    /// it reads and whether it has a fallback (a comma before its own
-    /// closing bracket).</summary>
-    private static List<(string Name, bool Fallback)> VarReferences(string value)
+    /// <summary>
+    /// #1610 (stage 10): whether Svg.Custom 5.2.3 reads
+    /// <paramref name="text"/> (trimmed, not empty) as a paint of its own,
+    /// which clears the parent's: a colour, <c>none</c>,
+    /// <c>currentColor</c>, or a reference with nothing or one of those
+    /// after it. Anything it cannot read keeps the parent's paint
+    /// (measured), so the forms here are a part of what it reads, taken
+    /// from its own parse in stage 10: a name System.Drawing knows, in any
+    /// case, with grey written for gray; # and 3, 4, 6 or 8 hex digits; and
+    /// rgb() or rgba() of three or four numbers, each with or without %. A
+    /// form it reads that is not here (hsl(), a space before the bracket, a
+    /// system colour of CSS 2) is taken to keep the parent's paint, which
+    /// only counts the pattern more.
+    /// </summary>
+    private static bool DrawsOwnPaint(string text)
     {
-        Scanned(value.Length);
-        var found = new List<(string Name, bool Fallback)>();
-        for (int at = value.IndexOf("var(", StringComparison.OrdinalIgnoreCase);
-            at >= 0;
-            at = value.IndexOf("var(", at + 4, StringComparison.OrdinalIgnoreCase))
+        if (text.StartsWith("url(", StringComparison.Ordinal))
         {
-            int start = at + 4;
-            while (start < value.Length && char.IsWhiteSpace(value[start]))
+            int end = UrlArgumentEnd(text, 4);
+            if (end >= text.Length || text[end] != ')')
             {
-                start++;
+                return false;
             }
-            int end = start;
-            while (end < value.Length && IsVarNameCharacter(value[end]))
-            {
-                end++;
-            }
-            bool fallback = false;
-            int depth = 0;
-            int k = end;
-            for (; k < value.Length; k++)
-            {
-                char c = value[k];
-                if (c == '(')
-                {
-                    depth++;
-                }
-                else if (c == ')')
-                {
-                    if (depth == 0)
-                    {
-                        break;
-                    }
-                    depth--;
-                }
-                else if (c == ',' && depth == 0)
-                {
-                    fallback = true;
-                    break;
-                }
-            }
-            Scanned(k - at);
-            found.Add((value[start..end], fallback));
+            string rest = text[(end + 1)..].Trim();
+            return rest.Length == 0 || IsColour(rest);
         }
-        return found;
+        return IsColour(text);
+    }
+
+    /// <summary>Whether <paramref name="text"/> (trimmed, not empty) is
+    /// one of <see cref="DrawsOwnPaint"/>'s colours or <c>none</c> or
+    /// <c>currentColor</c>.</summary>
+    private static bool IsColour(string text)
+    {
+        Scanned(2L * text.Length);
+        if (text.Equals("none", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("currentColor", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (text[0] == '#')
+        {
+            for (int i = 1; i < text.Length; i++)
+            {
+                if (!char.IsAsciiHexDigit(text[i]))
+                {
+                    return false;
+                }
+            }
+            return text.Length is 4 or 5 or 7 or 9;
+        }
+        int open = text.IndexOf('(', StringComparison.Ordinal);
+        if (open >= 0)
+        {
+            string function = text[..open];
+            if (text[^1] != ')'
+                || !(function.Equals("rgb", StringComparison.OrdinalIgnoreCase)
+                    || function.Equals("rgba", StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+            string[] arguments = text[(open + 1)..^1].Split(',');
+            return arguments.Length is 3 or 4 && Array.TrueForAll(arguments, argument => IsCssNumber(argument.Trim()));
+        }
+        return System.Drawing.Color.FromName(text.Replace("grey", "gray", StringComparison.Ordinal)).IsKnownColor;
+    }
+
+    /// <summary>A CSS number with an optional sign and fraction and an
+    /// optional %, as 1, -2.5, .5 or 30% write it.</summary>
+    private static bool IsCssNumber(string text)
+    {
+        int i = 0;
+        if (i < text.Length && text[i] is '+' or '-')
+        {
+            i++;
+        }
+        int digits = 0;
+        while (i < text.Length && char.IsAsciiDigit(text[i]))
+        {
+            i++;
+            digits++;
+        }
+        if (i < text.Length && text[i] == '.')
+        {
+            i++;
+            int fraction = 0;
+            while (i < text.Length && char.IsAsciiDigit(text[i]))
+            {
+                i++;
+                fraction++;
+            }
+            if (fraction == 0)
+            {
+                return false;
+            }
+            digits += fraction;
+        }
+        if (i < text.Length && text[i] == '%')
+        {
+            i++;
+        }
+        return digits > 0 && i == text.Length;
     }
 
     private static string ReadName(string text, ref int i)
