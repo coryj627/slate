@@ -1835,6 +1835,80 @@ public sealed class SvgPreviewGuardTests
         Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
     }
 
+    /// <summary>A pattern beside <paramref name="rects"/> rects that fill
+    /// with <c>var(--c)</c>, which <paramref name="rule"/> defines.</summary>
+    private static string RuleScopeDocument(string rule, int rects)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><style>").Append(rule).Append("</style>");
+        for (int i = 0; i < rects; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='var(--c)'/>");
+        }
+        return s.Append("</svg>").ToString();
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor B, stage 12): a rule that
+    /// defines a custom property for every rect, or for the root as a
+    /// selector the guard cannot match exactly, gives 20,500 rects the
+    /// value their parent's scope or a sibling's already holds, so they
+    /// share that scope and add nothing against the cap. 7ae94ac1 admitted
+    /// both documents and the decoder draws them in 0.66 and 0.60 s; the
+    /// cap had refused them as spent. Each is admitted within the judge's
+    /// allocation bound.
+    /// </summary>
+    [Theory]
+    [InlineData("rect{--c:#336699}")]
+    [InlineData(":root{--c:#336699}")]
+    public void ARuleThatGivesEveryRectTheSamePropertyIsAdmitted(string rule)
+    {
+        string source = RuleScopeDocument(rule, 20_500);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(estimate.StepsSpent, "the check spent its steps");
+        Assert.Equal(SvgRefusal.None, verdict);
+        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor C, stage 12): under the cap,
+    /// scopes that copied their parent's would still explode. 10,000
+    /// properties one fill reads and 9,000 children that each define
+    /// another as a colour hold 19,000 definitions, within the cap; the
+    /// linked scopes admit the document (the decoder draws it in 240 ms)
+    /// within the judge's allocation bound, where copying reached the step
+    /// budget near 6,400 children and 1,746 MiB.
+    /// </summary>
+    [Fact]
+    public void CustomPropertiesUnderTheCapAllocateABoundedAmount()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><g style='");
+        for (int i = 0; i < 10_000; i++)
+        {
+            s.Append("--a").Append(i).Append(":1;");
+        }
+        s.Append("' fill='");
+        for (int i = 0; i < 10_000; i++)
+        {
+            s.Append("var(--a").Append(i).Append(')');
+        }
+        s.Append("'>");
+        for (int i = 0; i < 9_000; i++)
+        {
+            s.Append("<g style='--a").Append(i).Append(":red'/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(estimate.StepsSpent, "the check spent its steps");
+        Assert.Equal(SvgRefusal.None, verdict);
+        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
     /// <summary>A 1,000-rect marker the group's marker-mid sets, over a
     /// 3,000-vertex polyline that writes <paramref name="line"/>: the
     /// documents stage 10 decoded.</summary>
