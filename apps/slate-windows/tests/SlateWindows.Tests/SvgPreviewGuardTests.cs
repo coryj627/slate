@@ -1466,6 +1466,13 @@ public sealed class SvgPreviewGuardTests
         ["var(--u)rl(#p) in the fill attribute"] = (Tile($"<g style='--u:u'><rect{Rect20} fill='var(--u)rl(#p)'/></g>"), false, true, true),
         ["url(var(--f)) in a fallback"] = (Tile($"<rect{Rect20} style='--f:#p;fill:var(--none, url(var(--f)))'/>"), false, true, true),
         ["url(var(--f)) in a definition the fill reads"] = (Tile($"<rect{Rect20} style='--f:#p;--g:url(var(--f));fill:var(--g)'/>"), false, true, true),
+        // A var() written with text before its comma still fails to its
+        // fallback, the pattern, in the style attribute and the fill
+        // attribute; one with a reference beside its name paints nothing,
+        // which the guard counts as it may give anything.
+        ["var(--none x, url(#p)) in the style attribute"] = (Tile($"<rect{Rect20} style='fill:var(--none x, url(#p))'/>"), false, true, true),
+        ["var(--none x, url(#p)) in the fill attribute"] = (Tile($"<rect{Rect20} fill='var(--none x, url(#p))'/>"), false, true, true),
+        ["var(--a url(#p)) in the style attribute"] = (Tile($"<rect{Rect20} style='--a:x;fill:var(--a url(#p))'/>"), false, false, true),
         // A rule reads url( as one token before any var() is substituted.
         ["url(var(--f)) in a rule"] = (Tile($"<style>rect{{--f:#p;fill:url(var(--f))}}</style><rect{Rect20}/>"), false, false, true),
         ["a marker at url(var(--f)) in the style attribute"] = (
