@@ -1530,6 +1530,32 @@ public sealed class SvgPreviewGuardTests
             $"reading past 199 more links took {far.Steps - near.Steps} more steps");
     }
 
+    /// <summary>
+    /// #1610 (the delta merge judge's minor B, stage 12): a group whose
+    /// values its parent's scope already holds reads that scope and makes
+    /// no link. 500 rects under 200 nested groups that each define
+    /// <c>--x:red</c> read <c>--y</c>, which no group defines, through one
+    /// link, not 200: the strokes' lookups spend fewer than 10 steps more
+    /// each than reading <c>--x</c>.
+    /// </summary>
+    [Fact]
+    public void AScopeItsParentAlreadyMatchesMakesNoLink()
+    {
+        static string Chain(string read)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g fill='url(#pat)'>");
+            s.Append(Repeat("<g style='--x:red'>", 200));
+            s.Append(Repeat($"<rect width='7' height='7' fill='var(--x)' stroke='var({read})'/>", 500));
+            s.Append(Repeat("</g>", 200));
+            return s.Append("</g></svg>").ToString();
+        }
+        SvgPreviewGuard.Check(Chain("--x"), 8 * 1024 * 1024, out SvgDecodeEstimate near);
+        SvgPreviewGuard.Check(Chain("--y"), 8 * 1024 * 1024, out SvgDecodeEstimate far);
+        Assert.True(
+            far.Steps - near.Steps < 500L * 10,
+            $"reading --y took {far.Steps - near.Steps} more steps");
+    }
+
     public static TheoryData<string> DroppedDeclarationCases() => [.. DroppedDeclaration.Keys];
 
     /// <summary>
