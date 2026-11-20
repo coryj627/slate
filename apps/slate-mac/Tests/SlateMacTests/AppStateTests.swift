@@ -1986,6 +1986,40 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    /// A search core's full-text index refuses says core's detail with no
+    /// lead of the Mac's own: "Search error: " and core's plain sentence
+    /// (the owner, 2026-11-20: "Plain words. Please change it."), never
+    /// "Search query is invalid: " before it. The Windows twin has this
+    /// name (GraphSearchFailureDetailTests). The oracle is core's detail of
+    /// the same refusal, so the Mac's own words are what the fact tests.
+    func testAnInvalidQuerySaysCoresDetailWithNoLeadOfItsOwn() async throws {
+        let vault = tempDir.appendingPathComponent("search-refused")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("hello world".utf8).write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        let session = try XCTUnwrap(state.currentSession)
+        var detail: String?
+        do {
+            _ = try session.fullTextSearch(query: "AND", scope: .vault, cancel: CancelToken())
+            XCTFail("core should refuse a bare AND")
+        } catch let error as VaultError {
+            detail = vaultErrorDetail(error: error)
+        }
+        let coreDetail = try XCTUnwrap(detail)
+
+        state.searchQuery = "AND"
+        state.bumpSearchQuery()
+        await awaitSearch(state)
+
+        XCTAssertEqual(state.searchState, .error(coreDetail))
+        XCTAssertEqual(state.searchSummary, "Search error: \(coreDetail)")
+        XCTAssertFalse(state.searchSummary.contains("Search query is invalid"))
+        XCTAssertEqual(coreDetail, "Check the quotes, symbols and operators in your search.")
+    }
+
     /// #876 Codex round 1: activating a result during the 150 ms search
     /// debounce — when the field already holds a NEWER query but the OLD
     /// rows are still displayed — must record the query that PRODUCED the
