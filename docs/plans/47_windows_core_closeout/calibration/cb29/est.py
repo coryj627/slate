@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cory Joseph
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Committed copy of CB-29's step 0 estimator (#1610). It ran in the chunk's
 # working notes, beside the step 0 CSVs, the real and mermaid SVGs and the
 # generator tool it calls; those stay there. The generators are

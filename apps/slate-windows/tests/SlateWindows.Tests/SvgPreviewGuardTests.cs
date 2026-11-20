@@ -428,10 +428,12 @@ public sealed class SvgPreviewGuardTests
         }
     }
 
-    /// <summary>#1610 (the red team's B1): the step budget admits the
-    /// document the most steps were measured on, 8 MiB of rects (2.40 M
-    /// steps), by a margin of four: the budget only ends a check no real or
-    /// calibration document comes near.</summary>
+    /// <summary>#1610 (the red team's B1): a quarter of the step budget admits
+    /// 8 MiB of rects, 6,313,640 steps (guard-estimates.csv): the budget only
+    /// ends a check no real or calibration document comes near. The most
+    /// steps any of them takes, 12,958,636 on 8 MiB of stylesheet, stays
+    /// inside half the budget
+    /// (<see cref="EachScanStaysInsideTheStepBudgetAtTheCap"/>).</summary>
     [Fact]
     public void TheStepBudgetAdmitsEightMebibytesOfRects()
     {
