@@ -857,15 +857,15 @@ public sealed class SvgPreviewGuardTests
         ["both cleared under a pattern fill and stroke"] = (
             () => PaintedGroup("", " fill='url(#pat)' stroke='url(#pat)'", " fill='red' stroke='red'"),
             false),
-        // What keeps the parent's paint: inherit (3.2 s), a var() nothing
-        // defines (3.2 s), and currentColor, which the lead's rule keeps
-        // although this decoder draws it as the colour (81 ms).
+        // What keeps the parent's paint: inherit (3.2 s) and a var() nothing
+        // defines (3.2 s). currentColor is a colour: the decoder draws it so
+        // (46 and 81 ms), and the lead's stage 9 ruling follows it.
         ["inherit"] = (() => PaintedGroup("", PatternFill, " fill='inherit'"), true),
         ["a var() nothing defines"] = (() => PaintedGroup("", PatternFill, " fill='var(--undefined)'"), true),
         ["a var() nothing defines, in the style attribute"] = (
             () => PaintedGroup("", PatternFill, " style='fill:var(--undefined)'"),
             true),
-        ["currentColor"] = (() => PaintedGroup("", PatternFill, " fill='currentColor'"), true),
+        ["currentColor"] = (() => PaintedGroup("", PatternFill, " fill='currentColor'"), false),
         // The reverse: a rule sets the pattern under a solid group (2.5 s).
         ["a class rule that sets the pattern under a red group"] = (
             () => PaintedGroup(".p{fill:url(#pat)}", " fill='red'", " class='p'"),
@@ -911,6 +911,19 @@ public sealed class SvgPreviewGuardTests
                 + "</g>" + Repeat("<rect width='1' height='1' fill='red'/>", 20_000)),
             true),
     };
+
+    /// <summary>#1610 (stage 9, the lead's ruling): 3,000 rects drawn in
+    /// <c>currentColor</c> under a group whose fill is the pattern decode in
+    /// 46 to 81 ms, the decoder drawing the colour, so they are admitted
+    /// with no pattern term.</summary>
+    [Fact]
+    public void RectsDrawnInCurrentColorUnderAPatternGroupAreAdmitted()
+    {
+        string source = PaintedGroup("", PatternFill, " fill='currentColor'");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.Equal(0, estimate.PatternMicroseconds);
+    }
 
     /// <summary>#1610 (Codex's round 5, stage 8): under a group whose fill is
     /// the pattern, the rects that set a colour clear it and the rest keep
