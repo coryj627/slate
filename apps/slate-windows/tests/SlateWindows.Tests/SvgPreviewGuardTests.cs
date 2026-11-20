@@ -1449,6 +1449,13 @@ public sealed class SvgPreviewGuardTests
         // with a word after it (9,105 ms), which the guard cleared.
         ["var(--missing, inherit)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing, inherit)'"), "counted"),
         ["url(#missing) none"] = (() => MarkedLine(MarkerMid, " marker-mid='url(#missing) none'"), "counted"),
+        // And through a property that holds either: 8,892 and 10,073 ms.
+        ["var(--c) with --c:var(--missing, inherit) on the group"] = (
+            () => MarkedLine(MarkerMid + " style='--c:var(--missing, inherit)'", " marker-mid='var(--c)'"),
+            "counted"),
+        ["var(--c) with --c:url(#missing) none on the group"] = (
+            () => MarkedLine(MarkerMid + " style='--c:url(#missing) none'", " marker-mid='var(--c)'"),
+            "counted"),
         // What clears it: none 50 ms, NONE 96 ms, None 22 ms, a missing
         // reference 52 ms; a var() with no value 34 ms, a none fallback
         // 23 ms, a word fallback 24 ms, a property that holds none 25 ms or

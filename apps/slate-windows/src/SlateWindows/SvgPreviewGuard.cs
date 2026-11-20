@@ -1948,22 +1948,17 @@ internal static class SvgPreviewGuard
         /// <summary>
         /// #1610 (stage 10): what a literal value (trimmed, no <c>var()</c>)
         /// gives a fill or a stroke: nothing clears it (a <c>var()</c>'s
-        /// fallback or a custom property that holds nothing);
-        /// <c>inherit</c>, a context paint and any value the decoder cannot
-        /// read as a paint keep the parent's paint; a value that names a
-        /// pattern is one; and a paint the decoder draws
-        /// (<see cref="DrawsOwnPaint"/>) clears it.
+        /// fallback or a custom property that holds nothing); a value that
+        /// names a pattern is one; a paint the decoder draws
+        /// (<see cref="DrawsOwnPaint"/>) clears it; and anything else keeps
+        /// the parent's paint, <c>inherit</c> and a context paint among
+        /// them.
         /// </summary>
         private static byte Literal(string text, HashSet<string> patternIds)
         {
             if (text.Length == 0)
             {
                 return ClearsMask;
-            }
-            if (text.Equals("inherit", StringComparison.OrdinalIgnoreCase)
-                || text.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
-            {
-                return KeepsMask;
             }
             if (UrlsIn(text).Exists(patternIds.Contains))
             {
