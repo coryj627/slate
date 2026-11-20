@@ -1405,10 +1405,10 @@ fn a_notes_own_sweep_claims_the_lock_to_settle_a_marker_under_its_alias() {
 /// stored row is the one that was there, read again.
 ///
 /// A host hears one thing and no more: the stored note was read again
-/// (`Modified`, as after every repair). Nothing is sent for the alias
-/// path. `Deleted` would tell a reader that a file on disk is gone, and
-/// `Renamed` onto a spelling a host already holds (both rows were listed)
-/// would put two open buffers on one path.
+/// (`Modified`, as after a repair of a row that stood). Nothing is sent
+/// for the alias path. `Deleted` would tell a reader that a file on disk is
+/// gone, and `Renamed` onto a spelling a host already holds (both rows were
+/// listed) would put two open buffers on one path.
 #[test]
 fn a_row_an_earlier_build_left_under_an_alias_goes_when_its_marker_is_swept() {
     let (_tmp, _provider, session) = one_alias_vault();
@@ -1435,8 +1435,10 @@ fn a_row_an_earlier_build_left_under_an_alias_goes_when_its_marker_is_swept() {
 /// The other way a row comes to stand under an alias: a mover stopped after
 /// the volume applied its case-only rename, so the only row is under the
 /// old spelling and nothing is under the stored one. The sweep removes that
-/// row, reads the stored spelling and gives it its row. A host hears the
-/// same one thing: the stored note's `Modified`.
+/// row, reads the stored spelling and gives it its row. A host hears one
+/// thing: the stored note's `Created`, because the row the sweep wrote is
+/// the stored spelling's first (#1704: a repair announces a first row as a
+/// save of a new path does, so a host re-seats a tab missing at it).
 #[test]
 fn a_row_a_stopped_move_left_under_an_alias_goes_and_the_stored_spelling_gets_its_row() {
     let (_tmp, _provider, session) = one_alias_vault();
@@ -1455,7 +1457,7 @@ fn a_row_a_stopped_move_left_under_an_alias_goes_and_the_stored_spelling_gets_it
     assert_eq!(vault_tasks(&session), strings(&["stored.md: one"]));
     assert_eq!(index_paths(&session, "files"), strings(&["stored.md"]));
     assert_eq!(index_paths(&session, "text_write_intents"), no_markers());
-    assert_eq!(recorder.take(), strings(&["Modified stored.md"]));
+    assert_eq!(recorder.take(), strings(&["Created stored.md"]));
 }
 
 /// What a host's change feed holds after the sweep removed a row under an

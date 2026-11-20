@@ -417,6 +417,36 @@ public sealed class BasesRedTeamRegressionTests : IDisposable
         Assert.Equal(before, File.ReadAllText(note));
     }
 
+    /// <summary>Plan 47 CB-31 (#1704): a saved query exported to a new
+    /// path is that path's first index, and it heals the dangling links
+    /// that name it, as a create does. Before, the export indexed the base
+    /// and left a note's link to it unresolved until a rescan: the note's
+    /// Connections leaf showed a ghost, the base had no backlinks, and the
+    /// reading view would not follow the link. The Windows twin of core's
+    /// a_saved_query_export_heals_the_links_that_name_it.</summary>
+    [Fact]
+    public void TheSavedQueryExportHealsTheLinksThatNameIt()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = _session.CreateExclusive("Linker.md", "[[Exported.base]]\n");
+        Assert.True(
+            Assert.Single(_session.OutgoingLinks("Linker.md")).IsUnresolved,
+            "premise: the link dangles before the export");
+        string id = _session.SaveQuery(
+            "Exportable", null, SeedQueryJson(), SavedQuerySourceSyntax.Builder);
+        _announced.Clear();
+
+        workspace.ExportSavedQueryAsBase(id, "Exported.base");
+
+        Assert.Contains(_announced, e => e is A11yEvent.BasesSavedQueryExported);
+        OutgoingLink link = Assert.Single(_session.OutgoingLinks("Linker.md"));
+        Assert.False(link.IsUnresolved);
+        Assert.Equal("Exported.base", link.TargetPath);
+        Backlink backlink = Assert.Single(
+            _session.Backlinks("Exported.base", new Paging(null, 50)).Items);
+        Assert.Equal("Linker.md", backlink.SourcePath);
+    }
+
     [Fact]
     public void DashboardEditorRefusesAStaleSaveWithTheCanonicalSentence()
     {

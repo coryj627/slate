@@ -74,6 +74,30 @@ public sealed class FinalMergeDeltaTests
         Assert.Equal("Saved ghost.md.", ghost.Status);
     }
 
+    /// <summary>Plan 47 CB-31 (#1704): a missing tab's note comes back
+    /// outside Slate, and a repair, not a rescan, is the first to index it
+    /// (the task-index repair coordinator's call, as after a save whose index
+    /// commit failed). Core announces that first row Created, as it does a
+    /// save of a new path, so the lifecycle re-seats the tab with the file's
+    /// bytes. A repair used to announce every re-read Modified, which marks
+    /// a tab at the path stale and re-seats nothing, so the tab kept reading
+    /// "missing from disk" over a note that was back.</summary>
+    [Fact]
+    public void ARepairThatFirstIndexesAMissingTabsFileReseatsIt()
+    {
+        using var host = new PumpedSaveReentrancyTests.Host();
+        WorkspaceTabViewModel arrived = OpenMissing(host, "arrived.md", WorkspaceOpenTarget.NewTab);
+        File.WriteAllText(Path.Combine(host.Root, "arrived.md"), "# Arrived\n");
+
+        Assert.True(
+            host.Workspace.TaskIndexRepairsForTests.TryRepairNow("arrived.md", out string? error),
+            error);
+        host.Settle();
+
+        Assert.False(arrived.IsMissingFromDisk, "the repaired note still reads missing from disk");
+        Assert.Equal("# Arrived\n", arrived.Text);
+    }
+
     /// <summary>Finding 1, a note shown twice — in another pane, or a
     /// duplicate in the same one: both tabs of the path are missing, the
     /// reader types and saves in one and takes the edit back in it (the peer
