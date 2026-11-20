@@ -1465,16 +1465,17 @@ internal static class SvgPreviewGuard
         /// attribute, which beats the other rules, which beat the
         /// presentation attribute, and among rules the higher specificity,
         /// then the later rule, wins. A value that names a pattern, directly
-        /// or through a custom property, is a pattern. <c>inherit</c>,
-        /// <c>currentColor</c> (the lead's rule; this decoder draws it as the
-        /// colour), a context paint, and a <c>var()</c> that may resolve to
-        /// nothing (measured: the decoder then keeps the parent's paint) keep
-        /// the parent's paint. Anything else is not a pattern. A rule whose
-        /// selector the guard cannot match exactly (a combinator, a
+        /// or through a custom property, is a pattern. <c>inherit</c>, a
+        /// context paint, and a <c>var()</c> that may resolve to nothing
+        /// (measured: the decoder then keeps the parent's paint) keep the
+        /// parent's paint. Anything else is not a pattern, <c>currentColor</c>
+        /// among them: the decoder draws it as the colour (stage 9). A rule
+        /// whose selector the guard cannot match exactly (a combinator, a
         /// pseudo-class, an attribute selector, an id several elements share,
-        /// or a name in another case) may apply or not: where it would set or keep a pattern it is
-        /// taken to apply and to win among the rules, and where it would
-        /// clear one it is left out, so the count errs toward the pattern.
+        /// or a name in another case) may apply or not: where it would set or
+        /// keep a pattern it is taken to apply and to win among the rules,
+        /// and where it would clear one it is left out, so the count errs
+        /// toward the pattern.
         /// Only a document with a pattern is read this way.
         /// </summary>
         private void PaintCascade(
@@ -1534,7 +1535,6 @@ internal static class SvgPreviewGuard
                 string value = raw.Trim();
                 Scanned(2L * value.Length);
                 if (value.Equals("inherit", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("currentColor", StringComparison.OrdinalIgnoreCase)
                     || value.StartsWith("context-", StringComparison.OrdinalIgnoreCase))
                 {
                     return KeepsPaint;
