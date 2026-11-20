@@ -590,11 +590,15 @@ fn search_fts_syntax_error_exits_one_with_message() {
     slate()
         .arg("search")
         .arg(vault.path())
-        // An unbalanced quote is an FTS5 syntax error → InvalidQuery.
+        // An unbalanced quote is an FTS5 syntax error → InvalidQuery,
+        // whose message is core's plain sentence, not SQLite's text.
         .arg("\"unbalanced")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("invalid search query"))
+        .stderr(predicate::str::contains(
+            "invalid search query: Check the quotes, symbols and operators in your search.",
+        ))
+        .stderr(predicate::str::contains("FTS5").not())
         .stderr(predicate::str::starts_with("slate: "));
 }
 

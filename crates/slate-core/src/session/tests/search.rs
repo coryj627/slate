@@ -10,6 +10,40 @@
 use super::common::*;
 use super::*;
 
+/// Core's sentence for a search its full-text index refuses as a query
+/// (the owner, 2026-11-20: "Plain words. Please change it."). The facts
+/// below hold core to this literal; `a11y::SEARCH_QUERY_UNREADABLE` is
+/// pinned to it in a11y's own tests.
+const REFUSED: &str = "Check the quotes, symbols and operators in your search.";
+
+/// The message of the `InvalidQuery` a search is refused with, or a panic
+/// that names the query, the scope and what came back instead.
+fn refusal_message(session: &VaultSession, query: &str, scope: &crate::SearchScope) -> String {
+    match session.full_text_search(query, scope, &CancelToken::new()) {
+        Err(VaultError::InvalidQuery { message }) => message,
+        other => panic!("{query:?} at {scope:?}: expected InvalidQuery, got {other:?}"),
+    }
+}
+
+/// A vault whose one note sits under `notes/` and carries `#project`, so
+/// the Vault, Folder and Tag scopes all reach the full-text index.
+fn refusal_vault() -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/a.md", b"alpha beta gamma #project")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+fn every_search_scope() -> [crate::SearchScope; 3] {
+    [
+        crate::SearchScope::Vault,
+        crate::SearchScope::Folder("notes".into()),
+        crate::SearchScope::Tag("project".into()),
+    ]
+}
+
 #[test]
 fn full_text_search_maps_fts5_syntax_errors_to_invalid_query() {
     // Audit-#88-B3 regression: previously a user-supplied FTS5
@@ -20,20 +54,159 @@ fn full_text_search_maps_fts5_syntax_errors_to_invalid_query() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    // Unbalanced quote — FTS5 parser rejects with "syntax
-    // error" in the message.
-    match session.full_text_search(
+    // Unbalanced quote: FTS5's parser refuses it ("unterminated
+    // string"), and the reader hears core's sentence, not SQLite's text.
+    assert_eq!(
+        refusal_message(&session, "unbalanced\"", &crate::SearchScope::Vault),
+        REFUSED
+    );
+}
+
+/// Every kind of query plan 47's step 0 saw FTS5 refuse as a query says
+/// core's one plain sentence, at every scope: SQLite's own refusal text
+/// (and the query it quoted) never reaches the reader.
+#[test]
+fn every_query_fts5_refuses_says_cores_sentence() {
+    let (_tmp, session) = refusal_vault();
+    // FTS5's parser stack holds fewer than 100 nested groups, and its
+    // expression tree is at most 256 deep (step 0: 50 and 200 run).
+    let nested = format!("{}alpha{}", "(".repeat(100), ")".repeat(100));
+    let chain = format!("alpha{}", " NOT beta".repeat(300));
+    let queries: Vec<&str> = vec![
+        // An operator with nothing to join, an open NEAR, a NEAR distance
+        // below zero.
+        "AND",
+        "foo AND",
+        "NOT foo",
+        "foo AND OR bar",
+        "NEAR(alpha beta",
+        "NEAR(alpha beta, -1)",
+        // A quote left open, at either end.
         "unbalanced\"",
-        &crate::SearchScope::Vault,
-        &CancelToken::new(),
-    ) {
-        Err(VaultError::InvalidQuery { message }) => {
-            assert!(
-                message.contains("unbalanced"),
-                "InvalidQuery message should include the query: {message}"
+        "\"unbalanced",
+        // A special query and the other operator symbols.
+        "*",
+        "^",
+        "+",
+        "(foo",
+        "foo)",
+        // Ordinary text with one symbol in it.
+        "#project",
+        "don't",
+        "e.g.",
+        "what?",
+        "foo, bar",
+        "[[alpha]]",
+        "C++",
+        "**bold**",
+        "email@example.com",
+        // Past the parser's depth, and past the expression tree's.
+        &nested,
+        &chain,
+    ];
+    for scope in every_search_scope() {
+        for query in &queries {
+            assert_eq!(
+                refusal_message(&session, query, &scope),
+                REFUSED,
+                "{query:?} at {scope:?}"
             );
         }
-        other => panic!("expected InvalidQuery, got {other:?}"),
+    }
+}
+
+/// A colon, a hyphen, a date, a link or a NEAR distance that is not a
+/// number: FTS5 refuses each as a query ("no such column: known",
+/// "expected integer, got …"), so each says core's sentence, not a
+/// database error.
+#[test]
+fn a_column_filter_hyphen_date_link_or_near_distance_is_refused_as_a_query() {
+    let (_tmp, session) = refusal_vault();
+    for scope in every_search_scope() {
+        for query in [
+            "foo:bar",
+            "title:foo",
+            "-x",
+            "TODO:",
+            "well-known",
+            "2024-01-01",
+            "https://example.com",
+            "NEAR(alpha, beta)",
+            "NEAR(alpha beta, x)",
+        ] {
+            assert_eq!(
+                refusal_message(&session, query, &scope),
+                REFUSED,
+                "{query:?} at {scope:?}"
+            );
+        }
+    }
+}
+
+/// A damaged full-text index is a database error, never a refused query:
+/// FTS5's corruption texts begin "fts5:" as its parse failures do, and a
+/// reader told to check a search that is fine would edit it forever.
+#[test]
+fn a_damaged_full_text_index_is_a_database_error_not_a_refused_query() {
+    let (_tmp, session) = refusal_vault();
+    assert_eq!(fts_match_count(&session, "alpha"), 1, "premise: indexed");
+    {
+        let conn = session.conn.lock().unwrap();
+        // FTS5 keeps its structure record at id 1 and its averages at id
+        // 10; the leaves have larger ids.
+        let zeroed = conn
+            .execute(
+                "UPDATE files_fts_data SET block = X'0000000000000000' WHERE id > 10",
+                [],
+            )
+            .unwrap();
+        assert!(zeroed > 0, "premise: the index has leaves to damage");
+    }
+    for scope in every_search_scope() {
+        match session.full_text_search("alpha", &scope, &CancelToken::new()) {
+            Err(error @ VaultError::Db(_)) => {
+                let detail = crate::a11y::vault_error_detail(&error);
+                assert!(detail.contains("corruption"), "{scope:?}: {detail}");
+            }
+            other => panic!("{scope:?}: a damaged index must be Db, got {other:?}"),
+        }
+    }
+}
+
+/// The queries step 0 saw FTS5 read still run: the refusal markers catch
+/// no operator used as FTS5 means it, no prefix, no phrase, no word.
+#[test]
+fn every_query_fts5_reads_still_runs() {
+    let (_tmp, session) = refusal_vault();
+    let nested = format!("{}alpha{}", "(".repeat(50), ")".repeat(50));
+    let chain = format!("alpha{}", " NOT beta".repeat(200));
+    for query in [
+        "NEAR",
+        "NEAR(alpha beta, 99999999999)",
+        "foo*",
+        "^alpha",
+        "foo + bar",
+        "foo_bar",
+        "caf\u{e9}",
+        "\u{201c}curly\u{201d}",
+        "\"alpha beta\"",
+        "alpha AND beta",
+        "alpha OR beta",
+        "alpha NOT beta",
+        "and",
+        "near",
+        "or alpha",
+        &nested,
+        &chain,
+    ] {
+        for scope in every_search_scope() {
+            assert!(
+                session
+                    .full_text_search(query, &scope, &CancelToken::new())
+                    .is_ok(),
+                "{query:?} at {scope:?}"
+            );
+        }
     }
 }
 

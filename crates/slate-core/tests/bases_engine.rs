@@ -2589,12 +2589,58 @@ fn file_matches_invalid_query_fails_view_with_search_error() {
     .expect("execute invalid FTS query");
 
     let error = result.error.expect("invalid FTS query should fail view");
-    assert!(
-        error.construct.contains("file.matches")
-            && error.construct.contains("invalid search query")
-            && error.construct.contains("unbalanced"),
-        "{error:?}"
-    );
+    assert_eq!(error.construct, FILE_MATCHES_REFUSED, "{error:?}");
+    assert_eq!(error.row_path, "", "{error:?}");
+}
+
+/// What a Bases view says when the full-text index refuses a
+/// `file.matches` query: the function, then core's plain sentence (the
+/// owner, 2026-11-20), never "invalid search query:" or SQLite's text.
+const FILE_MATCHES_REFUSED: &str =
+    "file.matches: Check the quotes, symbols and operators in your search.";
+
+/// A refused `file.matches` query fails the view with the same words on
+/// both of its paths: the pushed-down top-level conjunct, and the
+/// interpreter, which runs it with pushdown off and under `or:` (where the
+/// view error also names the row being evaluated). A query FTS5 refuses
+/// for a colon or a hyphen is a view error too, not a failed execute.
+#[test]
+fn file_matches_refused_query_says_the_same_on_every_path() {
+    let conn = migrated_conn();
+    seed_index(&conn);
+    update_body_text(&conn, 1, "roadmap");
+
+    for refused in ["AND", "#project", "well-known", "foo:bar"] {
+        let filter = format!("file.matches({refused:?})");
+        let top_level = stmt(&filter);
+        let nested = FilterNode::Or(vec![stmt(&filter), stmt(r#"status == "done""#)]);
+        for (shape, filters, pushdown) in [
+            ("top-level, pushed down", top_level.clone(), true),
+            ("top-level, interpreted", top_level, false),
+            ("under or:", nested, true),
+        ] {
+            let mut query = query();
+            query.filters = Some(filters);
+            query.columns = vec![column("file.path")];
+
+            let result = execute(
+                &query,
+                &conn,
+                &EngineCtx {
+                    pushdown,
+                    ..EngineCtx::default()
+                },
+                &CancelToken::new(),
+            )
+            .unwrap_or_else(|error| panic!("{refused:?} {shape}: execute failed: {error:?}"));
+
+            let error = result
+                .error
+                .unwrap_or_else(|| panic!("{refused:?} {shape}: the view should fail"));
+            assert_eq!(error.construct, FILE_MATCHES_REFUSED, "{refused:?} {shape}");
+            assert!(result.rows.is_empty(), "{refused:?} {shape}");
+        }
+    }
 }
 
 #[test]
