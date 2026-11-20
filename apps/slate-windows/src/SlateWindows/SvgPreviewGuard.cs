@@ -820,9 +820,9 @@ internal static class SvgPreviewGuard
 
         private void AddMarker(int index, int slots, string value)
         {
-            if (ReadMarkerValue(value, out string? target, out string? throughVar))
+            if (ReadMarkerValue(value, out string? target, out string? throughVar, out bool keepsToo))
             {
-                elementMarkers.Add(new MarkerDeclaration(index, slots, target, throughVar));
+                elementMarkers.Add(new MarkerDeclaration(index, slots, target, throughVar, keepsToo));
             }
         }
 
@@ -1913,104 +1913,12 @@ internal static class SvgPreviewGuard
         /// </summary>
         private byte Substitute(string value, Dictionary<string, byte>? scope, HashSet<string> patternIds)
         {
-            Scanned(value.Length);
-            var levels = new List<VarLevel> { new(null, 0, 0, inContent: true) { Fallback = 0, Close = value.Length } };
-            var open = new List<int>();
-            int depth = 0;
-            void Mark(int owner)
-            {
-                if (owner == 0 || levels[owner].Fallback >= 0)
-                {
-                    levels[owner].Text = true;
-                }
-                else
-                {
-                    levels[owner].Junk = true;
-                }
-            }
-            for (int i = 0; i < value.Length; i++)
-            {
-                int owner = open.Count > 0 ? open[^1] : 0;
-                char c = value[i];
-                if (IsUrlAt(value, i))
-                {
-                    int end = UrlArgumentEnd(value, i + 4);
-                    int close = end < value.Length && value[end] == ')' ? end : value.Length;
-                    Mark(owner);
-                    if (Fragment(value, i + 4, close) is { } id && patternIds.Contains(id))
-                    {
-                        levels[owner].Urls = PatternMask;
-                    }
-                    i = end;
-                    continue;
-                }
-                if (i + 4 <= value.Length && value.AsSpan(i, 4).Equals("var(", StringComparison.OrdinalIgnoreCase))
-                {
-                    steps.Spend(1);
-                    int start = i + 4;
-                    while (start < value.Length && char.IsWhiteSpace(value[start]))
-                    {
-                        start++;
-                    }
-                    int nameEnd = start;
-                    if (nameEnd + 1 < value.Length && value[nameEnd] == '-' && value[nameEnd + 1] == '-')
-                    {
-                        nameEnd += 2;
-                        while (nameEnd < value.Length && IsVarNameCharacter(value[nameEnd]))
-                        {
-                            nameEnd++;
-                        }
-                    }
-                    bool inContent = owner == 0 || levels[owner].Fallback >= 0;
-                    if (inContent)
-                    {
-                        levels[owner].Children++;
-                    }
-                    else
-                    {
-                        levels[owner].Junk = true;
-                    }
-                    levels.Add(new VarLevel(nameEnd > start ? value[start..nameEnd] : null, owner, ++depth, inContent));
-                    open.Add(levels.Count - 1);
-                    i = nameEnd - 1;
-                    continue;
-                }
-                if (c == '(')
-                {
-                    depth++;
-                    Mark(owner);
-                }
-                else if (c == ')')
-                {
-                    if (owner > 0 && levels[owner].Depth == depth)
-                    {
-                        levels[owner].Close = i;
-                        open.RemoveAt(open.Count - 1);
-                    }
-                    else
-                    {
-                        Mark(owner);
-                    }
-                    depth = Math.Max(0, depth - 1);
-                }
-                else if (c == ',' && owner > 0 && levels[owner].Depth == depth && levels[owner].Fallback < 0)
-                {
-                    levels[owner].Fallback = i + 1;
-                }
-                else if (!char.IsWhiteSpace(c))
-                {
-                    Mark(owner);
-                }
-            }
-            foreach (int unclosed in open)
-            {
-                levels[unclosed].Close = value.Length;
-            }
+            List<VarLevel> levels = VarLevels(value, patternIds);
 
             byte Content(VarLevel level) =>
                 level.Children == 0 ? Literal(value[level.Fallback..level.Close].Trim(), patternIds)
                 : level.Children == 1 && !level.Text ? level.Union
-                : (byte)(level.Union | KeepsMask | ClearsMask | level.Urls);
+                : (byte)(level.Union | KeepsMask | ClearsMask | (level.PatternUrl ? PatternMask : 0));
             for (int k = levels.Count - 1; k > 0; k--)
             {
                 steps.Spend(1);
@@ -2018,7 +1926,7 @@ internal static class SvgPreviewGuard
                 byte result;
                 if (level.Name is null || level.Junk)
                 {
-                    result = (byte)(KeepsMask | ClearsMask | level.Nested | level.Urls);
+                    result = (byte)(KeepsMask | ClearsMask | (level.PatternUrl || level.NestedPattern ? PatternMask : 0));
                 }
                 else
                 {
@@ -2028,49 +1936,13 @@ internal static class SvgPreviewGuard
                         : (byte)((held & ~FailsMask) | Content(level));
                 }
                 VarLevel parent = levels[level.Parent];
-                parent.Nested |= (byte)(level.Nested | level.Urls);
+                parent.NestedPattern |= level.NestedPattern || level.PatternUrl;
                 if (level.InContent)
                 {
                     parent.Union |= result;
                 }
             }
             return Content(levels[0]);
-        }
-
-        /// <summary>One <c>var()</c> in a value being substituted, or the
-        /// value itself (the first): the name it reads, its parent's index,
-        /// its bracket depth, and whether it stands in its parent's fallback
-        /// (or the value) rather than before its parent's comma; then where
-        /// its fallback starts (-1 for none) and where it closes, how many
-        /// <c>var()</c> its fallback holds and what they can give, whether
-        /// anything else is written there or before its comma, and the
-        /// pattern references in it and in the <c>var()</c> inside
-        /// it.</summary>
-        private sealed class VarLevel(string? name, int parent, int depth, bool inContent)
-        {
-            internal string? Name { get; } = name;
-
-            internal int Parent { get; } = parent;
-
-            internal int Depth { get; } = depth;
-
-            internal bool InContent { get; } = inContent;
-
-            internal int Fallback { get; set; } = -1;
-
-            internal int Close { get; set; }
-
-            internal int Children { get; set; }
-
-            internal byte Union { get; set; }
-
-            internal bool Text { get; set; }
-
-            internal bool Junk { get; set; }
-
-            internal byte Urls { get; set; }
-
-            internal byte Nested { get; set; }
         }
 
         /// <summary>
@@ -2172,8 +2044,10 @@ internal static class SvgPreviewGuard
     /// <summary>#1610 (CB-29): a marker property an element or a rule sets:
     /// its slots (1 start, 2 mid, 4 end), the marker id it names, or
     /// neither for <c>none</c>, or the value when it is read through
-    /// <c>var()</c>.</summary>
-    private readonly record struct MarkerDeclaration(int Element, int Slots, string? Target, string? ThroughVar);
+    /// <c>var()</c>; and whether it may keep the parent's marker as well
+    /// (stage 10: a reference with text after it, or a <c>var()</c> that
+    /// can give such a value).</summary>
+    private readonly record struct MarkerDeclaration(int Element, int Slots, string? Target, string? ThroughVar, bool KeepsToo);
 
     /// <summary>The slots a marker property sets, or null for any other
     /// property.</summary>
@@ -2187,13 +2061,17 @@ internal static class SvgPreviewGuard
     /// <summary>Whether a marker property's value places or clears a
     /// marker: <c>none</c>, a <c>url(#id)</c>, or anything through
     /// <c>var()</c>, which Svg.Custom resolves (the value is kept, to read
-    /// every <c>url()</c> it can reach). Any other value is
-    /// ignored.</summary>
-    private static bool ReadMarkerValue(string value, out string? target, out string? throughVar)
+    /// every <c>url()</c> it can reach). Any other value is ignored, so
+    /// the parent's marker is kept. A reference with text before or after
+    /// it may keep the parent's marker as well, as one after it does in
+    /// the decoder (stage 10), and so may a <c>var()</c> that can give
+    /// such a value (<see cref="MarkerMayKeep"/>).</summary>
+    private static bool ReadMarkerValue(string value, out string? target, out string? throughVar, out bool keepsToo)
     {
         Scanned(4L * value.Length);
         target = null;
         throughVar = null;
+        keepsToo = false;
         string text = value.Trim();
         if (text.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
@@ -2202,6 +2080,7 @@ internal static class SvgPreviewGuard
         if (text.Contains("var(", StringComparison.OrdinalIgnoreCase))
         {
             throughVar = text;
+            keepsToo = MarkerMayKeep(text);
             return true;
         }
         int url = text.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
@@ -2211,6 +2090,7 @@ internal static class SvgPreviewGuard
         }
         int end = UrlArgumentEnd(text, url + 4);
         target = Fragment(text, url + 4, end < text.Length && text[end] == ')' ? end : text.Length);
+        keepsToo = url > 0 || MarkerLiteralKeeps(text);
         return target is not null;
     }
 
@@ -2626,6 +2506,7 @@ internal static class SvgPreviewGuard
         {
             var urls = new List<List<string>>();
             var vertices = new List<int>();
+            var keeps = new List<bool>();
             var values = new List<(int Name, string Value)>();
             foreach ((string name, string value) in definitions)
             {
@@ -2635,6 +2516,7 @@ internal static class SvgPreviewGuard
                     names[name] = id = names.Count;
                     urls.Add([]);
                     vertices.Add(0);
+                    keeps.Add(false);
                 }
                 List<string> named = UrlsIn(value);
                 steps.Spend(named.Count);
@@ -2643,6 +2525,10 @@ internal static class SvgPreviewGuard
                 if (value.Contains("path(", StringComparison.OrdinalIgnoreCase))
                 {
                     vertices[id] = Math.Max(vertices[id], CssPathVertices(value));
+                }
+                if (!keeps[id] && MarkerMayKeep(value))
+                {
+                    keeps[id] = true;
                 }
                 values.Add((id, value));
             }
@@ -2669,6 +2555,7 @@ internal static class SvgPreviewGuard
             Urls = new List<string>[components];
             Named = new List<int>[components];
             PathVertices = new int[components];
+            MayKeepMarker = new bool[components];
             var urlSets = new HashSet<string>[components];
             var namedSets = new HashSet<int>[components];
             for (int c = 0; c < components; c++)
@@ -2682,6 +2569,7 @@ internal static class SvgPreviewGuard
             {
                 int c = component[id];
                 PathVertices[c] = Math.Max(PathVertices[c], vertices[id]);
+                MayKeepMarker[c] |= keeps[id];
                 foreach (string url in urls[id])
                 {
                     if (urlSets[c].Add(url))
@@ -2704,6 +2592,7 @@ internal static class SvgPreviewGuard
                 foreach (int other in Named[c])
                 {
                     PathVertices[c] = Math.Max(PathVertices[c], PathVertices[other]);
+                    MayKeepMarker[c] |= MayKeepMarker[other];
                 }
             }
         }
@@ -2733,6 +2622,26 @@ internal static class SvgPreviewGuard
 
         /// <summary>Each component's ids, in its definitions' own text.</summary>
         internal List<string>[] Urls { get; }
+
+        /// <summary>#1610 (stage 10): whether a marker property that reads
+        /// a component's properties may keep the parent's marker: a
+        /// definition in it, or in any component it names, can give such a
+        /// value (<see cref="MarkerMayKeep"/>).</summary>
+        internal bool[] MayKeepMarker { get; }
+
+        /// <summary>Whether a marker value read through <c>var()</c> may
+        /// keep the parent's marker through a property it names.</summary>
+        internal bool MarkerMayKeepThrough(string value)
+        {
+            foreach (string name in NamesIn(value))
+            {
+                if (ComponentOf(name) is var c and >= 0 && MayKeepMarker[c])
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         /// <summary>The other components each component names, all lower
         /// than it.</summary>
@@ -2930,6 +2839,7 @@ internal static class SvgPreviewGuard
         private readonly HashSet<string> attributeNames = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> widestById = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> widestThroughVar = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, bool> keepsThroughVar = new(ReferenceEqualityComparer.Instance);
         private int[]? widestByComponent;
         private readonly Dictionary<int, double[]> choiceRows = [];
         private double queriedPasses;
@@ -3120,9 +3030,9 @@ internal static class SvgPreviewGuard
                     pathVertices = Math.Max(pathVertices, document.Reach?.PathVerticesOf(value) ?? CssPathVertices(value));
                 }
                 if (MarkerSlots(name) is { } slots
-                    && ReadMarkerValue(value, out string? target, out string? throughVar))
+                    && ReadMarkerValue(value, out string? target, out string? throughVar, out bool keepsToo))
                 {
-                    (markers ??= []).Add(new MarkerDeclaration(-1, slots, target, throughVar));
+                    (markers ??= []).Add(new MarkerDeclaration(-1, slots, target, throughVar, keepsToo));
                 }
             }
             double passes = 1 + (custom ? 1 : 0) + (geometry ? 1 : 0);
@@ -3688,10 +3598,12 @@ internal static class SvgPreviewGuard
             }
             const int NotSet = -2;
             var own = new int[elements * Slots];
+            var ownKeeps = new bool[elements * Slots];
             var vertexCounts = new int[elements];
             var best = new int[Slots];
             var bestRenders = new double[Slots];
             var set = new bool[Slots];
+            var keeps = new bool[Slots];
             IReadOnlyList<MarkerDeclaration> declared = document.ElementMarkers;
             IReadOnlyList<(int Element, string Value)> pathVarUses = document.PathVarUses;
             int nextDeclaration = 0;
@@ -3704,6 +3616,7 @@ internal static class SvgPreviewGuard
                 Array.Fill(best, -1);
                 Array.Fill(bestRenders, -1);
                 Array.Clear(set);
+                Array.Clear(keeps);
                 int vertexCount = document.Vertices[i];
                 bool path = document.Names[i] == "path";
                 while (nextPathVarUse < pathVarUses.Count && pathVarUses[nextPathVarUse].Element == i)
@@ -3712,9 +3625,10 @@ internal static class SvgPreviewGuard
                     vertexCount = Math.Max(
                         vertexCount, document.Reach?.PathVerticesOf(pathVarUses[nextPathVarUse++].Value) ?? 0);
                 }
-                void Candidate(int slot, int marker)
+                void Candidate(int slot, int marker, bool keepsToo)
                 {
                     set[slot] = true;
+                    keeps[slot] |= keepsToo;
                     double markerRenders = marker >= 0 ? renders[marker] : 0;
                     if (markerRenders > bestRenders[slot])
                     {
@@ -3753,7 +3667,7 @@ internal static class SvgPreviewGuard
                         {
                             if (markerSet[slot])
                             {
-                                Candidate(slot, stats.MarkerBest![slot]);
+                                Candidate(slot, stats.MarkerBest![slot], stats.MarkerKeeps![slot]);
                             }
                         }
                     }
@@ -3762,11 +3676,12 @@ internal static class SvgPreviewGuard
                 {
                     MarkerDeclaration declaration = declared[nextDeclaration++];
                     int marker = Resolve(declaration);
+                    bool keepsToo = KeepsToo(declaration);
                     for (int slot = 0; slot < Slots; slot++)
                     {
                         if ((declaration.Slots & (1 << slot)) != 0)
                         {
-                            Candidate(slot, marker);
+                            Candidate(slot, marker, keepsToo);
                         }
                     }
                 }
@@ -3797,6 +3712,7 @@ internal static class SvgPreviewGuard
                 for (int slot = 0; slot < Slots; slot++)
                 {
                     own[(i * Slots) + slot] = set[slot] ? (bestRenders[slot] > 0 ? best[slot] : -1) : NotSet;
+                    ownKeeps[(i * Slots) + slot] = keeps[slot];
                 }
                 vertexCounts[i] = vertexCount;
             }
@@ -3849,7 +3765,9 @@ internal static class SvgPreviewGuard
                     {
                         inherited = Wider(inherited, viaUses[slot]);
                     }
-                    effective[(i * Slots) + slot] = mine != NotSet ? mine : inherited;
+                    effective[(i * Slots) + slot] = mine == NotSet ? inherited
+                        : ownKeeps[(i * Slots) + slot] ? Wider(mine, inherited)
+                        : mine;
                 }
                 units = Cap(units + Placements(i, vertexCounts[i], effective));
             }
@@ -3898,6 +3816,28 @@ internal static class SvgPreviewGuard
             declaration.ThroughVar is { } value ? WidestThroughVar(value)
             : declaration.Target is { } target ? WidestWithId(target)
             : -1;
+
+        /// <summary>#1610 (stage 10): whether a marker declaration may keep
+        /// the parent's marker as well as place its own: its own text can
+        /// give such a value, or a property it reads through <c>var()</c>
+        /// can. Found once per value.</summary>
+        private bool KeepsToo(MarkerDeclaration declaration)
+        {
+            if (declaration.KeepsToo)
+            {
+                return true;
+            }
+            if (declaration.ThroughVar is not { } value || document.Reach is not { } reach)
+            {
+                return false;
+            }
+            if (!keepsThroughVar.TryGetValue(value, out bool keeps))
+            {
+                steps.Spend(1);
+                keepsThroughVar[value] = keeps = reach.MarkerMayKeepThrough(value);
+            }
+            return keeps;
+        }
 
         /// <summary>The element an id names, or -1: of several elements
         /// sharing it, the one with the most renders (the red team's m4),
@@ -4237,9 +4177,11 @@ internal static class SvgPreviewGuard
             internal List<MarkerDeclaration>? Markers;
             internal bool[]? MarkerSet;
             internal int[]? MarkerBest;
+            internal bool[]? MarkerKeeps;
 
             /// <summary>Each slot's widest marker among the rules filed
-            /// here.</summary>
+            /// here, and whether one may keep the parent's marker
+            /// too.</summary>
             internal void ResolveMarkers(DecodeCostEstimator estimator)
             {
                 if (Markers is null)
@@ -4248,10 +4190,12 @@ internal static class SvgPreviewGuard
                 }
                 MarkerSet = new bool[Slots];
                 MarkerBest = [-1, -1, -1];
+                MarkerKeeps = new bool[Slots];
                 var widest = new double[] { -1, -1, -1 };
                 foreach (MarkerDeclaration declaration in Markers)
                 {
                     int marker = estimator.Resolve(declaration);
+                    bool keepsToo = estimator.KeepsToo(declaration);
                     double markerRenders = marker >= 0 ? estimator.renders[marker] : 0;
                     for (int slot = 0; slot < Slots; slot++)
                     {
@@ -4260,6 +4204,7 @@ internal static class SvgPreviewGuard
                             continue;
                         }
                         MarkerSet[slot] = true;
+                        MarkerKeeps[slot] |= keepsToo;
                         if (markerRenders > widest[slot])
                         {
                             widest[slot] = markerRenders;
@@ -4698,6 +4643,210 @@ internal static class SvgPreviewGuard
         int bang = value.LastIndexOf('!');
         important = bang >= 0 && value.AsSpan(bang + 1).Trim().Equals("important", StringComparison.OrdinalIgnoreCase);
         return important ? value[..bang] : value;
+    }
+
+    /// <summary>
+    /// #1610 (stage 10): a value's <c>var()</c> references, read in one
+    /// pass: the first level is the value itself, and each other one
+    /// <c>var()</c> in document order, with its parent, so a reader that
+    /// goes from the last level to the first resolves the innermost first
+    /// and never recurses. A reference to an id in
+    /// <paramref name="patternIds"/> is marked where it stands.
+    /// </summary>
+    private static List<VarLevel> VarLevels(string value, HashSet<string>? patternIds)
+    {
+        Scanned(value.Length);
+        var levels = new List<VarLevel> { new(null, 0, 0, inContent: true) { Fallback = 0, Close = value.Length } };
+        var open = new List<int>();
+        int depth = 0;
+        void Mark(int owner)
+        {
+            if (owner == 0 || levels[owner].Fallback >= 0)
+            {
+                levels[owner].Text = true;
+            }
+            else
+            {
+                levels[owner].Junk = true;
+            }
+        }
+        for (int i = 0; i < value.Length; i++)
+        {
+            int owner = open.Count > 0 ? open[^1] : 0;
+            char c = value[i];
+            if (IsUrlAt(value, i))
+            {
+                int end = UrlArgumentEnd(value, i + 4);
+                int close = end < value.Length && value[end] == ')' ? end : value.Length;
+                Mark(owner);
+                if (patternIds is not null && Fragment(value, i + 4, close) is { } id && patternIds.Contains(id))
+                {
+                    levels[owner].PatternUrl = true;
+                }
+                i = end;
+                continue;
+            }
+            if (i + 4 <= value.Length && value.AsSpan(i, 4).Equals("var(", StringComparison.OrdinalIgnoreCase))
+            {
+                int start = i + 4;
+                while (start < value.Length && char.IsWhiteSpace(value[start]))
+                {
+                    start++;
+                }
+                int nameEnd = start;
+                if (nameEnd + 1 < value.Length && value[nameEnd] == '-' && value[nameEnd + 1] == '-')
+                {
+                    nameEnd += 2;
+                    while (nameEnd < value.Length && IsVarNameCharacter(value[nameEnd]))
+                    {
+                        nameEnd++;
+                    }
+                }
+                bool inContent = owner == 0 || levels[owner].Fallback >= 0;
+                if (inContent)
+                {
+                    levels[owner].Children++;
+                }
+                else
+                {
+                    levels[owner].Junk = true;
+                }
+                levels.Add(new VarLevel(nameEnd > start ? value[start..nameEnd] : null, owner, ++depth, inContent));
+                open.Add(levels.Count - 1);
+                i = nameEnd - 1;
+                continue;
+            }
+            if (c == '(')
+            {
+                depth++;
+                Mark(owner);
+            }
+            else if (c == ')')
+            {
+                if (owner > 0 && levels[owner].Depth == depth)
+                {
+                    levels[owner].Close = i;
+                    open.RemoveAt(open.Count - 1);
+                }
+                else
+                {
+                    Mark(owner);
+                }
+                depth = Math.Max(0, depth - 1);
+            }
+            else if (c == ',' && owner > 0 && levels[owner].Depth == depth && levels[owner].Fallback < 0)
+            {
+                levels[owner].Fallback = i + 1;
+            }
+            else if (!char.IsWhiteSpace(c))
+            {
+                Mark(owner);
+            }
+        }
+        foreach (int unclosed in open)
+        {
+            levels[unclosed].Close = value.Length;
+        }
+        return levels;
+    }
+
+    /// <summary>One <c>var()</c> in a value (<see cref="VarLevels"/>), or
+    /// the value itself (the first): the name it reads, its parent's index,
+    /// its bracket depth, and whether it stands in its parent's fallback
+    /// (or the value) rather than before its parent's comma; then where
+    /// its fallback starts (-1 for none) and where it closes, how many
+    /// <c>var()</c> its fallback holds and what they can give, whether
+    /// anything else is written there or before its comma, and whether a
+    /// pattern is named there or in a <c>var()</c> inside it.</summary>
+    private sealed class VarLevel(string? name, int parent, int depth, bool inContent)
+    {
+        internal string? Name { get; } = name;
+
+        internal int Parent { get; } = parent;
+
+        internal int Depth { get; } = depth;
+
+        internal bool InContent { get; } = inContent;
+
+        internal int Fallback { get; set; } = -1;
+
+        internal int Close { get; set; }
+
+        internal int Children { get; set; }
+
+        internal byte Union { get; set; }
+
+        internal bool Text { get; set; }
+
+        internal bool Junk { get; set; }
+
+        internal bool PatternUrl { get; set; }
+
+        internal bool NestedPattern { get; set; }
+    }
+
+    /// <summary>
+    /// #1610 (stage 10, the audit after Codex's round 7): whether a marker
+    /// value read through <c>var()</c>, or a custom property's definition,
+    /// can give a marker property a value that keeps the parent's marker
+    /// (<see cref="MarkerLiteralKeeps"/>): its own text or a fallback the
+    /// decoder may select is one, or holds several pieces that could make
+    /// one, or a <c>var()</c> in it is written wrongly. A <c>var()</c> with
+    /// no value and no fallback clears the marker (measured), so it keeps
+    /// nothing; what a property it names holds is
+    /// <see cref="VarReach.MayKeepMarker"/>'s.
+    /// </summary>
+    private static bool MarkerMayKeep(string value)
+    {
+        if (!value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+        {
+            return MarkerLiteralKeeps(value.Trim());
+        }
+        List<VarLevel> levels = VarLevels(value, null);
+        for (int k = 0; k < levels.Count; k++)
+        {
+            VarLevel level = levels[k];
+            if (k > 0 && (level.Name is null || level.Junk))
+            {
+                return true;
+            }
+            if (level.Fallback < 0)
+            {
+                continue;
+            }
+            if (level.Children == 0
+                ? MarkerLiteralKeeps(value[level.Fallback..level.Close].Trim())
+                : level.Children > 1 || level.Text)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Whether a literal marker value (trimmed) keeps the parent's
+    /// marker in the decoder (measured in stage 10): nothing,
+    /// <c>inherit</c>, <c>unset</c>, a reference with anything after it,
+    /// and, unmeasured, the other CSS-wide keywords. <c>none</c>, a
+    /// reference alone and a word clear it.</summary>
+    private static bool MarkerLiteralKeeps(string text)
+    {
+        Scanned(2L * text.Length);
+        if (text.Length == 0
+            || text.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("unset", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("initial", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("revert", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("revert-layer", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (!IsUrlAt(text, 0))
+        {
+            return false;
+        }
+        int end = UrlArgumentEnd(text, 4);
+        return end >= text.Length || text[end] != ')' || !text.AsSpan(end + 1).IsWhiteSpace();
     }
 
     /// <summary>
