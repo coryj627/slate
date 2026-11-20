@@ -199,12 +199,9 @@ pub fn full_text_search(
     let mut stmt = conn.prepare_cached(sql)?;
 
     let mut rows = Vec::new();
-    // Map FTS5 query-syntax errors to a dedicated `InvalidQuery`
-    // variant so the UI can render \"bad query\" guidance without
-    // conflating with a corrupt-cache `Db` error. The actual rusqlite
-    // surface for FTS5 errors is `SqliteFailure` with code `Unknown`
-    // and a message starting with `fts5:` — we sniff the message
-    // string since rusqlite doesn't expose a typed error for it.
+    // A query FTS5 refuses becomes `InvalidQuery` carrying core's plain
+    // sentence, kept apart from a corrupt-cache `Db` error; see
+    // `map_fts5_error` for how the two are told apart.
     let cursor_result = match folder_prefix.as_ref() {
         Some(prefix) => stmt.query(rusqlite::params![
             trimmed,
@@ -220,13 +217,13 @@ pub fn full_text_search(
     };
     let mut cursor = match cursor_result {
         Ok(c) => c,
-        Err(err) => return Err(map_fts5_error(err, trimmed)),
+        Err(err) => return Err(map_fts5_error(err)),
     };
     loop {
         let row = match cursor.next() {
             Ok(Some(r)) => r,
             Ok(None) => break,
-            Err(err) => return Err(map_fts5_error(err, trimmed)),
+            Err(err) => return Err(map_fts5_error(err)),
         };
         // Periodic cancel check — same cooperative pattern as
         // `scan_initial`. Bail before allocating the next row.
@@ -322,14 +319,14 @@ fn tag_scoped_search(
     ]);
     let mut cursor = match cursor_result {
         Ok(c) => c,
-        Err(err) => return Err(map_fts5_error(err, trimmed_query)),
+        Err(err) => return Err(map_fts5_error(err)),
     };
     let mut rows = Vec::new();
     loop {
         let row = match cursor.next() {
             Ok(Some(r)) => r,
             Ok(None) => break,
-            Err(err) => return Err(map_fts5_error(err, trimmed_query)),
+            Err(err) => return Err(map_fts5_error(err)),
         };
         if cancel.is_cancelled() {
             return Err(VaultError::Cancelled);
@@ -382,31 +379,56 @@ fn tag_scoped_list_all(
     Ok(QueryResultSet { rows, summary })
 }
 
-/// Distinguish FTS5 query-syntax errors from real database errors.
+/// SQLite's own texts for a query FTS5 refuses: the ones its query
+/// parser raises (`sqlite3Fts5ParseError` in the bundled `sqlite3.c`) and
+/// its cursor's special-query check. FTS5's corruption texts also begin
+/// "fts5:" ("fts5: corruption found reading blob …", "fts5: missing row
+/// …"), so that bare prefix is not one of them.
+const FTS5_QUERY_REFUSALS: &[&str] = &[
+    // An operator with nothing to join, a symbol FTS5 does not read
+    // (`#`, an apostrophe, a period, a comma), a stray parenthesis.
+    "syntax error",
+    // A quote left open.
+    "unterminated string",
+    // A bare `*`, or a `*` before a word.
+    "unknown special query",
+    // Groups nested deeper than the parser's stack.
+    "parser stack overflow",
+    // An expression deeper than 256 (a long chain of NOT).
+    "expression tree is too large",
+    // A column filter: `foo:bar`, `TODO:`, a link's `https:`, and a
+    // hyphen, which FTS5 reads as one (`well-known`, `2024-01-01`).
+    "no such column",
+    // A NEAR distance that is not a number.
+    "expected integer",
+];
+
+/// Tell a query FTS5 refuses from a database fault, and give the refusal
+/// core's plain sentence.
 ///
-/// SQLite surfaces FTS5 parse failures as `rusqlite::Error::
-/// SqliteFailure` with code `Unknown` and one of several message
-/// strings depending on the failure mode (`fts5: ...`,
-/// `syntax error near ...`, `unterminated string`, `unknown
-/// special query`, etc.). There's no typed variant, so we sniff
-/// the message. A false negative (mapping a real DB error to
-/// InvalidQuery) is far less harmful than a false positive
-/// (mapping a syntax error to Db and confusing the UI), so the
-/// matcher is intentionally permissive on the FTS5-marker side.
-fn map_fts5_error(err: rusqlite::Error, query: &str) -> VaultError {
+/// SQLite raises FTS5's refusals as `rusqlite::Error::SqliteFailure` with
+/// code `Unknown` and no typed variant, so the text is matched against
+/// SQLite's own refusal texts ([`FTS5_QUERY_REFUSALS`]). A refusal is
+/// `InvalidQuery` carrying [`crate::a11y::SEARCH_QUERY_UNREADABLE`], the
+/// sentence a host speaks (the owner, 2026-11-20: "Plain words."):
+/// SQLite's text and the query are not kept, and the reader has the query
+/// in the field. Anything else is `Db`, a damaged full-text index
+/// included, so a reader is never told to check a search that is fine.
+///
+/// Only the MATCH cursor's errors arrive here: the outer statement is
+/// prepared before the cursor runs, so a schema error in it fails at
+/// prepare as `Db`. FTS5 prepares its own content-table statement during
+/// the step and passes that statement's error text out, so a `files`
+/// table without `body_text` would read "no such column" here; the
+/// migrations rule that out.
+fn map_fts5_error(err: rusqlite::Error) -> VaultError {
     let message = err.to_string();
-    // Known FTS5 / SQL-parser failure markers. Broaden carefully
-    // if new edge cases show up — but err on the side of treating
-    // any `SqliteFailure` during a MATCH-bound cursor as a query
-    // problem, since prepared-stmt binding errors and connection
-    // failures shouldn't arrive here in practice.
-    let looks_like_query_problem = message.contains("fts5:")
-        || message.contains("syntax error")
-        || message.contains("unterminated")
-        || message.contains("unknown special query");
-    if looks_like_query_problem {
+    if FTS5_QUERY_REFUSALS
+        .iter()
+        .any(|refusal| message.contains(refusal))
+    {
         VaultError::InvalidQuery {
-            message: format!("FTS5 could not parse {query:?}: {message}"),
+            message: crate::a11y::SEARCH_QUERY_UNREADABLE.to_owned(),
         }
     } else {
         VaultError::from(err)

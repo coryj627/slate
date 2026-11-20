@@ -557,6 +557,8 @@ A new surface joins ALL SIX or fails a named gate.
 
 - **SD-6 — Windows says core's detail for a failed search; the Mac adds a lead of its own.** Owner decision CD9 (plan 47, 2026-11-16, #1890): the overlay's own error arms are gone, and `SearchFailed` carries the failure's detail through `FailureDetail.Of`: core's `vault_error_detail` for a vault error, and any other exception's own message. An `InvalidQuery` says core's message bare ("Search error: FTS5 could not parse …"), where the Mac's `humanReadable` adds "Search query is invalid: " (`AppState.swift:26018-26019`). The template S6 cites is now `a11y.rs:2155`. Convergence is the Mac adopting core's detail (#1527, #1954). Facts: `GraphSearchFailureDetailTests`.
 
+  Amended (the owner, 2026-11-20, "Plain words. Please change it."): a search core's full-text index refuses as a query carries core's sentence, `a11y::SEARCH_QUERY_UNREADABLE`, as its `InvalidQuery` message, and the Mac's search says core's detail too (`vaultErrorDetail`), so both hosts say "Search error: Check the quotes, symbols and operators in your search." S6 no longer holds for a search on three points: the message embeds no SQLite text, the host shows it verbatim as guidance, and the classifier in `search_db.rs` (`map_fts5_error`) matches SQLite's own refusal texts, with a damaged index on `Db`. A second refused search in an open overlay says the same line and is not announced again, as S7 has it for equal summaries. Facts: `GraphSearchFailureDetailTests`, core's `session::tests::search`, the Mac's `AppStateTests`.
+
 ## Accepted-risk register (owner-recorded; off-limits for re-litigation)
 
 - **SR-1 — The sidebar loses its reading-view tag entry point.** SD-4

@@ -190,6 +190,11 @@ fn every_query_fts5_reads_still_runs() {
         "caf\u{e9}",
         "\u{201c}curly\u{201d}",
         "\"alpha beta\"",
+        // A refused text with its words in double quotes runs.
+        "\"#project\"",
+        "\"don't\"",
+        "\"well-known\"",
+        "\"https://example.com\"",
         "alpha AND beta",
         "alpha OR beta",
         "alpha NOT beta",
