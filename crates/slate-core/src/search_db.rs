@@ -471,4 +471,50 @@ mod tests {
             r"path\\with\\backslash"
         );
     }
+
+    fn sqlite_failure(code: std::os::raw::c_int, message: &str) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), Some(message.to_owned()))
+    }
+
+    /// A refusal is SQLITE_ERROR carrying one of FTS5's refusal texts. A
+    /// damaged database whose own message holds such a text stays a
+    /// database error: a cached MATCH statement re-prepared against a
+    /// damaged `sqlite_schema` fails with SQLITE_CORRUPT and "malformed
+    /// database schema (extra) - near ",": syntax error" (the merge judge's
+    /// reproduction), and the reader must not hear it as their query.
+    #[test]
+    fn only_an_sqlite_error_with_a_refusal_text_is_a_refused_query() {
+        for refusal in [
+            "fts5: syntax error near \"AND\"",
+            "unterminated string",
+            "no such column: known",
+        ] {
+            match map_fts5_error(sqlite_failure(rusqlite::ffi::SQLITE_ERROR, refusal)) {
+                VaultError::InvalidQuery { message } => {
+                    assert_eq!(message, crate::a11y::SEARCH_QUERY_UNREADABLE, "{refusal}");
+                }
+                other => panic!("{refusal}: expected InvalidQuery, got {other:?}"),
+            }
+        }
+        for (code, damage) in [
+            (
+                rusqlite::ffi::SQLITE_CORRUPT,
+                "malformed database schema (extra) - near \",\": syntax error",
+            ),
+            (
+                rusqlite::ffi::SQLITE_CORRUPT_VTAB,
+                "fts5: syntax error in a damaged record",
+            ),
+            (
+                rusqlite::ffi::SQLITE_IOERR,
+                "disk I/O error: no such column",
+            ),
+        ] {
+            let error = map_fts5_error(sqlite_failure(code, damage));
+            assert!(
+                matches!(error, VaultError::Db(_)),
+                "{damage} (code {code}): expected Db, got {error:?}"
+            );
+        }
+    }
 }

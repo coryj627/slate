@@ -174,6 +174,48 @@ fn a_damaged_full_text_index_is_a_database_error_not_a_refused_query() {
     }
 }
 
+/// A damaged database schema is a database error, never a refused query,
+/// though SQLite's message for it says "syntax error": the cached search
+/// statement is re-prepared inside the step after the schema changes, and
+/// the damaged `sqlite_schema` row fails that with SQLITE_CORRUPT
+/// ("malformed database schema (extra) - near ",": syntax error").
+#[test]
+fn a_damaged_database_schema_is_a_database_error_not_a_refused_query() {
+    let (_tmp, session) = refusal_vault();
+    for scope in every_search_scope() {
+        assert!(
+            session
+                .full_text_search("alpha", &scope, &CancelToken::new())
+                .is_ok(),
+            "premise: {scope:?} runs and its statement is cached"
+        );
+    }
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch("CREATE TABLE extra(x)").unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA schema_version", [], |row| row.get(0))
+            .unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA writable_schema=ON;
+             UPDATE sqlite_schema SET sql = 'CREATE TABLE extra(x,,y)' WHERE name = 'extra';
+             PRAGMA schema_version={};
+             PRAGMA writable_schema=OFF;",
+            version + 1
+        ))
+        .unwrap();
+    }
+    for scope in every_search_scope() {
+        match session.full_text_search("alpha", &scope, &CancelToken::new()) {
+            Err(error @ VaultError::Db(_)) => {
+                let detail = crate::a11y::vault_error_detail(&error);
+                assert!(detail.contains("malformed"), "{scope:?}: {detail}");
+            }
+            other => panic!("{scope:?}: a damaged schema must be Db, got {other:?}"),
+        }
+    }
+}
+
 /// FTS5 runs these queries, which step 0 saw it read: an operator used as
 /// FTS5 means it, a prefix, a phrase, a word, the parser's and the
 /// expression tree's depth within their limits. A refused text runs once
