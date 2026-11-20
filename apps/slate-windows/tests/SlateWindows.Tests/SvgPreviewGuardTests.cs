@@ -912,6 +912,154 @@ public sealed class SvgPreviewGuardTests
             true),
     };
 
+    /// <summary><see cref="PaintedGroup(string, string, string)"/>'s group
+    /// inside <paramref name="outerOpen"/> and <paramref name="outerClose"/>:
+    /// the documents stage 9 decoded.</summary>
+    private static string ScopedGroup(string stylesheet, string outerOpen, string outerClose, string group, string rect)
+    {
+        string source = PaintedGroup(stylesheet, group, rect);
+        int open = source.IndexOf($"<g{group}>", StringComparison.Ordinal);
+        return source[..open] + outerOpen + source[open..^"</svg>".Length] + outerClose + "</svg>";
+    }
+
+    /// <summary>A symbol of 100 rects filled with <c>var(--c)</c>, drawn by
+    /// 30 uses in a group whose fill is the pattern, beside 20,000 plain
+    /// rects: <paramref name="defs"/> holds the symbol (<c>{rects}</c>
+    /// marks its content), or is empty for one in a <c>defs</c> that
+    /// defines <c>--c:red</c>.</summary>
+    private static string UsedSymbol(string defs, string useGroup, string useAttrs)
+    {
+        string rects = string.Concat(Enumerable.Range(0, 100).Select(
+            i => $"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='var(--c)'/>"));
+        string defsOpen = defs.Length == 0 ? "<defs style='--c:red'>" : "<defs>";
+        string symbol = defs.Length == 0 ? $"<symbol id='s'>{rects}</symbol>" : defs.Replace("{rects}", rects, StringComparison.Ordinal);
+        return $"<svg {Ns} width='800' height='800'>{defsOpen}{Swatch}{symbol}</defs><g{useGroup}>"
+            + Repeat($"<use href='#s'{useAttrs}/>", 30) + "</g>"
+            + Repeat("<rect width='1' height='1' fill='red'/>", 20_000) + "</svg>";
+    }
+
+    public static TheoryData<string> VarScopeCases() => [.. VarScope.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 6, stage 9): a <c>var()</c> in a fill takes what
+    /// its custom property holds in the element's scope, as the decoder
+    /// resolves it. Each row was decoded once in stage 9 and is counted,
+    /// cleared or malformed as the decoder made it, but the combinator rule,
+    /// which the guard cannot match and so keeps counting.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VarScopeCases))]
+    public void AVarTakesWhatItsPropertyHoldsInTheElementsScope(string name)
+    {
+        (Func<string> build, string expected) = VarScope[name];
+        string source = build();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        switch (expected)
+        {
+            case "counted":
+                Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+                break;
+            case "cleared":
+                Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+                Assert.Equal(SvgRefusal.None, verdict);
+                break;
+            default:
+                Assert.Equal(expected, verdict.ToString());
+                break;
+        }
+    }
+
+    private const string ReadsC = " fill='var(--c)'";
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> VarScope = new()
+    {
+        // The baselines: 3,498 ms where the rects keep the group's pattern,
+        // 50 ms where they are red.
+        ["the rects keep the group's pattern"] = (() => ScopedGroup("", "", "", PatternFill, ""), "counted"),
+        ["the rects are red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red'"), "cleared"),
+        // An ancestor's definition: style 69 ms, type rule 69 ms, class rule
+        // 90 ms; a combinator rule 63 ms, which the guard cannot match and
+        // counts. As an attribute it is no XML: the decoder draws nothing.
+        ["--c:red in an ancestor's style attribute"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:red'", ReadsC), "cleared"),
+        ["--c='red' as an ancestor's attribute"] = (() => ScopedGroup("", "", "", PatternFill + " --c='red'", ReadsC), "Malformed"),
+        ["--c:red from a type rule on an ancestor"] = (() => ScopedGroup("g{--c:red}", "", "", PatternFill, ReadsC), "cleared"),
+        ["--c:red from a class rule on an ancestor"] = (() => ScopedGroup(".k{--c:red}", "", "", PatternFill + " class='k'", ReadsC), "cleared"),
+        ["--c:red from a combinator rule on an ancestor"] = (() => ScopedGroup("svg > g{--c:red}", "", "", PatternFill, ReadsC), "counted"),
+        // Fallbacks: --c undefined 116 ms; --c a pattern under a red group
+        // 3,248 ms; --c a colour 61 ms.
+        ["a fallback with --c undefined"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--c, red)'"), "cleared"),
+        ["a fallback with --c a pattern"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:url(#pat)'", " fill='var(--c, red)'"),
+            "counted"),
+        ["a fallback with --c a colour"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:blue'", " fill='var(--c, red)'"), "cleared"),
+        // Chains: to a colour 52 ms, to a pattern 3,275 ms, through an outer
+        // group 54 ms, to nothing 3,296 ms, a cycle 3,241 ms.
+        ["--a:var(--b) with --b a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b);--b:red'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b) with --b a pattern"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--a:var(--b);--b:url(#pat)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--b) with --b on an outer group"] = (
+            () => ScopedGroup("", "<g style='--b:red'>", "</g>", PatternFill + " style='--a:var(--b)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b) with --b undefined"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a and --b reading each other"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b);--b:var(--a)'", " fill='var(--a)'"),
+            "counted"),
+        // Shadowing: an inner colour over an outer pattern 48 ms; an inner
+        // pattern over an outer colour 3,152 ms.
+        ["an inner --c colour over an outer --c pattern"] = (
+            () => ScopedGroup("", "<g style='--c:url(#pat)'>", "</g>", PatternFill + " style='--c:red'", ReadsC),
+            "cleared"),
+        ["an inner --c pattern over an outer --c colour"] = (
+            () => ScopedGroup("", "<g style='--c:red'>", "</g>", " fill='red' style='--c:url(#pat)'", ReadsC),
+            "counted"),
+        // The element's own definition: style 37 ms, rule 44 ms; two levels
+        // up 38 ms; the root 37 ms; a sibling branch only 3,246 ms.
+        ["--c:red in the rect's own style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='--c:red'" + ReadsC), "cleared"),
+        ["--c:red from a rule on the rect"] = (() => ScopedGroup(".r{--c:red}", "", "", PatternFill, " class='r'" + ReadsC), "cleared"),
+        ["--c:red two levels up"] = (() => ScopedGroup("", "<g style='--c:red'><g>", "</g></g>", PatternFill, ReadsC), "cleared"),
+        ["--c:red on the root"] = (() => ScopedGroup("svg{--c:red}", "", "", PatternFill, ReadsC), "cleared"),
+        ["--c:red on a sibling branch only"] = (() => ScopedGroup("", "<g style='--c:red'/>", "", PatternFill, ReadsC), "counted"),
+        // The var() in the rect's style attribute 33 ms or a rule 61 ms; the
+        // rect's own --c pattern over the group's colour 3,012 ms;
+        // currentColor with color on the group 56 ms.
+        ["fill:var(--c) in the rect's style attribute"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='fill:var(--c)'"),
+            "cleared"),
+        ["fill:var(--c) from a rule on the rect"] = (
+            () => ScopedGroup(".v{fill:var(--c)}", "", "", PatternFill + " style='--c:red'", " class='v'"),
+            "cleared"),
+        ["the rect's own --c pattern over the group's --c colour"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:url(#pat)'" + ReadsC),
+            "counted"),
+        ["currentColor with color red on the group"] = (
+            () => ScopedGroup("", "", "", PatternFill + " color='red'", " fill='currentColor'"),
+            "cleared"),
+        // Through a use, the instance reads the scope of the symbol it draws
+        // and the symbol's ancestors, not the use's: no definition 23.9 s;
+        // --c:red around the uses 23.4 s or on each use 23.2 s; on the symbol
+        // 238 ms, a group around it in defs 135 ms, defs itself 241 ms.
+        ["uses with no definition"] = (() => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill, ""), "counted"),
+        ["uses in a group that defines --c:red"] = (
+            () => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill + " style='--c:red'", ""),
+            "counted"),
+        ["uses that each define --c:red"] = (
+            () => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill, " style='--c:red'"),
+            "counted"),
+        ["a symbol that defines --c:red"] = (
+            () => UsedSymbol("<symbol id='s' style='--c:red'>{rects}</symbol>", PatternFill, ""),
+            "cleared"),
+        ["a symbol inside a group in defs that defines --c:red"] = (
+            () => UsedSymbol("<g style='--c:red'><symbol id='s'>{rects}</symbol></g>", PatternFill, ""),
+            "cleared"),
+        ["a symbol in a defs that defines --c:red"] = (() => UsedSymbol("", PatternFill, ""), "cleared"),
+    };
+
     /// <summary>#1610 (stage 9, the lead's ruling): 3,000 rects drawn in
     /// <c>currentColor</c> under a group whose fill is the pattern decode in
     /// 46 to 81 ms, the decoder drawing the colour, so they are admitted
