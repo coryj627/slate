@@ -80,6 +80,11 @@ public sealed class SvgPreviewGuardTests
                 + "\"}</style>" + Square),
             Svg("<style>/* " + Repeat("url(#a)", SvgPreviewGuard.MaxUrlReferencesPerValue + 1)
                 + " */rect{fill:red}</style>" + Square),
+            // Custom properties that name each other in a cycle are one node,
+            // never a render cycle (Codex's review, stage 4).
+            Svg("<style>svg{--a:var(--b, url(#p));--b:var(--a)}</style>"
+                + "<defs><pattern id='p' width='4' height='4'>" + Square + "</pattern></defs>"
+                + "<rect width='16' height='16' fill='var(--a)'/>"),
         ];
 
         string pie = File.ReadAllText(
@@ -239,6 +244,10 @@ public sealed class SvgPreviewGuardTests
                 + LongPathData + "\"));d:var(--p)'/>"),
             false),
         // a marker a use sets, which the shapes of its instance inherit;
+        ["a 2,000-rect marker on a path whose d a chain of two custom properties draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--q:path(\""
+                + LongPathData + "\");--p:var(--q);d:var(--p)'/>"),
+            false),
         ["a 2,000-rect marker a use sets on the polyline it draws"] = (
             () => MarkedShape("<defs><polyline id='p' fill='none' stroke='black' points='" + LongPoints + "'/></defs>"
                 + "<use href='#p' marker-mid='url(#m)'/>"),
