@@ -1653,6 +1653,52 @@ public sealed class SvgPreviewGuardTests
             $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) unset'/></g>",
             false,
             false),
+        // Stage 13 (the delta merge judge's E1): the decoder reads URL( and
+        // Url( as a reference, so their inherit fallback keeps the group's
+        // pattern, in the style attribute, a rule, after navy, and
+        // !important.
+        ["URL(#missing) inherit over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:URL(#missing) inherit'/></g>",
+            true,
+            true),
+        ["Url(#missing) inherit from a rule over navy under a pattern group"] = (
+            $"<style>.s{{fill:Url(#missing) inherit}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["navy then URL(#missing) inherit in one style attribute under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:URL(#missing) inherit'/></g>",
+            true,
+            true),
+        ["URL(#missing) inherit !important over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:URL(#missing) inherit !important'/></g>",
+            true,
+            true),
+        // Stage 13 (the delta merge judge's E2): the decoder drops every
+        // escaped paint in the style attribute, so the pattern attribute
+        // below it applies.
+        ["b\\6cue in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:b\\6cue'/>", true, true),
+        ["\\72\\65\\64 in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:\\72\\65\\64'/>",
+            true,
+            true),
+        ["n\\6fne in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:n\\6fne'/>", true, true),
+        ["#00\\66 in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#00\\66'/>", true, true),
+        ["\\75rl(#missing) in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:\\75rl(#missing)'/>",
+            true,
+            true),
+        ["inh\\65rit in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:inh\\65rit'/>", true, true),
+        ["url(#missing) inh\\65rit in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) inh\\65rit'/>",
+            true,
+            true),
+        // In a rule the decoder resolves the escape and draws blue; the
+        // guard does not take escaped text as a paint it is sure of, so it
+        // counts the pattern below.
+        ["b\\6cue from a rule over the pattern attribute"] = (
+            $"<style>.s{{fill:b\\6cue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
     };
 
     /// <summary>
@@ -1724,6 +1770,13 @@ public sealed class SvgPreviewGuardTests
         {
             AddPlaces(d, "");
         }
+        List<string> generated = GeneratedSpellings();
+        foreach (string d in generated.Concat(CaseSpellings))
+        {
+            AddPlaces(d, "");
+        }
+        AddPlaces("url(#g)", Gradient);
+        AddPlaces("URL(#g)", Gradient);
         foreach (string v in fallbacks)
         {
             foreach ((string d, string defs) in new[] { ($"url(#missing) {v}", ""), ($"url(#missing){v}", ""), ($"url(#g) {v}", Gradient) })
@@ -1759,8 +1812,124 @@ public sealed class SvgPreviewGuardTests
                 hidden.Add(body);
             }
         }
-        Assert.Equal((38 * 15) + (24 * 3 * 18) + (12 * 4), bodies.Count);
+        Assert.Equal(GeneratedSpellingCount, generated.Count);
+        Assert.Equal(((38 + GeneratedSpellingCount + 10 + 2) * 15) + (24 * 3 * 18) + (12 * 4), bodies.Count);
         Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
+    }
+
+    private const int GeneratedSpellingCount = 53;
+
+    /// <summary>
+    /// #1610 (stage 13, the lead's ruling): spellings of paints the guard
+    /// reads, written so the guard cannot be sure the decoder reads them
+    /// so: each of eleven values with one letter escaped (its first, a
+    /// middle one and its last), every letter escaped, and a comment after
+    /// its first character.
+    /// </summary>
+    internal static List<string> GeneratedSpellings()
+    {
+        string[] readable =
+        [
+            "blue", "red", "none", "currentColor", "transparent", "#00f", "rgb(0,0,255)", "url(#missing)", "inherit",
+            "url(#missing) inherit", "url(#missing) blue",
+        ];
+        var spellings = new List<string>();
+        foreach (string value in readable)
+        {
+            int[] letters = [.. Enumerable.Range(0, value.Length).Where(i => char.IsAsciiLetter(value[i]))];
+            foreach (int at in new[] { letters[0], letters[letters.Length / 2], letters[^1] }.Distinct())
+            {
+                spellings.Add(value[..at] + $"\\{(int)value[at]:x} " + value[(at + 1)..]);
+            }
+            spellings.Add(string.Concat(value.Select(c => char.IsAsciiLetter(c) ? $"\\{(int)c:x} " : c.ToString())));
+            spellings.Add(value[..1] + "/**/" + value[1..]);
+        }
+        return spellings;
+    }
+
+    /// <summary>Stage 13 (the delta merge judge's E1): a reference and the
+    /// colour words the guard reads, in other cases. The decoder reads
+    /// <c>URL(</c> and <c>Url(</c> as a reference.</summary>
+    private static readonly string[] CaseSpellings =
+    [
+        "BLUE", "Blue", "NONE", "CURRENTCOLOR", "URL(#missing)", "URL(#missing) inherit", "Url(#missing) inherit",
+        "uRl(#missing) inherit", "URL(#missing) blue", "INHERIT",
+    ];
+
+    /// <summary>
+    /// #1610 (stage 13, the lead's ruling): in the style attribute or a
+    /// rule, a winning fill clears the pattern of a declaration below it
+    /// only when the guard is sure the decoder reads it as a paint of its
+    /// own: a colour form the guard parses, <c>none</c>,
+    /// <c>currentColor</c>, or a reference that resolves, written plainly.
+    /// Anything else (an escape, a comment, a word, a fallback after a
+    /// reference, a <c>var()</c>, a reference in another case to nothing)
+    /// leaves the pattern below counted. Each generated spelling stands in
+    /// the style attribute over the pattern attribute and in a later rule
+    /// over an earlier pattern rule.
+    /// </summary>
+    [Fact]
+    public void AWinnerTheGuardIsNotSureOfLeavesThePatternBelowCounted()
+    {
+        const string Gradient =
+            "<defs><linearGradient id='g'><stop offset='0' stop-color='#336600'/><stop offset='1' stop-color='#336600'/></linearGradient></defs>";
+        string[] sure =
+        [
+            "blue", "BLUE", "Blue", "none", "NONE", "currentColor", "CURRENTCOLOR", "transparent", "#00f", "rgb(0,0,255)",
+            "url(#g)", "URL(#g)",
+        ];
+        var unsure = new List<string>(GeneratedSpellings().Concat(CaseSpellings).Where(spelling => !sure.Contains(spelling)))
+        {
+            "bogus", "inherit", "unset", "url(#missing)", "url(#missing) blue", "url(#g) blue", "url(#g) inherit", "var(--b)",
+            "var(--none, blue)", "hsl(240,100%,50%)", "",
+        };
+        double Term(string body)
+        {
+            SvgPreviewGuard.Check(Tile(Gradient + body), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.PatternMicroseconds;
+        }
+        var wrong = new List<string>();
+        foreach ((string spelling, bool clears) in sure.Select(s => (s, true)).Concat(unsure.Select(s => (s, false))))
+        {
+            foreach (string body in new[]
+            {
+                $"<rect{Rect20} fill='url(#p)' style='fill:{spelling}'/>",
+                $"<style>.p{{fill:url(#p)}} .s{{fill:{spelling}}}</style><rect class='p s'{Rect20}/>",
+            })
+            {
+                if ((Term(body) == 0) != clears)
+                {
+                    wrong.Add($"[{spelling}] {(clears ? "kept" : "cleared")} the pattern in {body}");
+                }
+            }
+        }
+        Assert.True(wrong.Count == 0, string.Join("\n", wrong));
+    }
+
+    /// <summary>
+    /// #1610 (stage 13, the delta merge judge's E1 and E2): 6,000 rects
+    /// written over by a paint the guard is not sure of keep the pattern
+    /// and are refused: <c>URL(#x) inherit</c> over navy under a pattern
+    /// group (10.5 s to decode, the judge's measurement), and
+    /// <c>b\6cue</c> in the style attribute over the pattern attribute
+    /// (11.1 s).
+    /// </summary>
+    [Theory]
+    [InlineData(" fill='url(#pat)'", " fill='#000080' style='fill:URL(#x) inherit'")]
+    [InlineData("", " fill='url(#pat)' style='fill:b\\6cue'")]
+    public void SixThousandRectsWrittenOverByAPaintTheGuardIsNotSureOfAreRefused(string group, string rect)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g{group}>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{rect}/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
     }
 
     /// <summary>
