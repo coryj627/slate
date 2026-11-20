@@ -2028,16 +2028,19 @@ internal static class SvgPreviewGuard
         /// the references are resolved from the last to the first, so the
         /// innermost go first and no depth recurses. A <c>var()</c> written
         /// wrongly (no name, or text between its name and its comma) may give
-        /// anything.
+        /// anything. The decoder substitutes a <c>var()</c> as text, so
+        /// pieces side by side may build a reference: a fallback or a value
+        /// of several pieces may give a pattern (the delta merge judge's
+        /// minor 3, stage 11).
         /// </summary>
         private byte Substitute(string value, CustomScopeLink? scope, HashSet<string> patternIds)
         {
-            List<VarLevel> levels = VarLevels(value, patternIds);
+            List<VarLevel> levels = VarLevels(value);
 
             byte Content(VarLevel level) =>
                 level.Children == 0 ? Literal(value[level.Fallback..level.Close].Trim(), patternIds)
                 : level.Children == 1 && !level.Text ? level.Union
-                : (byte)(level.Union | KeepsMask | ClearsMask | (level.PatternUrl ? PatternMask : 0));
+                : (byte)(level.Union | KeepsMask | ClearsMask | PatternMask);
             for (int k = levels.Count - 1; k > 0; k--)
             {
                 steps.Spend(1);
@@ -2045,7 +2048,7 @@ internal static class SvgPreviewGuard
                 byte result;
                 if (level.Name is null || level.Junk)
                 {
-                    result = (byte)(KeepsMask | ClearsMask | (level.PatternUrl || level.NestedPattern ? PatternMask : 0));
+                    result = KeepsMask | ClearsMask | PatternMask;
                 }
                 else
                 {
@@ -2055,7 +2058,6 @@ internal static class SvgPreviewGuard
                         : (byte)((held & ~FailsMask) | Content(level));
                 }
                 VarLevel parent = levels[level.Parent];
-                parent.NestedPattern |= level.NestedPattern || level.PatternUrl;
                 if (level.InContent)
                 {
                     parent.Union |= result;
@@ -2071,13 +2073,18 @@ internal static class SvgPreviewGuard
         /// names a pattern is one; a paint the decoder draws
         /// (<see cref="DrawsOwnPaint"/>) clears it; and anything else keeps
         /// the parent's paint, <c>inherit</c> and a context paint among
-        /// them.
+        /// them. A <c>url()</c> whose argument holds a <c>var()</c> may name
+        /// any pattern once the decoder substitutes it (stage 11).
         /// </summary>
         private static byte Literal(string text, HashSet<string> patternIds)
         {
             if (text.Length == 0)
             {
                 return ClearsMask;
+            }
+            if (text.Contains("var(", StringComparison.OrdinalIgnoreCase))
+            {
+                return KeepsMask | ClearsMask | PatternMask;
             }
             if (UrlsIn(text).Exists(patternIds.Contains))
             {
@@ -2621,6 +2628,7 @@ internal static class SvgPreviewGuard
             var urls = new List<List<string>>();
             var vertices = new List<int>();
             var keeps = new List<bool>();
+            var builds = new List<bool>();
             var values = new List<(int Name, string Value)>();
             foreach ((string name, string value) in definitions)
             {
@@ -2631,6 +2639,7 @@ internal static class SvgPreviewGuard
                     urls.Add([]);
                     vertices.Add(0);
                     keeps.Add(false);
+                    builds.Add(false);
                 }
                 List<string> named = UrlsIn(value);
                 steps.Spend(named.Count);
@@ -2643,6 +2652,10 @@ internal static class SvgPreviewGuard
                 if (!keeps[id] && MarkerMayKeep(value))
                 {
                     keeps[id] = true;
+                }
+                if (!builds[id] && MayBuildReference(value))
+                {
+                    builds[id] = true;
                 }
                 values.Add((id, value));
             }
@@ -2670,6 +2683,7 @@ internal static class SvgPreviewGuard
             Named = new List<int>[components];
             PathVertices = new int[components];
             MayKeepMarker = new bool[components];
+            MayBuildReferences = new bool[components];
             var urlSets = new HashSet<string>[components];
             var namedSets = new HashSet<int>[components];
             for (int c = 0; c < components; c++)
@@ -2684,6 +2698,7 @@ internal static class SvgPreviewGuard
                 int c = component[id];
                 PathVertices[c] = Math.Max(PathVertices[c], vertices[id]);
                 MayKeepMarker[c] |= keeps[id];
+                MayBuildReferences[c] |= builds[id];
                 foreach (string url in urls[id])
                 {
                     if (urlSets[c].Add(url))
@@ -2707,6 +2722,7 @@ internal static class SvgPreviewGuard
                 {
                     PathVertices[c] = Math.Max(PathVertices[c], PathVertices[other]);
                     MayKeepMarker[c] |= MayKeepMarker[other];
+                    MayBuildReferences[c] |= MayBuildReferences[other];
                 }
             }
         }
@@ -2742,6 +2758,26 @@ internal static class SvgPreviewGuard
         /// definition in it, or in any component it names, can give such a
         /// value (<see cref="MarkerMayKeep"/>).</summary>
         internal bool[] MayKeepMarker { get; }
+
+        /// <summary>#1610 (the delta merge judge's minor 3, stage 11):
+        /// whether a value that reads a component's properties may build a
+        /// reference as the decoder substitutes it: a definition in it, or
+        /// in any component it names, may (<see cref="MayBuildReference(string)"/>).</summary>
+        internal bool[] MayBuildReferences { get; }
+
+        /// <summary>Whether a value read through <c>var()</c> may build a
+        /// reference through a property it names.</summary>
+        internal bool MayBuildReferenceThrough(string value)
+        {
+            foreach (string name in NamesIn(value))
+            {
+                if (ComponentOf(name) is var c and >= 0 && MayBuildReferences[c])
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         /// <summary>Whether a marker value read through <c>var()</c> may
         /// keep the parent's marker through a property it names.</summary>
@@ -3984,8 +4020,11 @@ internal static class SvgPreviewGuard
         /// of every <c>url()</c> its own text names, a fallback's at any
         /// depth among them (Svg.Custom resolves a fallback when a lookup
         /// fails), and every one a custom property it names reaches, through
-        /// any chain. Found once per value: a rule's value is shared by its
-        /// branches.
+        /// any chain. A value, or a property it reads, that may build a
+        /// reference as the decoder substitutes it (<c>url(var(--f))</c>,
+        /// <c>var(--u)rl(#m)</c>: the delta merge judge's minor 3, stage 11)
+        /// may place any marker, so the widest of them. Found once per
+        /// value: a rule's value is shared by its branches.
         /// </summary>
         private int WidestThroughVar(string value)
         {
@@ -4007,6 +4046,10 @@ internal static class SvgPreviewGuard
             {
                 Consider(WidestWithId(id));
             }
+            if (MayBuildReference(value) || (document.Reach?.MayBuildReferenceThrough(value) ?? false))
+            {
+                Consider(WidestMarker());
+            }
             if (document.Reach is { } reach)
             {
                 int[] byComponent = WidestByComponent(reach);
@@ -4023,6 +4066,31 @@ internal static class SvgPreviewGuard
             widestThroughVar[value] = widest;
             return widest;
         }
+
+        /// <summary>The marker with the most renders in the document, or
+        /// -1: what a reference built through <c>var()</c> may name. Found
+        /// once.</summary>
+        private int WidestMarker()
+        {
+            if (widestMarker is { } done)
+            {
+                return done;
+            }
+            int widest = -1;
+            int elements = document.Names.Count;
+            steps.Spend(elements);
+            for (int i = 0; i < elements; i++)
+            {
+                if (document.Names[i] == "marker" && (widest < 0 || renders[i] > renders[widest]))
+                {
+                    widest = i;
+                }
+            }
+            widestMarker = widest;
+            return widest;
+        }
+
+        private int? widestMarker;
 
         /// <summary>Each component of custom properties' widest reachable
         /// marker, lower components first.</summary>
@@ -4764,10 +4832,9 @@ internal static class SvgPreviewGuard
     /// pass: the first level is the value itself, and each other one
     /// <c>var()</c> in document order, with its parent, so a reader that
     /// goes from the last level to the first resolves the innermost first
-    /// and never recurses. A reference to an id in
-    /// <paramref name="patternIds"/> is marked where it stands.
+    /// and never recurses.
     /// </summary>
-    private static List<VarLevel> VarLevels(string value, HashSet<string>? patternIds)
+    private static List<VarLevel> VarLevels(string value)
     {
         Scanned(value.Length);
         var levels = new List<VarLevel> { new(null, 0, 0, inContent: true) { Fallback = 0, Close = value.Length } };
@@ -4793,9 +4860,9 @@ internal static class SvgPreviewGuard
                 int end = UrlArgumentEnd(value, i + 4);
                 int close = end < value.Length && value[end] == ')' ? end : value.Length;
                 Mark(owner);
-                if (patternIds is not null && Fragment(value, i + 4, close) is { } id && patternIds.Contains(id))
+                if (value.AsSpan(i + 4, close - (i + 4)).Contains("var(", StringComparison.OrdinalIgnoreCase))
                 {
-                    levels[owner].PatternUrl = true;
+                    levels[owner].UrlHoldsVar = true;
                 }
                 i = end;
                 continue;
@@ -4871,7 +4938,8 @@ internal static class SvgPreviewGuard
     /// its fallback starts (-1 for none) and where it closes, how many
     /// <c>var()</c> its fallback holds and what they can give, whether
     /// anything else is written there or before its comma, and whether a
-    /// pattern is named there or in a <c>var()</c> inside it.</summary>
+    /// <c>url()</c> there holds a <c>var()</c>, whose text the decoder
+    /// substitutes into the reference (stage 11).</summary>
     private sealed class VarLevel(string? name, int parent, int depth, bool inContent)
     {
         internal string? Name { get; } = name;
@@ -4894,9 +4962,39 @@ internal static class SvgPreviewGuard
 
         internal bool Junk { get; set; }
 
-        internal bool PatternUrl { get; set; }
+        internal bool UrlHoldsVar { get; set; }
 
-        internal bool NestedPattern { get; set; }
+        /// <summary>Whether this level's content may build a reference as
+        /// the decoder substitutes it: a <c>url()</c> that holds a
+        /// <c>var()</c>, a <c>var()</c> beside other text, or several
+        /// <c>var()</c>.</summary>
+        internal bool MayBuildReference => UrlHoldsVar || Children > 1 || (Children == 1 && Text);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor 3, stage 11): whether a value
+    /// read through <c>var()</c> may build a reference the decoder then
+    /// follows: the decoder substitutes a <c>var()</c> as text, so
+    /// <c>url(var(--f))</c> with <c>--f:#m</c>, or <c>var(--u)rl(#m)</c>
+    /// with <c>--u:u</c>, names <c>#m</c> (measured). A <c>var()</c>
+    /// written wrongly may give anything too.
+    /// </summary>
+    private static bool MayBuildReference(string value)
+    {
+        if (!value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        List<VarLevel> levels = VarLevels(value);
+        for (int k = 0; k < levels.Count; k++)
+        {
+            VarLevel level = levels[k];
+            if ((k > 0 && (level.Name is null || level.Junk)) || ((k == 0 || level.Fallback >= 0) && level.MayBuildReference))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
@@ -4916,7 +5014,7 @@ internal static class SvgPreviewGuard
         {
             return MarkerLiteralKeeps(value.Trim());
         }
-        List<VarLevel> levels = VarLevels(value, null);
+        List<VarLevel> levels = VarLevels(value);
         for (int k = 0; k < levels.Count; k++)
         {
             VarLevel level = levels[k];
