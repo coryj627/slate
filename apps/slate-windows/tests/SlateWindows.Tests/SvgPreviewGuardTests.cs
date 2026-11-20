@@ -502,6 +502,67 @@ public sealed class SvgPreviewGuardTests
         Assert.True(many - few >= floor, $"990 more declarations add {many - few:F0} ms, under {floor:F0} ms");
     }
 
+    public static TheoryData<string> LargestAdmittedInputs() =>
+    [
+        "stylesheet", "attributes", "points", "path data", "style attributes", "url arguments",
+        "css path", "custom properties", "comments and strings", "escapes", "class lists",
+    ];
+
+    /// <summary>
+    /// #1610 (stage 6, the lead's closure of the guard-time class): every
+    /// scan charges the characters it touches, so the guard's own time is
+    /// linear in its input; fed its largest admitted input (a document of
+    /// about the 8 MiB cap made of what the scan reads), each scan's
+    /// check stays inside half the step budget.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LargestAdmittedInputs))]
+    public void EachScanStaysInsideTheStepBudgetAtTheCap(string scan)
+    {
+        string source = LargestInput(scan);
+        Assert.InRange(source.Length, 7 * 1024 * 1024, 8 * 1024 * 1024);
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.False(estimate.StepsSpent, $"{scan}: the step budget was spent");
+        Assert.True(
+            estimate.Steps <= SvgPreviewGuard.MaxGuardSteps / 2,
+            $"{scan}: {estimate.Steps:N0} steps of {SvgPreviewGuard.MaxGuardSteps:N0}");
+    }
+
+    /// <summary>A document of about the 8 MiB cap made of what one scan
+    /// reads.</summary>
+    private static string LargestInput(string scan)
+    {
+        const int Cap = (8 * 1024 * 1024) - 4096;
+        static string Fill(string head, string unit, string tail)
+        {
+            var text = new StringBuilder(Cap);
+            text.Append(head);
+            while (text.Length + unit.Length + tail.Length < Cap)
+            {
+                text.Append(unit);
+            }
+            return text.Append(tail).ToString();
+        }
+        return scan switch
+        {
+            "stylesheet" => SlowSvgDocuments.Generate("Big_style N=383126"),
+            "attributes" => SlowSvgDocuments.Generate("Big_rects N=150092"),
+            "points" => SlowSvgDocuments.Generate("Big_points N=1119023"),
+            "path data" => Svg(Fill("<path d='M0 0", " A1 1 0 0 1 3 4", "'/>")),
+            "style attributes" => Svg(Fill("", "<rect width='1' height='1' style='fill:red;stroke:blue;stroke-width:2'/>", "")),
+            "url arguments" => Svg(Fill(
+                "<defs><linearGradient id='g'><stop offset='0'/></linearGradient></defs>",
+                "<rect width='1' height='1' fill='url(#g)'/>",
+                "")),
+            "css path" => Svg(Fill("<path style='d:path(\"M0 0", " L1 2", "\")'/>")),
+            "custom properties" => Svg(Fill("<style>svg{", "--p:url(#g) var(--q, 1);", "}</style><rect width='1' height='1' fill='var(--p)'/>")),
+            "comments and strings" => Svg(Fill("<style>", "/* a comment */ a{content:\"a string\"}", "</style>" + Square)),
+            "escapes" => Svg(Fill("<style>", ".a\\62 c{fill:\\72 ed}", "</style>" + Square)),
+            "class lists" => Svg(Fill("<style>.a{fill:red}</style>", "<rect class='a b c d e f g h' width='1' height='1'/>", "")),
+            _ => throw new ArgumentException(scan, nameof(scan)),
+        };
+    }
+
     public static TheoryData<char> WalkingCombinators() => ['>', '+'];
 
     /// <summary>#1610 (the red team's m1): a child or adjacent-sibling step

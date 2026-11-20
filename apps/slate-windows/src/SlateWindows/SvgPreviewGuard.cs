@@ -213,18 +213,22 @@ internal static class SvgPreviewGuard
     /// owner's pick.</summary>
     internal const int MaxEstimatedDecodeMilliseconds = 2_000;
 
-    /// <summary>#1610 (the red team's B1): the most steps one check may
-    /// take across its read, Measure and the estimate, a step being one
-    /// element, attribute, edge, rule, branch, declaration, key visit or
-    /// var() lookup. The guard runs on the caller before any decoder slot,
-    /// so past this budget it stops and refuses the document for its cost,
-    /// whatever made it slow. 10,000,000 is 4.2 times the most steps any
-    /// real or calibration document takes (2,401,485, 8 MiB of rects); of
-    /// the 8 MiB shapes measured, the three past it are webs of var()
-    /// definitions built to spend it. At the costliest step measured, about
-    /// 40 ns, it adds at most about 0.4 s to an 8 MiB read (CB-29's
-    /// calibration, section 6).</summary>
-    internal const long MaxGuardSteps = 10_000_000;
+    /// <summary>
+    /// #1610 (the red team's B1, closed in stage 6): the most steps one
+    /// check may take across its read, Measure and the estimate. A step is
+    /// one element, attribute, edge, rule, branch, declaration, key visit
+    /// or var() lookup, or <see cref="GuardSteps.CharactersPerStep"/>
+    /// characters a scan touches, its rescans and copies included, so no
+    /// work of the guard goes uncounted. The guard runs on the caller before
+    /// any decoder slot, so past this budget it stops and refuses the
+    /// document for its cost. Linear work is at most about 3.4 steps an
+    /// input byte (measured: 28.3 M steps on the 8 MiB maximum, one var()
+    /// definition of a million references; 1.6 on the largest calibration
+    /// document), so within the 8 MiB cap only a product of counts reaches
+    /// the budget. 64,000,000 is 4.9 times the most steps any real or
+    /// calibration document takes (12,958,636, 8 MiB of stylesheet).
+    /// </summary>
+    internal const long MaxGuardSteps = 64_000_000;
 
     [ThreadStatic]
     private static long? stepBudgetForTests;
@@ -259,25 +263,54 @@ internal static class SvgPreviewGuard
     internal static SvgRefusal Check(string source, int maxCharacters, out SvgDecodeEstimate estimate)
     {
         estimate = default;
-        if (ForbiddenTokens.Any(token =>
-                source.Contains(token, StringComparison.OrdinalIgnoreCase)))
-        {
-            return SvgRefusal.Markup;
-        }
-
         var steps = new GuardSteps(StepBudgetForTests ?? MaxGuardSteps);
+        GuardSteps? outer = scanning;
+        scanning = steps;
         SvgRefusal refusal;
         try
         {
-            refusal = Judge(source, maxCharacters, steps, out estimate);
+            // The token scans and the reader's pass read the source, up to
+            // the reader's cap.
+            long read = Math.Min(source.Length, (long)maxCharacters);
+            Scanned((ForbiddenTokens.Length + 1) * read);
+            refusal = ForbiddenTokens.Any(token => source.Contains(token, StringComparison.OrdinalIgnoreCase))
+                ? SvgRefusal.Markup
+                : Judge(source, maxCharacters, steps, out estimate);
         }
         catch (GuardStepsSpentException)
         {
             estimate = new SvgDecodeEstimate(0, 0, 0, 0) { StepsSpent = true };
             refusal = SvgRefusal.DecodeCost;
         }
+        finally
+        {
+            scanning = outer;
+        }
         estimate = estimate with { Steps = steps.Spent };
         return refusal;
+    }
+
+    /// <summary>The check under way on this thread, which every scan
+    /// charges (<see cref="Scanned"/>).</summary>
+    [ThreadStatic]
+    private static GuardSteps? scanning;
+
+    /// <summary>
+    /// Charges <paramref name="characters"/> a scan reads or copies to the
+    /// check under way (the lead's closure of the guard-time class, stage
+    /// 6). Every character-level scan charges what it touches, its rescans
+    /// and copies included, so no scan does work the step budget does not
+    /// see: the guard's own time is linear in what it touches, and what it
+    /// touches is bounded by <see cref="MaxGuardSteps"/> times
+    /// <see cref="GuardSteps.CharactersPerStep"/>.
+    /// </summary>
+    private static void Scanned(long characters) => scanning?.Touch(characters);
+
+    /// <summary><see cref="Scanned"/> in an expression: true.</summary>
+    private static bool Charged(long characters)
+    {
+        Scanned(characters);
+        return true;
     }
 
     /// <summary>The read, Measure and the estimate, each step spent from
@@ -338,6 +371,26 @@ internal static class SvgPreviewGuard
             if (left < 0)
             {
                 throw new GuardStepsSpentException();
+            }
+        }
+
+        /// <summary>Characters a scan touches per step: a step's other
+        /// kinds (an edge, a lookup, a key visit) cost about what 16
+        /// characters of scanning cost.</summary>
+        internal const int CharactersPerStep = 16;
+
+        private long characters;
+
+        /// <summary>Spends a step per <see cref="CharactersPerStep"/>
+        /// characters touched.</summary>
+        internal void Touch(long count)
+        {
+            characters += count;
+            if (characters >= CharactersPerStep)
+            {
+                long whole = characters / CharactersPerStep;
+                characters -= whole * CharactersPerStep;
+                Spend(whole);
             }
         }
     }
@@ -614,6 +667,7 @@ internal static class SvgPreviewGuard
         /// them costs more than its length.</summary>
         private SvgRefusal ReadHref(int index, string element, string value)
         {
+            Scanned(3L * value.Length);
             string target = value.Trim();
             if (target.StartsWith('#'))
             {
@@ -639,8 +693,11 @@ internal static class SvgPreviewGuard
         private void ReadCostAttribute(
             int index, string element, string attribute, string value, ref int vertexCount, ref string? useTarget)
         {
+            // The var() and use checks below each read the value.
+            Scanned(3L * value.Length);
             if (attribute == "points" && element is "polyline" or "polygon")
             {
+                Scanned(value.Length);
                 int points = NumberCount(value, 0, value.Length) / 2;
                 vertexCount = points + (element == "polygon" && points >= 1 ? 1 : 0);
             }
@@ -677,6 +734,7 @@ internal static class SvgPreviewGuard
         private void ReadStyleAttribute(int index, string element, string value, ref int vertexCount)
         {
             string text = CssText(value);
+            Scanned(3L * text.Length);
             bool path = element == "path";
             if (!path
                 && !text.Contains("--", StringComparison.Ordinal)
@@ -789,6 +847,7 @@ internal static class SvgPreviewGuard
             string raw, int from, bool declarations, bool tokens, bool stylesheet = false)
         {
             string text = Unescape(raw);
+            Scanned(text.Length);
             int urls = 0;
             int depth = 0;
             int boundary = 0;
@@ -798,12 +857,14 @@ internal static class SvgPreviewGuard
                 if (tokens && text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
                 {
                     int close = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                    Scanned((close < 0 ? text.Length : close + 2) - i);
                     i = close < 0 ? text.Length : close + 1;
                     continue;
                 }
                 if (tokens && text[i] is '"' or '\'')
                 {
                     int end = StringEnd(text, i);
+                    Scanned(end - i);
                     for (int k = i + 1; k < end; k++)
                     {
                         if (!IsUrlAt(text, k))
@@ -815,6 +876,7 @@ internal static class SvgPreviewGuard
                             return SvgRefusal.UrlReferences;
                         }
                         int argumentEnd = k + 4 < end ? text.IndexOf(')', k + 4, end - (k + 4)) : -1;
+                        Scanned((argumentEnd < 0 ? end : argumentEnd) - k);
                         if (stylesheet && Fragment(text, k + 4, argumentEnd < 0 ? end : argumentEnd) is { } quoted)
                         {
                             AddRuleTarget(preludes.Count > 0 ? preludes[^1] : null, quoted);
@@ -832,6 +894,7 @@ internal static class SvgPreviewGuard
                         {
                             return SvgRefusal.ValueNesting;
                         }
+                        Scanned(i - boundary);
                         preludes.Add(text[boundary..i].Trim());
                         urls = 0;
                         boundary = i + 1;
@@ -906,6 +969,7 @@ internal static class SvgPreviewGuard
         {
             var keys = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            Scanned(2L * (prelude?.Length ?? 0));
             foreach (string selector in (prelude ?? string.Empty).Split(','))
             {
                 steps.Spend(1);
@@ -1013,6 +1077,7 @@ internal static class SvgPreviewGuard
                 foreach ((string name, string value) in rule.Declarations)
                 {
                     steps.Spend(1);
+                    Scanned(value.Length);
                     if (name.StartsWith("--", StringComparison.Ordinal)
                         || !value.Contains("var(", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1243,6 +1308,7 @@ internal static class SvgPreviewGuard
                 {
                     Edge(i, any);
                 }
+                Scanned((2L * names[i].Length) + (3L * ((ids[i]?.Length ?? 0) + (classLists[i]?.Length ?? 0))));
                 if (keyNodes.TryGetValue(names[i].ToLowerInvariant(), out int byType))
                 {
                     Edge(i, byType);
@@ -1354,6 +1420,7 @@ internal static class SvgPreviewGuard
     /// ignored.</summary>
     private static bool ReadMarkerValue(string value, out string? target, out string? throughVar)
     {
+        Scanned(4L * value.Length);
         target = null;
         throughVar = null;
         string text = value.Trim();
@@ -1381,16 +1448,20 @@ internal static class SvgPreviewGuard
     /// them.</summary>
     private static List<string> UrlsIn(string value)
     {
+        Scanned(value.Length);
         var found = new List<string>();
-        for (int url = value.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
-            url >= 0;
-            url = value.IndexOf("url(", url + 4, StringComparison.OrdinalIgnoreCase))
+        int url = value.IndexOf("url(", StringComparison.OrdinalIgnoreCase);
+        while (url >= 0)
         {
             int end = UrlArgumentEnd(value, url + 4);
             if (Fragment(value, url + 4, end < value.Length && value[end] == ')' ? end : value.Length) is { } id)
             {
                 found.Add(id);
             }
+            // On past the argument just read: a url( inside it is part of
+            // the argument, not a reference, and is never read again
+            // (Codex's round 3).
+            url = end + 1 < value.Length ? value.IndexOf("url(", end + 1, StringComparison.OrdinalIgnoreCase) : -1;
         }
         return found;
     }
@@ -1399,6 +1470,7 @@ internal static class SvgPreviewGuard
     /// name, fallbacks' among them.</summary>
     private static List<string> NamesIn(string value)
     {
+        Scanned(value.Length);
         var found = new List<string>();
         for (int at = value.IndexOf("var(", StringComparison.OrdinalIgnoreCase);
             at >= 0;
@@ -1494,6 +1566,7 @@ internal static class SvgPreviewGuard
     /// segments), and a vertex per Z.</summary>
     private static int PathVertices(string data)
     {
+        Scanned(data.Length);
         long total = 0;
         int i = 0;
         while (i < data.Length)
@@ -1617,6 +1690,7 @@ internal static class SvgPreviewGuard
     /// them (Codex's review, stage 4), or 0.</summary>
     private static int CssPathVertices(string value)
     {
+        Scanned(value.Length);
         int most = 0;
         for (int open = value.IndexOf("path(", StringComparison.OrdinalIgnoreCase);
             open >= 0;
@@ -1632,6 +1706,7 @@ internal static class SvgPreviewGuard
                 continue;
             }
             int close = value.IndexOf(value[i], i + 1);
+            Scanned((close < 0 ? value.Length : close) - i);
             most = Math.Max(most, PathVertices(close < 0 ? value[(i + 1)..] : value[(i + 1)..close]));
             if (close < 0)
             {
@@ -1651,10 +1726,12 @@ internal static class SvgPreviewGuard
     private static string CssText(string raw)
     {
         string css = Unescape(raw);
+        Scanned(css.Length);
         if (!css.Contains("/*", StringComparison.Ordinal))
         {
             return css;
         }
+        Scanned(css.Length);
         var text = new StringBuilder(css.Length);
         int i = 0;
         while (i < css.Length)
@@ -1675,7 +1752,9 @@ internal static class SvgPreviewGuard
             else if (c == '/' && i + 1 < css.Length && css[i + 1] == '*')
             {
                 int close = css.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                i = close < 0 ? css.Length : close + 2;
+                int after = close < 0 ? css.Length : close + 2;
+                Scanned(after - i);
+                i = after;
             }
             else
             {
@@ -1728,12 +1807,16 @@ internal static class SvgPreviewGuard
                     depth += c == '{' ? 1 : c == '}' ? -1 : 0;
                     k++;
                 }
+                int bodyEnd = Math.Max(open + 1, k - 1);
+                // The read to the block's end, and the prelude's and the
+                // body's copies.
+                Scanned((k - i) + (3L * (open - i)) + (bodyEnd - open));
                 string prelude = text[i..open];
                 int semicolon = prelude.LastIndexOf(';');
                 prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
-                int bodyEnd = Math.Max(open + 1, k - 1);
                 if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
                 {
+                    Scanned(bodyEnd - open);
                     if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
                     {
                         blocks.Push((open + 1, bodyEnd));
@@ -1785,6 +1868,7 @@ internal static class SvgPreviewGuard
                 List<string> named = UrlsIn(value);
                 steps.Spend(named.Count);
                 urls[id].AddRange(named);
+                Scanned(value.Length);
                 if (value.Contains("path(", StringComparison.OrdinalIgnoreCase))
                 {
                     vertices[id] = Math.Max(vertices[id], CssPathVertices(value));
@@ -1961,6 +2045,7 @@ internal static class SvgPreviewGuard
         var declarations = new List<(string Name, string Value)>();
         foreach (string declaration in SplitTop(block, ';'))
         {
+            Scanned(2L * declaration.Length);
             int colon = declaration.IndexOf(':', StringComparison.Ordinal);
             if (colon > 0)
             {
@@ -1974,6 +2059,7 @@ internal static class SvgPreviewGuard
     /// between the separators outside strings and brackets.</summary>
     private static List<string> SplitTop(string text, char separator)
     {
+        Scanned(text.Length);
         var pieces = new List<string>();
         int depth = 0;
         int start = 0;
@@ -2004,6 +2090,7 @@ internal static class SvgPreviewGuard
 
     private static void AddPiece(string text, int start, int end, List<string> pieces)
     {
+        Scanned(end - start);
         string piece = text[start..end].Trim();
         if (piece.Length > 0)
         {
@@ -2077,6 +2164,8 @@ internal static class SvgPreviewGuard
         private double queriedPasses;
         private int queriedRules;
         private double[]? ofTypeShare;
+        private double[]? ownMatched;
+        private double[]? placements;
         private int rules;
         private double[] renders = [];
 
@@ -2150,6 +2239,7 @@ internal static class SvgPreviewGuard
             List<MarkerDeclaration>? markers = null;
             foreach ((string name, string value) in declarations)
             {
+                Scanned((2L * name.Length) + value.Length);
                 bool definition = name.StartsWith("--", StringComparison.Ordinal);
                 bool usesVar = value.Contains("var(", StringComparison.OrdinalIgnoreCase);
                 custom |= definition;
@@ -2218,6 +2308,7 @@ internal static class SvgPreviewGuard
             for (int i = declarations.Count - 1; i >= 0; i--)
             {
                 string name = declarations[i].Name;
+                Scanned(2L * name.Length);
                 if (seen.Add(name.StartsWith("--", StringComparison.Ordinal) ? name : name.ToLowerInvariant()))
                 {
                     kept.Add(declarations[i]);
@@ -2239,6 +2330,8 @@ internal static class SvgPreviewGuard
         /// </summary>
         private ParsedBranch ReadBranch(string branch)
         {
+            // The read, and each compound's copy.
+            Scanned(2L * branch.Length);
             int descendants = 0;
             int siblings = 0;
             int walks = 0;
@@ -2317,7 +2410,8 @@ internal static class SvgPreviewGuard
         /// nth-child and first-child read an index and stay linear (the
         /// follow-up measured nth-child).</summary>
         private static bool RecomputesFamily(string compound) =>
-            compound.Contains(':', StringComparison.Ordinal)
+            Charged(5L * compound.Length)
+            && compound.Contains(':', StringComparison.Ordinal)
             && (compound.Contains("of-type", StringComparison.OrdinalIgnoreCase)
                 || compound.Contains(":nth-last-", StringComparison.OrdinalIgnoreCase)
                 || compound.Contains(":last-child", StringComparison.OrdinalIgnoreCase)
@@ -2333,6 +2427,7 @@ internal static class SvgPreviewGuard
         /// </summary>
         private string CompoundKey(string compound)
         {
+            Scanned(3L * compound.Length);
             int i = 0;
             string? type = null;
             string? firstClass = null;
@@ -2423,6 +2518,7 @@ internal static class SvgPreviewGuard
         /// for any other, or null when the name cannot be read.</summary>
         private static string? AttributeKey(string inside)
         {
+            Scanned(4L * inside.Length);
             string text = inside.Trim();
             int i = 0;
             while (i < text.Length && (IsNameCharacter(text[i]) || text[i] is ':' or '.'))
@@ -2664,6 +2760,7 @@ internal static class SvgPreviewGuard
             {
                 return found;
             }
+            Scanned(source.Length);
             using var textReader = new StringReader(source);
             using XmlReader reader = XmlReader.Create(textReader, settings);
             int index = -1;
@@ -2683,6 +2780,7 @@ internal static class SvgPreviewGuard
                 {
                     steps.Spend(1);
                     string name = reader.LocalName.ToLowerInvariant();
+                    Scanned(2L * name.Length);
                     if (!attributeNames.Contains(name))
                     {
                         continue;
@@ -2691,6 +2789,7 @@ internal static class SvgPreviewGuard
                     {
                         found.Add((index, present));
                     }
+                    Scanned(2L * reader.Value.Length);
                     if (keys.TryGetValue("[" + name + "=" + reader.Value + "]", out KeyStats? exact))
                     {
                         found.Add((index, exact));
@@ -2777,6 +2876,10 @@ internal static class SvgPreviewGuard
                     stats.Count++;
                     stats.FamilySum += siblings[i];
                     stats.DescendantSum += descendants[i];
+                    if (stats.DeclarationMicroseconds > 0)
+                    {
+                        (ownMatched ??= new double[elements])[i] += stats.DeclarationMicroseconds;
+                    }
                     if (stats.OfTypeWeight > 0)
                     {
                         (ofTypeShare ??= new double[elements])[i] += stats.OfTypeWeight * siblings[i];
@@ -2810,6 +2913,8 @@ internal static class SvgPreviewGuard
                 }
                 if (anyKey)
                 {
+                    Scanned((2L * document.Names[i].Length)
+                        + (3L * ((document.Ids[i]?.Length ?? 0) + (document.ClassLists[i]?.Length ?? 0))));
                     Visit(AnyElementKey);
                     Visit(document.Names[i].ToLowerInvariant());
                     if (document.Ids[i] is { } id)
@@ -2921,6 +3026,8 @@ internal static class SvgPreviewGuard
                 double positions = slot == 1 ? Math.Max(0, vertexCount - 2) : 1;
                 placed += positions * (markerRenders + SvgDecodeRates.MarkerPlacementWeight);
                 widest = Math.Max(widest, markerRenders);
+                (placements ??= new double[renders.Length])[marker] =
+                    Cap(placements[marker] + (positions * document.Paths[element]));
             }
             return widest == 0 ? 0 : Cap((placed + widest) * document.Paths[element]);
         }
@@ -3061,58 +3168,108 @@ internal static class SvgPreviewGuard
 
         /// <summary>
         /// Under any <c>&lt;style&gt;</c>, each use render re-applies the
-        /// stylesheet to the document and to its instance's elements. The
-        /// fitted per-rule weights cover one branch query of each rule per
-        /// instance (the calibration's use sweep had one branch a rule).
-        /// Svg.Custom's scoped application queries the instance's elements
-        /// (Codex's round 2), so each render also takes every further branch
-        /// query (more branches, custom and geometry passes, child and
-        /// adjacent walks) over the instance's elements, and the combinator
-        /// work of the instance's own subtree: its descendant chains,
-        /// sibling reads and of-type reads, counted as the stylesheet term
-        /// counts them, over the target's elements (measured: about 0.35 s
-        /// an instance where this counts 0.5 s).
+        /// stylesheet to its instance (Svg.Custom's scoped application,
+        /// <c>ApplyScoped</c>, from the scene compiler's use node). One
+        /// function gives the work of one render (<see cref="InstanceWork"/>)
+        /// and one multiplier gives each use's renders
+        /// (<see cref="Instantiations"/>), so every construct that clones
+        /// content composes: a use drawn by another use, a use in a marker's
+        /// content (compiled again at every placement), a use in a pattern
+        /// (cloned for each element it paints, measured), and their
+        /// nesting.
         /// </summary>
         private double UseMicroseconds(int elements, Family family)
         {
-            if (!document.HasStyleElement)
+            if (!document.HasStyleElement || document.Uses.Count == 0)
             {
                 return 0;
             }
-            double useRenders = 0;
-            double instanceElements = 0;
-            double instanceCombinators = 0;
-            double[]? subtreeCombinators = null;
+            double[] instantiations = Instantiations();
+            double[] subtreeWork = SubtreeInstanceWork(family);
+            double perRender = SvgDecodeRates.UseRenderElement * (elements + (SvgDecodeRates.UseRenderRuleWeight * rules));
+            double perInstanceElement = SvgDecodeRates.UseInstanceElement
+                + (SvgDecodeRates.UseInstanceElementRule * rules)
+                + (SvgDecodeRates.QueryPerBranchElement * Math.Max(0, queriedPasses - queriedRules));
+            double total = 0;
             foreach ((int element, string? target) in document.Uses)
             {
                 steps.Spend(1);
-                double paths = document.Paths[element];
-                useRenders = Cap(useRenders + paths);
-                if (target is not null && WidestWithId(target) is var instance and >= 0)
-                {
-                    instanceElements = Cap(instanceElements + (paths * renders[instance]));
-                    subtreeCombinators ??= SubtreeCombinators(family);
-                    instanceCombinators = Cap(instanceCombinators + (paths * subtreeCombinators[instance]));
-                }
+                double work = target is not null && WidestWithId(target) is var instance and >= 0
+                    ? InstanceWork(instance, perRender, perInstanceElement, subtreeWork)
+                    : perRender;
+                total = Cap(total + (instantiations[element] * work));
             }
-            double furtherQueries = Math.Max(0, queriedPasses - queriedRules);
-            return Cap(SvgDecodeRates.UseRenderElement * useRenders
-                    * (elements + (SvgDecodeRates.UseRenderRuleWeight * rules)))
-                + Cap(instanceElements
-                    * (SvgDecodeRates.UseInstanceElement + (SvgDecodeRates.UseInstanceElementRule * rules)))
-                + Cap(instanceElements * SvgDecodeRates.QueryPerBranchElement * furtherQueries)
-                + instanceCombinators;
+            return total;
         }
 
         /// <summary>
-        /// Each element's subtree's combinator work (Codex's round 2): an
-        /// element's own is what the stylesheet term counts for it (the ways
-        /// to pick 1 to k of its ancestors for each descendant branch, its
-        /// sibling list's reads for each general-sibling branch, its sibling
-        /// list for each of-type key it is filed under), a left compound's
-        /// narrowing aside, which errs wide; a subtree's is the sum.
+        /// The work of one use render over its instance rooted at
+        /// <paramref name="instance"/> (Codex's rounds 2 and 3): the fitted
+        /// per-render cost (the stylesheet over the document's elements and
+        /// rules), the fitted per-element cost over the instance's renders,
+        /// which covers one branch query of each rule, every further branch
+        /// query over those elements, and the instance's own subtree's
+        /// combinator work and matched declarations.
         /// </summary>
-        private double[] SubtreeCombinators(Family family)
+        private double InstanceWork(int instance, double perRender, double perInstanceElement, double[] subtreeWork) =>
+            perRender + Cap(renders[instance] * perInstanceElement) + subtreeWork[instance];
+
+        /// <summary>
+        /// How many times each node is compiled (Codex's round 3): its
+        /// renders as Measure counts them (once per path through nesting and
+        /// references, a use's and a pattern's included), and, for a marker,
+        /// once more per placement, carried down its content and through
+        /// every reference the content makes, in Measure's order. Placements
+        /// take the marked shape's renders, so a marker on a shape inside a
+        /// use counts each instance; markers inside marker content are not
+        /// multiplied again (departure D4: measured, not replayed).
+        /// </summary>
+        private double[] Instantiations()
+        {
+            List<int>?[] next = document.Next;
+            var counts = new double[next.Length];
+            for (int node = 0; node < counts.Length; node++)
+            {
+                counts[node] = document.Paths[node];
+            }
+            if (placements is null)
+            {
+                return counts;
+            }
+            var carried = new double[next.Length];
+            for (int node = 0; node < placements.Length; node++)
+            {
+                carried[node] = placements[node];
+            }
+            foreach (int node in document.Order)
+            {
+                steps.Spend(1 + (next[node]?.Count ?? 0));
+                if (carried[node] <= 0 || next[node] is not { } outgoing)
+                {
+                    continue;
+                }
+                foreach (int to in outgoing)
+                {
+                    carried[to] = Cap(carried[to] + carried[node]);
+                }
+            }
+            for (int node = 0; node < counts.Length; node++)
+            {
+                counts[node] = Cap(counts[node] + carried[node]);
+            }
+            return counts;
+        }
+        /// <summary>
+        /// Each element's subtree's work in a scoped application (Codex's
+        /// rounds 2 and 3): an element's own is what the stylesheet term
+        /// counts for it, its combinator work (the ways to pick 1 to k of its
+        /// ancestors for each descendant branch, its sibling list's reads for
+        /// each general-sibling branch, its sibling list for each of-type key
+        /// it is filed under; a left compound's narrowing aside, which errs
+        /// wide) and the declarations the rules filed under its keys land on
+        /// it; a subtree's is the sum.
+        /// </summary>
+        private double[] SubtreeInstanceWork(Family family)
         {
             int elements = document.Names.Count;
             var descendantWeights = new Dictionary<int, double>();
@@ -3135,7 +3292,7 @@ internal static class SvgPreviewGuard
             for (int i = 0; i < elements; i++)
             {
                 steps.Spend(1 + descendantWeights.Count + siblingWeights.Count);
-                double own = ofTypeShare?[i] ?? 0;
+                double own = (ofTypeShare?[i] ?? 0) + (ownMatched?[i] ?? 0);
                 int depth = Math.Min(family.Depths[i], MaxRenderDepth);
                 foreach ((int chain, double weight) in descendantWeights)
                 {
@@ -3468,6 +3625,7 @@ internal static class SvgPreviewGuard
         /// holds.</summary>
         private VarReference[] Parse(string value)
         {
+            Scanned(value.Length);
             var references = new List<VarReference>();
             var open = new Stack<(int Reference, int Depth)>();
             int depth = 0;
@@ -3575,6 +3733,7 @@ internal static class SvgPreviewGuard
     /// anything else.</summary>
     private static string? SimpleSelectorKey(string selector)
     {
+        Scanned(3L * selector.Length);
         string text = selector.Trim();
         if (text.Length == 0)
         {
@@ -3654,18 +3813,45 @@ internal static class SvgPreviewGuard
             i = close < 0 ? text.Length : close + 1;
         }
         int end = i < text.Length ? text.IndexOf(')', i) : -1;
-        return end < 0 ? text.Length - 1 : end;
+        int argumentEnd = end < 0 ? text.Length - 1 : end;
+        Scanned(Math.Max(0, argumentEnd - start + 1));
+        return argumentEnd;
     }
 
     /// <summary>The element id the url argument in [<paramref
     /// name="start"/>, <paramref name="end"/>) names (<c>#id</c>, quoted
-    /// or not), or null.</summary>
+    /// or not), or null. Only the id is copied (Codex's round 3: an
+    /// argument that names no id is never copied).</summary>
     private static string? Fragment(string text, int start, int end)
     {
         int from = Math.Min(start, text.Length);
         int to = Math.Clamp(end, from, text.Length);
-        string argument = text[from..to].Trim().Trim('"', '\'').Trim();
-        return argument.StartsWith('#') && argument.Length > 1 ? argument[1..] : null;
+        Scanned(to - from);
+        while (from < to && char.IsWhiteSpace(text[from]))
+        {
+            from++;
+        }
+        while (to > from && char.IsWhiteSpace(text[to - 1]))
+        {
+            to--;
+        }
+        while (from < to && text[from] is '"' or '\'')
+        {
+            from++;
+        }
+        while (to > from && text[to - 1] is '"' or '\'')
+        {
+            to--;
+        }
+        while (from < to && char.IsWhiteSpace(text[from]))
+        {
+            from++;
+        }
+        while (to > from && char.IsWhiteSpace(text[to - 1]))
+        {
+            to--;
+        }
+        return to - from > 1 && text[from] == '#' ? text[(from + 1)..to] : null;
     }
 
     /// <summary>Where the CSS string opening at <paramref name="open"/>
@@ -3678,6 +3864,7 @@ internal static class SvgPreviewGuard
         {
             i++;
         }
+        Scanned(i - open + 1);
         return i;
     }
 
@@ -3694,6 +3881,7 @@ internal static class SvgPreviewGuard
     /// </summary>
     private static string Unescape(string text)
     {
+        Scanned(text.Length);
         if (!text.Contains('\\'))
         {
             return text;
