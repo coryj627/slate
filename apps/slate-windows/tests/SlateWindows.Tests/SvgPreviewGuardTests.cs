@@ -1060,6 +1060,332 @@ public sealed class SvgPreviewGuardTests
         ["a symbol in a defs that defines --c:red"] = (() => UsedSymbol("", PatternFill, ""), "cleared"),
     };
 
+    /// <summary>Whether <paramref name="source"/>'s pattern term counts the
+    /// rects (over a second) or is 0 with the verdict None.</summary>
+    private static void AssertPatternTerm(string name, string source, string expected)
+    {
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        if (expected == "counted")
+        {
+            Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+        }
+        else
+        {
+            Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+            Assert.Equal(SvgRefusal.None, verdict);
+        }
+    }
+
+    public static TheoryData<string> VarFallbackCases() => [.. VarFallback.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 7, stage 10): a <c>var()</c> fallback, wherever
+    /// the decoder selects it (in a fill, or inside a custom property's
+    /// definition), gives what the same literal value gives: <c>inherit</c>
+    /// and any value the decoder cannot read as a paint keep the parent's
+    /// paint, a pattern is a pattern, and a colour, <c>none</c>,
+    /// <c>currentColor</c>, a missing reference or nothing clears it. A
+    /// definition's own <c>inherit</c>, <c>unset</c> and <c>initial</c> act
+    /// on the property, as CSS has it. Each row was decoded once in stage 10.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VarFallbackCases))]
+    public void AFallbackGivesWhatTheSameLiteralGives(string name)
+    {
+        (Func<string> build, string expected) = VarFallback[name];
+        AssertPatternTerm(name, build(), expected);
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> VarFallback = new()
+    {
+        // A fallback in the fill: inherit 3,336 ms; a pattern under a red
+        // group 3,142 ms; a reference on to a pattern 3,069 ms or to a
+        // colour 47 ms; a defined --c's colour over an inherit fallback
+        // 32 ms; none 34 ms, currentColor 73 ms, a missing reference 27 ms.
+        ["var(--missing, inherit) in the fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, inherit)'"), "counted"),
+        ["var(--missing, url(#pat)) under a red group"] = (() => ScopedGroup("", "", "", " fill='red'", " fill='var(--missing, url(#pat))'"), "counted"),
+        ["var(--missing, var(--other)) with --other a pattern under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--other:url(#pat)'", " fill='var(--missing, var(--other))'"),
+            "counted"),
+        ["var(--missing, var(--other)) with --other a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--other:blue'", " fill='var(--missing, var(--other))'"),
+            "cleared"),
+        ["var(--c, inherit) with --c a colour"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " fill='var(--c, inherit)'"), "cleared"),
+        ["var(--missing, none)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, none)'"), "cleared"),
+        ["var(--missing, currentColor)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, currentColor)'"), "cleared"),
+        ["var(--missing, url(#missing))"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, url(#missing))'"), "cleared"),
+        // The fallback a defined --c passes over is never read: 62 ms.
+        ["var(--c, url(#pat)) with --c a colour under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " fill='var(--c, url(#pat))'"),
+            "cleared"),
+        // Values the decoder cannot read as a paint keep the parent's: unset
+        // 3,536 ms, initial 3,442 ms, foo 3,313 ms; an inherit two fallbacks
+        // deep 3,401 ms; a fallback and a word after it 3,188 ms.
+        ["var(--missing, unset)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, unset)'"), "counted"),
+        ["var(--missing, initial)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, initial)'"), "counted"),
+        ["var(--missing, foo)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, foo)'"), "counted"),
+        ["var(--missing, var(--missing2, inherit))"] = (
+            () => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, var(--missing2, inherit))'"),
+            "counted"),
+        ["var(--missing, red) blue"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, red) blue'"), "counted"),
+        // An empty fallback clears in the fill attribute 32 ms, the style
+        // attribute 48 ms and a rule 55 ms; an empty value written in the
+        // style attribute 3,467 ms or a rule 2,521 ms keeps the parent's,
+        // the decoder dropping the declaration.
+        ["var(--missing,) in the fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing,)'"), "cleared"),
+        ["fill:var(--missing,) in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:var(--missing,)'"), "cleared"),
+        ["fill:var(--missing,) from a rule"] = (() => ScopedGroup(".v{fill:var(--missing,)}", "", "", PatternFill, " class='v'"), "cleared"),
+        ["an empty fill in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:'"), "counted"),
+        ["an empty fill from a rule"] = (() => ScopedGroup(".v{fill:;}", "", "", PatternFill, " class='v'"), "counted"),
+        // A fallback inside a definition: inherit passed on, read by the
+        // fill 3,151 ms, by a fill with a colour fallback 3,510 ms, from the
+        // rect's own definition over the group's colour 3,631 ms or with a
+        // colour fallback 3,421 ms.
+        ["--a:var(--missing,inherit) on the group, read by the fill"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,inherit)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--missing, inherit) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing, inherit)'", " fill='var(--a, red)'"),
+            "counted"),
+        ["the rect's own --a:var(--missing, inherit) over the group's --a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:red'", " style='--a:var(--missing, inherit)' fill='var(--a)'"),
+            "counted"),
+        ["the rect's own --a:var(--missing, inherit), read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--a:var(--missing, inherit)' fill='var(--a, red)'"),
+            "counted"),
+        // A definition with no value: 50 ms read as var(--a, red); on to
+        // a colour 49 ms, on to nothing 3,301 ms; an empty fallback 68 ms.
+        ["--a:var(--missing) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing)'", " fill='var(--a, red)'"),
+            "cleared"),
+        ["--a:var(--missing, var(--other)) with --other a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--other:red;--a:var(--missing, var(--other))'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--missing, var(--other)) with --other undefined"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing, var(--other))'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--missing,) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,)'", " fill='var(--a, red)'"),
+            "cleared"),
+        // A definition that reads itself takes its fallback, never the
+        // parent's value: 37, 64, 57 and 68 ms, and 67 ms with none.
+        ["--a:var(--b, red) and --b:var(--a)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b, red);--b:var(--a)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--a, red)"] = (() => ScopedGroup("", "", "", PatternFill + " style='--a:var(--a, red)'", " fill='var(--a)'"), "cleared"),
+        ["--a:var(--a, red) under an outer --a pattern"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--a, red)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b, red) and --b:var(--a) under an outer --a pattern"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--b, red);--b:var(--a)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--a) under an outer --a pattern, read as var(--a, red)"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--a)'", " fill='var(--a, red)'"),
+            "cleared"),
+        // A definition's keywords act on the property: inherit 69 ms,
+        // INHERIT 37 ms and unset 60 ms take the parent's colour; initial
+        // has no value, so the fallback is read (3,449 and 67 ms); revert
+        // keeps the red group's paint (140 ms).
+        ["the rect's own --c:inherit under the group's --c colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='--c:inherit' fill='var(--c)'"),
+            "cleared"),
+        ["--c:INHERIT on the group under an outer --c colour"] = (
+            () => ScopedGroup("", "<g style='--c:red'>", "</g>", PatternFill + " style='--c:INHERIT'", " fill='var(--c)'"),
+            "cleared"),
+        ["the rect's own --c:unset under the group's --c colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='--c:unset' fill='var(--c)'"),
+            "cleared"),
+        ["the rect's own --c:initial, read as var(--c, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:initial' fill='var(--c, url(#pat))'"),
+            "counted"),
+        ["the rect's own --c:initial, read as var(--c, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--c:initial' fill='var(--c, red)'"),
+            "cleared"),
+        ["the rect's own --c:revert, read as var(--c, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:revert' fill='var(--c, url(#pat))'"),
+            "cleared"),
+        // A definition the decoder cannot read as a paint passes that on:
+        // the rect's own 3,281 ms, the group's 3,393 ms.
+        ["the rect's own --c:foo, read as var(--c, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--c:foo' fill='var(--c, red)'"),
+            "counted"),
+        ["--c:foo on the group, read by the fill"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:foo'", " fill='var(--c)'"), "counted"),
+        // An empty definition holds nothing, which clears: from the style
+        // attribute 48 and 55 ms, from a rule 51 and 86 ms.
+        ["--a: on the group, read as var(--a, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--a:;'", " fill='var(--a, url(#pat))'"),
+            "cleared"),
+        ["--a: on the group, read by the fill"] = (() => ScopedGroup("", "", "", PatternFill + " style='--a:;'", " fill='var(--a)'"), "cleared"),
+        [".k{--a:;} on the group, read as var(--a, url(#pat)) under a red group"] = (
+            () => ScopedGroup(".k{--a:;}", "", "", " fill='red' class='k'", " fill='var(--a, url(#pat))'"),
+            "cleared"),
+        [".k{--a:;} on the group, read by the fill"] = (
+            () => ScopedGroup(".k{--a:;}", "", "", PatternFill + " class='k'", " fill='var(--a)'"),
+            "cleared"),
+    };
+
+    public static TheoryData<string> PaintLiteralCases() => [.. PaintLiteral.Keys];
+
+    /// <summary>
+    /// #1610 (stage 10, the audit after Codex's round 7): a fill the decoder
+    /// cannot read as a paint keeps the parent's paint, as
+    /// <c>inherit</c> does, and only a colour, <c>none</c>,
+    /// <c>currentColor</c> or a reference with nothing or a colour after it
+    /// clears it. Each row was decoded once in stage 10, the rects under a
+    /// group whose fill is the pattern.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PaintLiteralCases))]
+    public void APaintTheDecoderCannotReadKeepsTheParentsPaint(string name)
+    {
+        (Func<string> build, string expected) = PaintLiteral[name];
+        AssertPatternTerm(name, build(), expected);
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> PaintLiteral = new()
+    {
+        // Keywords the decoder does not take keep the parent's paint: unset
+        // 3,657 ms, UNSET 3,410 ms, initial 3,643 ms, revert 3,670 ms,
+        // revert-layer 3,402 ms; in the style attribute 3,349 and 3,407 ms.
+        ["unset"] = (() => ScopedGroup("", "", "", PatternFill, " fill='unset'"), "counted"),
+        ["UNSET"] = (() => ScopedGroup("", "", "", PatternFill, " fill='UNSET'"), "counted"),
+        ["initial"] = (() => ScopedGroup("", "", "", PatternFill, " fill='initial'"), "counted"),
+        ["revert"] = (() => ScopedGroup("", "", "", PatternFill, " fill='revert'"), "counted"),
+        ["revert-layer"] = (() => ScopedGroup("", "", "", PatternFill, " fill='revert-layer'"), "counted"),
+        ["fill:unset in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:unset'"), "counted"),
+        ["fill:initial in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:initial'"), "counted"),
+        // So do words that are no colour: foo 3,376 ms, rde 3,381 ms, in the
+        // style attribute 3,353 ms; two colours 3,436 ms, none and a colour
+        // 3,405 ms, a missing reference and a word 3,353 ms; INHERIT 3,410 ms.
+        ["foo"] = (() => ScopedGroup("", "", "", PatternFill, " fill='foo'"), "counted"),
+        ["rde"] = (() => ScopedGroup("", "", "", PatternFill, " fill='rde'"), "counted"),
+        ["fill:foo in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:foo'"), "counted"),
+        ["red blue"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red blue'"), "counted"),
+        ["none red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='none red'"), "counted"),
+        ["url(#missing) foo"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) foo'"), "counted"),
+        ["INHERIT"] = (() => ScopedGroup("", "", "", PatternFill, " fill='INHERIT'"), "counted"),
+        // What clears: an empty fill attribute 52 ms, transparent 70 ms,
+        // rgb() 91 ms, #f00 71 ms, currentcolor 50 ms, a colour and a space
+        // 36 ms, a missing reference alone 38 ms or with a colour 37 ms or
+        // none 35 ms.
+        ["an empty fill attribute"] = (() => ScopedGroup("", "", "", PatternFill, " fill=''"), "cleared"),
+        ["transparent"] = (() => ScopedGroup("", "", "", PatternFill, " fill='transparent'"), "cleared"),
+        ["rgb(1,2,3)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='rgb(1,2,3)'"), "cleared"),
+        ["#f00"] = (() => ScopedGroup("", "", "", PatternFill, " fill='#f00'"), "cleared"),
+        ["currentcolor"] = (() => ScopedGroup("", "", "", PatternFill, " fill='currentcolor'"), "cleared"),
+        ["a colour and a space"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red '"), "cleared"),
+        ["url(#missing)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing)'"), "cleared"),
+        ["url(#missing) red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) red'"), "cleared"),
+        ["url(#missing) none"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) none'"), "cleared"),
+        // The pattern with a colour after it, under a red group: 3,147 ms.
+        ["url(#pat) red under a red group"] = (() => ScopedGroup("", "", "", " fill='red'", " fill='url(#pat) red'"), "counted"),
+        // context-fill outside a marker clears (35 ms), but a marker takes
+        // the element it marks' paint, so the guard counts it, as it counts
+        // a rule it cannot match.
+        ["context-fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='context-fill'"), "counted"),
+    };
+
+    /// <summary>#1610 (Codex's round 7): a fallback that passes
+    /// <c>inherit</c> on through a custom property gives the rects the
+    /// pattern term a literal <c>inherit</c> gives them.</summary>
+    [Fact]
+    public void AnIndirectInheritFallbackGivesTheSamePatternTermAsALiteralInherit()
+    {
+        SvgPreviewGuard.Check(
+            ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,inherit)'", " fill='var(--a)'"),
+            8 * 1024 * 1024,
+            out SvgDecodeEstimate indirect);
+        SvgPreviewGuard.Check(ScopedGroup("", "", "", PatternFill, " fill='inherit'"), 8 * 1024 * 1024, out SvgDecodeEstimate literal);
+        Assert.True(literal.PatternMicroseconds > 1_000_000, $"a literal inherit's term is {literal.PatternMicroseconds:F0} us");
+        Assert.Equal(literal.PatternMicroseconds, indirect.PatternMicroseconds);
+    }
+
+    /// <summary>
+    /// #1610 (stage 10): no fill the guard reads as clearing the parent's
+    /// paint is one the decoder reads as keeping it, in a presentation
+    /// attribute, the style attribute or a rule. The decoder's reading is
+    /// Svg.Custom's own parse of one rect under a group whose fill is the
+    /// pattern, which decoded the same as the stage 10 rows did; the
+    /// guard's is whether the rect adds to the pattern term. The guard may
+    /// count a paint the decoder clears (an unusual colour form), never the
+    /// reverse.
+    /// </summary>
+    [Fact]
+    public void NoPaintTheGuardClearsKeepsTheParentsPaintInTheDecoder()
+    {
+        var values = new List<string>
+        {
+            "red", "none", "NONE", "nOnE", "inherit", "INHERIT", "unset", "initial", "revert", "revert-layer",
+            "foo", "rde", "redd", "r", "0", "-", "--", "--a", "", " ", "transparent", "currentColor", "currentcolor",
+            "CURRENTCOLOR", "context-fill", "context-stroke", "red blue", "none red", "red icc-color(x)", "icc-color(x)",
+            "#f", "#f0", "#f00", "#ff00", "#ff000", "#ff0000", "#ff00000", "#ff000080", "#ff0000801", "#gg0000",
+            "#FF0000", "#ABCD", "#ff 00 00", "#",
+            "rgb(1,2,3)", "rgb(1, 2, 3)", "rgb( 1 , 2 , 3 )", "rgb(1 2 3)", "rgb(10%,20%,30%)", "rgb(1.5,2,3)",
+            "rgb(-1,2,3)", "rgb(+1,2,3)", "rgb(.5,2,3)", "rgb(-.5,2,3)", "rgb(1.,2,3)", "rgb(1e2,2,3)", "rgb(300,2,3)",
+            "rgb(1,2)", "rgb(1,2,3,4)", "rgb(1,2,3,4,5)", "rgb()", "rgb(a,b,c)", "rgb(0x10,2,3)", "rgb(1deg,2,3)",
+            "rgb(1,2,3", "rgb(1,2,3) foo", "rgb (1,2,3)", "RGB(1,2,3)", "rGb(1,2,3)", "rgba(1,2,3,0.5)",
+            "RGBA(1,2,3,0.5)", "rgba(1,2,3)", "rgba(1,2,3,50%)", "rgba(1,2,3,-1)", "rgb(1%,2%,3%,4%)",
+            "hsl(120,50%,50%)", "hsl(1%,2,3)", "hsl(1.5deg,2,3)", "HSLA(1,2,3,0.5)", "hsla(1,2,3)",
+            "grey", "Grey", "GREY", "greY", "darkgrey", "Darkgrey", "DARKGREY", "lightGrey", "slategrey",
+            "rebeccapurple", "REBECCAPURPLE", "rEd", "ThreeDFace", "InfoBackground", "ButtonFace",
+            "url(#missing)", "url(#missing) red", "url(#missing)red", "url(#missing) none", "url(#missing) foo",
+            "url(#missing) inherit", "url(#missing) currentColor", "url(#missing) #f00", "url(#missing) rgb(1,2)",
+            "url(#missing) GREY", "url(#missing) red blue", "url(#missing) url(#missing2)", "url(#missing",
+            "URL(#missing)", "Url(#missing) red", "url('#missing')", "url( #missing )", "url(missing)",
+            "url(#pat)", "url(#pat) red", "url(#pat) foo", "var(--x)", "'red'",
+        };
+        foreach (string name in Enum.GetNames<System.Drawing.KnownColor>())
+        {
+            values.Add(name);
+            values.Add(name.ToLowerInvariant());
+            values.Add(name.ToUpperInvariant());
+        }
+        const string Head = "<defs><pattern id='pat' width='4' height='4' patternUnits='userSpaceOnUse'><rect width='2' height='2'/></pattern></defs>";
+        var parameters = new global::Svg.Model.SvgParameters(
+            null,
+            null,
+            null,
+            new global::Svg.SvgDocumentLoadOptions
+            {
+                ProcessingMode = global::Svg.SvgProcessingMode.SecureStatic,
+                ExternalResources = global::Svg.SvgExternalResourcePolicy.Disabled,
+                PreserveUnknownElements = false,
+            });
+        static double Term(string source)
+        {
+            SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.PatternMicroseconds;
+        }
+        double baseline = Term(Svg(Head + "<g fill='url(#pat)'><rect width='5' height='5' fill='red'/></g>"));
+        var failures = new List<string>();
+        foreach (string value in values)
+        {
+            string attribute = value.Replace("'", "&apos;", StringComparison.Ordinal);
+            string[] paths = value.Contains('\'', StringComparison.Ordinal)
+                ? [$"<g fill='url(#pat)'><rect width='5' height='5' fill='{attribute}'/></g>"]
+                :
+                [
+                    $"<g fill='url(#pat)'><rect width='5' height='5' fill='{attribute}'/></g>",
+                    $"<g fill='url(#pat)'><rect width='5' height='5' style='fill:{value}'/></g>",
+                    $"<style>.s{{fill:{value}}}</style><g fill='url(#pat)'><rect class='s' width='5' height='5'/></g>",
+                ];
+            foreach (string body in paths)
+            {
+                string source = Svg(Head + body);
+                bool guardKeeps = Term(source) > baseline;
+                global::Svg.SvgDocument document = global::Svg.Model.Services.SvgService.FromSvg(source, parameters)!;
+                global::Svg.SvgPaintServer? fill = document.Descendants().OfType<global::Svg.SvgRectangle>().Last().Fill;
+                bool decoderKeeps = fill?.ToString() == "url(#pat)";
+                if (decoderKeeps && !guardKeeps)
+                {
+                    failures.Add($"[{value}] in {body}");
+                }
+            }
+        }
+        Assert.True(failures.Count == 0, "the guard clears what the decoder keeps:\n" + string.Join("\n", failures));
+    }
+
     /// <summary>#1610 (stage 9, the lead's ruling): 3,000 rects drawn in
     /// <c>currentColor</c> under a group whose fill is the pattern decode in
     /// 46 to 81 ms, the decoder drawing the colour, so they are admitted
