@@ -119,9 +119,9 @@ internal static class SvgDecodeRates
 
     /// <summary>Each paint a pattern gives a shape, a fill or a stroke, per
     /// element of the document, whatever the pattern holds (stage 7, the
-    /// merge judge's register check: fitted on eighteen documents of 1,000
-    /// to 10,000 paints among 1,000 to 13,000 elements, 0.23 to 0.40, 0.34
-    /// in the middle).</summary>
+    /// merge judge's register check: eighteen documents of 1,000 to 10,000
+    /// paints among 1,000 to 13,000 elements, 0.23 to 0.41 across two
+    /// sessions, 0.34 in the middle).</summary>
     internal const double PatternPaintElement = 0.34;
 }
 
