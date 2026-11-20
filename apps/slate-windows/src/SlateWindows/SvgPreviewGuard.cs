@@ -376,6 +376,7 @@ internal static class SvgPreviewGuard
         private readonly List<MarkerDeclaration> elementMarkers = [];
         private readonly List<(string Name, string Value)> customDefinitions = [];
         private readonly List<(int Element, string Value)> attributeVarUses = [];
+        private readonly List<(int Element, string Value)> pathVarUses = [];
         private readonly List<(int Element, string? Target)> uses = [];
         private readonly List<int> order = [];
 
@@ -403,6 +404,10 @@ internal static class SvgPreviewGuard
         /// custom-property definitions aside, and the element each is
         /// on.</summary>
         internal IReadOnlyList<(int Element, string Value)> AttributeVarUses => attributeVarUses;
+
+        /// <summary>A path's style-attribute <c>d</c> values read through
+        /// <c>var()</c>, in document order.</summary>
+        internal IReadOnlyList<(int Element, string Value)> PathVarUses => pathVarUses;
 
         /// <summary>The stylesheet's rules, read once for Measure and the
         /// estimate.</summary>
@@ -666,11 +671,13 @@ internal static class SvgPreviewGuard
         /// <summary>A style attribute's declarations, read as ExCSS reads
         /// them (escapes resolved, comments gone, the red team's M1): its
         /// custom properties, markers, var() uses, and a path's CSS
-        /// <c>d:path()</c> vertices.</summary>
+        /// <c>d:path()</c> vertices, those a <c>d</c> read through
+        /// <c>var()</c> reaches left to the estimate (Codex's review,
+        /// stage 4).</summary>
         private void ReadStyleAttribute(int index, string element, string value, ref int vertexCount)
         {
             string text = CssText(value);
-            bool path = element == "path" && text.Contains("path(", StringComparison.OrdinalIgnoreCase);
+            bool path = element == "path";
             if (!path
                 && !text.Contains("--", StringComparison.Ordinal)
                 && !text.Contains("var(", StringComparison.OrdinalIgnoreCase)
@@ -688,6 +695,10 @@ internal static class SvgPreviewGuard
                 if (path && property.Equals("d", StringComparison.OrdinalIgnoreCase))
                 {
                     vertexCount = Math.Max(vertexCount, CssPathVertices(declared));
+                    if (declared.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pathVarUses.Add((index, declared));
+                    }
                 }
                 if (MarkerSlots(property) is { } slots)
                 {
@@ -1395,7 +1406,7 @@ internal static class SvgPreviewGuard
             if (end + 1 < value.Length && value[end] == '-' && value[end + 1] == '-')
             {
                 end += 2;
-                while (end < value.Length && IsNameCharacter(value[end]))
+                while (end < value.Length && IsVarNameCharacter(value[end]))
                 {
                     end++;
                 }
@@ -1594,26 +1605,34 @@ internal static class SvgPreviewGuard
         return true;
     }
 
-    /// <summary>The vertices of a CSS <c>path("...")</c> value (the red
-    /// team's m4), or 0.</summary>
+    /// <summary>The most vertices any CSS <c>path("...")</c> in a value's
+    /// own text gives (the red team's m4), a <c>var()</c> fallback's among
+    /// them (Codex's review, stage 4), or 0.</summary>
     private static int CssPathVertices(string value)
     {
-        int open = value.IndexOf("path(", StringComparison.OrdinalIgnoreCase);
-        if (open < 0)
+        int most = 0;
+        for (int open = value.IndexOf("path(", StringComparison.OrdinalIgnoreCase);
+            open >= 0;
+            open = value.IndexOf("path(", open + 5, StringComparison.OrdinalIgnoreCase))
         {
-            return 0;
+            int i = open + 5;
+            while (i < value.Length && char.IsWhiteSpace(value[i]))
+            {
+                i++;
+            }
+            if (i >= value.Length || value[i] is not ('"' or '\''))
+            {
+                continue;
+            }
+            int close = value.IndexOf(value[i], i + 1);
+            most = Math.Max(most, PathVertices(close < 0 ? value[(i + 1)..] : value[(i + 1)..close]));
+            if (close < 0)
+            {
+                break;
+            }
+            open = close - 4;
         }
-        int i = open + 5;
-        while (i < value.Length && char.IsWhiteSpace(value[i]))
-        {
-            i++;
-        }
-        if (i >= value.Length || value[i] is not ('"' or '\''))
-        {
-            return 0;
-        }
-        int close = value.IndexOf(value[i], i + 1);
-        return PathVertices(close < 0 ? value[(i + 1)..] : value[(i + 1)..close]);
+        return most;
     }
 
     /// <summary>
@@ -1745,6 +1764,7 @@ internal static class SvgPreviewGuard
         internal VarReach(IEnumerable<(string Name, string Value)> definitions, GuardSteps steps)
         {
             var urls = new List<List<string>>();
+            var vertices = new List<int>();
             var values = new List<(int Name, string Value)>();
             foreach ((string name, string value) in definitions)
             {
@@ -1753,10 +1773,15 @@ internal static class SvgPreviewGuard
                 {
                     names[name] = id = names.Count;
                     urls.Add([]);
+                    vertices.Add(0);
                 }
                 List<string> named = UrlsIn(value);
                 steps.Spend(named.Count);
                 urls[id].AddRange(named);
+                if (value.Contains("path(", StringComparison.OrdinalIgnoreCase))
+                {
+                    vertices[id] = Math.Max(vertices[id], CssPathVertices(value));
+                }
                 values.Add((id, value));
             }
             int count = names.Count;
@@ -1781,6 +1806,7 @@ internal static class SvgPreviewGuard
             Count = components;
             Urls = new List<string>[components];
             Named = new List<int>[components];
+            PathVertices = new int[components];
             var urlSets = new HashSet<string>[components];
             var namedSets = new HashSet<int>[components];
             for (int c = 0; c < components; c++)
@@ -1793,6 +1819,7 @@ internal static class SvgPreviewGuard
             for (int id = 0; id < count; id++)
             {
                 int c = component[id];
+                PathVertices[c] = Math.Max(PathVertices[c], vertices[id]);
                 foreach (string url in urls[id])
                 {
                     if (urlSets[c].Add(url))
@@ -1809,9 +1836,38 @@ internal static class SvgPreviewGuard
                     }
                 }
             }
+            for (int c = 0; c < components; c++)
+            {
+                steps.Spend(1 + Named[c].Count);
+                foreach (int other in Named[c])
+                {
+                    PathVertices[c] = Math.Max(PathVertices[c], PathVertices[other]);
+                }
+            }
+        }
+
+        /// <summary>The most CSS <c>path()</c> vertices a <c>d</c> value
+        /// gives: its own text's, a fallback's among them, and those of
+        /// every custom property it names.</summary>
+        internal int PathVerticesOf(string value)
+        {
+            int most = CssPathVertices(value);
+            foreach (string name in NamesIn(value))
+            {
+                if (ComponentOf(name) is var c and >= 0)
+                {
+                    most = Math.Max(most, PathVertices[c]);
+                }
+            }
+            return most;
         }
 
         internal int Count { get; }
+
+        /// <summary>Each component's most CSS <c>path()</c> vertices, in its
+        /// definitions' own text or any component it names (Codex's review,
+        /// stage 4).</summary>
+        internal int[] PathVertices { get; }
 
         /// <summary>Each component's ids, in its definitions' own text.</summary>
         internal List<string>[] Urls { get; }
@@ -2095,7 +2151,7 @@ internal static class SvgPreviewGuard
                 }
                 if (name.Equals("d", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathVertices = Math.Max(pathVertices, CssPathVertices(value));
+                    pathVertices = Math.Max(pathVertices, document.Reach?.PathVerticesOf(value) ?? CssPathVertices(value));
                 }
                 if (MarkerSlots(name) is { } slots
                     && ReadMarkerValue(value, out string? target, out string? throughVar))
@@ -2630,15 +2686,19 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>
-        /// One walk in document order, parents first: each element is
-        /// counted under each key it carries (every element, the descriptive
-        /// ones too: a rule's query walks them all and applies its
-        /// declarations to each match), and each marked shape adds its
-        /// placements. An element's marker in each slot is its own (from its
-        /// attributes, its style attribute or the rules filed under its keys,
-        /// the one with the most renders), else its parent's. A path's
-        /// vertices are the most its data or any CSS <c>d:path()</c> filed
-        /// under its keys gives (the red team's m4).
+        /// One walk in document order: each element is counted under each
+        /// key it carries (every element, the descriptive ones too: a rule's
+        /// query walks them all and applies its declarations to each match),
+        /// and its own marker in each slot is found (from its attributes,
+        /// its style attribute or the rules filed under its keys, the one
+        /// with the most renders). A path's vertices are the most its data
+        /// or any CSS <c>d:path()</c> filed under its keys or read through
+        /// <c>var()</c> gives (the red team's m4, Codex's review, stage 4).
+        /// Then one walk in Measure's order, in which an element's parent
+        /// and every use that draws it come first: its marker in each slot
+        /// is its own, else the widest its parent's and those of the uses
+        /// drawing it (an instance inherits from its use, Codex's review,
+        /// stage 4), and each marked shape adds its placements.
         /// </summary>
         private double VisitElements(Family family, List<(int Element, KeyStats Key)> attributeKeys)
         {
@@ -2651,15 +2711,18 @@ internal static class SvgPreviewGuard
                 steps.Spend(1);
                 key.ResolveMarkers(this);
             }
-            var effective = new int[elements * Slots];
+            const int NotSet = -2;
+            var own = new int[elements * Slots];
+            var vertexCounts = new int[elements];
             var best = new int[Slots];
             var bestRenders = new double[Slots];
             var set = new bool[Slots];
             IReadOnlyList<MarkerDeclaration> declared = document.ElementMarkers;
+            IReadOnlyList<(int Element, string Value)> pathVarUses = document.PathVarUses;
             int nextDeclaration = 0;
             int nextAttributeKey = 0;
+            int nextPathVarUse = 0;
             bool anyKey = keys.Count > 0;
-            double units = 0;
             for (int i = 0; i < elements; i++)
             {
                 steps.Spend(1);
@@ -2668,6 +2731,12 @@ internal static class SvgPreviewGuard
                 Array.Clear(set);
                 int vertexCount = document.Vertices[i];
                 bool path = document.Names[i] == "path";
+                while (nextPathVarUse < pathVarUses.Count && pathVarUses[nextPathVarUse].Element == i)
+                {
+                    steps.Spend(1);
+                    vertexCount = Math.Max(
+                        vertexCount, document.Reach?.PathVerticesOf(pathVarUses[nextPathVarUse++].Value) ?? 0);
+                }
                 void Candidate(int slot, int marker)
                 {
                     set[slot] = true;
@@ -2740,17 +2809,72 @@ internal static class SvgPreviewGuard
                         VisitStats(attributeKeys[nextAttributeKey++].Key);
                     }
                 }
-                int parent = document.Parents[i];
                 for (int slot = 0; slot < Slots; slot++)
                 {
-                    effective[(i * Slots) + slot] = set[slot]
-                        ? (bestRenders[slot] > 0 ? best[slot] : -1)
-                        : parent >= 0 ? effective[(parent * Slots) + slot] : -1;
+                    own[(i * Slots) + slot] = set[slot] ? (bestRenders[slot] > 0 ? best[slot] : -1) : NotSet;
                 }
-                units = Cap(units + Placements(i, vertexCount, effective));
+                vertexCounts[i] = vertexCount;
+            }
+
+            var usesById = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            foreach ((int use, string? target) in document.Uses)
+            {
+                if (target is not null)
+                {
+                    if (!usesById.TryGetValue(target, out List<int>? drawing))
+                    {
+                        usesById[target] = drawing = [];
+                    }
+                    drawing.Add(use);
+                }
+            }
+            var fromUses = new Dictionary<string, int[]>(StringComparer.Ordinal);
+            var effective = new int[elements * Slots];
+            double units = 0;
+            foreach (int i in document.Order)
+            {
+                if (i >= elements)
+                {
+                    continue;
+                }
+                steps.Spend(1);
+                int parent = document.Parents[i];
+                int[]? viaUses = null;
+                if (document.Ids[i] is { } id && usesById.TryGetValue(id, out List<int>? drawing)
+                    && !fromUses.TryGetValue(id, out viaUses))
+                {
+                    // Every use naming the id comes before every element it
+                    // names in Measure's order.
+                    viaUses = [-1, -1, -1];
+                    steps.Spend(drawing.Count);
+                    foreach (int use in drawing)
+                    {
+                        for (int slot = 0; slot < Slots; slot++)
+                        {
+                            viaUses[slot] = Wider(viaUses[slot], effective[(use * Slots) + slot]);
+                        }
+                    }
+                    fromUses[id] = viaUses;
+                }
+                for (int slot = 0; slot < Slots; slot++)
+                {
+                    int mine = own[(i * Slots) + slot];
+                    int inherited = parent >= 0 ? effective[(parent * Slots) + slot] : -1;
+                    if (viaUses is not null)
+                    {
+                        inherited = Wider(inherited, viaUses[slot]);
+                    }
+                    effective[(i * Slots) + slot] = mine != NotSet ? mine : inherited;
+                }
+                units = Cap(units + Placements(i, vertexCounts[i], effective));
             }
             return units;
         }
+
+        /// <summary>Of two markers (-1 for none), the one with the most
+        /// renders.</summary>
+        private int Wider(int first, int second) =>
+            second >= 0 && (first < 0 || renders[second] > renders[first]) ? second : first;
 
         /// <summary>What a marked shape's placements weigh, times the
         /// shape's own renders: each placement its marker's renders and
@@ -3038,8 +3162,13 @@ internal static class SvgPreviewGuard
 
     /// <summary>
     /// #1610 (CB-29): the custom properties of a document, each resolved at
-    /// each of Svg.Custom's lookup levels: whether its value resolves there,
-    /// and the lookups that takes.
+    /// each of Svg.Custom's lookup levels. A lookup has two outcomes, each
+    /// with the most lookups it takes: it resolves, or it fails and its
+    /// fallback is read. A name defined more than once keeps both outcomes
+    /// of its alternatives (Codex's review, stage 4): which definition an
+    /// element sees is the cascade's choice, so a literal defined anywhere
+    /// never erases another definition's failure and the fallbacks that
+    /// failure reads.
     /// </summary>
     private sealed class VarTable
     {
@@ -3047,8 +3176,10 @@ internal static class SvgPreviewGuard
 
         private readonly Dictionary<string, int> names = new(StringComparer.Ordinal);
         private readonly List<int> tableRow = [];
-        private readonly float[] lookups;
-        private readonly bool[] resolves;
+        private readonly float[] resolveCost;
+        private readonly float[] failCost;
+        private readonly bool[] canResolve;
+        private readonly bool[] canFail;
         private readonly List<Frame> frames = [];
         private readonly GuardSteps steps;
 
@@ -3085,8 +3216,10 @@ internal static class SvgPreviewGuard
                     tableRow[id] = rows++;
                 }
             }
-            lookups = new float[rows * (Levels + 1)];
-            resolves = new bool[rows * (Levels + 1)];
+            resolveCost = new float[rows * (Levels + 1)];
+            failCost = new float[rows * (Levels + 1)];
+            canResolve = new bool[rows * (Levels + 1)];
+            canFail = new bool[rows * (Levels + 1)];
             for (int level = Levels; level >= 1; level--)
             {
                 for (int id = 0; id < parsed.Length; id++)
@@ -3097,119 +3230,144 @@ internal static class SvgPreviewGuard
                     {
                         continue;
                     }
-                    double widest = 0;
-                    bool any = false;
+                    int at = (row * (Levels + 1)) + level;
                     foreach (VarReference[] references in parsed[id])
                     {
-                        (bool ok, double count) = Evaluate(references, level);
-                        widest = Math.Max(widest, count);
-                        any |= ok;
+                        Outcome outcome = Evaluate(references, level);
+                        if (outcome.Resolves)
+                        {
+                            canResolve[at] = true;
+                            resolveCost[at] = Math.Max(resolveCost[at], (float)Math.Min(outcome.ResolveCost, 1e18));
+                        }
+                        if (outcome.Fails)
+                        {
+                            canFail[at] = true;
+                            failCost[at] = Math.Max(failCost[at], (float)Math.Min(outcome.FailCost, 1e18));
+                        }
                     }
-                    lookups[(row * (Levels + 1)) + level] = (float)Math.Min(widest, 1e18);
-                    resolves[(row * (Levels + 1)) + level] = any;
                 }
             }
         }
 
         private static readonly VarReference[] Literal = [];
 
-        /// <summary>The lookups resolving a declaration's value
-        /// takes.</summary>
-        internal double Resolve(string value) => Evaluate(Parse(value), 0).Lookups;
+        /// <summary>The lookups resolving a declaration's value takes, the
+        /// more of its two outcomes.</summary>
+        internal double Resolve(string value) => Evaluate(Parse(value), 0).Widest;
 
         /// <summary>A name's lookup at <paramref name="level"/>: past the
         /// deepest level, or for a name nothing defines, one lookup that
         /// fails; for a name defined only by literals, one that
         /// resolves.</summary>
-        private (bool Resolves, double Lookups) Lookup(int name, int level)
+        private Outcome Lookup(int name, int level)
         {
             if (name < 0 || level > Levels)
             {
-                return (false, 1);
+                return new Outcome(false, 0, true, 1);
             }
             int row = tableRow[name];
-            return row < 0
-                ? (true, 1)
-                : (resolves[(row * (Levels + 1)) + level], lookups[(row * (Levels + 1)) + level]);
+            if (row < 0)
+            {
+                return new Outcome(true, 1, false, 0);
+            }
+            int at = (row * (Levels + 1)) + level;
+            return new Outcome(canResolve[at], resolveCost[at], canFail[at], failCost[at]);
         }
 
-        /// <summary>A value's references resolved at
-        /// <paramref name="level"/>, from left to right, with an explicit
-        /// stack for the fallbacks: a value with none is one
-        /// lookup.</summary>
-        private (bool Resolves, double Lookups) Evaluate(VarReference[] references, int level)
+        /// <summary>
+        /// A value's references resolved at <paramref name="level"/>, from
+        /// left to right, with an explicit stack for the fallbacks: a value
+        /// with none is one lookup. A frame follows every outcome at once:
+        /// the most lookups along which it goes on resolving, and the most
+        /// along which it has failed.
+        /// </summary>
+        private Outcome Evaluate(VarReference[] references, int level)
         {
             if (references.Length == 0)
             {
-                return (true, 1);
+                return new Outcome(true, 1, false, 0);
             }
+            static double Cap(double value) => Math.Min(value, 1e18);
             frames.Clear();
-            frames.Add(new Frame(0, references.Length, level, 0));
-            (bool Resolves, double Lookups)? delivered = null;
+            frames.Add(Frame.Start(0, references.Length, level));
+            Outcome? delivered = null;
             while (true)
             {
                 steps.Spend(1);
                 int top = frames.Count - 1;
                 Frame frame = frames[top];
-                bool? ended = null;
                 if (delivered is { } fallback)
                 {
-                    // A fallback ended; it served the reference at Position.
+                    // A fallback ended; it served the failed reference at
+                    // Position, whose lookup may also have resolved.
                     delivered = null;
-                    frame.Lookups = Math.Min(frame.Lookups + fallback.Lookups, 1e18);
-                    if (fallback.Resolves)
+                    if (fallback.Fails)
                     {
-                        frame.Position = references[frame.Position].End;
+                        frame.Failed = true;
+                        frame.FailedCost = Math.Max(frame.FailedCost, Cap(frame.FallbackBase + fallback.FailCost));
                     }
-                    else
-                    {
-                        ended = false;
-                    }
-                }
-                else if (frame.Position >= frame.End)
-                {
-                    ended = true;
-                }
-                else
-                {
-                    VarReference reference = references[frame.Position];
-                    (bool resolves, double count) = Lookup(reference.Name, frame.Level + 1);
-                    frame.Lookups = Math.Min(frame.Lookups + count, 1e18);
-                    if (resolves)
-                    {
-                        frame.Position = reference.End;
-                    }
-                    else if (!reference.HasFallback)
-                    {
-                        ended = false;
-                    }
-                    else if (frame.Position + 1 == reference.End)
-                    {
-                        // A fallback with no reference is a literal.
-                        frame.Lookups = Math.Min(frame.Lookups + 1, 1e18);
-                        frame.Position = reference.End;
-                    }
-                    else
-                    {
-                        frames[top] = frame;
-                        frames.Add(new Frame(frame.Position + 1, reference.End, frame.Level + 1, 0));
-                        continue;
-                    }
-                }
-                if (ended is not { } resolved)
-                {
+                    frame.Going = frame.PendingResolves || fallback.Resolves;
+                    frame.GoingCost = Math.Max(
+                        frame.PendingResolves ? frame.PendingResolveCost : 0,
+                        fallback.Resolves ? Cap(frame.FallbackBase + fallback.ResolveCost) : 0);
+                    frame.Position = references[frame.Position].End;
                     frames[top] = frame;
                     continue;
                 }
-                frames.RemoveAt(top);
-                if (frames.Count == 0)
+                if (!frame.Going || frame.Position >= frame.End)
                 {
-                    return (resolved, frame.Lookups);
+                    var ended = new Outcome(frame.Going, frame.GoingCost, frame.Failed, frame.FailedCost);
+                    frames.RemoveAt(top);
+                    if (frames.Count == 0)
+                    {
+                        return ended;
+                    }
+                    delivered = ended;
+                    continue;
                 }
-                delivered = (resolved, frame.Lookups);
+                VarReference reference = references[frame.Position];
+                Outcome lookup = Lookup(reference.Name, frame.Level + 1);
+                double resolved = Cap(frame.GoingCost + lookup.ResolveCost);
+                double failed = Cap(frame.GoingCost + lookup.FailCost);
+                if (!lookup.Fails)
+                {
+                    frame.GoingCost = resolved;
+                    frame.Position = reference.End;
+                }
+                else if (!reference.HasFallback)
+                {
+                    frame.Failed = true;
+                    frame.FailedCost = Math.Max(frame.FailedCost, failed);
+                    frame.Going = lookup.Resolves;
+                    frame.GoingCost = resolved;
+                    frame.Position = reference.End;
+                }
+                else if (frame.Position + 1 == reference.End)
+                {
+                    // A fallback with no reference is a literal.
+                    frame.GoingCost = Math.Max(lookup.Resolves ? resolved : 0, Cap(failed + 1));
+                    frame.Position = reference.End;
+                }
+                else
+                {
+                    frame.PendingResolves = lookup.Resolves;
+                    frame.PendingResolveCost = resolved;
+                    frame.FallbackBase = failed;
+                    frames[top] = frame;
+                    frames.Add(Frame.Start(frame.Position + 1, reference.End, frame.Level + 1));
+                    continue;
+                }
+                frames[top] = frame;
             }
         }
 
+        /// <summary>A lookup's or a value's outcomes: whether it can
+        /// resolve and the most lookups that takes, whether it can fail and
+        /// the most lookups that takes.</summary>
+        private readonly record struct Outcome(bool Resolves, double ResolveCost, bool Fails, double FailCost)
+        {
+            internal double Widest => Math.Max(Resolves ? ResolveCost : 0, Fails ? FailCost : 0);
+        }
         /// <summary>The <c>var()</c> references of a value in document
         /// order, each with the end of the references its fallback
         /// holds.</summary>
@@ -3232,7 +3390,7 @@ internal static class SvgPreviewGuard
                     if (end + 1 < value.Length && value[end] == '-' && value[end + 1] == '-')
                     {
                         end += 2;
-                        while (end < value.Length && IsNameCharacter(value[end]))
+                        while (end < value.Length && IsVarNameCharacter(value[end]))
                         {
                             end++;
                         }
@@ -3276,7 +3434,24 @@ internal static class SvgPreviewGuard
         /// past the references its fallback holds.</summary>
         private readonly record struct VarReference(int Name, bool HasFallback, int End);
 
-        private record struct Frame(int Position, int End, int Level, double Lookups);
+        /// <summary>A value being resolved: its next reference, its end,
+        /// its level, the outcome so far along each way, and, while a
+        /// fallback is read, what the failed lookup left.</summary>
+        private record struct Frame(
+            int Position,
+            int End,
+            int Level,
+            bool Going,
+            double GoingCost,
+            bool Failed,
+            double FailedCost,
+            bool PendingResolves,
+            double PendingResolveCost,
+            double FallbackBase)
+        {
+            internal static Frame Start(int position, int end, int level) =>
+                new(position, end, level, true, 0, false, 0, false, 0, 0);
+        }
     }
 
     /// <summary>Links and animations name an element without drawing it.</summary>
@@ -3360,6 +3535,12 @@ internal static class SvgPreviewGuard
     private static bool IsNameCharacter(char c) =>
         char.IsAsciiLetterOrDigit(c) || c is '-' or '_' || c >= '\u0080';
 
+    /// <summary>A character of a custom property's name as
+    /// <see cref="Unescape"/> leaves it: a name character, or U+0001 for an
+    /// escaped syntax character, which a name may hold (Codex's review,
+    /// stage 4).</summary>
+    private static bool IsVarNameCharacter(char c) => IsNameCharacter(c) || c == '\u0001';
+
     private static bool IsUrlAt(string text, int i) =>
         i + 4 <= text.Length && text.AsSpan(i, 4).Equals("url(", StringComparison.OrdinalIgnoreCase);
 
@@ -3407,11 +3588,14 @@ internal static class SvgPreviewGuard
 
     /// <summary>
     /// Resolves CSS escapes: <c>\</c> and up to six hex digits (and one
-    /// whitespace after them), or <c>\</c> and any other character. An
-    /// escaped character that would otherwise be CSS syntax becomes
-    /// U+0001, which is neither syntax nor part of a name: it can neither
-    /// open, close, separate nor start a comment, and a selector holding
-    /// one is not a simple selector.
+    /// whitespace after them), or <c>\</c> and any other character. A hex
+    /// escape gives its code point, a supplementary one as its surrogate
+    /// pair, and U+FFFD for zero, a surrogate or one past U+10FFFF, as CSS
+    /// does (Codex's review, stage 4: a valid escape names the character it
+    /// gives). An escaped character that would otherwise be CSS syntax
+    /// becomes U+0001, which is no syntax: it can neither open, close,
+    /// separate nor start a comment, a selector holding one is not a simple
+    /// selector, and a custom property's name may hold it.
     /// </summary>
     private static string Unescape(string text)
     {
@@ -3442,7 +3626,19 @@ internal static class SvgPreviewGuard
                 {
                     i++;
                 }
-                resolved = code is > 0 and < 0xD800 ? (char)code : '\u0001';
+                if (code is 0 or (>= 0xD800 and <= 0xDFFF) or > 0x10FFFF)
+                {
+                    resolved = '�';
+                }
+                else if (code > 0xFFFF)
+                {
+                    builder.Append(char.ConvertFromUtf32(code));
+                    continue;
+                }
+                else
+                {
+                    resolved = (char)code;
+                }
             }
             else
             {
