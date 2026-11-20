@@ -1042,10 +1042,11 @@ fn fts_pushdown_predicate(
     match fts.ensure_sql_membership(conn, query, cancel) {
         Ok(()) => {}
         Err(VaultError::Cancelled) => return Err(CandidateLoadError::Vault(VaultError::Cancelled)),
+        // The refusal's message is core's plain sentence (search_db's
+        // `map_fts5_error`), so the view says the function and then it, as
+        // the interpreter's `file_matches` does.
         Err(VaultError::InvalidQuery { message }) => {
-            return Err(CandidateLoadError::View(format!(
-                "file.matches: invalid search query: {message}"
-            )));
+            return Err(CandidateLoadError::View(format!("file.matches: {message}")));
         }
         Err(error) => return Err(CandidateLoadError::Vault(error)),
     }
@@ -3938,6 +3939,13 @@ impl VaultLookup for SqlVaultLookup<'_> {
         match self.fts.paths(self.conn, query, self.cancel) {
             Ok(paths) => Ok(paths.contains(path)),
             Err(VaultError::Cancelled) => Err(EvalError::Cancelled),
+            // A refused query says core's plain sentence after the function,
+            // as the pushed-down conjunct does (`fts_pushdown_predicate`),
+            // not the error's Display ("invalid search query: …").
+            Err(VaultError::InvalidQuery { message }) => Err(EvalError::InvalidArgument {
+                function: "file.matches".to_string(),
+                message,
+            }),
             Err(error) => Err(EvalError::InvalidArgument {
                 function: "file.matches".to_string(),
                 message: error.to_string(),

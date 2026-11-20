@@ -9897,7 +9897,12 @@ final class AppState: ObservableObject {
                     // whatever the panel was showing before.
                     return
                 }
-                let message = self.humanReadable(error)
+                // Core's detail, as Windows says it: a search the index
+                // refuses is core's plain sentence, with no lead of the
+                // Mac's own before it (the owner, 2026-11-20: "Plain
+                // words."; humanReadable would add "Search query is
+                // invalid: ").
+                let message = vaultErrorDetail(error: error)
                 let event = A11yEvent.searchFailed(message: message)
                 self.searchAnnouncement = event
                 self.searchState = .error(message)

@@ -3602,6 +3602,18 @@ fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
 /// speaks it through `vault_error_detail` with no corpus or event change.
 pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system gives Slate no file identity for it, so Slate cannot keep the vault anchored to it.";
 
+/// What a reader hears when core's full-text index refuses a search as a
+/// query (the owner, 2026-11-20: "Plain words. Please change it."): an
+/// operator with nothing to join, a quote left open, or a symbol the query
+/// syntax refuses (`#`, an apostrophe, a period) or reads as an operator (a
+/// colon or a hyphen, read as a column filter).
+/// It completes the lead it lands after ("Search error: ",
+/// "file.matches: ") and never restates the failure. Core's copy, carried
+/// in a `VaultError::InvalidQuery` whose message crosses the FFI verbatim,
+/// so a host speaks it through `vault_error_detail` with no corpus or
+/// event change, as [`VAULT_ROOT_IDENTITY_UNAVAILABLE`]'s is.
+pub const SEARCH_QUERY_UNREADABLE: &str = "Check the quotes, symbols and operators in your search.";
+
 /// Why a rename that changes only the case of a name was not made (plan 47
 /// CB-13, #1727, owner decision CD7): the volume reported the rename as done
 /// and kept the old spelling, as FAT32 and exFAT have been seen to. `stored`
@@ -6812,9 +6824,9 @@ mod tests {
             ),
             (
                 VaultError::InvalidQuery {
-                    message: "fts5: syntax error near \"AND\"".into(),
+                    message: SEARCH_QUERY_UNREADABLE.into(),
                 },
-                "fts5: syntax error near \"AND\"",
+                SEARCH_QUERY_UNREADABLE,
             ),
             (
                 VaultError::Unsupported {
@@ -6929,6 +6941,36 @@ mod tests {
         assert_eq!(
             witnessed, declared,
             "VaultError variants without a detail witness"
+        );
+    }
+
+    /// The owner's "Plain words" call (2026-11-20): a search the full-text
+    /// index refuses reaches the host as core's sentence through
+    /// `vault_error_detail`, and completes each lead it lands after, the
+    /// search's and the Bases preview's, without restating the failure.
+    #[test]
+    fn the_unreadable_search_is_cores_sentence() {
+        assert_eq!(
+            SEARCH_QUERY_UNREADABLE,
+            "Check the quotes, symbols and operators in your search."
+        );
+        let refusal = VaultError::InvalidQuery {
+            message: SEARCH_QUERY_UNREADABLE.to_owned(),
+        };
+        assert_eq!(vault_error_detail(&refusal), SEARCH_QUERY_UNREADABLE);
+        assert_eq!(
+            A11yEvent::SearchFailed {
+                message: vault_error_detail(&refusal),
+            }
+            .render(),
+            "Search error: Check the quotes, symbols and operators in your search."
+        );
+        assert_eq!(
+            A11yEvent::BaseQueryPreviewFailed {
+                detail: format!("file.matches: {SEARCH_QUERY_UNREADABLE}"),
+            }
+            .render(),
+            "Preview failed: file.matches: Check the quotes, symbols and operators in your search."
         );
     }
 

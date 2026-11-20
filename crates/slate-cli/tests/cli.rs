@@ -590,11 +590,16 @@ fn search_fts_syntax_error_exits_one_with_message() {
     slate()
         .arg("search")
         .arg(vault.path())
-        // An unbalanced quote is an FTS5 syntax error → InvalidQuery.
+        // An unbalanced quote is a query FTS5 refuses ("unterminated
+        // string") → InvalidQuery, whose message is core's plain
+        // sentence, not SQLite's text.
         .arg("\"unbalanced")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("invalid search query"))
+        .stderr(predicate::str::contains(
+            "invalid search query: Check the quotes, symbols and operators in your search.",
+        ))
+        .stderr(predicate::str::contains("FTS5").not())
         .stderr(predicate::str::starts_with("slate: "));
 }
 
@@ -922,6 +927,46 @@ fn query_view_error_exits_two_with_error_envelope() {
             .contains("unknown function"),
         "{data:#?}"
     );
+}
+
+/// A `file.matches` query the full-text index refuses fails the view with
+/// core's plain sentence: a view error (exit 2, the envelope on stdout),
+/// for an operator and for a hyphen alike, never a runtime error.
+#[test]
+fn query_refused_file_matches_exits_two_with_cores_sentence() {
+    for refused in ["AND", "well-known"] {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Queries")).unwrap();
+        fs::write(root.join("note.md"), "# Note\n").unwrap();
+        fs::write(
+            root.join("Queries/Refused.base"),
+            format!(
+                "views:\n  - type: table\n    name: Refused\n    filters: 'file.matches(\"{refused}\")'\n    order:\n      - file.name\n"
+            ),
+        )
+        .unwrap();
+
+        let output = slate()
+            .arg("query")
+            .arg(root)
+            .arg("--base")
+            .arg("Queries/Refused.base")
+            .arg("--format")
+            .arg("json")
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stderr.is_empty(), "{refused}: {output:?}");
+        let data = assert_envelope(&output.stdout, "query");
+        assert_eq!(data["error"]["kind"], "view_error", "{refused}");
+        assert_eq!(
+            data["error"]["message"],
+            "file.matches: Check the quotes, symbols and operators in your search.",
+            "{refused}: {data:#?}"
+        );
+    }
 }
 
 // --- `read` -----------------------------------------------------------

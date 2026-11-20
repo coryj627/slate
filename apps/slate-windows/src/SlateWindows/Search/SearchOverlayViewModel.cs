@@ -878,8 +878,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         // Core's words for the failure (#1890, CD9): a vault error's
         // detail is core's own rendering, never the binding's field dump,
         // and the host adds no lead of its own. An InvalidQuery's message
-        // embeds a raw SQLite string; it is passed through, never parsed
-        // and never re-classified host-side (contract S6).
+        // is core's plain sentence for a search its index refuses
+        // (a11y::SEARCH_QUERY_UNREADABLE); it is passed through, never
+        // parsed and never re-classified host-side (contract S6, SD-6).
         var announcement = new A11yEvent.SearchFailed(FailureDetail.Of(failure));
         // The displayed line is the event's own rendering ("Search
         // error: {message}", a11y.rs:2155) — the displayed and spoken
