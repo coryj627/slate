@@ -137,12 +137,21 @@ internal readonly record struct SvgDecodeEstimate(
     /// cost whatever the terms say.</summary>
     internal bool StepsSpent { get; init; }
 
+    /// <summary>The steps the check took, out of
+    /// <see cref="SvgPreviewGuard.MaxGuardSteps"/>.</summary>
+    internal long Steps { get; init; }
+
     /// <summary>The largest term's name, for the log: <c>stylesheet</c>,
-    /// <c>use</c>, <c>var</c> or <c>marker</c>.</summary>
+    /// <c>use</c>, <c>var</c> or <c>marker</c>, or <c>guard</c> when the
+    /// guard spent its step budget.</summary>
     internal string LargestTerm
     {
         get
         {
+            if (StepsSpent)
+            {
+                return "guard";
+            }
             (string Name, double Value)[] terms =
             [
                 ("stylesheet", StylesheetMicroseconds),
@@ -163,8 +172,10 @@ internal readonly record struct SvgDecodeEstimate(
 /// runs on a thread with a large stack
 /// (<c>EditorInteractionCoordinator.DecodeSvgImage</c>); this guard
 /// bounds the depth that stack must hold and the work a document can
-/// expand to, reading the document once with an XmlReader BEFORE
-/// Svg.Custom parses it.
+/// expand to, reading the document with an XmlReader BEFORE Svg.Custom
+/// parses it: once, and a second time when a stylesheet rule is filed under
+/// an attribute (#1610). Its own work is bounded by
+/// <see cref="MaxGuardSteps"/>.
 /// </summary>
 /// <remarks>
 /// The reference graph errs wide wherever the guard cannot know what
@@ -202,6 +213,19 @@ internal static class SvgPreviewGuard
     /// owner's pick.</summary>
     internal const int MaxEstimatedDecodeMilliseconds = 2_000;
 
+    /// <summary>#1610 (the red team's B1): the most steps one check may
+    /// take across its read, Measure and the estimate, a step being one
+    /// element, attribute, edge, rule, branch, declaration, key visit or
+    /// var() lookup. The guard runs on the caller before any decoder slot,
+    /// so past this budget it stops and refuses the document for its cost,
+    /// whatever made it slow. 10,000,000 is 4.4 times the most steps any
+    /// real or calibration document takes (2,251,392, 8 MiB of rects) and
+    /// above every linear shape the red team built at 8 MiB but one (a
+    /// var() definition of a million references); at the costliest step
+    /// measured, about 40 ns, it adds at most about 0.4 s to an 8 MiB
+    /// read (CB-29's calibration, section 6).</summary>
+    internal const long MaxGuardSteps = 10_000_000;
+
     [ThreadStatic]
     private static long? stepBudgetForTests;
 
@@ -230,7 +254,8 @@ internal static class SvgPreviewGuard
 
     /// <summary>The verdict, and for a document every other check admits,
     /// the decode time it is estimated at (#1610): the caps are checked
-    /// first, so a document past one still says which.</summary>
+    /// first, so a document past one still says which. The steps the check
+    /// took are given whatever the verdict.</summary>
     internal static SvgRefusal Check(string source, int maxCharacters, out SvgDecodeEstimate estimate)
     {
         estimate = default;
@@ -240,6 +265,27 @@ internal static class SvgPreviewGuard
             return SvgRefusal.Markup;
         }
 
+        var steps = new GuardSteps(StepBudgetForTests ?? MaxGuardSteps);
+        SvgRefusal refusal;
+        try
+        {
+            refusal = Judge(source, maxCharacters, steps, out estimate);
+        }
+        catch (GuardStepsSpentException)
+        {
+            estimate = new SvgDecodeEstimate(0, 0, 0, 0) { StepsSpent = true };
+            refusal = SvgRefusal.DecodeCost;
+        }
+        estimate = estimate with { Steps = steps.Spent };
+        return refusal;
+    }
+
+    /// <summary>The read, Measure and the estimate, each step spent from
+    /// <paramref name="steps"/>.</summary>
+    private static SvgRefusal Judge(
+        string source, int maxCharacters, GuardSteps steps, out SvgDecodeEstimate estimate)
+    {
+        estimate = default;
         var settings = new XmlReaderSettings
         {
             DtdProcessing = DtdProcessing.Prohibit,
@@ -248,7 +294,7 @@ internal static class SvgPreviewGuard
             IgnoreComments = true,
             IgnoreProcessingInstructions = false,
         };
-        var document = new DocumentShape();
+        var document = new DocumentShape(steps);
         try
         {
             using var textReader = new StringReader(source);
@@ -268,11 +314,35 @@ internal static class SvgPreviewGuard
         {
             return measured;
         }
-        estimate = new DecodeCostEstimator(document, source, settings).Estimate();
+        estimate = new DecodeCostEstimator(document, source, settings, steps).Estimate();
         return estimate.Milliseconds > MaxEstimatedDecodeMilliseconds
             ? SvgRefusal.DecodeCost
             : SvgRefusal.None;
     }
+
+    /// <summary>The steps one check has left (#1610, B1); spending past
+    /// them throws <see cref="GuardStepsSpentException"/>, which
+    /// <see cref="Check(string, int, out SvgDecodeEstimate)"/> turns into a
+    /// refusal for the cost.</summary>
+    private sealed class GuardSteps(long budget)
+    {
+        private long left = budget;
+
+        internal long Spent => Budget - Math.Max(0, left);
+
+        private long Budget { get; } = budget;
+
+        internal void Spend(long count)
+        {
+            left -= count;
+            if (left < 0)
+            {
+                throw new GuardStepsSpentException();
+            }
+        }
+    }
+
+    private sealed class GuardStepsSpentException : Exception;
 
     /// <summary>#1610 (CB-29): the decode time <see cref="Check"/> compares
     /// with <see cref="MaxEstimatedDecodeMilliseconds"/>, for a document every
@@ -285,7 +355,7 @@ internal static class SvgPreviewGuard
 
     /// <summary>The elements of a document and the edges a render can
     /// follow between them, collected in one pass.</summary>
-    private sealed class DocumentShape
+    private sealed class DocumentShape(GuardSteps steps)
     {
         private readonly List<int> parents = [];
         private readonly List<string> names = [];
@@ -293,11 +363,12 @@ internal static class SvgPreviewGuard
         private readonly List<string?> classLists = [];
         private readonly List<(int From, string Id)> references = [];
         private readonly List<(int From, int To)> filterInputs = [];
-        private readonly Dictionary<string, List<string>> ruleTargets = new(StringComparer.Ordinal);
+        private readonly List<RuleBlock> ruleBlocks = [];
         private readonly List<int> open = [];
         private readonly List<FilterInputs?> openFilters = [];
         private readonly StringBuilder styleText = new();
         private int styleDepth = -1;
+        private string? keyedPrelude;
 
         // #1610 (CB-29): what the decode estimate reads, collected in the
         // same pass, and Measure's graph, kept for it.
@@ -341,7 +412,8 @@ internal static class SvgPreviewGuard
         internal string Stylesheet { get; private set; } = string.Empty;
 
         /// <summary>Measure's graph: the elements, then one node per rule
-        /// key, and each node's edges.</summary>
+        /// key, one node per id a reference names and one node per rule
+        /// block several keys share, and each node's edges.</summary>
         internal List<int>?[] Next { get; private set; } = [];
 
         /// <summary>Each node's render count, as Measure counts it.</summary>
@@ -396,6 +468,7 @@ internal static class SvgPreviewGuard
 
         private SvgRefusal ReadElement(XmlReader reader)
         {
+            steps.Spend(1);
             int index = names.Count;
             int depth = reader.Depth;
             if (index >= MaxRenderedElements)
@@ -442,6 +515,7 @@ internal static class SvgPreviewGuard
             {
                 do
                 {
+                    steps.Spend(1);
                     if (reader.Prefix == "xmlns"
                         || (reader.Prefix.Length == 0 && reader.LocalName == "xmlns"))
                     {
@@ -552,11 +626,11 @@ internal static class SvgPreviewGuard
             }
             else if (attribute == "d" && element == "path")
             {
-                vertexCount = PathVertices(value);
+                vertexCount = Math.Max(vertexCount, PathVertices(value));
             }
             if (attribute == "style")
             {
-                ReadStyleAttribute(index, value);
+                ReadStyleAttribute(index, element, value, ref vertexCount);
                 return;
             }
             if (MarkerSlots(attribute) is { } slots)
@@ -574,20 +648,31 @@ internal static class SvgPreviewGuard
             }
         }
 
-        private void ReadStyleAttribute(int index, string value)
+        /// <summary>A style attribute's declarations, read as ExCSS reads
+        /// them (escapes resolved, comments gone, the red team's M1): its
+        /// custom properties, markers, var() uses, and a path's CSS
+        /// <c>d:path()</c> vertices.</summary>
+        private void ReadStyleAttribute(int index, string element, string value, ref int vertexCount)
         {
-            if (!value.Contains("--", StringComparison.Ordinal)
-                && !value.Contains("var(", StringComparison.OrdinalIgnoreCase)
-                && !value.Contains("marker", StringComparison.OrdinalIgnoreCase))
+            string text = CssText(value);
+            bool path = element == "path" && text.Contains("path(", StringComparison.OrdinalIgnoreCase);
+            if (!path
+                && !text.Contains("--", StringComparison.Ordinal)
+                && !text.Contains("var(", StringComparison.OrdinalIgnoreCase)
+                && !text.Contains("marker", StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
-            foreach ((string property, string declared) in Declarations(Unescape(value)))
+            foreach ((string property, string declared) in Declarations(text))
             {
                 if (property.StartsWith("--", StringComparison.Ordinal))
                 {
                     customDefinitions.Add((property, declared));
                     continue;
+                }
+                if (path && property.Equals("d", StringComparison.OrdinalIgnoreCase))
+                {
+                    vertexCount = Math.Max(vertexCount, CssPathVertices(declared));
                 }
                 if (MarkerSlots(property) is { } slots)
                 {
@@ -774,56 +859,63 @@ internal static class SvgPreviewGuard
 
         /// <summary>Files <paramref name="target"/> under the key of every
         /// selector in <paramref name="prelude"/>, or under every element
-        /// when the prelude is not a list of simple selectors.</summary>
+        /// when the prelude is not a list of simple selectors: in the
+        /// block the prelude opens, whose keys are read once, each key
+        /// once.</summary>
         private void AddRuleTarget(string? prelude, string target)
         {
-            List<string> keys = [];
-            foreach (string selector in (prelude ?? string.Empty).Split(','))
+            if (ruleBlocks.Count == 0 || !ReferenceEquals(prelude, keyedPrelude))
             {
-                if (SimpleSelectorKey(selector) is not { } key)
+                var keys = new List<string>();
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (string selector in (prelude ?? string.Empty).Split(','))
                 {
-                    keys = [AnyElementKey];
-                    break;
+                    steps.Spend(1);
+                    if (SimpleSelectorKey(selector) is not { } key)
+                    {
+                        keys = [AnyElementKey];
+                        break;
+                    }
+                    if (seen.Add(key))
+                    {
+                        keys.Add(key);
+                    }
                 }
-                keys.Add(key);
+                ruleBlocks.Add(new RuleBlock(keys));
+                keyedPrelude = prelude;
             }
-            foreach (string key in keys)
-            {
-                if (!ruleTargets.TryGetValue(key, out List<string>? targets))
-                {
-                    ruleTargets[key] = targets = [];
-                }
-                targets.Add(target);
-            }
+            steps.Spend(1);
+            ruleBlocks[^1].Targets.Add(target);
         }
 
-        /// <summary>Walks the graph once in dependency order: the longest
-        /// chain, the number of renders and whether every element was
-        /// reached, which fails exactly when there is a cycle.</summary>
+        /// <summary>A stylesheet block's keys and the ids its
+        /// <c>url()</c> references name.</summary>
+        private sealed class RuleBlock(List<string> keys)
+        {
+            internal List<string> Keys { get; } = keys;
+
+            internal HashSet<string> Targets { get; } = new(StringComparer.Ordinal);
+        }
+
+        /// <summary>
+        /// Walks the graph once in dependency order: the longest chain, the
+        /// number of renders and whether every element was reached, which
+        /// fails exactly when there is a cycle. A reference reaches the
+        /// elements an id names through one node per id (the red team's
+        /// B1), as a rule's elements reach its targets through one node per
+        /// key, and the keys of a block that no other block files reach its
+        /// targets through one node per block, so the edges stay linear in
+        /// the document when many elements share an id or many selectors
+        /// share a block. The render counts are the same as an edge from
+        /// each key to each distinct target filed under it.
+        /// </summary>
         internal SvgRefusal Measure()
         {
             int elements = names.Count;
-            var keyNodes = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (string key in ruleTargets.Keys)
-            {
-                keyNodes[key] = elements + keyNodes.Count;
-            }
-            int nodes = elements + keyNodes.Count;
-            var next = new List<int>?[nodes];
-            var indegree = new int[nodes];
-            void Edge(int from, int to)
-            {
-                (next[from] ??= []).Add(to);
-                indegree[to]++;
-            }
-
             var byId = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             for (int i = 0; i < elements; i++)
             {
-                if (parents[i] >= 0)
-                {
-                    Edge(parents[i], i);
-                }
+                steps.Spend(1);
                 if (ids[i] is { } id)
                 {
                     if (!byId.TryGetValue(id, out List<int>? named))
@@ -833,14 +925,94 @@ internal static class SvgPreviewGuard
                     named.Add(i);
                 }
             }
+            var keyNodes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var keyBlocks = new List<int>();
+            foreach (RuleBlock block in ruleBlocks)
+            {
+                foreach (string key in block.Keys)
+                {
+                    steps.Spend(1);
+                    if (!keyNodes.TryGetValue(key, out int node))
+                    {
+                        keyNodes[key] = node = elements + keyNodes.Count;
+                        keyBlocks.Add(0);
+                    }
+                    keyBlocks[node - elements]++;
+                }
+            }
+            // One node per id a reference or a rule names that draws
+            // something: an id only gradients carry reaches nothing.
+            var idNodes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var namedNothing = new HashSet<string>(StringComparer.Ordinal);
+            void NameNode(string id)
+            {
+                steps.Spend(1);
+                if (idNodes.ContainsKey(id) || namedNothing.Contains(id))
+                {
+                    return;
+                }
+                if (byId.TryGetValue(id, out List<int>? named)
+                    && named.Exists(target => !IsGradient(names[target])))
+                {
+                    idNodes[id] = elements + keyNodes.Count + idNodes.Count;
+                }
+                else
+                {
+                    namedNothing.Add(id);
+                }
+            }
+            foreach ((int _, string id) in references)
+            {
+                NameNode(id);
+            }
+            foreach (RuleBlock block in ruleBlocks)
+            {
+                foreach (string id in block.Targets)
+                {
+                    NameNode(id);
+                }
+            }
+            // One node per block that two or more keys file alone.
+            int firstRuleNode = elements + keyNodes.Count + idNodes.Count;
+            var ruleNodes = new int[ruleBlocks.Count];
+            int ruleNodeCount = 0;
+            for (int b = 0; b < ruleBlocks.Count; b++)
+            {
+                int alone = ruleBlocks[b].Keys.Count(key => keyBlocks[keyNodes[key] - elements] == 1);
+                ruleNodes[b] = alone >= 2 ? firstRuleNode + ruleNodeCount++ : -1;
+            }
+            int nodes = firstRuleNode + ruleNodeCount;
+            var next = new List<int>?[nodes];
+            var indegree = new int[nodes];
+            void Edge(int from, int to)
+            {
+                steps.Spend(1);
+                (next[from] ??= []).Add(to);
+                indegree[to]++;
+            }
+
+            for (int i = 0; i < elements; i++)
+            {
+                if (parents[i] >= 0)
+                {
+                    Edge(parents[i], i);
+                }
+            }
+            foreach ((string id, int node) in idNodes)
+            {
+                foreach (int target in byId[id])
+                {
+                    if (!IsGradient(names[target]))
+                    {
+                        Edge(node, target);
+                    }
+                }
+            }
             void Reference(int from, string id)
             {
-                if (byId.TryGetValue(id, out List<int>? targets))
+                if (idNodes.TryGetValue(id, out int node))
                 {
-                    foreach (int target in targets.Where(target => !IsGradient(names[target])))
-                    {
-                        Edge(from, target);
-                    }
+                    Edge(from, node);
                 }
             }
             foreach ((int from, string id) in references)
@@ -851,16 +1023,55 @@ internal static class SvgPreviewGuard
             {
                 Edge(from, to);
             }
-            foreach ((string key, List<string> targets) in ruleTargets)
+            // A key filed in several blocks reaches each distinct target of
+            // its blocks once.
+            var keyTargets = new Dictionary<int, HashSet<int>>();
+            for (int b = 0; b < ruleBlocks.Count; b++)
             {
-                foreach (string id in targets.Distinct(StringComparer.Ordinal))
+                RuleBlock block = ruleBlocks[b];
+                int ruleNode = ruleNodes[b];
+                if (ruleNode >= 0)
                 {
-                    Reference(keyNodes[key], id);
+                    foreach (string id in block.Targets)
+                    {
+                        Reference(ruleNode, id);
+                    }
+                }
+                foreach (string key in block.Keys)
+                {
+                    int keyNode = keyNodes[key];
+                    if (keyBlocks[keyNode - elements] > 1)
+                    {
+                        if (!keyTargets.TryGetValue(keyNode, out HashSet<int>? filed))
+                        {
+                            keyTargets[keyNode] = filed = [];
+                        }
+                        foreach (string id in block.Targets)
+                        {
+                            steps.Spend(1);
+                            if (idNodes.TryGetValue(id, out int idNode) && filed.Add(idNode))
+                            {
+                                Edge(keyNode, idNode);
+                            }
+                        }
+                    }
+                    else if (ruleNode >= 0)
+                    {
+                        Edge(keyNode, ruleNode);
+                    }
+                    else
+                    {
+                        foreach (string id in block.Targets)
+                        {
+                            Reference(keyNode, id);
+                        }
+                    }
                 }
             }
             bool anyClassKey = keyNodes.Keys.Any(key => key.StartsWith('.'));
             for (int i = 0; i < elements; i++)
             {
+                steps.Spend(1);
                 if (!TakesStyleRules(names[i]))
                 {
                     continue;
@@ -916,6 +1127,7 @@ internal static class SvgPreviewGuard
             long rendered = 0;
             while (ready.TryDequeue(out int node))
             {
+                steps.Spend(1 + (next[node]?.Count ?? 0));
                 reached++;
                 order.Add(node);
                 if (node < elements)
@@ -1095,13 +1307,164 @@ internal static class SvgPreviewGuard
             {
                 i++;
             }
-            total += per == 0 ? 1 : NumberCount(data, start, i) / per * (command == 'A' ? 4 : 1);
+            total += per == 0 ? 1
+                : command == 'A' ? ArcCount(data, start, i) * 4L
+                : NumberCount(data, start, i) / per;
         }
         return (int)Math.Min(total, int.MaxValue);
     }
 
     private static bool IsPathCommand(char c) =>
         char.ToUpperInvariant(c) is 'M' or 'L' or 'T' or 'H' or 'V' or 'C' or 'S' or 'Q' or 'A' or 'Z';
+
+    /// <summary>The arcs in an A command's arguments: three numbers, two
+    /// flags, two numbers each. A flag is one character, so it may run into
+    /// what follows (the red team's m4: <c>A1 1 0 001 1</c> is one
+    /// arc).</summary>
+    private static int ArcCount(string text, int start, int end)
+    {
+        int arcs = 0;
+        int i = start;
+        while (ReadNumber(text, ref i, end) && ReadNumber(text, ref i, end) && ReadNumber(text, ref i, end)
+            && ReadFlag(text, ref i, end) && ReadFlag(text, ref i, end)
+            && ReadNumber(text, ref i, end) && ReadNumber(text, ref i, end))
+        {
+            arcs++;
+        }
+        return arcs;
+    }
+
+    private static void SkipSeparators(string text, ref int i, int end)
+    {
+        while (i < end && (char.IsWhiteSpace(text[i]) || text[i] == ','))
+        {
+            i++;
+        }
+    }
+
+    private static bool ReadFlag(string text, ref int i, int end)
+    {
+        SkipSeparators(text, ref i, end);
+        if (i < end && text[i] is '0' or '1')
+        {
+            i++;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Reads one number as <see cref="NumberCount"/> counts
+    /// them, after any separators.</summary>
+    private static bool ReadNumber(string text, ref int i, int end)
+    {
+        SkipSeparators(text, ref i, end);
+        int at = i;
+        if (at < end && text[at] is '+' or '-')
+        {
+            at++;
+        }
+        int digits = at;
+        while (at < end && char.IsAsciiDigit(text[at]))
+        {
+            at++;
+        }
+        if (at < end && text[at] == '.')
+        {
+            at++;
+            while (at < end && char.IsAsciiDigit(text[at]))
+            {
+                at++;
+            }
+        }
+        if (at == digits || (at == digits + 1 && text[digits] == '.'))
+        {
+            return false;
+        }
+        if (at < end && text[at] is 'e' or 'E')
+        {
+            int exponent = at + 1;
+            if (exponent < end && text[exponent] is '+' or '-')
+            {
+                exponent++;
+            }
+            if (exponent < end && char.IsAsciiDigit(text[exponent]))
+            {
+                at = exponent;
+                while (at < end && char.IsAsciiDigit(text[at]))
+                {
+                    at++;
+                }
+            }
+        }
+        i = at;
+        return true;
+    }
+
+    /// <summary>The vertices of a CSS <c>path("...")</c> value (the red
+    /// team's m4), or 0.</summary>
+    private static int CssPathVertices(string value)
+    {
+        int open = value.IndexOf("path(", StringComparison.OrdinalIgnoreCase);
+        if (open < 0)
+        {
+            return 0;
+        }
+        int i = open + 5;
+        while (i < value.Length && char.IsWhiteSpace(value[i]))
+        {
+            i++;
+        }
+        if (i >= value.Length || value[i] is not ('"' or '\''))
+        {
+            return 0;
+        }
+        int close = value.IndexOf(value[i], i + 1);
+        return PathVertices(close < 0 ? value[(i + 1)..] : value[(i + 1)..close]);
+    }
+
+    /// <summary>
+    /// CSS text as ExCSS reads it (the red team's M1): escapes resolved
+    /// first, as <see cref="Unescape"/> does for the guard's own scan, then
+    /// every comment removed, except where <c>/*</c> sits inside a string or
+    /// a <c>url()</c> argument, which a comment cannot open.
+    /// </summary>
+    private static string CssText(string raw)
+    {
+        string css = Unescape(raw);
+        if (!css.Contains("/*", StringComparison.Ordinal))
+        {
+            return css;
+        }
+        var text = new StringBuilder(css.Length);
+        int i = 0;
+        while (i < css.Length)
+        {
+            char c = css[i];
+            if (c is '"' or '\'')
+            {
+                int end = CssStringEnd(css, i);
+                text.Append(css, i, end - i);
+                i = end;
+            }
+            else if (c is 'u' or 'U' && IsUrlAt(css, i))
+            {
+                int end = Math.Min(css.Length, UrlArgumentEnd(css, i + 4) + 1);
+                text.Append(css, i, end - i);
+                i = end;
+            }
+            else if (c == '/' && i + 1 < css.Length && css[i + 1] == '*')
+            {
+                int close = css.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = close < 0 ? css.Length : close + 2;
+            }
+            else
+            {
+                text.Append(c);
+                i++;
+            }
+        }
+        return text.ToString();
+    }
 
     /// <summary>The <c>name: value</c> declarations of a declaration block,
     /// split at the semicolons outside strings and brackets.</summary>
@@ -1188,11 +1551,16 @@ internal static class SvgPreviewGuard
     /// again.</item>
     /// </list>
     /// Every count errs wide where the guard cannot know what applies. It is
-    /// computed iteratively and saturates; nothing recurses, and the guard's
-    /// own time stays linear in the document, but for the <c>var()</c> table,
-    /// 17 lookup depths per custom property.
+    /// computed iteratively and saturates; nothing recurses. Its work is
+    /// linear in the document for the shapes the red team made super-linear
+    /// (a rule's var() uses are counted once per rule, a reference reaches
+    /// an id's elements through one node), the <c>var()</c> table takes 16
+    /// lookup levels per custom property, and the selector counts read a
+    /// table of choices built once. Each step is spent from
+    /// <see cref="MaxGuardSteps"/>, which ends whatever is left.
     /// </summary>
-    private sealed class DecodeCostEstimator(DocumentShape document, string source, XmlReaderSettings settings)
+    private sealed class DecodeCostEstimator(
+        DocumentShape document, string source, XmlReaderSettings settings, GuardSteps steps)
     {
         /// <summary>Where every count stops growing.</summary>
         private const double Saturated = 1e18;
@@ -1211,9 +1579,11 @@ internal static class SvgPreviewGuard
 
         private readonly Dictionary<string, KeyStats> keys = new(StringComparer.Ordinal);
         private readonly List<SelectorBranch> selectorBranches = [];
-        private readonly List<(string Value, List<KeyStats> Subjects)> ruleVarUses = [];
+        private readonly List<(List<string> Values, List<KeyStats> Subjects)> ruleVarUses = [];
         private readonly List<(string Name, string Value)> ruleDefinitions = [];
         private readonly HashSet<string> attributeNames = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> widestById = new(StringComparer.Ordinal);
+        private readonly Dictionary<int, double[]> choiceRows = [];
         private double queriedPasses;
         private int rules;
         private double[] renders = [];
@@ -1221,10 +1591,10 @@ internal static class SvgPreviewGuard
         internal SvgDecodeEstimate Estimate()
         {
             int elements = document.Names.Count;
-            ReadRules(Unescape(document.Stylesheet));
+            ReadRules(CssText(document.Stylesheet));
             renders = Renders();
             Family family = Families(elements);
-            double markerUnits = VisitElements(family.Siblings, ReadAttributeKeys());
+            double markerUnits = VisitElements(family, ReadAttributeKeys());
             return new SvgDecodeEstimate(
                 Cap(StylesheetMicroseconds(elements, family)),
                 Cap(UseMicroseconds(elements)),
@@ -1247,12 +1617,13 @@ internal static class SvgPreviewGuard
         // The stylesheet
         // ------------------------------------------------------------------
 
-        /// <summary>Reads every qualified rule of the joined stylesheet, in
-        /// <c>@media</c> and every other block at-rule too (Svg.Custom reads
-        /// <c>@media</c> only; counting the rest errs wide).</summary>
-        private void ReadRules(string stylesheet)
+        /// <summary>Reads every qualified rule of the joined stylesheet, as
+        /// <see cref="CssText"/> gives it, and those of each <c>@media</c>
+        /// block, which Svg.Custom applies. Any other block at-rule (an
+        /// animation export's <c>@keyframes</c>, the red team's M2) is one
+        /// rule ExCSS parses and Svg.Custom does not apply.</summary>
+        private void ReadRules(string text)
         {
-            string text = StripComments(stylesheet);
             var blocks = new Stack<(int Start, int End)>();
             blocks.Push((0, text.Length));
             while (blocks.TryPop(out (int Start, int End) block))
@@ -1260,6 +1631,7 @@ internal static class SvgPreviewGuard
                 int i = block.Start;
                 while (i < block.End)
                 {
+                    steps.Spend(1);
                     int open = i;
                     while (open < block.End && text[open] != '{')
                     {
@@ -1286,12 +1658,16 @@ internal static class SvgPreviewGuard
                     int semicolon = prelude.LastIndexOf(';');
                     prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
                     int bodyEnd = Math.Max(open + 1, k - 1);
-                    if (prelude.StartsWith('@'))
+                    if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
                     {
                         if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
                         {
                             blocks.Push((open + 1, bodyEnd));
                         }
+                    }
+                    else if (prelude.StartsWith('@'))
+                    {
+                        rules++;
                     }
                     else
                     {
@@ -1307,6 +1683,7 @@ internal static class SvgPreviewGuard
             rules++;
             List<(string Name, string Value)> declarations = Distinct(Declarations(body));
             List<string> branches = SplitTop(prelude, ',');
+            steps.Spend(declarations.Count + branches.Count);
             if (declarations.Count == 0 || branches.Count == 0)
             {
                 return;
@@ -1314,7 +1691,8 @@ internal static class SvgPreviewGuard
             bool custom = false;
             bool geometry = false;
             double landing = 0;
-            bool holdsVarUse = false;
+            List<string>? varValues = null;
+            int pathVertices = 0;
             List<MarkerDeclaration>? markers = null;
             foreach ((string name, string value) in declarations)
             {
@@ -1330,7 +1708,14 @@ internal static class SvgPreviewGuard
                     ruleDefinitions.Add((name, value));
                     continue;
                 }
-                holdsVarUse |= usesVar;
+                if (usesVar)
+                {
+                    (varValues ??= []).Add(value);
+                }
+                if (name.Equals("d", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathVertices = Math.Max(pathVertices, CssPathVertices(value));
+                }
                 if (MarkerSlots(name) is { } slots
                     && ReadMarkerValue(value, out string? target, out bool throughVar))
                 {
@@ -1338,32 +1723,30 @@ internal static class SvgPreviewGuard
                 }
             }
             double passes = 1 + (custom ? 1 : 0) + (geometry ? 1 : 0);
-            List<KeyStats>? subjects = holdsVarUse ? new(branches.Count) : null;
+            List<KeyStats>? subjects = varValues is null ? null : new(branches.Count);
             foreach (string branch in branches)
             {
-                (KeyStats subject, int descendants, int siblings, List<KeyStats>? ofType) = ReadBranch(branch);
+                ParsedBranch parsed = ReadBranch(branch);
+                KeyStats subject = parsed.Subject;
                 subject.DeclarationMicroseconds += landing;
+                subject.PathVertices = Math.Max(subject.PathVertices, pathVertices);
                 if (markers is not null)
                 {
                     (subject.Markers ??= []).AddRange(markers);
                 }
                 subjects?.Add(subject);
-                queriedPasses += passes;
-                if (descendants > 0 || siblings > 0 || ofType is not null)
+                queriedPasses += passes * (1 + parsed.Walks);
+                if (parsed.Descendants > 0 || parsed.Siblings > 0 || parsed.OfType is not null)
                 {
-                    selectorBranches.Add(new SelectorBranch(passes, descendants, siblings, ofType));
+                    selectorBranches.Add(new SelectorBranch(
+                        passes, parsed.Descendants, parsed.Siblings, parsed.OfType, parsed.Left));
                 }
             }
-            if (subjects is not null)
+            // One entry per rule (the red team's B1): its var() values
+            // resolve once each, on every element its branches land on.
+            if (varValues is not null)
             {
-                foreach ((string name, string value) in declarations)
-                {
-                    if (!name.StartsWith("--", StringComparison.Ordinal)
-                        && value.Contains("var(", StringComparison.OrdinalIgnoreCase))
-                    {
-                        ruleVarUses.Add((value, subjects));
-                    }
-                }
+                ruleVarUses.Add((varValues, subjects!));
             }
         }
 
@@ -1391,17 +1774,22 @@ internal static class SvgPreviewGuard
 
         /// <summary>
         /// A selector branch: the key its subject (the rightmost compound) is
-        /// filed under, its descendant steps and its general-sibling steps
-        /// (child and adjacent-sibling steps read one level or one sibling,
-        /// and add nothing past the branch's own query), and the keys of the
-        /// compounds carrying an of-type pseudo-class (or one whose position
-        /// counts from the end), which recomputes the parent's children per
-        /// element, or null for none.
+        /// filed under, its descendant steps, its general-sibling steps, its
+        /// child and adjacent-sibling steps (each one more walk of the
+        /// document, which reads one level or one sibling per element, the
+        /// red team's m1), the keys of the compounds carrying an of-type
+        /// pseudo-class (or one whose position counts from the end), which
+        /// recomputes the parent's children per element, or null for none,
+        /// and, for a branch of one descendant or general-sibling step, the
+        /// key its left compound is filed under (the red team's m2).
         /// </summary>
-        private (KeyStats Subject, int Descendants, int Siblings, List<KeyStats>? OfType) ReadBranch(string branch)
+        private ParsedBranch ReadBranch(string branch)
         {
             int descendants = 0;
             int siblings = 0;
+            int walks = 0;
+            int compounds = 0;
+            string? first = null;
             List<KeyStats>? ofType = null;
             string? previous = null;
             char combinator = '\0';
@@ -1413,16 +1801,20 @@ internal static class SvgPreviewGuard
                 if (start >= 0
                     && (i == branch.Length || (depth == 0 && (char.IsWhiteSpace(c) || c is '>' or '+' or '~'))))
                 {
+                    steps.Spend(1);
                     string compound = branch[start..i];
                     if (previous is not null)
                     {
                         descendants += combinator == '\0' ? 1 : 0;
                         siblings += combinator == '~' ? 1 : 0;
+                        walks += combinator is '>' or '+' ? 1 : 0;
                     }
                     if (RecomputesFamily(compound))
                     {
                         (ofType ??= []).Add(KeyOf(CompoundKey(compound)));
                     }
+                    first ??= compound;
+                    compounds++;
                     previous = compound;
                     combinator = '\0';
                     start = -1;
@@ -1457,8 +1849,13 @@ internal static class SvgPreviewGuard
                     depth = Math.Max(0, depth - 1);
                 }
             }
-            return (KeyOf(CompoundKey(previous ?? AnyElementKey)), descendants, siblings, ofType);
+            KeyStats? left = compounds == 2 && walks == 0 ? KeyOf(CompoundKey(first!)) : null;
+            return new ParsedBranch(
+                KeyOf(CompoundKey(previous ?? AnyElementKey)), descendants, siblings, walks, ofType, left);
         }
+
+        private readonly record struct ParsedBranch(
+            KeyStats Subject, int Descendants, int Siblings, int Walks, List<KeyStats>? OfType, KeyStats? Left);
 
         /// <summary>Whether a compound carries a pseudo-class that re-reads
         /// the parent's children for each element it tests: the of-type
@@ -1616,13 +2013,17 @@ internal static class SvgPreviewGuard
         }
 
         /// <summary>
-        /// Every branch's query walks every element once per pass. A branch
-        /// whose query is not linear (#1610, Design 1b, with the follow-up's
+        /// Every branch's query walks every element once per pass, and once
+        /// more for each child or adjacent-sibling step. A branch whose
+        /// query is not linear (#1610, Design 1b, with the follow-up's
         /// measured counts) adds, per pass: for its descendant steps, the
         /// depth bound; for its general-sibling steps, the sibling-list
         /// reads; for each compound with an of-type pseudo-class, the
-        /// sibling-list sizes of the elements filed under its key. Then the
-        /// declarations each key's elements take, and each rule.
+        /// sibling-list sizes of the elements filed under its key. A branch
+        /// of one such step counts only what its left compound's matches
+        /// read (the red team's m2): their descendants, or their sibling
+        /// lists. Then the declarations each key's elements take, and each
+        /// rule.
         /// </summary>
         private double StylesheetMicroseconds(int elements, Family family)
         {
@@ -1631,12 +2032,17 @@ internal static class SvgPreviewGuard
             double selectors = 0;
             foreach (SelectorBranch branch in selectorBranches)
             {
+                steps.Spend(1);
                 double work = 0;
                 if (branch.Descendants > 0)
                 {
                     if (!depthBounds.TryGetValue(branch.Descendants, out double bound))
                     {
                         depthBounds[branch.Descendants] = bound = DepthBound(family, branch.Descendants);
+                    }
+                    if (branch.Left is { } left)
+                    {
+                        bound = Math.Min(bound, left.DescendantSum);
                     }
                     work = Cap(work + (SvgDecodeRates.DescendantChainUnit * bound));
                 }
@@ -1645,6 +2051,10 @@ internal static class SvgPreviewGuard
                     if (!siblingReads.TryGetValue(branch.Siblings, out double reads))
                     {
                         siblingReads[branch.Siblings] = reads = SiblingReads(family, branch.Siblings);
+                    }
+                    if (branch.Left is { } left)
+                    {
+                        reads = Math.Min(reads, left.FamilySum);
                     }
                     work = Cap(work + (SvgDecodeRates.SiblingListRead * reads));
                 }
@@ -1671,16 +2081,18 @@ internal static class SvgPreviewGuard
         /// ways to pick 1 to <paramref name="steps"/> of its ancestors, the
         /// work ExCSS's composed query does when every ancestor matches every
         /// compound (duplicates are removed only at the end). Elements are
-        /// counted by depth, so it costs at most 257 x 256 steps.
+        /// counted by depth, so it reads at most 256 rows of
+        /// <see cref="Choices"/>.
         /// </summary>
-        private static double DepthBound(Family family, int steps)
+        private double DepthBound(Family family, int chain)
         {
+            steps.Spend(family.AtDepth.Length);
             double total = 0;
             for (int depth = 1; depth < family.AtDepth.Length; depth++)
             {
                 if (family.AtDepth[depth] > 0)
                 {
-                    total = Cap(total + (family.AtDepth[depth] * Choices(depth, steps)));
+                    total = Cap(total + (family.AtDepth[depth] * Choices(depth, chain)));
                 }
             }
             return total;
@@ -1693,35 +2105,52 @@ internal static class SvgPreviewGuard
         /// included, so a parent of n children costs n x the ways to pick 1 to
         /// <paramref name="steps"/> of them when every child matches.
         /// </summary>
-        private static double SiblingReads(Family family, int steps)
+        private double SiblingReads(Family family, int chain)
         {
+            steps.Spend(family.Parents.Count);
             double total = 0;
             foreach ((int children, int parents) in family.Parents)
             {
-                total = Cap(total + ((double)parents * children * Choices(children, steps)));
+                total = Cap(total + ((double)parents * children * Choices(children, chain)));
             }
             return total;
         }
 
-        /// <summary>C(n, 1) + ... + C(n, k), saturating.</summary>
-        private static double Choices(int n, int k)
+        /// <summary>C(n, 1) + ... + C(n, k), saturating, read from a row of
+        /// sums per n built once, up to where it saturates: no row holds more
+        /// than 64 sums, and any number of branches reads the same
+        /// rows.</summary>
+        private double Choices(int n, int k)
         {
-            double sum = 0;
-            double term = 1;
-            for (int s = 1; s <= Math.Min(n, k) && sum < Saturated; s++)
+            if (n <= 0 || k <= 0)
             {
-                term = term * (n - s + 1) / s;
-                sum = Cap(sum + term);
+                return 0;
             }
-            return sum;
+            if (!choiceRows.TryGetValue(n, out double[]? row))
+            {
+                var sums = new List<double>();
+                double sum = 0;
+                double term = 1;
+                for (int s = 1; s <= n && sum < Saturated; s++)
+                {
+                    term = term * (n - s + 1) / s;
+                    sum = Cap(sum + term);
+                    sums.Add(sum);
+                }
+                steps.Spend(sums.Count);
+                choiceRows[n] = row = [.. sums];
+            }
+            return row[Math.Min(k, row.Length) - 1];
         }
 
         /// <summary>The family counts the selector work reads: how many
         /// elements sit at each depth (proper ancestors, the root at 0), how
-        /// many parents have each number of children, and each element's
-        /// sibling-list size (its parent's children, the root's 0).</summary>
+        /// many parents have each number of children, each element's
+        /// sibling-list size (its parent's children, the root's 0) and its
+        /// descendants.</summary>
         private Family Families(int elements)
         {
+            steps.Spend(elements);
             IReadOnlyList<int> parents = document.Parents;
             var depths = new int[elements];
             var children = new int[elements];
@@ -1737,6 +2166,7 @@ internal static class SvgPreviewGuard
                 atDepth[Math.Min(depths[i], MaxRenderDepth)]++;
             }
             var siblings = new double[elements];
+            var descendants = new double[elements];
             var families = new Dictionary<int, int>();
             for (int i = 0; i < elements; i++)
             {
@@ -1749,13 +2179,22 @@ internal static class SvgPreviewGuard
                     families[children[i]] = families.GetValueOrDefault(children[i]) + 1;
                 }
             }
-            return new Family(atDepth, families, siblings);
+            // Children follow their parent in document order.
+            for (int i = elements - 1; i >= 0; i--)
+            {
+                if (parents[i] >= 0)
+                {
+                    descendants[parents[i]] += descendants[i] + 1;
+                }
+            }
+            return new Family(atDepth, families, siblings, descendants);
         }
 
         /// <summary>Elements by depth, parents by their number of children
-        /// (children, parents), and each element's sibling-list
-        /// size.</summary>
-        private sealed record Family(double[] AtDepth, Dictionary<int, int> Parents, double[] Siblings);
+        /// (children, parents), and each element's sibling-list size and
+        /// descendants.</summary>
+        private sealed record Family(
+            double[] AtDepth, Dictionary<int, int> Parents, double[] Siblings, double[] Descendants);
 
         // ------------------------------------------------------------------
         // Elements: their keys, and the markers they place
@@ -1776,6 +2215,7 @@ internal static class SvgPreviewGuard
             int index = -1;
             while (reader.Read())
             {
+                steps.Spend(1);
                 if (reader.NodeType != XmlNodeType.Element)
                 {
                     continue;
@@ -1787,6 +2227,7 @@ internal static class SvgPreviewGuard
                 }
                 do
                 {
+                    steps.Spend(1);
                     string name = reader.LocalName.ToLowerInvariant();
                     if (!attributeNames.Contains(name))
                     {
@@ -1814,14 +2255,19 @@ internal static class SvgPreviewGuard
         /// declarations to each match), and each marked shape adds its
         /// placements. An element's marker in each slot is its own (from its
         /// attributes, its style attribute or the rules filed under its keys,
-        /// the one with the most renders), else its parent's.
+        /// the one with the most renders), else its parent's. A path's
+        /// vertices are the most its data or any CSS <c>d:path()</c> filed
+        /// under its keys gives (the red team's m4).
         /// </summary>
-        private double VisitElements(double[] siblings, List<(int Element, KeyStats Key)> attributeKeys)
+        private double VisitElements(Family family, List<(int Element, KeyStats Key)> attributeKeys)
         {
             int elements = document.Names.Count;
+            double[] siblings = family.Siblings;
+            double[] descendants = family.Descendants;
             int throughVar = WidestVarMarker();
             foreach (KeyStats key in keys.Values)
             {
+                steps.Spend(1);
                 key.ResolveMarkers(this, throughVar);
             }
             var effective = new int[elements * Slots];
@@ -1835,9 +2281,12 @@ internal static class SvgPreviewGuard
             double units = 0;
             for (int i = 0; i < elements; i++)
             {
+                steps.Spend(1);
                 Array.Fill(best, -1);
                 Array.Fill(bestRenders, -1);
                 Array.Clear(set);
+                int vertexCount = document.Vertices[i];
+                bool path = document.Names[i] == "path";
                 void Candidate(int slot, int marker)
                 {
                     set[slot] = true;
@@ -1857,8 +2306,14 @@ internal static class SvgPreviewGuard
                 }
                 void VisitStats(KeyStats stats)
                 {
+                    steps.Spend(1);
                     stats.Count++;
                     stats.FamilySum += siblings[i];
+                    stats.DescendantSum += descendants[i];
+                    if (path)
+                    {
+                        vertexCount = Math.Max(vertexCount, stats.PathVertices);
+                    }
                     if (stats.MarkerSet is { } markerSet)
                     {
                         for (int slot = 0; slot < Slots; slot++)
@@ -1911,7 +2366,7 @@ internal static class SvgPreviewGuard
                         ? (bestRenders[slot] > 0 ? best[slot] : -1)
                         : parent >= 0 ? effective[(parent * Slots) + slot] : -1;
                 }
-                units = Cap(units + Placements(i, effective));
+                units = Cap(units + Placements(i, vertexCount, effective));
             }
             return units;
         }
@@ -1921,9 +2376,8 @@ internal static class SvgPreviewGuard
         /// <see cref="SvgDecodeRates.MarkerPlacementWeight"/>, and the widest
         /// marker once more. Start and end are one placement each, mid every
         /// vertex between.</summary>
-        private double Placements(int element, int[] effective)
+        private double Placements(int element, int vertexCount, int[] effective)
         {
-            int vertexCount = document.Vertices[element];
             if (vertexCount <= 0)
             {
                 return 0;
@@ -1945,16 +2399,38 @@ internal static class SvgPreviewGuard
             return widest == 0 ? 0 : Cap((placed + widest) * document.Paths[element]);
         }
 
-        /// <summary>The element a marker declaration places: the first
-        /// element with its id, the widest marker any custom property names
-        /// when it is read through <c>var()</c>, or none.</summary>
+        /// <summary>The element a marker declaration places: the element
+        /// its id names, the widest marker any custom property names when it
+        /// is read through <c>var()</c>, or none.</summary>
         private int Resolve(MarkerDeclaration declaration, int throughVar) =>
             declaration.ThroughVar ? throughVar
-            : declaration.Target is { } target ? FirstWithId(target)
+            : declaration.Target is { } target ? WidestWithId(target)
             : -1;
 
-        private int FirstWithId(string id) =>
-            document.ElementsById.TryGetValue(id, out List<int>? named) ? named[0] : -1;
+        /// <summary>The element an id names, or -1: of several elements
+        /// sharing it, the one with the most renders (the red team's m4),
+        /// found once per id.</summary>
+        private int WidestWithId(string id)
+        {
+            if (widestById.TryGetValue(id, out int found))
+            {
+                return found;
+            }
+            int widest = -1;
+            if (document.ElementsById.TryGetValue(id, out List<int>? named))
+            {
+                steps.Spend(named.Count);
+                foreach (int element in named)
+                {
+                    if (widest < 0 || renders[element] > renders[widest])
+                    {
+                        widest = element;
+                    }
+                }
+            }
+            widestById[id] = widest;
+            return widest;
+        }
 
         /// <summary>The widest marker a custom property's value names, which
         /// a marker property read through <c>var()</c> may resolve to
@@ -1968,9 +2444,10 @@ internal static class SvgPreviewGuard
                     url >= 0;
                     url = value.IndexOf("url(", url + 4, StringComparison.OrdinalIgnoreCase))
                 {
+                    steps.Spend(1);
                     int end = UrlArgumentEnd(value, url + 4);
                     if (Fragment(value, url + 4, end < value.Length && value[end] == ')' ? end : value.Length) is { } id
-                        && FirstWithId(id) is var marker and >= 0
+                        && WidestWithId(id) is var marker and >= 0
                         && (widest < 0 || renders[marker] > renders[widest]))
                     {
                         widest = marker;
@@ -1993,6 +2470,7 @@ internal static class SvgPreviewGuard
             {
                 int node = order[k];
                 double total = node < elements ? 1 : 0;
+                steps.Spend(1 + (next[node]?.Count ?? 0));
                 if (next[node] is { } outgoing)
                 {
                     foreach (int to in outgoing)
@@ -2022,9 +2500,10 @@ internal static class SvgPreviewGuard
             double instanceElements = 0;
             foreach ((int element, string? target) in document.Uses)
             {
+                steps.Spend(1);
                 double paths = document.Paths[element];
                 useRenders = Cap(useRenders + paths);
-                if (target is not null && FirstWithId(target) is var instance and >= 0)
+                if (target is not null && WidestWithId(target) is var instance and >= 0)
                 {
                     instanceElements = Cap(instanceElements + (paths * renders[instance]));
                 }
@@ -2042,7 +2521,8 @@ internal static class SvgPreviewGuard
         /// <summary>
         /// The lookups Svg.Custom makes resolving every <c>var()</c> use: an
         /// attribute's or a style attribute's once, a rule's on each element
-        /// it is filed under. A property's value is resolved from left to
+        /// its branches are filed under, those elements summed once per rule
+        /// (the red team's B1). A property's value is resolved from left to
         /// right, each reference one level deeper; a lookup past
         /// <see cref="VarLevels"/> levels, or of a name nothing defines, costs
         /// one and fails, and a failed reference with a fallback resolves the
@@ -2058,21 +2538,30 @@ internal static class SvgPreviewGuard
             {
                 return 0;
             }
-            var table = new VarTable(document.CustomDefinitions.Concat(ruleDefinitions));
+            var table = new VarTable(document.CustomDefinitions.Concat(ruleDefinitions), steps);
             double lookups = 0;
             foreach (string value in document.AttributeVarUses)
             {
                 lookups = Cap(lookups + table.Resolve(value));
             }
-            foreach ((string value, List<KeyStats> subjects) in ruleVarUses)
+            foreach ((List<string> values, List<KeyStats> subjects) in ruleVarUses)
             {
-                double landed = subjects.Sum(subject => subject.Count);
-                lookups = Cap(lookups + (table.Resolve(value) * landed));
+                steps.Spend(subjects.Count);
+                double landed = 0;
+                foreach (KeyStats subject in subjects)
+                {
+                    landed += subject.Count;
+                }
+                foreach (string value in values)
+                {
+                    lookups = Cap(lookups + (table.Resolve(value) * landed));
+                }
             }
             return lookups;
         }
 
-        private sealed record SelectorBranch(double Passes, int Descendants, int Siblings, List<KeyStats>? OfType);
+        private sealed record SelectorBranch(
+            double Passes, int Descendants, int Siblings, List<KeyStats>? OfType, KeyStats? Left);
 
         /// <summary>What the elements filed under one key add up to, and
         /// what the rules filed there apply to each.</summary>
@@ -2080,6 +2569,8 @@ internal static class SvgPreviewGuard
         {
             internal double Count;
             internal double FamilySum;
+            internal double DescendantSum;
+            internal int PathVertices;
             internal double DeclarationMicroseconds;
             internal List<MarkerDeclaration>? Markers;
             internal bool[]? MarkerSet;
@@ -2132,9 +2623,11 @@ internal static class SvgPreviewGuard
         private readonly float[] lookups;
         private readonly bool[] resolves;
         private readonly List<Frame> frames = [];
+        private readonly GuardSteps steps;
 
-        internal VarTable(IEnumerable<(string Name, string Value)> definitions)
+        internal VarTable(IEnumerable<(string Name, string Value)> definitions, GuardSteps steps)
         {
+            this.steps = steps;
             List<(string Name, string Value)> all = [.. definitions];
             foreach ((string name, string _) in all)
             {
@@ -2171,6 +2664,7 @@ internal static class SvgPreviewGuard
             {
                 for (int id = 0; id < parsed.Length; id++)
                 {
+                    steps.Spend(1);
                     int row = tableRow[id];
                     if (row < 0)
                     {
@@ -2227,6 +2721,7 @@ internal static class SvgPreviewGuard
             (bool Resolves, double Lookups)? delivered = null;
             while (true)
             {
+                steps.Spend(1);
                 int top = frames.Count - 1;
                 Frame frame = frames[top];
                 bool? ended = null;
@@ -2322,6 +2817,7 @@ internal static class SvgPreviewGuard
                         after++;
                     }
                     bool fallback = after < value.Length && value[after] == ',';
+                    steps.Spend(1);
                     references.Add(new VarReference(name, fallback, references.Count + 1));
                     open.Push((references.Count - 1, depth));
                     i = fallback ? after : end - 1;
@@ -2354,29 +2850,6 @@ internal static class SvgPreviewGuard
         private readonly record struct VarReference(int Name, bool HasFallback, int End);
 
         private record struct Frame(int Position, int End, int Level, double Lookups);
-    }
-
-    /// <summary>A stylesheet without its comments, which count for
-    /// nothing; an unclosed one runs to the end.</summary>
-    private static string StripComments(string css)
-    {
-        if (!css.Contains("/*", StringComparison.Ordinal))
-        {
-            return css;
-        }
-        var text = new StringBuilder(css.Length);
-        int i = 0;
-        while (i < css.Length)
-        {
-            if (css[i] == '/' && i + 1 < css.Length && css[i + 1] == '*')
-            {
-                int close = css.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                i = close < 0 ? css.Length : close + 2;
-                continue;
-            }
-            text.Append(css[i++]);
-        }
-        return text.ToString();
     }
 
     /// <summary>Links and animations name an element without drawing it.</summary>

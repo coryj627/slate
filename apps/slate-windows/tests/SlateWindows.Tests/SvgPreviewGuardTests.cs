@@ -283,6 +283,27 @@ public sealed class SvgPreviewGuardTests
         }
     }
 
+    /// <summary>#1610 (the red team's B1): the step budget admits the
+    /// document the most steps were measured on, 8 MiB of rects (2.25 M
+    /// steps), by a margin of four: the budget only ends a check no real or
+    /// calibration document comes near.</summary>
+    [Fact]
+    public void TheStepBudgetAdmitsEightMebibytesOfRects()
+    {
+        string source = SlowSvgDocuments.Generate("Big_rects N=150092");
+        SvgPreviewGuard.StepBudgetForTests = SvgPreviewGuard.MaxGuardSteps / 4;
+        try
+        {
+            SvgRefusal refusal = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            Assert.False(estimate.StepsSpent);
+            Assert.Equal(SvgRefusal.None, refusal);
+        }
+        finally
+        {
+            SvgPreviewGuard.StepBudgetForTests = null;
+        }
+    }
+
     public static TheoryData<char> WalkingCombinators() => ['>', '+'];
 
     /// <summary>#1610 (the red team's m1): a child or adjacent-sibling step

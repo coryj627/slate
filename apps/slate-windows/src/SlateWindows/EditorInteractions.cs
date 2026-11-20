@@ -3580,6 +3580,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             case SvgRefusal.None:
                 source = text;
                 return null;
+            case SvgRefusal.DecodeCost when estimate.StepsSpent:
+                // The guard spent its step budget (the red team's B1): no
+                // estimate was reached, so the guard is the term.
+                HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedForCost, "term=" + estimate.LargestTerm);
+                return SvgDecodeCostRefusedMessage;
             case SvgRefusal.DecodeCost:
                 HostLog.WriteDetail(
                     HostDiagnosticEvent.SvgDecodeRefusedForCost,
