@@ -390,55 +390,55 @@ Every other sweep document: under 10 ms. The probe's naive guard-shaped counter 
 
 ### The guard CB-29 ships
 
-The table above measured `main`'s guard, before CB-29 added its estimate. The red team's review of CB-29's diff (B1) found that guard's own work super-linear in a document's shape, on the caller's thread: one rule of 320,000 branches and 32,000 `var()` declarations (1.1 MB) took it 23.3 s, because each declaration summed the rule's branches again; 16,000 references to an id 16,000 elements share (480 KB) took 3.1 s, because each reference had an edge to each element; and, found on the way, one block of 20,000 classes whose 1,000 declarations name `url()` targets (163 KB) took 6.0 s, because each target was filed under each class. CB-29 now sums a rule's elements once for all its `var()` values, reaches the elements an id names through one node per id, and reaches a block's targets through one node per block. Those three shapes take 51, 18 and 8 ms in the table below (`TheGuardsOwnTimeStaysBounded` holds each under a second).
+The table above measured `main`'s guard, before CB-29 added its estimate. The red team's review of CB-29's diff (B1) found that guard's own work super-linear in a document's shape, on the caller's thread: one rule of 320,000 branches and 32,000 `var()` declarations (1.1 MB) took it 23.3 s, because each declaration summed the rule's branches again; 16,000 references to an id 16,000 elements share (480 KB) took 3.1 s, because each reference had an edge to each element; and, found on the way, one block of 20,000 classes whose 1,000 declarations name `url()` targets (163 KB) took 6.0 s, because each target was filed under each class. CB-29 now sums a rule's elements once for all its `var()` values, reaches the elements an id names through one node per id, and reaches a block's targets through one node per block. Those three shapes take 84, 18 and 18 ms in the table below (`TheGuardsOwnTimeStaysBounded` holds each under a second).
 
-Every check also spends from a step budget, `SvgPreviewGuard.MaxGuardSteps`: a step is one element, attribute, edge, rule, branch, declaration, key visit or `var()` lookup, across the read, `Measure` and the estimate. Past the budget the guard stops and refuses the document for its cost, and the caller logs `term=guard`. **The budget is 10,000,000 steps.** The most steps any document of this record or follow-up 2 takes, of the core outputs and the repository's pie, is 2,251,392 (Big_rects, 8 MiB of rects); the largest real document takes 239,647 (mermaid ER n=451). So the budget is 4.4 times the most. Of the 8 MiB shapes below, one passes it: one `var()` definition of a million references (14.9 M steps without the budget), refused for its cost in 90 ms. The step that costs most was measured at about 40 ns (the `var()` table, from the guard's time at budgets of 4, 8 and 16 million), so the budget adds at most about 0.4 s to reading an 8 MiB document.
+Every check also spends from a step budget, `SvgPreviewGuard.MaxGuardSteps`: a step is one element, attribute, edge, rule, branch, declaration, key visit or `var()` lookup, across the read, `Measure` and the estimate. Past the budget the guard stops and refuses the document for its cost, and the caller logs `term=guard`. **The budget is 10,000,000 steps.** The most steps any document of this record or follow-up 2 takes, of the core outputs and the repository's pie, is 2,401,485 (Big_rects, 8 MiB of rects; 2,251,392 before stage 4's walks); the largest real document takes 239,647 (mermaid ER n=451). So the budget is 4.2 times the most. Of the 8 MiB shapes below, three pass it, each a web of `var()` definitions built to spend it (one definition of a million references, the red team's one rule of chained definitions, and its class rules defining and using `var()`), and each is refused for its cost in at most 0.64 s. The step that costs most was measured at about 40 ns (the `var()` table, from the guard's time at budgets of 4, 8 and 16 million), so the budget adds at most about 0.4 s to reading an 8 MiB document.
 
-`SvgPreviewGuard.Check` on CB-29's head, median of three (of five for the first three rows), on this desktop:
+`SvgPreviewGuard.Check` on CB-29's head after stage 4 (06f0fb2c), median of three (of five for the first three rows), on this desktop:
 
 | document | bytes | verdict | steps | Check ms |
 |---|---|---|---|---|
-| T_varrule B=320000 V=32000 | 1,141,080 | None | 1,088,059 | 50.7 |
-| T_dupid N=16000 | 480,136 | RenderedElements | 288,022 | 18.3 |
-| T_prelude K=20000 U=1000 | 162,944 | None | 202,053 | 7.5 |
-| Big_rects N=150092 | 8,278,686 | None | 2,251,392 | 88.8 |
-| Big_style N=383126 | 8,317,852 | None | 1,915,667 | 228.8 |
-| Big_points N=1119023 | 8,336,588 | None | 25 | 34.9 |
-| A_class R=105720 E=105720 | 8,386,552 | DecodeCost | 2,220,143 | 153.8 |
-| A_type R=136514 E=136514 | 8,386,582 | DecodeCost | 2,593,790 | 107.7 |
-| A_attr R=95093 E=95093 | 8,386,580 | DecodeCost | 2,567,544 | 161.1 |
-| A_desc R=103194 E=103194 | 8,386,538 | DecodeCost | 2,373,757 | 182.1 |
-| A_use G=4 X=0 R=2654 U=265434 | 8,386,572 | RenderedElements | 800,003 | 89.9 |
-| G_scatter N=105551 | 8,386,549 | RenderedElements | 1,372,204 | 106.2 |
-| C_root R=82320 E=82320 | 8,386,589 | DecodeCost | 3,457,468 | 257.1 |
-| C_double D=8 E=106924 | 8,386,600 | DecodeCost | 1,925,141 | 104.7 |
-| C_kary K=4 D=15 E=105576 | 8,386,576 | DecodeCost | 1,901,448 | 94.6 |
-| C_fb F=1 D=16 E=105579 | 8,386,550 | DecodeCost | 1,795,840 | 101.7 |
-| D_marker M=66192 V=661927 | 8,386,589 | DecodeCost | 992,942 | 34.1 |
-| D_paths M=4 X=0 N=141104 | 8,386,578 | RenderedElements | 1,693,318 | 141.9 |
-| D_varinline M=66192 V=661927 | 8,386,608 | DecodeCost | 992,962 | 36.2 |
-| N_desc K=4 D=200 R=100679 | 2,627,549 | DecodeCost | 915,351 | 53.1 |
-| N_sib K=2 R=1919 N=191994 | 8,386,608 | DecodeCost | 2,891,453 | 72.6 |
-| N_nth Q=1 R=1916 N=191680 | 8,386,527 | DecodeCost | 2,884,804 | 75.3 |
-| N_unstyled T=1 Q=1 D=101040 N=1010408 | 8,386,561 | RenderedElements | 200,006 | 14.2 |
-| A_keyframes A=10226 E=102269 | 8,386,320 | DecodeCost | 1,605,640 | 108.0 |
-| T_varrule B=2296622 V=229662 | 8,386,578 | None | 7,808,573 | 403.7 |
-| T_dupid N=279548 | 8,386,576 | RenderedElements | 400,005 | 69.2 |
-| T5 8 MiB of 'g g g g g g rect{fill:red}' rules | 8,388,079 | DecodeCost | 3,554,420 | 185.8 |
-| T5 8 MiB of rects, *{fill:red} | 8,386,685 | RenderedElements | 600,000 | 48.6 |
-| T5 8 MiB of rects with style var() | 8,386,717 | RenderedElements | 400,002 | 85.4 |
-| T5 8 MiB of attribute rules over 2,000 rects | 8,367,528 | DecodeCost | 1,590,559 | 270.0 |
-| T5 rules of 1, 2, 3, ... descendant steps to 8 MiB | 8,379,567 | DecodeCost | 4,931,415 | 111.3 |
-| T5 rules of 1, 2, 3, ... sibling steps, 600 families | 8,128,577 | DecodeCost | 1,448,024 | 66.7 |
-| T6 8 MiB of var() definitions in one rule | 8,386,671 | None | 5,677,352 | 250.2 |
-| T6 8 MiB of class rules defining and using var() | 8,386,679 | None | 9,140,903 | 428.7 |
-| T6 8 MiB of marker rules over 20,000 groups | 8,466,645 | Malformed | 28,855 | 13.5 |
-| T2a 4 MiB of url(#x) class rules, elements sharing id x | 6,382,320 | DecodeCost | 5,525,151 | 466.6 |
-| Prelude of 300,000 classes naming url() targets | 8,386,571 | None | 3,414,165 | 345.8 |
-| 8 MiB definition of one million var() references | 8,386,537 | DecodeCost, budget spent | 10,000,000 | 90.3 |
-| 199,000 groups using var() in a style attribute | 5,174,096 | None | 2,786,043 | 111.4 |
+| T_varrule B=320000 V=32000 | 1,141,080 | None | 1,152,067 | 84.2 |
+| T_dupid N=16000 | 480,136 | RenderedElements | 288,022 | 17.8 |
+| T_prelude K=20000 U=1000 | 162,944 | None | 203,056 | 18.4 |
+| Big_rects N=150092 | 8,278,686 | None | 2,401,485 | 75.9 |
+| Big_style N=383126 | 8,317,852 | None | 2,298,796 | 448.5 |
+| Big_points N=1119023 | 8,336,588 | None | 27 | 29.7 |
+| A_class R=105720 E=105720 | 8,386,552 | DecodeCost | 2,431,585 | 194.9 |
+| A_type R=136514 E=136514 | 8,386,582 | DecodeCost | 2,866,820 | 147.4 |
+| A_attr R=95093 E=95093 | 8,386,580 | DecodeCost | 2,757,732 | 228.5 |
+| A_desc R=103194 E=103194 | 8,386,538 | DecodeCost | 2,580,148 | 224.2 |
+| A_use G=4 X=0 R=2654 U=265434 | 8,386,572 | RenderedElements | 800,003 | 136.2 |
+| G_scatter N=105551 | 8,386,549 | RenderedElements | 1,372,208 | 81.6 |
+| C_root R=82320 E=82320 | 8,386,589 | DecodeCost | 4,116,030 | 330.8 |
+| C_double D=8 E=106924 | 8,386,600 | DecodeCost | 2,139,120 | 93.2 |
+| C_kary K=4 D=15 E=105576 | 8,386,576 | DecodeCost | 2,112,952 | 89.2 |
+| C_fb F=1 D=16 E=105579 | 8,386,550 | DecodeCost | 2,113,032 | 93.3 |
+| D_marker M=66192 V=661927 | 8,386,589 | DecodeCost | 1,059,138 | 40.7 |
+| D_paths M=4 X=0 N=141104 | 8,386,578 | RenderedElements | 1,693,318 | 145.5 |
+| D_varinline M=66192 V=661927 | 8,386,608 | DecodeCost | 1,059,177 | 42.2 |
+| N_desc K=4 D=200 R=100679 | 2,627,549 | DecodeCost | 1,016,432 | 89.1 |
+| N_sib K=2 R=1919 N=191994 | 8,386,608 | DecodeCost | 3,085,368 | 75.4 |
+| N_nth Q=1 R=1916 N=191680 | 8,386,527 | DecodeCost | 3,078,402 | 68.4 |
+| N_unstyled T=1 Q=1 D=101040 N=1010408 | 8,386,561 | RenderedElements | 200,006 | 15.7 |
+| A_keyframes A=10226 E=102269 | 8,386,320 | DecodeCost | 1,718,137 | 104.5 |
+| T_varrule B=2296622 V=229662 | 8,386,578 | None | 8,267,905 | 403.5 |
+| T_dupid N=279548 | 8,386,576 | RenderedElements | 400,005 | 98.6 |
+| T5 8 MiB of 'g g g g g g rect{fill:red}' rules | 8,388,079 | DecodeCost | 3,877,184 | 356.2 |
+| T5 8 MiB of rects, *{fill:red} | 8,386,685 | RenderedElements | 600,000 | 46.1 |
+| T5 8 MiB of rects with style var() | 8,386,717 | RenderedElements | 400,002 | 119.1 |
+| T5 8 MiB of attribute rules over 2,000 rects | 8,367,528 | DecodeCost | 1,905,067 | 464.8 |
+| T5 rules of 1, 2, 3, ... descendant steps to 8 MiB | 8,379,567 | DecodeCost | 4,934,505 | 118.1 |
+| T5 rules of 1, 2, 3, ... sibling steps, 600 families | 8,128,577 | DecodeCost | 1,468,435 | 66.9 |
+| T6 8 MiB of var() definitions in one rule | 8,386,671 | DecodeCost, budget spent | 10,000,000 | 381.0 |
+| T6 8 MiB of class rules defining and using var() | 8,386,679 | DecodeCost, budget spent | 10,000,000 | 639.4 |
+| T6 8 MiB of marker rules over 20,000 groups | 8,466,645 | Malformed | 28,855 | 39.3 |
+| T2a 4 MiB of url(#x) class rules, elements sharing id x | 6,382,320 | DecodeCost | 5,919,805 | 610.3 |
+| Prelude of 300,000 classes naming url() targets | 8,386,571 | None | 3,828,281 | 379.7 |
+| 8 MiB definition of one million var() references | 8,386,537 | DecodeCost, budget spent | 10,000,000 | 200.6 |
+| 199,000 groups using var() in a style attribute | 5,174,096 | None | 3,184,050 | 143.8 |
 
-The rows after the first three are the calibration's three 8 MiB documents, each generator kind grown to the 8 MiB cap (the probe's search for N_desc's size stopped at 2.6 MB), the red team's shapes (T_varrule and T_dupid grown to the cap, T5 and T6 rebuilt from its harness, and its T2a grown to 6.4 MB), and three of this run's own (one prelude of 300,000 classes naming url() targets, one var() definition of a million references, and 199,000 groups using var() in a style attribute); the slowest check is 467 ms (the red team's url() class rules over elements sharing an id, 6.4 MB), and 525 ms in an earlier run of the same table. The red team's 8 MiB of marker rules is 8,466,645 bytes, past the reader's 8 MiB cap, and is refused as malformed before any count.
+The rows after the first three are the calibration's three 8 MiB documents, each generator kind grown to the 8 MiB cap (the probe's search for N_desc's size stopped at 2.6 MB), the red team's shapes (T_varrule and T_dupid grown to the cap, T5 and T6 rebuilt from its harness, and its T2a grown to 6.4 MB), and three of this run's own (one prelude of 300,000 classes naming url() targets, one var() definition of a million references, and 199,000 groups using var() in a style attribute); the slowest check is 639 ms (the red team's class rules defining and using `var()`, refused for the budget), and 610 ms for one that finishes (its url() class rules over elements sharing an id, 6.4 MB). The red team's 8 MiB of marker rules is 8,466,645 bytes, past the reader's 8 MiB cap, and is refused as malformed before any count.
 
 ## 7. What the source reading changes for the guard design
 
@@ -451,7 +451,7 @@ The rows after the first three are the calibration's three 8 MiB documents, each
 
 ## 8. The guard's own verdicts on every regenerated document
 
-`guard-estimates.csv` in this folder holds what CB-29's guard says (its verdict, its estimate and each of the four terms, and the steps it took) for each document this record decoded (174) and each document follow-up 2 decoded (139), regenerated byte for byte by the generators or read from the core outputs and the repository's pie. It was generated with the guard of 8edf1636, after the red team's fixes. A document is refused at a limit when the guard refuses it for anything (a cap, or its estimate past the limit). No check spent its step budget.
+`guard-estimates.csv` in this folder holds what CB-29's guard says (its verdict, its estimate and each of the four terms, and the steps it took) for each document this record decoded (174) and each document follow-up 2 decoded (139), regenerated byte for byte by the generators or read from the core outputs and the repository's pie. It was generated with the guard of 8edf1636, after the red team's fixes, and again with that of 06f0fb2c, after Codex's review (section 9), which moved no estimate and no verdict; the file holds 06f0fb2c's, whose steps are higher (at most 2,401,485). A document is refused at a limit when the guard refuses it for anything (a cap, or its estimate past the limit). No check spent its step budget.
 
 **Step 0 documents** (174):
 
@@ -474,6 +474,34 @@ The rows after the first three are the calibration's three 8 MiB documents, each
 | 10 s | 0 (0) | 20 (0) | 37 | 131x |
 
 The margin is the limit over the largest estimate of a real document, 76.4 ms (mermaid sequence n=1093). Every step 0 estimate equals `est2Ms` within 0.1% but two: A_desc R=2000 E=5000 and A_desc R=5000 E=10000 are 0.82 of it, since a branch of one descendant step now counts only the descendants of its left compound's matches (the red team's m2). That admits the first at 2 s (it decodes in 1.8 s) and the second at 10 s (9.7 s). The four refused under 1 s at a 1 s limit are follow-up 2's N_nth Q=2 R=100 N=10000 (195 ms, estimated at 1.12 s) and N_desc K=2, 3 and 4 R=100 F=1 N=10000 (216 to 264 ms, 1.30 s each), where the selector counts err wide; the two admitted past 5 s at a 5 s limit are A_compound R=5000 E=10000 (5.3 s, estimated at 4.7 s) and D_marker M=100 V=10 L=1000 (5.2 s, 2.7 s).
+
+## 9. Equivalent inputs
+
+Codex's review of CB-29 (stage 4) wrote documents two ways that render alike and found the second's estimate far lower. The guard now reads each of these as the first:
+
+- A marker named in a `var()` fallback, at any depth (`marker-mid:var(--undefined, url(#m))`), in a presentation attribute, a style attribute or a stylesheet rule, or in a custom property's own fallback.
+- A paint drawn through a custom property (`--p:url(#pat)` and `fill:var(--p)`), through a chain of them or a definition's fallback, in an attribute, a style attribute or a rule: `Measure` reaches the targets as if the value named them, through one node per component of properties, so a cycle of names is no render cycle.
+- A path's `d` drawn through a custom property (`--p:path("...")` and `d:var(--p)`), inline, in a stylesheet, through a chain or a fallback.
+- A marker a `use` sets, which the shapes of its instance inherit; every render of a shape takes its widest context.
+- A chain of `var()` fallbacks beside another element's literal definitions of the same names: a lookup keeps its resolving and failing outcomes apart, so a literal never erases a failure's fallback cost.
+- A custom property's name, or an id in `url()`, written with a CSS escape (`\E000 `, `\1F600 `, `\;`).
+
+Each has a row of `RefusesEachSlowDocumentForItsCost` or `RefusesEachDocumentPastACap` and a mutation. These were looked for and are not followed (an accepted-risk register):
+
+| route | example | why it is open |
+|---|---|---|
+| paint inherited by descendants or a use's instance | `<g fill='url(#pat)'>` over 10,000 `<rect/>` counts the pattern once; the same `fill` on each rect is refused for its renders | `Measure` counts a `url()` per element that writes it; whether Svg.Skia records a pattern per painted shape is not measured |
+| `var()` lookups in a use's instance | one rect with `stroke-dasharray:var(--v15)` drawn by 2,000 uses counts its lookups once | whether a clone resolves its `var()` again per render under a stylesheet is not measured |
+| CSS escapes in a presentation attribute | `marker-mid='u\72l(#m)'`, `fill='var(--a\;b)'` | `Measure` reads attribute values unescaped, the estimate's marker, `var()` and `d` readers raw; whether Svg.Custom unescapes them is not measured |
+| `var()` in the `d` attribute | `<path d='var(--p)'>` | path data is not CSS; whether Svg.Custom resolves `var()` there is not measured |
+| selector work inside a pseudo-class's argument | `:is(g g g g) rect`, `:not(...)`, `:has(...)`, `:nth-child(n of .a)` | the steps inside the argument are not counted; ExCSS 4.3.1's support is not measured |
+| CSS nesting | `g{& g{& rect{fill:red}}}` | nested rules are not read; ExCSS 4.3.1's support is not measured |
+| `@property` initial values | `@property --m{initial-value:url(#m)}` | not read; Svg.Custom's support is not measured |
+| fragment spellings | `url(%23m)`, `url(this.svg#m)` | not counted; whether Svg resolves them to this document is not measured |
+| markers inside marker content | a marked path inside a marker | not multiplied (departure D4; follow-up 2 measured them not replayed) |
+| a use with both `href` and `xlink:href` | `<use xlink:href='#a' href='#b'>` | the instance size reads the last one read |
+
+Checked and not a route: an `<image>` whose `href` is an SVG data URI. Inside one, a document that decodes alone in 1.9 s (C_double D=14 E=600) decodes in 6 ms, as a trivial one does.
 
 ## Not verified
 

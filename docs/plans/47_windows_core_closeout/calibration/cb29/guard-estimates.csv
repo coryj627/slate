@@ -1,314 +1,314 @@
 set,label,kind,bytes,actualMs,verdict,estimateMs,stylesheetMs,useMs,varMs,markerMs,steps
-step0,D_marker M=500 V=1000,D_marker,31964,1293,None,1326.1,0.0,0.0,0.0,1326.1,7562
-step0,A_type R=300 E=1000,A_type,47971,352,None,338.5,338.5,0.0,0.0,0.0,16224
-step0,A_class R=300 E=3000,A_class,172001,206,None,88.6,88.6,0.0,0.0,0.0,49523
-step0,A_class R=1000 E=3000,A_class,186071,293,None,288.3,288.3,0.0,0.0,0.0,53023
-step0,A_class R=2000 E=5000,A_class,321511,913,None,949.5,949.5,0.0,0.0,0.0,90023
-step0,A_class R=5000 E=6000,A_class,440341,2622,DecodeCost,2834.6,2834.6,0.0,0.0,0.0,121023
-step0,A_class R=10000 E=10000,A_class,772331,9223,DecodeCost,9407.2,9407.2,0.0,0.0,0.0,210023
-step0,A_class R=5000 E=20000,A_class,1243401,10087,DecodeCost,9394.0,9394.0,0.0,0.0,0.0,345023
-step0,A_class R=20000 E=5000,A_class,693731,8475,DecodeCost,9448.9,9448.9,0.0,0.0,0.0,180023
-step0,A_class R=15000 E=20000,A_class,1455621,28740,DecodeCost,28140.9,28140.9,0.0,0.0,0.0,395023
-step0,A_class R=25000 E=25000,A_class,1962531,61842,DecodeCost,58580.4,58580.4,0.0,0.0,0.0,525023
-step0,A_type R=100 E=1000,A_type,44371,141,None,112.8,112.8,0.0,0.0,0.0,15424
-step0,A_type R=1000 E=1000,A_type,60571,1008,None,1128.2,1128.2,0.0,0.0,0.0,19024
-step0,A_type R=1000 E=3000,A_type,146511,2687,DecodeCost,3375.2,3375.2,0.0,0.0,0.0,49024
-step0,A_type R=3000 E=3000,A_type,182511,7954,DecodeCost,10125.6,10125.6,0.0,0.0,0.0,57024
-step0,A_type R=300 E=30000,A_type,1308751,10863,DecodeCost,10112.9,10112.9,0.0,0.0,0.0,451224
-step0,A_type R=2000 E=10000,A_type,470551,18332,DecodeCost,22479.4,22479.4,0.0,0.0,0.0,158024
-step0,A_type R=4000 E=12000,A_type,591691,49278,DecodeCost,53946.7,53946.7,0.0,0.0,0.0,196024
-step0,A_type R=4200 E=1700,A_type,148075,6505,DecodeCost,8041.5,8041.5,0.0,0.0,0.0,42324
-step0,A_star_g R=3000 E=13000,A_star_g,97151,40513,DecodeCost,43836.7,43836.7,0.0,0.0,0.0,155026
-step0,A_type R=12500 E=5000,A_type,440951,57041,DecodeCost,70277.3,70277.3,0.0,0.0,0.0,125024
-step0,A_unclassed R=2000 E=5000,A_unclassed,314321,828,None,944.4,944.4,0.0,0.0,0.0,85023
-step0,A_unclassed R=10000 E=10000,A_unclassed,752402,8825,DecodeCost,9396.9,9396.9,0.0,0.0,0.0,200023
-step0,A_unmatched R=2000 E=5000,A_unmatched,254841,581,None,944.4,944.4,0.0,0.0,0.0,80023
-step0,A_unmatched R=10000 E=10000,A_unmatched,633441,5888,DecodeCost,9396.9,9396.9,0.0,0.0,0.0,190023
-step0,A_attr R=1000 E=3000,A_attr,195071,246,None,288.3,288.3,0.0,0.0,0.0,71033
-step0,A_attr R=3000 E=6000,A_attr,427341,1260,None,1703.2,1703.2,0.0,0.0,0.0,147033
-step0,A_attr R=5000 E=10000,A_attr,716221,3727,DecodeCost,4708.7,4708.7,0.0,0.0,0.0,245033
-step0,A_compound R=2000 E=5000,A_compound,329511,945,None,949.5,949.5,0.0,0.0,0.0,90023
-step0,A_compound R=5000 E=10000,A_compound,691221,5256,DecodeCost,4708.7,4708.7,0.0,0.0,0.0,185023
-step0,A_desc R=2000 E=5000,A_desc,325518,1819,None,1549.7,1549.7,0.0,0.0,0.0,94295
-step0,A_desc R=5000 E=10000,A_desc,681228,9688,DecodeCost,7709.2,7709.2,0.0,0.0,0.0,195295
-step0,A_list R=500 S=4 E=5000,A_list,311911,968,None,942.8,942.8,0.0,0.0,0.0,87023
-step0,A_list R=2500 S=4 E=10000,A_list,708171,9335,DecodeCost,9373.4,9373.4,0.0,0.0,0.0,195023
-step0,A_decls R=2000 D=8 E=5000,A_decls,563511,1006,None,985.6,985.6,0.0,0.0,0.0,104023
-step0,A_use R=300 G=4 U=300,A_use,15083,392,None,428.8,10.0,418.8,0.0,0.0,7014
-step0,A_use R=1000 G=4 U=1000,A_use,50223,3796,DecodeCost,4488.7,98.8,4390.0,0.0,0.0,23114
-step0,A_use R=2000 G=4 U=2000,A_use,101923,13964,DecodeCost,17718.4,384.5,17333.9,0.0,0.0,46114
-step0,A_use R=1000 G=40 U=1000,A_use,52140,6782,DecodeCost,7697.8,102.2,7595.6,0.0,0.0,23690
-step0,A_use R=100 G=4 U=10000,A_use,316173,32478,DecodeCost,29904.2,94.0,29810.2,0.0,0.0,180614
-step0,A_use R=10000 G=4 U=100,A_use,202243,3381,DecodeCost,4190.2,146.0,4044.3,0.0,0.0,51914
-step0,A_use R=3000 G=4 U=3000,A_use,153023,33397,DecodeCost,39689.2,857.2,38831.9,0.0,0.0,69114
-step0,A_use_nostyle G=4 U=3000,A_use_nostyle,94134,180,None,0.0,0.0,0.0,0.0,0.0,51098
-step0,C_root R=1000 E=2000,C_root,148746,291,None,193.9,193.6,0.0,0.4,0.0,58028
-step0,C_root R=3000 E=5000,C_root,403406,1273,None,1422.5,1421.5,0.0,1.0,0.0,158028
-step0,C_root R=10000 E=10000,C_root,980116,9639,DecodeCost,9410.7,9408.7,0.0,1.9,0.0,420028
-step0,C_root_inline R=3000 E=5000,C_root_inline,390626,121,None,3.4,2.4,0.0,1.0,0.0,141028
-step0,C_inline E=10000,C_inline,774536,129,None,1.9,0.0,0.0,1.9,0.0,180028
-step0,C_per_rule R=1000 E=2000,C_per_rule,142961,378,None,381.3,380.9,0.0,0.4,0.0,42039
-step0,C_per_rule R=3000 E=5000,C_per_rule,381621,2557,DecodeCost,2825.6,2824.6,0.0,1.0,0.0,110039
-step0,C_per_rule R=8000 E=10000,C_per_rule,835221,14650,DecodeCost,15010.9,15009.0,0.0,1.9,0.0,240039
-step0,C_rule_all R=500 E=2000,C_rule_all,92709,351,None,502.0,501.6,0.0,0.4,0.0,38535
-step0,C_rule_all R=2000 E=5000,C_rule_all,246870,2935,DecodeCost,5004.9,5003.9,0.0,1.0,0.0,109035
-step0,C_rule_all R=5000 E=10000,C_rule_all,513470,15729,DecodeCost,25009.7,25007.8,0.0,1.9,0.0,235035
-step0,C_typevar R=300 E=1000,C_typevar,51871,155,None,415.2,357.6,0.0,57.6,0.0,17740
-step0,C_typevar R=1000 E=3000,C_typevar,159511,1395,DecodeCost,4141.9,3565.9,0.0,576.0,0.0,54040
-step0,C_typevar R=3000 E=5000,C_typevar,308951,7388,DecodeCost,20699.6,17819.6,0.0,2880.0,0.0,102040
-step0,C_typedecl R=1000 E=3000,C_typedecl,148421,3038,DecodeCost,2068.2,2067.7,0.0,0.6,0.0,65032
-step0,C_typedecl R=3000 E=5000,C_typedecl,277861,13428,DecodeCost,10323.6,10322.6,0.0,1.0,0.0,135032
-step0,C_chain D=30 E=1000,C_chain,67080,44,None,0.4,0.2,0.0,0.2,0.0,18185
-step0,C_chain D=100 E=5000,C_chain,342651,185,None,2.0,1.0,0.0,1.0,0.0,88565
-step0,C_nest D=100 E=5000 B=10,C_nest,337968,158,None,2.1,1.1,0.0,1.0,0.0,100045
-step0,C_double D=15 E=1,C_double,630,26,None,6.3,0.0,0.0,6.3,0.0,828
-step0,C_double D=15 E=10,C_double,1321,159,None,62.9,0.0,0.0,62.9,0.0,990
-step0,C_double D=15 E=100,C_double,8326,801,None,629.2,0.0,0.0,629.1,0.0,2610
-step0,C_double D=15 E=1000,C_double,78974,7432,DecodeCost,6291.7,0.2,0.0,6291.5,0.0,18810
-step0,C_double D=14 E=1000,C_double,78946,3187,DecodeCost,3145.9,0.2,0.0,3145.7,0.0,18773
-step0,C_double D=15 E=5000,C_double,396354,34785,DecodeCost,31458.2,0.9,0.0,31457.3,0.0,90810
-step0,C_double D=16 E=1000,C_double,79002,31,None,0.4,0.2,0.0,0.2,0.0,17845
-step0,C_kary K=3 D=12 E=1,C_kary,668,102,None,102.0,0.0,0.0,102.0,0.0,837
-step0,C_kary K=3 D=14 E=1,C_kary,746,823,None,918.3,0.0,0.0,918.3,0.0,924
-step0,C_kary K=3 D=16 E=1,C_kary,824,6,None,0.0,0.0,0.0,0.0,0.0,998
-step0,C_kary K=4 D=10 E=1,C_kary,690,190,None,201.3,0.0,0.0,201.3,0.0,853
-step0,C_kary K=4 D=11 E=1,C_kary,740,600,None,805.3,0.0,0.0,805.3,0.0,910
-step0,D_marker M=100 V=1000,D_marker,11164,239,None,307.9,0.0,0.0,0.0,307.9,1562
-step0,D_marker M=1000 V=2000,D_marker,64124,4708,DecodeCost,5200.4,0.0,0.0,0.0,5200.4,15062
-step0,D_marker M=1500 V=4000,D_marker,101944,14985,DecodeCost,15498.1,0.0,0.0,0.0,15498.1,22562
-step0,D_marker M=2000 V=6000,D_marker,141374,30960,DecodeCost,30891.8,0.0,0.0,0.0,30891.8,30062
-step0,D_marker M=5000 V=500,D_marker,265454,5716,DecodeCost,6383.9,0.0,0.0,0.0,6383.9,75062
-step0,D_marker M=200 V=12500,D_marker,90654,6434,DecodeCost,7038.2,0.0,0.0,0.0,7038.2,3062
-step0,D_marker M=3000 V=8000,D_marker,207574,61804,DecodeCost,61572.3,0.0,0.0,0.0,61572.3,45062
-step0,D_marker M=2000 V=10000,D_marker,168274,50028,DecodeCost,51489.9,0.0,0.0,0.0,51489.9,30062
-step0,D_paths M=1 N=1000,D_paths,58724,74,None,61.2,0.0,0.0,0.0,61.2,17059
-step0,D_paths M=1 N=3000,D_paths,176664,181,None,183.5,0.0,0.0,0.0,183.5,51059
-step0,D_paths M=1 N=10000,D_paths,594704,802,None,611.5,0.0,0.0,0.0,611.5,170059
-step0,D_paths M=1 N=20000,D_paths,1189104,2247,None,1223.0,0.0,0.0,0.0,1223.0,340059
-step0,D_paths M=10 N=1000,D_paths,59183,118,None,107.0,0.0,0.0,0.0,107.0,17194
-step0,D_paths M=10 N=3000,D_paths,177123,427,None,321.0,0.0,0.0,0.0,321.0,51194
-step0,D_paths M=10 N=10000,D_paths,595163,3405,None,1070.2,0.0,0.0,0.0,1070.2,170194
-step0,D_paths M=40 N=1000,D_paths,60713,228,None,259.9,0.0,0.0,0.0,259.9,17644
-step0,D_paths M=40 N=3000,D_paths,178653,1163,None,779.7,0.0,0.0,0.0,779.7,51644
-step0,D_paths M=1 N=20000 nomark=1,D_paths,769104,418,None,0.0,0.0,0.0,0.0,0.0,240053
-step0,D_use M=500 V=1000,D_use,31996,1674,None,1331.2,0.0,0.0,0.0,1331.2,7593
-step0,D_use M=1500 V=2000,D_use,90526,11797,DecodeCost,7757.3,0.0,0.0,0.0,7757.3,22593
-step0,D_css M=500 V=1000,D_css,31986,1377,None,1326.2,0.1,0.0,0.0,1326.1,7586
-step0,D_shorthand M=500 V=1000,D_shorthand,31966,1219,None,1328.8,0.0,0.0,0.0,1328.8,7562
-step0,D_inherit M=500 V=1000,D_inherit,31971,1231,None,1326.1,0.0,0.0,0.0,1326.1,7572
-step0,D_path M=500 V=1000,D_path,31958,1276,None,1326.1,0.0,0.0,0.0,1326.1,7562
-step0,D_start M=500 V=1000,D_start,31987,10,None,3.9,0.0,0.0,0.0,3.9,7567
-step0,D_circles_inherit M=100 N=1000,D_circles_inherit,37027,2577,None,1798.9,0.0,0.0,0.0,1798.9,14569
-step0,D_rects_inherit M=100 N=1000,D_rects_inherit,47917,2594,None,1798.9,0.0,0.0,0.0,1798.9,15569
-step0,D_use_poly M=100 V=1000 U=10,D_use_poly,11462,2937,DecodeCost,3387.4,0.0,0.0,0.0,3387.4,1738
-step0,D_use_poly M=100 V=1000 U=30,D_use_poly,12042,8772,DecodeCost,9546.4,0.0,0.0,0.0,9546.4,2078
-step0,A_use R=1 G=4 U=1000,A_use,31350,429,None,363.6,0.1,363.5,0.0,0.0,18119
-step0,A_use R=1 G=4 U=3000,A_use,94150,2759,DecodeCost,2569.8,0.3,2569.5,0.0,0.0,54119
-step0,A_use R=1 G=4 U=10000,A_use,314400,30305,DecodeCost,25821.0,0.9,25820.0,0.0,0.0,180119
-step0,A_use R=1 G=4 U=3000 X=20000,A_use,962950,16568,DecodeCost,17361.7,2.2,17359.5,0.0,0.0,334119
-step0,A_use R=1 G=40 U=3000,A_use,96037,5159,DecodeCost,5001.3,0.3,5000.9,0.0,0.0,54695
-step0,A_use_nostyle G=4 U=10000,A_use_nostyle,314384,2020,None,0.0,0.0,0.0,0.0,0.0,170098
-step0,G_scatter N=1000,G_scatter,79973,265,None,275.9,2.2,273.7,0.0,0.0,20075
-step0,G_scatter N=3000,G_scatter,238873,1752,DecodeCost,2306.6,6.5,2300.1,0.0,0.0,60075
-step0,G_scatter N=10000,G_scatter,795025,17438,DecodeCost,24943.5,21.6,24922.0,0.0,0.0,200075
-step0,G_scatter N=10000 nostyle=1,G_scatter,794950,998,None,0.0,0.0,0.0,0.0,0.0,180051
-step0,D_marker M=10 V=10 L=1000,D_marker,126465,553,None,659.9,0.0,0.0,0.0,659.9,18194
-step0,D_marker M=10 V=8002 L=1,D_marker,50644,411,None,631.9,0.0,0.0,0.0,631.9,212
-step0,D_marker M=100 V=10 L=1000,D_marker,131125,5219,DecodeCost,2723.8,0.0,0.0,0.0,2723.8,19544
-step0,D_marker M=100 V=8002 L=1,D_marker,55304,2541,DecodeCost,2466.7,0.0,0.0,0.0,2466.7,1562
-step0,D_paths M=1 N=10000 X=20000,D_paths,1463504,1283,None,611.5,0.0,0.0,0.0,611.5,450059
-step0,D_paths M=1 N=5000,D_paths,296104,362,None,305.8,0.0,0.0,0.0,305.8,85059
-step0,D_paths M=100 N=1000,D_paths,63773,603,None,565.7,0.0,0.0,0.0,565.7,18544
-step0,D_rects_inherit M=10 N=3000,D_rects_inherit,129197,1726,None,1268.9,0.0,0.0,0.0,1268.9,42219
-step0,D_circles_inherit M=10 N=3000,D_circles_inherit,96327,1757,None,1268.9,0.0,0.0,0.0,1268.9,39219
-step0,A_star_rect R=15000 E=8000,A_star_rect,449151,135593,DecodeCost,134921.2,134921.2,0.0,0.0,0.0,164026
-step0,Big_rects N=150092,Big_rects,8278686,2449,None,0.0,0.0,0.0,0.0,0.0,2251392
-step0,Big_points N=1119023,Big_points,8336588,555,None,0.0,0.0,0.0,0.0,0.0,25
-step0,Big_style N=383126,Big_style,8317852,1834,None,1831.5,1831.5,0.0,0.0,0.0,1915667
-step0,Big_style N=40000,Big_style,829080,153,None,191.2,191.2,0.0,0.0,0.0,200037
-step0,A_plain E=50000,A_plain,2922136,653,None,0.0,0.0,0.0,0.0,0.0,750012
-step0,C_double D=16 E=1,C_double,658,8,None,0.0,0.0,0.0,0.0,0.0,862
-step0,C_double D=18 E=1,C_double,714,6,None,0.0,0.0,0.0,0.0,0.0,932
-step0,C_double D=14 E=100,C_double,8298,417,None,314.6,0.0,0.0,314.6,0.0,2573
-step0,D_rects_attr M=100 N=100,D_rects_attr,16097,164,None,179.9,0.0,0.0,0.0,179.9,4444
-step0,D_circles_inherit M=100 N=100,D_circles_inherit,8570,140,None,179.9,0.0,0.0,0.0,179.9,2869
-step0,D_marker M=100 V=1000 L=10,D_marker,63615,3053,DecodeCost,3079.5,0.0,0.0,0.0,3079.5,1724
-step0,D_paths M=1 N=1000 nomark=1,D_paths,37724,26,None,0.0,0.0,0.0,0.0,0.0,12053
-step0,D_paths M=1 N=3000 nomark=1,D_paths,113664,67,None,0.0,0.0,0.0,0.0,0.0,36053
-step0,D_paths M=1 N=10000 nomark=1,D_paths,384704,216,None,0.0,0.0,0.0,0.0,0.0,120053
-step0,A_plain E=10000,A_plain,584536,123,None,0.0,0.0,0.0,0.0,0.0,150012
-step0,A_plain E=20000,A_plain,1168936,206,None,0.0,0.0,0.0,0.0,0.0,300012
-step0,C_double D=16 E=100,C_double,8354,10,None,0.1,0.0,0.0,0.0,0.0,2545
-step0,C_double D=13 E=100,C_double,8270,209,None,157.3,0.0,0.0,157.3,0.0,2534
-step0,D_paths M=1 N=20000 group=100,D_paths,1190504,2930,None,1223.0,0.0,0.0,0.0,1223.0,342059
-step0,D_paths M=1 N=20000 group=100 nomark=1,D_paths,770504,249,None,0.0,0.0,0.0,0.0,0.0,242053
-step0,D_paths M=1 N=10000 group=100,D_paths,595404,816,None,611.5,0.0,0.0,0.0,611.5,171059
-step0,C_triple D=8 E=1,C_triple,518,12,None,1.3,0.0,0.0,1.3,0.0,627
-step0,C_triple D=10 E=1,C_triple,590,33,None,11.3,0.0,0.0,11.3,0.0,738
-step0,C_triple D=11 E=1,C_triple,629,89,None,34.0,0.0,0.0,34.0,0.0,789
-step0,C_triple D=12 E=1,C_triple,668,231,None,102.0,0.0,0.0,102.0,0.0,837
-step0,real guardtest_00.svg,real,154,0,None,0.0,0.0,0.0,0.0,0.0,24
-step0,real guardtest_01.svg,real,368,1,None,0.0,0.0,0.0,0.0,0.0,139
-step0,real guardtest_02.svg,real,276,1,None,0.1,0.0,0.0,0.0,0.1,68
-step0,real guardtest_03.svg,real,5888,8,None,0.0,0.0,0.0,0.0,0.0,4559
-step0,real guardtest_04.svg,real,571,1,None,0.0,0.0,0.0,0.0,0.0,233
-step0,real guardtest_05.svg,real,306,1,None,0.0,0.0,0.0,0.0,0.0,369
-step0,real guardtest_06.svg,real,1932,6,None,0.0,0.0,0.0,0.0,0.0,2564
-step0,real guardtest_07.svg,real,206,0,None,0.0,0.0,0.0,0.0,0.0,32
-step0,real guardtest_08.svg,real,281,1,None,0.0,0.0,0.0,0.0,0.0,41
-step0,real guardtest_09.svg,real,185,0,None,0.0,0.0,0.0,0.0,0.0,46
-step0,real guardtest_10.svg,real,40033,16,None,0.0,0.0,0.0,0.0,0.0,13058
-step0,real guardtest_11.svg,real,210,1,None,0.0,0.0,0.0,0.0,0.0,40
-step0,real guardtest_12.svg,real,252,0,None,0.0,0.0,0.0,0.0,0.0,41
-step0,real repo_demo-vault_pie.svg,real,992,2,None,0.0,0.0,0.0,0.0,0.0,78
-step0,real mermaid_class_largest_n476.svg,real,823068,731,None,29.0,0.0,0.0,0.0,29.0,95718
-step0,real mermaid_class_typical_n20.svg,real,34944,70,None,1.2,0.0,0.0,0.0,1.2,4214
-step0,real mermaid_er_largest_n451.svg,real,2080917,755,None,0.0,0.0,0.0,0.0,0.0,239647
-step0,real mermaid_er_typical_n20.svg,real,92521,24,None,0.0,0.0,0.0,0.0,0.0,10786
-step0,real mermaid_flowchart_largest_n643.svg,real,627869,212,None,0.0,0.0,0.0,0.0,0.0,67252
-step0,real mermaid_flowchart_styled_largest_n904.svg,real,774702,293,None,0.0,0.0,0.0,0.0,0.0,86031
-step0,real mermaid_flowchart_styled_typical_n20.svg,real,17984,7,None,0.0,0.0,0.0,0.0,0.0,2051
-step0,real mermaid_flowchart_typical_n20.svg,real,20354,10,None,0.0,0.0,0.0,0.0,0.0,2239
-step0,real mermaid_sequence_largest_n1093.svg,real,1081889,434,None,76.4,0.0,0.0,0.0,76.4,112151
-step0,real mermaid_sequence_typical_n20.svg,real,25072,51,None,1.3,0.0,0.0,0.0,1.3,2794
-step0,real mermaid_state_largest_n501.svg,real,745789,322,None,38.4,0.0,0.0,0.0,38.4,79929
-step0,real mermaid_state_typical_n20.svg,real,31735,16,None,1.7,0.0,0.0,0.0,1.7,3472
-followup2,D_nested M=10 VO=100 VI=100,D_nested,1974,11,None,23.8,0.0,0.0,0.0,23.8,252
-followup2,D_nested M=10 VO=500 VI=100,D_nested,4264,32,None,57.4,0.0,0.0,0.0,57.4,252
-followup2,D_nested M=10 VO=1000 VI=200,D_nested,7634,73,None,115.3,0.0,0.0,0.0,115.3,252
-followup2,D_nested M=10 VO=2000 VI=200,D_nested,13414,157,None,199.4,0.0,0.0,0.0,199.4,252
-followup2,D_nested M=10 VO=1000 VI=200 IM=0,D_nested,7612,81,None,55.9,0.0,0.0,0.0,55.9,241
-followup2,D_nested M=10 VO=2000 VI=200 IM=0,D_nested,13392,135,None,112.0,0.0,0.0,0.0,112.0,241
-followup2,D_marker M=500 V=1000,D_marker,31964,1811,None,1326.1,0.0,0.0,0.0,1326.1,7562
-followup2,D_var M=500 V=1000,D_var,32003,1826,None,1326.3,0.2,0.0,0.0,1326.1,7613
-followup2,D_varinline M=500 V=1000,D_varinline,31983,1765,None,1326.1,0.0,0.0,0.0,1326.1,7582
-followup2,C_fb F=1 D=10 E=1,C_fb,500,5,None,0.0,0.0,0.0,0.0,0.0,628
-followup2,C_fb F=1 D=10 E=10,C_fb,1191,5,None,0.0,0.0,0.0,0.0,0.0,790
-followup2,C_fb F=1 D=10 E=100,C_fb,8196,6,None,0.0,0.0,0.0,0.0,0.0,2410
-followup2,C_fb F=1 D=15 E=1,C_fb,645,4,None,0.0,0.0,0.0,0.0,0.0,948
-followup2,C_fb F=1 D=15 E=10,C_fb,1336,5,None,0.0,0.0,0.0,0.0,0.0,1110
-followup2,C_fb F=1 D=15 E=100,C_fb,8341,7,None,0.1,0.0,0.0,0.0,0.0,2730
-followup2,C_fb F=1 D=16 E=1,C_fb,674,6,None,0.5,0.0,0.0,0.5,0.0,1014
-followup2,C_fb F=1 D=16 E=10,C_fb,1365,15,None,5.0,0.0,0.0,5.0,0.0,1167
-followup2,C_fb F=1 D=16 E=100,C_fb,8370,88,None,49.6,0.0,0.0,49.6,0.0,2697
-followup2,C_fb F=1 D=20 E=1,C_fb,790,5,None,0.5,0.0,0.0,0.5,0.0,1282
-followup2,C_fb F=1 D=20 E=10,C_fb,1481,8,None,5.0,0.0,0.0,5.0,0.0,1435
-followup2,C_fb F=1 D=20 E=100,C_fb,8486,36,None,49.6,0.0,0.0,49.6,0.0,2965
-followup2,C_fb F=1 D=40 E=1,C_fb,1370,6,None,0.5,0.0,0.0,0.5,0.0,2622
-followup2,C_fb F=1 D=40 E=10,C_fb,2061,8,None,5.0,0.0,0.0,5.0,0.0,2775
-followup2,C_fb F=1 D=40 E=100,C_fb,9066,37,None,49.7,0.0,0.0,49.6,0.0,4305
-followup2,C_fb F=2 D=10 E=1,C_fb,600,5,None,0.0,0.0,0.0,0.0,0.0,638
-followup2,C_fb F=2 D=10 E=10,C_fb,1291,5,None,0.0,0.0,0.0,0.0,0.0,800
-followup2,C_fb F=2 D=10 E=100,C_fb,8296,7,None,0.0,0.0,0.0,0.0,0.0,2420
-followup2,C_fb F=2 D=15 E=1,C_fb,800,5,None,0.0,0.0,0.0,0.0,0.0,963
-followup2,C_fb F=2 D=15 E=10,C_fb,1491,5,None,0.0,0.0,0.0,0.0,0.0,1125
-followup2,C_fb F=2 D=15 E=100,C_fb,8496,7,None,0.1,0.0,0.0,0.0,0.0,2745
-followup2,C_fb F=2 D=16 E=1,C_fb,840,5,None,0.5,0.0,0.0,0.5,0.0,1030
-followup2,C_fb F=2 D=16 E=10,C_fb,1531,8,None,5.0,0.0,0.0,5.0,0.0,1183
-followup2,C_fb F=2 D=16 E=100,C_fb,8536,39,None,49.6,0.0,0.0,49.6,0.0,2713
-followup2,C_fb F=2 D=20 E=1,C_fb,1000,5,None,0.5,0.0,0.0,0.5,0.0,1302
-followup2,C_fb F=2 D=20 E=10,C_fb,1691,8,None,5.0,0.0,0.0,5.0,0.0,1455
-followup2,C_fb F=2 D=20 E=100,C_fb,8696,37,None,49.6,0.0,0.0,49.6,0.0,2985
-followup2,C_fb F=2 D=40 E=1,C_fb,1800,6,None,0.5,0.0,0.0,0.5,0.0,2662
-followup2,C_fb F=2 D=40 E=10,C_fb,2491,9,None,5.0,0.0,0.0,5.0,0.0,2815
-followup2,C_fb F=2 D=40 E=100,C_fb,9496,39,None,49.7,0.0,0.0,49.6,0.0,4345
-followup2,N_unstyled T=1 Q=1 D=100 N=1000,N_unstyled,8485,17,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=1 Q=1 D=100 N=10000,N_unstyled,71485,141,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=1 Q=1 D=1000 N=1000,N_unstyled,20185,16,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=1 Q=1 D=1000 N=10000,N_unstyled,83185,70,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=1 Q=2 D=100 N=1000,N_unstyled,8575,41,None,50.2,50.2,0.0,0.0,0.0,11139
-followup2,N_unstyled T=1 Q=2 D=100 N=10000,N_unstyled,71575,408,None,501.9,501.9,0.0,0.0,0.0,110139
-followup2,N_unstyled T=1 Q=2 D=1000 N=1000,N_unstyled,22075,303,None,500.2,500.2,0.0,0.0,0.0,12039
-followup2,N_unstyled T=1 Q=2 D=1000 N=10000,N_unstyled,85075,3689,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,111039
-followup2,N_unstyled T=2 Q=1 D=100 N=1000,N_unstyled,9486,8,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=2 Q=1 D=100 N=10000,N_unstyled,81486,77,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=2 Q=1 D=1000 N=1000,N_unstyled,21186,10,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=2 Q=1 D=1000 N=10000,N_unstyled,93186,83,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=2 Q=2 D=100 N=1000,N_unstyled,9576,36,None,50.2,50.2,0.0,0.0,0.0,11139
-followup2,N_unstyled T=2 Q=2 D=100 N=10000,N_unstyled,81576,523,None,501.9,501.9,0.0,0.0,0.0,110139
-followup2,N_unstyled T=2 Q=2 D=1000 N=1000,N_unstyled,23076,310,None,500.2,500.2,0.0,0.0,0.0,12039
-followup2,N_unstyled T=2 Q=2 D=1000 N=10000,N_unstyled,95076,3311,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,111039
-followup2,N_unstyled T=3 Q=1 D=100 N=1000,N_unstyled,8485,11,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=3 Q=1 D=100 N=10000,N_unstyled,71485,80,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=3 Q=1 D=1000 N=1000,N_unstyled,20185,11,None,1.1,1.1,0.0,0.0,0.0,11040
-followup2,N_unstyled T=3 Q=1 D=1000 N=10000,N_unstyled,83185,81,None,11.2,11.2,0.0,0.0,0.0,110040
-followup2,N_unstyled T=3 Q=2 D=100 N=1000,N_unstyled,8575,73,None,50.2,50.2,0.0,0.0,0.0,11139
-followup2,N_unstyled T=3 Q=2 D=100 N=10000,N_unstyled,71575,420,None,501.9,501.9,0.0,0.0,0.0,110139
-followup2,N_unstyled T=3 Q=2 D=1000 N=1000,N_unstyled,22075,294,None,500.2,500.2,0.0,0.0,0.0,12039
-followup2,N_unstyled T=3 Q=2 D=1000 N=10000,N_unstyled,85075,3130,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,111039
-followup2,N_sib K=2 R=1 N=1000,N_sib,42596,61,None,15.5,15.5,0.0,0.0,0.0,15039
-followup2,N_sib K=2 R=1 N=3000,N_sib,128536,241,None,133.0,133.0,0.0,0.0,0.0,45037
-followup2,N_sib K=2 R=1 N=10000,N_sib,434576,1889,None,1451.4,1451.4,0.0,0.0,0.0,150037
-followup2,N_sib K=3 R=1 N=1000,N_sib,42603,5435,DecodeCost,7230.0,7230.0,0.0,0.0,0.0,15040
-followup2,N_sib K=3 R=1 N=3000,N_sib,128543,60014,DecodeCost,194662.7,194662.7,0.0,0.0,0.0,45038
-followup2,N_nth Q=1 R=1 N=1000,N_nth,42603,77,None,21.0,21.0,0.0,0.0,0.0,15029
-followup2,N_nth Q=1 R=1 N=3000,N_nth,128543,223,None,182.5,182.5,0.0,0.0,0.0,45029
-followup2,N_nth Q=1 R=1 N=10000,N_nth,434583,2235,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,150029
-followup2,N_nth Q=1 R=10 N=1000,N_nth,42891,242,None,210.5,210.5,0.0,0.0,0.0,15074
-followup2,N_nth Q=1 R=10 N=3000,N_nth,128831,1898,None,1825.3,1825.3,0.0,0.0,0.0,45074
-followup2,N_nth Q=1 R=10 N=10000,N_nth,434871,20641,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,150074
-followup2,N_nth Q=1 R=100 N=1000,N_nth,45771,2106,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,15524
-followup2,N_nth Q=1 R=100 N=3000,N_nth,131711,18743,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,45524
-followup2,N_nth Q=1 R=100 N=10000,N_nth,437751,60009,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,150524
-followup2,N_nth Q=2 R=1 N=1000,N_nth,42603,17,None,1.1,1.1,0.0,0.0,0.0,15028
-followup2,N_nth Q=2 R=1 N=3000,N_nth,128543,47,None,3.4,3.4,0.0,0.0,0.0,45028
-followup2,N_nth Q=2 R=1 N=10000,N_nth,434583,145,None,11.2,11.2,0.0,0.0,0.0,150028
-followup2,N_nth Q=2 R=10 N=1000,N_nth,42891,23,None,11.3,11.3,0.0,0.0,0.0,15064
-followup2,N_nth Q=2 R=10 N=3000,N_nth,128831,56,None,33.8,33.8,0.0,0.0,0.0,45064
-followup2,N_nth Q=2 R=10 N=10000,N_nth,434871,164,None,112.4,112.4,0.0,0.0,0.0,150064
-followup2,N_nth Q=2 R=100 N=1000,N_nth,45771,45,None,112.8,112.8,0.0,0.0,0.0,15424
-followup2,N_nth Q=2 R=100 N=3000,N_nth,131711,116,None,337.5,337.5,0.0,0.0,0.0,45424
-followup2,N_nth Q=2 R=100 N=10000,N_nth,437751,195,None,1124.0,1124.0,0.0,0.0,0.0,150424
-followup2,N_nth Q=3 R=1 N=1000,N_nth,42604,73,None,21.0,21.0,0.0,0.0,0.0,15029
-followup2,N_nth Q=3 R=1 N=3000,N_nth,128544,324,None,182.5,182.5,0.0,0.0,0.0,45029
-followup2,N_nth Q=3 R=1 N=10000,N_nth,434584,1831,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,150029
-followup2,N_nth Q=3 R=10 N=1000,N_nth,42901,189,None,210.5,210.5,0.0,0.0,0.0,15074
-followup2,N_nth Q=3 R=10 N=3000,N_nth,128841,1615,None,1825.3,1825.3,0.0,0.0,0.0,45074
-followup2,N_nth Q=3 R=10 N=10000,N_nth,434881,17169,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,150074
-followup2,N_nth Q=3 R=100 N=1000,N_nth,45871,1781,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,15524
-followup2,N_nth Q=3 R=100 N=3000,N_nth,131811,15096,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,45524
-followup2,N_nth Q=3 R=100 N=10000,N_nth,437851,60015,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,150524
-followup2,N_desc K=2 R=1 D=16,N_desc,938,6,None,0.1,0.1,0.0,0.0,0.0,841
-followup2,N_desc K=2 R=1 D=32,N_desc,1713,8,None,0.8,0.8,0.0,0.0,0.0,1649
-followup2,N_desc K=2 R=1 D=64,N_desc,3281,29,None,5.7,5.7,0.0,0.0,0.0,3828
-followup2,N_desc K=2 R=1 D=128,N_desc,6389,55,None,43.6,43.6,0.0,0.0,0.0,6528
-followup2,N_desc K=2 R=10 D=16,N_desc,1136,7,None,1.3,1.3,0.0,0.0,0.0,904
-followup2,N_desc K=2 R=10 D=32,N_desc,1911,14,None,8.0,8.0,0.0,0.0,0.0,1712
-followup2,N_desc K=2 R=10 D=64,N_desc,3479,63,None,57.0,57.0,0.0,0.0,0.0,3891
-followup2,N_desc K=2 R=10 D=128,N_desc,6587,449,None,435.9,435.9,0.0,0.0,0.0,6591
-followup2,N_desc K=2 R=100 D=16,N_desc,3116,17,None,13.1,13.1,0.0,0.0,0.0,1534
-followup2,N_desc K=2 R=100 D=32,N_desc,3891,77,None,79.5,79.5,0.0,0.0,0.0,2342
-followup2,N_desc K=2 R=100 D=64,N_desc,5459,609,None,570.2,570.2,0.0,0.0,0.0,4521
-followup2,N_desc K=2 R=100 D=128,N_desc,8567,4316,DecodeCost,4359.5,4359.5,0.0,0.0,0.0,7221
-followup2,N_desc K=3 R=1 D=16,N_desc,940,6,None,0.5,0.5,0.0,0.0,0.0,842
-followup2,N_desc K=3 R=1 D=32,N_desc,1715,12,None,6.0,6.0,0.0,0.0,0.0,1650
-followup2,N_desc K=3 R=1 D=64,N_desc,3283,94,None,89.6,89.6,0.0,0.0,0.0,3829
-followup2,N_desc K=3 R=1 D=128,N_desc,6391,1334,None,1385.7,1385.7,0.0,0.0,0.0,6529
-followup2,N_desc K=3 R=10 D=16,N_desc,1156,12,None,4.6,4.6,0.0,0.0,0.0,914
-followup2,N_desc K=3 R=10 D=32,N_desc,1931,66,None,60.3,60.3,0.0,0.0,0.0,1722
-followup2,N_desc K=3 R=10 D=64,N_desc,3499,872,None,895.7,895.7,0.0,0.0,0.0,3901
-followup2,N_desc K=3 R=10 D=128,N_desc,6607,13361,DecodeCost,13856.9,13856.9,0.0,0.0,0.0,6601
-followup2,N_desc K=3 R=100 D=16,N_desc,3316,49,None,45.8,45.8,0.0,0.0,0.0,1634
-followup2,N_desc K=3 R=100 D=32,N_desc,4091,599,None,603.3,603.3,0.0,0.0,0.0,2442
-followup2,N_desc K=3 R=100 D=64,N_desc,5659,8747,DecodeCost,8956.8,8956.8,0.0,0.0,0.0,4621
-followup2,N_desc K=3 R=100 D=128,N_desc,8767,60011,DecodeCost,138569.0,138569.0,0.0,0.0,0.0,7321
-followup2,N_desc K=4 R=1 D=16,N_desc,942,9,None,1.3,1.3,0.0,0.0,0.0,843
-followup2,N_desc K=4 R=1 D=32,N_desc,1717,106,None,37.0,37.0,0.0,0.0,0.0,1651
-followup2,N_desc K=4 R=1 D=64,N_desc,3285,1087,None,1121.4,1121.4,0.0,0.0,0.0,3830
-followup2,N_desc K=4 R=1 D=128,N_desc,6393,33007,DecodeCost,35074.4,35074.4,0.0,0.0,0.0,6530
-followup2,N_desc K=4 R=10 D=16,N_desc,1176,20,None,13.4,13.4,0.0,0.0,0.0,924
-followup2,N_desc K=4 R=10 D=32,N_desc,1951,363,None,369.7,369.7,0.0,0.0,0.0,1732
-followup2,N_desc K=4 R=10 D=64,N_desc,3519,10751,DecodeCost,11213.8,11213.8,0.0,0.0,0.0,3911
-followup2,N_desc K=4 R=10 D=128,N_desc,6627,60009,DecodeCost,350743.8,350743.8,0.0,0.0,0.0,6611
-followup2,N_desc K=4 R=100 D=16,N_desc,3516,139,None,134.3,134.3,0.0,0.0,0.0,1734
-followup2,N_desc K=4 R=100 D=32,N_desc,4291,3339,DecodeCost,3696.9,3696.9,0.0,0.0,0.0,2542
-followup2,N_desc K=4 R=100 D=64,N_desc,5859,60017,DecodeCost,112137.7,112137.7,0.0,0.0,0.0,4721
-followup2,N_desc K=2 R=1 F=1 N=10000,N_desc,434580,149,None,13.0,13.0,0.0,0.0,0.0,150301
-followup2,N_desc K=2 R=10 F=1 N=10000,N_desc,434778,178,None,130.4,130.4,0.0,0.0,0.0,150364
-followup2,N_desc K=2 R=100 F=1 N=10000,N_desc,436758,264,None,1304.0,1304.0,0.0,0.0,0.0,150994
-followup2,N_desc K=3 R=1 F=1 N=10000,N_desc,434582,58,None,13.0,13.0,0.0,0.0,0.0,150302
-followup2,N_desc K=3 R=10 F=1 N=10000,N_desc,434798,91,None,130.4,130.4,0.0,0.0,0.0,150374
-followup2,N_desc K=3 R=100 F=1 N=10000,N_desc,436958,216,None,1304.0,1304.0,0.0,0.0,0.0,151094
-followup2,N_desc K=4 R=1 F=1 N=10000,N_desc,434584,55,None,13.0,13.0,0.0,0.0,0.0,150303
-followup2,N_desc K=4 R=10 F=1 N=10000,N_desc,434818,109,None,130.4,130.4,0.0,0.0,0.0,150384
-followup2,N_desc K=4 R=100 F=1 N=10000,N_desc,437158,227,None,1304.0,1304.0,0.0,0.0,0.0,151194
+step0,D_marker M=500 V=1000,D_marker,31964,1293,None,1326.1,0.0,0.0,0.0,1326.1,8066
+step0,A_type R=300 E=1000,A_type,47971,352,None,338.5,338.5,0.0,0.0,0.0,17526
+step0,A_class R=300 E=3000,A_class,172001,206,None,88.6,88.6,0.0,0.0,0.0,52825
+step0,A_class R=1000 E=3000,A_class,186071,293,None,288.3,288.3,0.0,0.0,0.0,57025
+step0,A_class R=2000 E=5000,A_class,321511,913,None,949.5,949.5,0.0,0.0,0.0,97025
+step0,A_class R=5000 E=6000,A_class,440341,2622,DecodeCost,2834.6,2834.6,0.0,0.0,0.0,132025
+step0,A_class R=10000 E=10000,A_class,772331,9223,DecodeCost,9407.2,9407.2,0.0,0.0,0.0,230025
+step0,A_class R=5000 E=20000,A_class,1243401,10087,DecodeCost,9394.0,9394.0,0.0,0.0,0.0,370025
+step0,A_class R=20000 E=5000,A_class,693731,8475,DecodeCost,9448.9,9448.9,0.0,0.0,0.0,205025
+step0,A_class R=15000 E=20000,A_class,1455621,28740,DecodeCost,28140.9,28140.9,0.0,0.0,0.0,430025
+step0,A_class R=25000 E=25000,A_class,1962531,61842,DecodeCost,58580.4,58580.4,0.0,0.0,0.0,575025
+step0,A_type R=100 E=1000,A_type,44371,141,None,112.8,112.8,0.0,0.0,0.0,16526
+step0,A_type R=1000 E=1000,A_type,60571,1008,None,1128.2,1128.2,0.0,0.0,0.0,21026
+step0,A_type R=1000 E=3000,A_type,146511,2687,DecodeCost,3375.2,3375.2,0.0,0.0,0.0,53026
+step0,A_type R=3000 E=3000,A_type,182511,7954,DecodeCost,10125.6,10125.6,0.0,0.0,0.0,63026
+step0,A_type R=300 E=30000,A_type,1308751,10863,DecodeCost,10112.9,10112.9,0.0,0.0,0.0,481526
+step0,A_type R=2000 E=10000,A_type,470551,18332,DecodeCost,22479.4,22479.4,0.0,0.0,0.0,170026
+step0,A_type R=4000 E=12000,A_type,591691,49278,DecodeCost,53946.7,53946.7,0.0,0.0,0.0,212026
+step0,A_type R=4200 E=1700,A_type,148075,6505,DecodeCost,8041.5,8041.5,0.0,0.0,0.0,48226
+step0,A_star_g R=3000 E=13000,A_star_g,97151,40513,DecodeCost,43836.7,43836.7,0.0,0.0,0.0,171028
+step0,A_type R=12500 E=5000,A_type,440951,57041,DecodeCost,70277.3,70277.3,0.0,0.0,0.0,142526
+step0,A_unclassed R=2000 E=5000,A_unclassed,314321,828,None,944.4,944.4,0.0,0.0,0.0,92025
+step0,A_unclassed R=10000 E=10000,A_unclassed,752402,8825,DecodeCost,9396.9,9396.9,0.0,0.0,0.0,220025
+step0,A_unmatched R=2000 E=5000,A_unmatched,254841,581,None,944.4,944.4,0.0,0.0,0.0,87025
+step0,A_unmatched R=10000 E=10000,A_unmatched,633441,5888,DecodeCost,9396.9,9396.9,0.0,0.0,0.0,210025
+step0,A_attr R=1000 E=3000,A_attr,195071,246,None,288.3,288.3,0.0,0.0,0.0,75035
+step0,A_attr R=3000 E=6000,A_attr,427341,1260,None,1703.2,1703.2,0.0,0.0,0.0,156035
+step0,A_attr R=5000 E=10000,A_attr,716221,3727,DecodeCost,4708.7,4708.7,0.0,0.0,0.0,260035
+step0,A_compound R=2000 E=5000,A_compound,329511,945,None,949.5,949.5,0.0,0.0,0.0,97025
+step0,A_compound R=5000 E=10000,A_compound,691221,5256,DecodeCost,4708.7,4708.7,0.0,0.0,0.0,200025
+step0,A_desc R=2000 E=5000,A_desc,325518,1819,None,1549.7,1549.7,0.0,0.0,0.0,101298
+step0,A_desc R=5000 E=10000,A_desc,681228,9688,DecodeCost,7709.2,7709.2,0.0,0.0,0.0,210298
+step0,A_list R=500 S=4 E=5000,A_list,311911,968,None,942.8,942.8,0.0,0.0,0.0,92525
+step0,A_list R=2500 S=4 E=10000,A_list,708171,9335,DecodeCost,9373.4,9373.4,0.0,0.0,0.0,207525
+step0,A_decls R=2000 D=8 E=5000,A_decls,563511,1006,None,985.6,985.6,0.0,0.0,0.0,125025
+step0,A_use R=300 G=4 U=300,A_use,15083,392,None,428.8,10.0,418.8,0.0,0.0,7922
+step0,A_use R=1000 G=4 U=1000,A_use,50223,3796,DecodeCost,4488.7,98.8,4390.0,0.0,0.0,26122
+step0,A_use R=2000 G=4 U=2000,A_use,101923,13964,DecodeCost,17718.4,384.5,17333.9,0.0,0.0,52122
+step0,A_use R=1000 G=40 U=1000,A_use,52140,6782,DecodeCost,7697.8,102.2,7595.6,0.0,0.0,26734
+step0,A_use R=100 G=4 U=10000,A_use,316173,32478,DecodeCost,29904.2,94.0,29810.2,0.0,0.0,200722
+step0,A_use R=10000 G=4 U=100,A_use,202243,3381,DecodeCost,4190.2,146.0,4044.3,0.0,0.0,62122
+step0,A_use R=3000 G=4 U=3000,A_use,153023,33397,DecodeCost,39689.2,857.2,38831.9,0.0,0.0,78122
+step0,A_use_nostyle G=4 U=3000,A_use_nostyle,94134,180,None,0.0,0.0,0.0,0.0,0.0,57105
+step0,C_root R=1000 E=2000,C_root,148746,291,None,193.9,193.6,0.0,0.4,0.0,67030
+step0,C_root R=3000 E=5000,C_root,403406,1273,None,1422.5,1421.5,0.0,1.0,0.0,184030
+step0,C_root R=10000 E=10000,C_root,980116,9639,DecodeCost,9410.7,9408.7,0.0,1.9,0.0,500030
+step0,C_root_inline R=3000 E=5000,C_root_inline,390626,121,None,3.4,2.4,0.0,1.0,0.0,166030
+step0,C_inline E=10000,C_inline,774536,129,None,1.9,0.0,0.0,1.9,0.0,210032
+step0,C_per_rule R=1000 E=2000,C_per_rule,142961,378,None,381.3,380.9,0.0,0.4,0.0,48044
+step0,C_per_rule R=3000 E=5000,C_per_rule,381621,2557,DecodeCost,2825.6,2824.6,0.0,1.0,0.0,127044
+step0,C_per_rule R=8000 E=10000,C_per_rule,835221,14650,DecodeCost,15010.9,15009.0,0.0,1.9,0.0,282044
+step0,C_rule_all R=500 E=2000,C_rule_all,92709,351,None,502.0,501.6,0.0,0.4,0.0,43039
+step0,C_rule_all R=2000 E=5000,C_rule_all,246870,2935,DecodeCost,5004.9,5003.9,0.0,1.0,0.0,124039
+step0,C_rule_all R=5000 E=10000,C_rule_all,513470,15729,DecodeCost,25009.7,25007.8,0.0,1.9,0.0,270039
+step0,C_typevar R=300 E=1000,C_typevar,51871,155,None,415.2,357.6,0.0,57.6,0.0,19945
+step0,C_typevar R=1000 E=3000,C_typevar,159511,1395,DecodeCost,4141.9,3565.9,0.0,576.0,0.0,61045
+step0,C_typevar R=3000 E=5000,C_typevar,308951,7388,DecodeCost,20699.6,17819.6,0.0,2880.0,0.0,119045
+step0,C_typedecl R=1000 E=3000,C_typedecl,148421,3038,DecodeCost,2068.2,2067.7,0.0,0.6,0.0,73036
+step0,C_typedecl R=3000 E=5000,C_typedecl,277861,13428,DecodeCost,10323.6,10322.6,0.0,1.0,0.0,155036
+step0,C_chain D=30 E=1000,C_chain,67080,44,None,0.4,0.2,0.0,0.2,0.0,21822
+step0,C_chain D=100 E=5000,C_chain,342651,185,None,2.0,1.0,0.0,1.0,0.0,105952
+step0,C_nest D=100 E=5000 B=10,C_nest,337968,158,None,2.1,1.1,0.0,1.0,0.0,111052
+step0,C_double D=15 E=1,C_double,630,26,None,6.3,0.0,0.0,6.3,0.0,1122
+step0,C_double D=15 E=10,C_double,1321,159,None,62.9,0.0,0.0,62.9,0.0,1302
+step0,C_double D=15 E=100,C_double,8326,801,None,629.2,0.0,0.0,629.1,0.0,3102
+step0,C_double D=15 E=1000,C_double,78974,7432,DecodeCost,6291.7,0.2,0.0,6291.5,0.0,21102
+step0,C_double D=14 E=1000,C_double,78946,3187,DecodeCost,3145.9,0.2,0.0,3145.7,0.0,21039
+step0,C_double D=15 E=5000,C_double,396354,34785,DecodeCost,31458.2,0.9,0.0,31457.3,0.0,101102
+step0,C_double D=16 E=1000,C_double,79002,31,None,0.4,0.2,0.0,0.2,0.0,21164
+step0,C_kary K=3 D=12 E=1,C_kary,668,102,None,102.0,0.0,0.0,102.0,0.0,1080
+step0,C_kary K=3 D=14 E=1,C_kary,746,823,None,918.3,0.0,0.0,918.3,0.0,1220
+step0,C_kary K=3 D=16 E=1,C_kary,824,6,None,0.0,0.0,0.0,0.0,0.0,1352
+step0,C_kary K=4 D=10 E=1,C_kary,690,190,None,201.3,0.0,0.0,201.3,0.0,1067
+step0,C_kary K=4 D=11 E=1,C_kary,740,600,None,805.3,0.0,0.0,805.3,0.0,1150
+step0,D_marker M=100 V=1000,D_marker,11164,239,None,307.9,0.0,0.0,0.0,307.9,1666
+step0,D_marker M=1000 V=2000,D_marker,64124,4708,DecodeCost,5200.4,0.0,0.0,0.0,5200.4,16066
+step0,D_marker M=1500 V=4000,D_marker,101944,14985,DecodeCost,15498.1,0.0,0.0,0.0,15498.1,24066
+step0,D_marker M=2000 V=6000,D_marker,141374,30960,DecodeCost,30891.8,0.0,0.0,0.0,30891.8,32066
+step0,D_marker M=5000 V=500,D_marker,265454,5716,DecodeCost,6383.9,0.0,0.0,0.0,6383.9,80066
+step0,D_marker M=200 V=12500,D_marker,90654,6434,DecodeCost,7038.2,0.0,0.0,0.0,7038.2,3266
+step0,D_marker M=3000 V=8000,D_marker,207574,61804,DecodeCost,61572.3,0.0,0.0,0.0,61572.3,48066
+step0,D_marker M=2000 V=10000,D_marker,168274,50028,DecodeCost,51489.9,0.0,0.0,0.0,51489.9,32066
+step0,D_paths M=1 N=1000,D_paths,58724,74,None,61.2,0.0,0.0,0.0,61.2,18063
+step0,D_paths M=1 N=3000,D_paths,176664,181,None,183.5,0.0,0.0,0.0,183.5,54063
+step0,D_paths M=1 N=10000,D_paths,594704,802,None,611.5,0.0,0.0,0.0,611.5,180063
+step0,D_paths M=1 N=20000,D_paths,1189104,2247,None,1223.0,0.0,0.0,0.0,1223.0,360063
+step0,D_paths M=10 N=1000,D_paths,59183,118,None,107.0,0.0,0.0,0.0,107.0,18207
+step0,D_paths M=10 N=3000,D_paths,177123,427,None,321.0,0.0,0.0,0.0,321.0,54207
+step0,D_paths M=10 N=10000,D_paths,595163,3405,None,1070.2,0.0,0.0,0.0,1070.2,180207
+step0,D_paths M=40 N=1000,D_paths,60713,228,None,259.9,0.0,0.0,0.0,259.9,18687
+step0,D_paths M=40 N=3000,D_paths,178653,1163,None,779.7,0.0,0.0,0.0,779.7,54687
+step0,D_paths M=1 N=20000 nomark=1,D_paths,769104,418,None,0.0,0.0,0.0,0.0,0.0,260057
+step0,D_use M=500 V=1000,D_use,31996,1674,None,1331.2,0.0,0.0,0.0,1331.2,8100
+step0,D_use M=1500 V=2000,D_use,90526,11797,DecodeCost,7757.3,0.0,0.0,0.0,7757.3,24100
+step0,D_css M=500 V=1000,D_css,31986,1377,None,1326.2,0.1,0.0,0.0,1326.1,8092
+step0,D_shorthand M=500 V=1000,D_shorthand,31966,1219,None,1328.8,0.0,0.0,0.0,1328.8,8066
+step0,D_inherit M=500 V=1000,D_inherit,31971,1231,None,1326.1,0.0,0.0,0.0,1326.1,8077
+step0,D_path M=500 V=1000,D_path,31958,1276,None,1326.1,0.0,0.0,0.0,1326.1,8066
+step0,D_start M=500 V=1000,D_start,31987,10,None,3.9,0.0,0.0,0.0,3.9,8071
+step0,D_circles_inherit M=100 N=1000,D_circles_inherit,37027,2577,None,1798.9,0.0,0.0,0.0,1798.9,15673
+step0,D_rects_inherit M=100 N=1000,D_rects_inherit,47917,2594,None,1798.9,0.0,0.0,0.0,1798.9,16673
+step0,D_use_poly M=100 V=1000 U=10,D_use_poly,11462,2937,DecodeCost,3387.4,0.0,0.0,0.0,3387.4,1862
+step0,D_use_poly M=100 V=1000 U=30,D_use_poly,12042,8772,DecodeCost,9546.4,0.0,0.0,0.0,9546.4,2242
+step0,A_use R=1 G=4 U=1000,A_use,31350,429,None,363.6,0.1,363.5,0.0,0.0,20128
+step0,A_use R=1 G=4 U=3000,A_use,94150,2759,DecodeCost,2569.8,0.3,2569.5,0.0,0.0,60128
+step0,A_use R=1 G=4 U=10000,A_use,314400,30305,DecodeCost,25821.0,0.9,25820.0,0.0,0.0,200128
+step0,A_use R=1 G=4 U=3000 X=20000,A_use,962950,16568,DecodeCost,17361.7,2.2,17359.5,0.0,0.0,360128
+step0,A_use R=1 G=40 U=3000,A_use,96037,5159,DecodeCost,5001.3,0.3,5000.9,0.0,0.0,60740
+step0,A_use_nostyle G=4 U=10000,A_use_nostyle,314384,2020,None,0.0,0.0,0.0,0.0,0.0,190105
+step0,G_scatter N=1000,G_scatter,79973,265,None,275.9,2.2,273.7,0.0,0.0,22082
+step0,G_scatter N=3000,G_scatter,238873,1752,DecodeCost,2306.6,6.5,2300.1,0.0,0.0,66082
+step0,G_scatter N=10000,G_scatter,795025,17438,DecodeCost,24943.5,21.6,24922.0,0.0,0.0,220082
+step0,G_scatter N=10000 nostyle=1,G_scatter,794950,998,None,0.0,0.0,0.0,0.0,0.0,200055
+step0,D_marker M=10 V=10 L=1000,D_marker,126465,553,None,659.9,0.0,0.0,0.0,659.9,19207
+step0,D_marker M=10 V=8002 L=1,D_marker,50644,411,None,631.9,0.0,0.0,0.0,631.9,226
+step0,D_marker M=100 V=10 L=1000,D_marker,131125,5219,DecodeCost,2723.8,0.0,0.0,0.0,2723.8,20647
+step0,D_marker M=100 V=8002 L=1,D_marker,55304,2541,DecodeCost,2466.7,0.0,0.0,0.0,2466.7,1666
+step0,D_paths M=1 N=10000 X=20000,D_paths,1463504,1283,None,611.5,0.0,0.0,0.0,611.5,480063
+step0,D_paths M=1 N=5000,D_paths,296104,362,None,305.8,0.0,0.0,0.0,305.8,90063
+step0,D_paths M=100 N=1000,D_paths,63773,603,None,565.7,0.0,0.0,0.0,565.7,19647
+step0,D_rects_inherit M=10 N=3000,D_rects_inherit,129197,1726,None,1268.9,0.0,0.0,0.0,1268.9,45233
+step0,D_circles_inherit M=10 N=3000,D_circles_inherit,96327,1757,None,1268.9,0.0,0.0,0.0,1268.9,42233
+step0,A_star_rect R=15000 E=8000,A_star_rect,449151,135593,DecodeCost,134921.2,134921.2,0.0,0.0,0.0,187028
+step0,Big_rects N=150092,Big_rects,8278686,2449,None,0.0,0.0,0.0,0.0,0.0,2401485
+step0,Big_points N=1119023,Big_points,8336588,555,None,0.0,0.0,0.0,0.0,0.0,27
+step0,Big_style N=383126,Big_style,8317852,1834,None,1831.5,1831.5,0.0,0.0,0.0,2298796
+step0,Big_style N=40000,Big_style,829080,153,None,191.2,191.2,0.0,0.0,0.0,240040
+step0,A_plain E=50000,A_plain,2922136,653,None,0.0,0.0,0.0,0.0,0.0,800013
+step0,C_double D=16 E=1,C_double,658,8,None,0.0,0.0,0.0,0.0,0.0,1184
+step0,C_double D=18 E=1,C_double,714,6,None,0.0,0.0,0.0,0.0,0.0,1308
+step0,C_double D=14 E=100,C_double,8298,417,None,314.6,0.0,0.0,314.6,0.0,3039
+step0,D_rects_attr M=100 N=100,D_rects_attr,16097,164,None,179.9,0.0,0.0,0.0,179.9,4647
+step0,D_circles_inherit M=100 N=100,D_circles_inherit,8570,140,None,179.9,0.0,0.0,0.0,179.9,3073
+step0,D_marker M=100 V=1000 L=10,D_marker,63615,3053,DecodeCost,3079.5,0.0,0.0,0.0,3079.5,1837
+step0,D_paths M=1 N=1000 nomark=1,D_paths,37724,26,None,0.0,0.0,0.0,0.0,0.0,13057
+step0,D_paths M=1 N=3000 nomark=1,D_paths,113664,67,None,0.0,0.0,0.0,0.0,0.0,39057
+step0,D_paths M=1 N=10000 nomark=1,D_paths,384704,216,None,0.0,0.0,0.0,0.0,0.0,130057
+step0,A_plain E=10000,A_plain,584536,123,None,0.0,0.0,0.0,0.0,0.0,160013
+step0,A_plain E=20000,A_plain,1168936,206,None,0.0,0.0,0.0,0.0,0.0,320013
+step0,C_double D=16 E=100,C_double,8354,10,None,0.1,0.0,0.0,0.0,0.0,3164
+step0,C_double D=13 E=100,C_double,8270,209,None,157.3,0.0,0.0,157.3,0.0,2975
+step0,D_paths M=1 N=20000 group=100,D_paths,1190504,2930,None,1223.0,0.0,0.0,0.0,1223.0,362263
+step0,D_paths M=1 N=20000 group=100 nomark=1,D_paths,770504,249,None,0.0,0.0,0.0,0.0,0.0,262257
+step0,D_paths M=1 N=10000 group=100,D_paths,595404,816,None,611.5,0.0,0.0,0.0,611.5,181163
+step0,C_triple D=8 E=1,C_triple,518,12,None,1.3,0.0,0.0,1.3,0.0,776
+step0,C_triple D=10 E=1,C_triple,590,33,None,11.3,0.0,0.0,11.3,0.0,932
+step0,C_triple D=11 E=1,C_triple,629,89,None,34.0,0.0,0.0,34.0,0.0,1007
+step0,C_triple D=12 E=1,C_triple,668,231,None,102.0,0.0,0.0,102.0,0.0,1080
+step0,real guardtest_00.svg,real,154,0,None,0.0,0.0,0.0,0.0,0.0,26
+step0,real guardtest_01.svg,real,368,1,None,0.0,0.0,0.0,0.0,0.0,150
+step0,real guardtest_02.svg,real,276,1,None,0.1,0.0,0.0,0.0,0.1,73
+step0,real guardtest_03.svg,real,5888,8,None,0.0,0.0,0.0,0.0,0.0,5164
+step0,real guardtest_04.svg,real,571,1,None,0.0,0.0,0.0,0.0,0.0,249
+step0,real guardtest_05.svg,real,306,1,None,0.0,0.0,0.0,0.0,0.0,377
+step0,real guardtest_06.svg,real,1932,6,None,0.0,0.0,0.0,0.0,0.0,2820
+step0,real guardtest_07.svg,real,206,0,None,0.0,0.0,0.0,0.0,0.0,34
+step0,real guardtest_08.svg,real,281,1,None,0.0,0.0,0.0,0.0,0.0,45
+step0,real guardtest_09.svg,real,185,0,None,0.0,0.0,0.0,0.0,0.0,50
+step0,real guardtest_10.svg,real,40033,16,None,0.0,0.0,0.0,0.0,0.0,14063
+step0,real guardtest_11.svg,real,210,1,None,0.0,0.0,0.0,0.0,0.0,44
+step0,real guardtest_12.svg,real,252,0,None,0.0,0.0,0.0,0.0,0.0,45
+step0,real repo_demo-vault_pie.svg,real,992,2,None,0.0,0.0,0.0,0.0,0.0,84
+step0,real mermaid_class_largest_n476.svg,real,823068,731,None,29.0,0.0,0.0,0.0,29.0,101760
+step0,real mermaid_class_typical_n20.svg,real,34944,70,None,1.2,0.0,0.0,0.0,1.2,4480
+step0,real mermaid_er_largest_n451.svg,real,2080917,755,None,0.0,0.0,0.0,0.0,0.0,255443
+step0,real mermaid_er_typical_n20.svg,real,92521,24,None,0.0,0.0,0.0,0.0,0.0,11497
+step0,real mermaid_flowchart_largest_n643.svg,real,627869,212,None,0.0,0.0,0.0,0.0,0.0,71504
+step0,real mermaid_flowchart_styled_largest_n904.svg,real,774702,293,None,0.0,0.0,0.0,0.0,0.0,91465
+step0,real mermaid_flowchart_styled_typical_n20.svg,real,17984,7,None,0.0,0.0,0.0,0.0,0.0,2181
+step0,real mermaid_flowchart_typical_n20.svg,real,20354,10,None,0.0,0.0,0.0,0.0,0.0,2381
+step0,real mermaid_sequence_largest_n1093.svg,real,1081889,434,None,76.4,0.0,0.0,0.0,76.4,118449
+step0,real mermaid_sequence_typical_n20.svg,real,25072,51,None,1.3,0.0,0.0,0.0,1.3,2957
+step0,real mermaid_state_largest_n501.svg,real,745789,322,None,38.4,0.0,0.0,0.0,38.4,84579
+step0,real mermaid_state_typical_n20.svg,real,31735,16,None,1.7,0.0,0.0,0.0,1.7,3674
+followup2,D_nested M=10 VO=100 VI=100,D_nested,1974,11,None,23.8,0.0,0.0,0.0,23.8,268
+followup2,D_nested M=10 VO=500 VI=100,D_nested,4264,32,None,57.4,0.0,0.0,0.0,57.4,268
+followup2,D_nested M=10 VO=1000 VI=200,D_nested,7634,73,None,115.3,0.0,0.0,0.0,115.3,268
+followup2,D_nested M=10 VO=2000 VI=200,D_nested,13414,157,None,199.4,0.0,0.0,0.0,199.4,268
+followup2,D_nested M=10 VO=1000 VI=200 IM=0,D_nested,7612,81,None,55.9,0.0,0.0,0.0,55.9,257
+followup2,D_nested M=10 VO=2000 VI=200 IM=0,D_nested,13392,135,None,112.0,0.0,0.0,0.0,112.0,257
+followup2,D_marker M=500 V=1000,D_marker,31964,1811,None,1326.1,0.0,0.0,0.0,1326.1,8066
+followup2,D_var M=500 V=1000,D_var,32003,1826,None,1326.3,0.2,0.0,0.0,1326.1,8146
+followup2,D_varinline M=500 V=1000,D_varinline,31983,1765,None,1326.1,0.0,0.0,0.0,1326.1,8105
+followup2,C_fb F=1 D=10 E=1,C_fb,500,5,None,0.0,0.0,0.0,0.0,0.0,857
+followup2,C_fb F=1 D=10 E=10,C_fb,1191,5,None,0.0,0.0,0.0,0.0,0.0,1037
+followup2,C_fb F=1 D=10 E=100,C_fb,8196,6,None,0.0,0.0,0.0,0.0,0.0,2837
+followup2,C_fb F=1 D=15 E=1,C_fb,645,4,None,0.0,0.0,0.0,0.0,0.0,1362
+followup2,C_fb F=1 D=15 E=10,C_fb,1336,5,None,0.0,0.0,0.0,0.0,0.0,1542
+followup2,C_fb F=1 D=15 E=100,C_fb,8341,7,None,0.1,0.0,0.0,0.0,0.0,3342
+followup2,C_fb F=1 D=16 E=1,C_fb,674,6,None,0.5,0.0,0.0,0.5,0.0,1472
+followup2,C_fb F=1 D=16 E=10,C_fb,1365,15,None,5.0,0.0,0.0,5.0,0.0,1652
+followup2,C_fb F=1 D=16 E=100,C_fb,8370,88,None,49.6,0.0,0.0,49.6,0.0,3452
+followup2,C_fb F=1 D=20 E=1,C_fb,790,5,None,0.5,0.0,0.0,0.5,0.0,1912
+followup2,C_fb F=1 D=20 E=10,C_fb,1481,8,None,5.0,0.0,0.0,5.0,0.0,2092
+followup2,C_fb F=1 D=20 E=100,C_fb,8486,36,None,49.6,0.0,0.0,49.6,0.0,3892
+followup2,C_fb F=1 D=40 E=1,C_fb,1370,6,None,0.5,0.0,0.0,0.5,0.0,4112
+followup2,C_fb F=1 D=40 E=10,C_fb,2061,8,None,5.0,0.0,0.0,5.0,0.0,4292
+followup2,C_fb F=1 D=40 E=100,C_fb,9066,37,None,49.7,0.0,0.0,49.6,0.0,6092
+followup2,C_fb F=2 D=10 E=1,C_fb,600,5,None,0.0,0.0,0.0,0.0,0.0,887
+followup2,C_fb F=2 D=10 E=10,C_fb,1291,5,None,0.0,0.0,0.0,0.0,0.0,1067
+followup2,C_fb F=2 D=10 E=100,C_fb,8296,7,None,0.0,0.0,0.0,0.0,0.0,2867
+followup2,C_fb F=2 D=15 E=1,C_fb,800,5,None,0.0,0.0,0.0,0.0,0.0,1407
+followup2,C_fb F=2 D=15 E=10,C_fb,1491,5,None,0.0,0.0,0.0,0.0,0.0,1587
+followup2,C_fb F=2 D=15 E=100,C_fb,8496,7,None,0.1,0.0,0.0,0.0,0.0,3387
+followup2,C_fb F=2 D=16 E=1,C_fb,840,5,None,0.5,0.0,0.0,0.5,0.0,1520
+followup2,C_fb F=2 D=16 E=10,C_fb,1531,8,None,5.0,0.0,0.0,5.0,0.0,1700
+followup2,C_fb F=2 D=16 E=100,C_fb,8536,39,None,49.6,0.0,0.0,49.6,0.0,3500
+followup2,C_fb F=2 D=20 E=1,C_fb,1000,5,None,0.5,0.0,0.0,0.5,0.0,1972
+followup2,C_fb F=2 D=20 E=10,C_fb,1691,8,None,5.0,0.0,0.0,5.0,0.0,2152
+followup2,C_fb F=2 D=20 E=100,C_fb,8696,37,None,49.6,0.0,0.0,49.6,0.0,3952
+followup2,C_fb F=2 D=40 E=1,C_fb,1800,6,None,0.5,0.0,0.0,0.5,0.0,4232
+followup2,C_fb F=2 D=40 E=10,C_fb,2491,9,None,5.0,0.0,0.0,5.0,0.0,4412
+followup2,C_fb F=2 D=40 E=100,C_fb,9496,39,None,49.7,0.0,0.0,49.6,0.0,6212
+followup2,N_unstyled T=1 Q=1 D=100 N=1000,N_unstyled,8485,17,None,1.1,1.1,0.0,0.0,0.0,12143
+followup2,N_unstyled T=1 Q=1 D=100 N=10000,N_unstyled,71485,141,None,11.2,11.2,0.0,0.0,0.0,120143
+followup2,N_unstyled T=1 Q=1 D=1000 N=1000,N_unstyled,20185,16,None,1.1,1.1,0.0,0.0,0.0,13043
+followup2,N_unstyled T=1 Q=1 D=1000 N=10000,N_unstyled,83185,70,None,11.2,11.2,0.0,0.0,0.0,121043
+followup2,N_unstyled T=1 Q=2 D=100 N=1000,N_unstyled,8575,41,None,50.2,50.2,0.0,0.0,0.0,12642
+followup2,N_unstyled T=1 Q=2 D=100 N=10000,N_unstyled,71575,408,None,501.9,501.9,0.0,0.0,0.0,120642
+followup2,N_unstyled T=1 Q=2 D=1000 N=1000,N_unstyled,22075,303,None,500.2,500.2,0.0,0.0,0.0,18042
+followup2,N_unstyled T=1 Q=2 D=1000 N=10000,N_unstyled,85075,3689,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,126042
+followup2,N_unstyled T=2 Q=1 D=100 N=1000,N_unstyled,9486,8,None,1.1,1.1,0.0,0.0,0.0,12143
+followup2,N_unstyled T=2 Q=1 D=100 N=10000,N_unstyled,81486,77,None,11.2,11.2,0.0,0.0,0.0,120143
+followup2,N_unstyled T=2 Q=1 D=1000 N=1000,N_unstyled,21186,10,None,1.1,1.1,0.0,0.0,0.0,13043
+followup2,N_unstyled T=2 Q=1 D=1000 N=10000,N_unstyled,93186,83,None,11.2,11.2,0.0,0.0,0.0,121043
+followup2,N_unstyled T=2 Q=2 D=100 N=1000,N_unstyled,9576,36,None,50.2,50.2,0.0,0.0,0.0,12642
+followup2,N_unstyled T=2 Q=2 D=100 N=10000,N_unstyled,81576,523,None,501.9,501.9,0.0,0.0,0.0,120642
+followup2,N_unstyled T=2 Q=2 D=1000 N=1000,N_unstyled,23076,310,None,500.2,500.2,0.0,0.0,0.0,18042
+followup2,N_unstyled T=2 Q=2 D=1000 N=10000,N_unstyled,95076,3311,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,126042
+followup2,N_unstyled T=3 Q=1 D=100 N=1000,N_unstyled,8485,11,None,1.1,1.1,0.0,0.0,0.0,12143
+followup2,N_unstyled T=3 Q=1 D=100 N=10000,N_unstyled,71485,80,None,11.2,11.2,0.0,0.0,0.0,120143
+followup2,N_unstyled T=3 Q=1 D=1000 N=1000,N_unstyled,20185,11,None,1.1,1.1,0.0,0.0,0.0,13043
+followup2,N_unstyled T=3 Q=1 D=1000 N=10000,N_unstyled,83185,81,None,11.2,11.2,0.0,0.0,0.0,121043
+followup2,N_unstyled T=3 Q=2 D=100 N=1000,N_unstyled,8575,73,None,50.2,50.2,0.0,0.0,0.0,12642
+followup2,N_unstyled T=3 Q=2 D=100 N=10000,N_unstyled,71575,420,None,501.9,501.9,0.0,0.0,0.0,120642
+followup2,N_unstyled T=3 Q=2 D=1000 N=1000,N_unstyled,22075,294,None,500.2,500.2,0.0,0.0,0.0,18042
+followup2,N_unstyled T=3 Q=2 D=1000 N=10000,N_unstyled,85075,3130,DecodeCost,5001.9,5001.9,0.0,0.0,0.0,126042
+followup2,N_sib K=2 R=1 N=1000,N_sib,42596,61,None,15.5,15.5,0.0,0.0,0.0,16042
+followup2,N_sib K=2 R=1 N=3000,N_sib,128536,241,None,133.0,133.0,0.0,0.0,0.0,48040
+followup2,N_sib K=2 R=1 N=10000,N_sib,434576,1889,None,1451.4,1451.4,0.0,0.0,0.0,160040
+followup2,N_sib K=3 R=1 N=1000,N_sib,42603,5435,DecodeCost,7230.0,7230.0,0.0,0.0,0.0,16043
+followup2,N_sib K=3 R=1 N=3000,N_sib,128543,60014,DecodeCost,194662.7,194662.7,0.0,0.0,0.0,48041
+followup2,N_nth Q=1 R=1 N=1000,N_nth,42603,77,None,21.0,21.0,0.0,0.0,0.0,16032
+followup2,N_nth Q=1 R=1 N=3000,N_nth,128543,223,None,182.5,182.5,0.0,0.0,0.0,48032
+followup2,N_nth Q=1 R=1 N=10000,N_nth,434583,2235,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,160032
+followup2,N_nth Q=1 R=10 N=1000,N_nth,42891,242,None,210.5,210.5,0.0,0.0,0.0,16086
+followup2,N_nth Q=1 R=10 N=3000,N_nth,128831,1898,None,1825.3,1825.3,0.0,0.0,0.0,48086
+followup2,N_nth Q=1 R=10 N=10000,N_nth,434871,20641,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,160086
+followup2,N_nth Q=1 R=100 N=1000,N_nth,45771,2106,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,16626
+followup2,N_nth Q=1 R=100 N=3000,N_nth,131711,18743,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,48626
+followup2,N_nth Q=1 R=100 N=10000,N_nth,437751,60009,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,160626
+followup2,N_nth Q=2 R=1 N=1000,N_nth,42603,17,None,1.1,1.1,0.0,0.0,0.0,16031
+followup2,N_nth Q=2 R=1 N=3000,N_nth,128543,47,None,3.4,3.4,0.0,0.0,0.0,48031
+followup2,N_nth Q=2 R=1 N=10000,N_nth,434583,145,None,11.2,11.2,0.0,0.0,0.0,160031
+followup2,N_nth Q=2 R=10 N=1000,N_nth,42891,23,None,11.3,11.3,0.0,0.0,0.0,16076
+followup2,N_nth Q=2 R=10 N=3000,N_nth,128831,56,None,33.8,33.8,0.0,0.0,0.0,48076
+followup2,N_nth Q=2 R=10 N=10000,N_nth,434871,164,None,112.4,112.4,0.0,0.0,0.0,160076
+followup2,N_nth Q=2 R=100 N=1000,N_nth,45771,45,None,112.8,112.8,0.0,0.0,0.0,16526
+followup2,N_nth Q=2 R=100 N=3000,N_nth,131711,116,None,337.5,337.5,0.0,0.0,0.0,48526
+followup2,N_nth Q=2 R=100 N=10000,N_nth,437751,195,None,1124.0,1124.0,0.0,0.0,0.0,160526
+followup2,N_nth Q=3 R=1 N=1000,N_nth,42604,73,None,21.0,21.0,0.0,0.0,0.0,16032
+followup2,N_nth Q=3 R=1 N=3000,N_nth,128544,324,None,182.5,182.5,0.0,0.0,0.0,48032
+followup2,N_nth Q=3 R=1 N=10000,N_nth,434584,1831,DecodeCost,2001.4,2001.4,0.0,0.0,0.0,160032
+followup2,N_nth Q=3 R=10 N=1000,N_nth,42901,189,None,210.5,210.5,0.0,0.0,0.0,16086
+followup2,N_nth Q=3 R=10 N=3000,N_nth,128841,1615,None,1825.3,1825.3,0.0,0.0,0.0,48086
+followup2,N_nth Q=3 R=10 N=10000,N_nth,434881,17169,DecodeCost,20014.4,20014.4,0.0,0.0,0.0,160086
+followup2,N_nth Q=3 R=100 N=1000,N_nth,45871,1781,DecodeCost,2104.8,2104.8,0.0,0.0,0.0,16626
+followup2,N_nth Q=3 R=100 N=3000,N_nth,131811,15096,DecodeCost,18253.5,18253.5,0.0,0.0,0.0,48626
+followup2,N_nth Q=3 R=100 N=10000,N_nth,437851,60015,DecodeCost,200143.9,200143.9,0.0,0.0,0.0,160626
+followup2,N_desc K=2 R=1 D=16,N_desc,938,6,None,0.1,0.1,0.0,0.0,0.0,876
+followup2,N_desc K=2 R=1 D=32,N_desc,1713,8,None,0.8,0.8,0.0,0.0,0.0,1716
+followup2,N_desc K=2 R=1 D=64,N_desc,3281,29,None,5.7,5.7,0.0,0.0,0.0,3959
+followup2,N_desc K=2 R=1 D=128,N_desc,6389,55,None,43.6,43.6,0.0,0.0,0.0,6787
+followup2,N_desc K=2 R=10 D=16,N_desc,1136,7,None,1.3,1.3,0.0,0.0,0.0,948
+followup2,N_desc K=2 R=10 D=32,N_desc,1911,14,None,8.0,8.0,0.0,0.0,0.0,1788
+followup2,N_desc K=2 R=10 D=64,N_desc,3479,63,None,57.0,57.0,0.0,0.0,0.0,4031
+followup2,N_desc K=2 R=10 D=128,N_desc,6587,449,None,435.9,435.9,0.0,0.0,0.0,6859
+followup2,N_desc K=2 R=100 D=16,N_desc,3116,17,None,13.1,13.1,0.0,0.0,0.0,1668
+followup2,N_desc K=2 R=100 D=32,N_desc,3891,77,None,79.5,79.5,0.0,0.0,0.0,2508
+followup2,N_desc K=2 R=100 D=64,N_desc,5459,609,None,570.2,570.2,0.0,0.0,0.0,4751
+followup2,N_desc K=2 R=100 D=128,N_desc,8567,4316,DecodeCost,4359.5,4359.5,0.0,0.0,0.0,7579
+followup2,N_desc K=3 R=1 D=16,N_desc,940,6,None,0.5,0.5,0.0,0.0,0.0,877
+followup2,N_desc K=3 R=1 D=32,N_desc,1715,12,None,6.0,6.0,0.0,0.0,0.0,1717
+followup2,N_desc K=3 R=1 D=64,N_desc,3283,94,None,89.6,89.6,0.0,0.0,0.0,3960
+followup2,N_desc K=3 R=1 D=128,N_desc,6391,1334,None,1385.7,1385.7,0.0,0.0,0.0,6788
+followup2,N_desc K=3 R=10 D=16,N_desc,1156,12,None,4.6,4.6,0.0,0.0,0.0,958
+followup2,N_desc K=3 R=10 D=32,N_desc,1931,66,None,60.3,60.3,0.0,0.0,0.0,1798
+followup2,N_desc K=3 R=10 D=64,N_desc,3499,872,None,895.7,895.7,0.0,0.0,0.0,4041
+followup2,N_desc K=3 R=10 D=128,N_desc,6607,13361,DecodeCost,13856.9,13856.9,0.0,0.0,0.0,6869
+followup2,N_desc K=3 R=100 D=16,N_desc,3316,49,None,45.8,45.8,0.0,0.0,0.0,1768
+followup2,N_desc K=3 R=100 D=32,N_desc,4091,599,None,603.3,603.3,0.0,0.0,0.0,2608
+followup2,N_desc K=3 R=100 D=64,N_desc,5659,8747,DecodeCost,8956.8,8956.8,0.0,0.0,0.0,4851
+followup2,N_desc K=3 R=100 D=128,N_desc,8767,60011,DecodeCost,138569.0,138569.0,0.0,0.0,0.0,7679
+followup2,N_desc K=4 R=1 D=16,N_desc,942,9,None,1.3,1.3,0.0,0.0,0.0,878
+followup2,N_desc K=4 R=1 D=32,N_desc,1717,106,None,37.0,37.0,0.0,0.0,0.0,1718
+followup2,N_desc K=4 R=1 D=64,N_desc,3285,1087,None,1121.4,1121.4,0.0,0.0,0.0,3961
+followup2,N_desc K=4 R=1 D=128,N_desc,6393,33007,DecodeCost,35074.4,35074.4,0.0,0.0,0.0,6789
+followup2,N_desc K=4 R=10 D=16,N_desc,1176,20,None,13.4,13.4,0.0,0.0,0.0,968
+followup2,N_desc K=4 R=10 D=32,N_desc,1951,363,None,369.7,369.7,0.0,0.0,0.0,1808
+followup2,N_desc K=4 R=10 D=64,N_desc,3519,10751,DecodeCost,11213.8,11213.8,0.0,0.0,0.0,4051
+followup2,N_desc K=4 R=10 D=128,N_desc,6627,60009,DecodeCost,350743.8,350743.8,0.0,0.0,0.0,6879
+followup2,N_desc K=4 R=100 D=16,N_desc,3516,139,None,134.3,134.3,0.0,0.0,0.0,1868
+followup2,N_desc K=4 R=100 D=32,N_desc,4291,3339,DecodeCost,3696.9,3696.9,0.0,0.0,0.0,2708
+followup2,N_desc K=4 R=100 D=64,N_desc,5859,60017,DecodeCost,112137.7,112137.7,0.0,0.0,0.0,4951
+followup2,N_desc K=2 R=1 F=1 N=10000,N_desc,434580,149,None,13.0,13.0,0.0,0.0,0.0,160305
+followup2,N_desc K=2 R=10 F=1 N=10000,N_desc,434778,178,None,130.4,130.4,0.0,0.0,0.0,160377
+followup2,N_desc K=2 R=100 F=1 N=10000,N_desc,436758,264,None,1304.0,1304.0,0.0,0.0,0.0,161097
+followup2,N_desc K=3 R=1 F=1 N=10000,N_desc,434582,58,None,13.0,13.0,0.0,0.0,0.0,160306
+followup2,N_desc K=3 R=10 F=1 N=10000,N_desc,434798,91,None,130.4,130.4,0.0,0.0,0.0,160387
+followup2,N_desc K=3 R=100 F=1 N=10000,N_desc,436958,216,None,1304.0,1304.0,0.0,0.0,0.0,161197
+followup2,N_desc K=4 R=1 F=1 N=10000,N_desc,434584,55,None,13.0,13.0,0.0,0.0,0.0,160307
+followup2,N_desc K=4 R=10 F=1 N=10000,N_desc,434818,109,None,130.4,130.4,0.0,0.0,0.0,160397
+followup2,N_desc K=4 R=100 F=1 N=10000,N_desc,437158,227,None,1304.0,1304.0,0.0,0.0,0.0,161297
