@@ -918,16 +918,17 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
 
     /// <summary>CB-22 (#1661): the editor is not the surface the tab shows
-    /// (reading mode), so its caret is not on screen. No entry acts, speaks
-    /// or queues work for it: each returns at once, in silence.</summary>
+    /// (reading mode), so its caret is not on screen. None of the three
+    /// activation entries (ActivateAt, ActivateSpan, PreviewEmbedAt) acts,
+    /// speaks or queues work for it: each returns at once, in silence.</summary>
     private bool EditorHidden => !_tab.IsEditorVisible;
 
     /// <summary>CB-22 (#1661): the tab switched between its editor and its
     /// reading view. Both caret commands answer differently now, and a menu
     /// item asks a command again only when told. Leaving the editor also
-    /// closes what belonged to it: an open popover, a preview still pending,
-    /// a hover and a load the reader asked it for, with nothing said and no
-    /// focus asked for.</summary>
+    /// closes an open popover and a preview still pending, and drops the
+    /// pending hover and the spoken outcome of a load the reader asked for
+    /// (the load itself runs on), with nothing said and no focus asked for.</summary>
     internal void EditorSurfaceChanged()
     {
         ((RelayCommand)ActivateAtCaretCommand).RaiseCanExecuteChanged();
@@ -2087,11 +2088,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         // CB-22 (#1661): a pointer on prose is silent while the note's links
         // and tasks load, as it is at the math check above, and asks for no
-        // word when that load ends. A note changed on disk is another state:
-        // its sentence is true for either origin and says what to do.
+        // word when that load ends. A pointer on a checkbox still hears why
+        // nothing happened, where the list in place can vouch for the click:
+        // it names a checkbox there and was read from this note's saved text,
+        // so only the session has moved on (any scan or core write does that
+        // to every other open note). A list from an older save cannot vouch;
+        // its positions may be prose now. A note changed on disk is another
+        // state: its sentence is true for either origin and says what to do.
+        bool knownCheckbox = cachedTask is not null
+            && string.Equals(_artifactCachePath, _tab.Path, StringComparison.Ordinal)
+            && string.Equals(_artifactCacheHash, _tab.SavedContentHash, StringComparison.Ordinal);
         if (!EnsureArtifactCacheReady(
                 announceWhenUnavailable: true,
-                announceWhileLoading: origin is EditorInteractionOrigin.Keyboard))
+                announceWhileLoading: origin is EditorInteractionOrigin.Keyboard || knownCheckbox))
         {
             return true;
         }
