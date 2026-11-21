@@ -2379,6 +2379,26 @@ public sealed class SvgPreviewGuardTests
     }
 
     /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): Measure's rule keys
+    /// split class tokens at ASCII whitespace too. A pattern whose rect a
+    /// rule <c>.s</c> fills with that pattern is a reference cycle where
+    /// the rect's class is <c>x s</c>, and none where it is <c>x</c>, a
+    /// no-break space and <c>s</c>, which the decoder does not match
+    /// (it draws the document in 173 ms).
+    /// </summary>
+    [Theory]
+    [InlineData("x s", true)]
+    [InlineData("x&#160;s", false)]
+    public void AClassAfterANoBreakSpaceClosesNoCycleThroughARule(string classList, bool cycle)
+    {
+        string source = $"<svg {Ns} width='20' height='20'><defs>"
+            + "<pattern id='c' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<rect class='{classList}' width='5' height='5'/></pattern></defs>"
+            + "<style>.s{fill:url(#c)}</style><rect width='20' height='20' fill='url(#c)'/></svg>";
+        Assert.Equal(cycle ? SvgRefusal.ReferenceCycle : SvgRefusal.None, SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out _));
+    }
+
+    /// <summary>
     /// #1610 (the delta merge judge's G4, stage 14): the judge's map, a
     /// hatch pattern on a group of 3,200 paths whose class rule fills them
     /// a colour under a comment, is admitted with no pattern term, as it
