@@ -34,12 +34,18 @@ pub enum NodeKey {
 }
 
 /// Normalize an authored link target into a ghost key: trim, strip a
-/// leading `./` or `/`, then `str::to_lowercase()` — EXACTLY the
-/// resolver's comparison convention (`link_resolver::find_exact` /
+/// leading `./` or `/`, then `str::to_lowercase()` — the resolver's
+/// comparison convention (`link_resolver::find_exact` /
 /// `collect_basename_matches`: full Unicode lowercase, no NFC, no
 /// simple case-fold), so a ghost and the note that later materializes
 /// it collide on intent. `target_raw` is already anchor-stripped by
 /// `links::extract_links`.
+///
+/// One difference since #1705 (plan 47 CB-32): the resolver now folds the
+/// final sigma to sigma ([`crate::name_fold::fold_case`]) and this key does
+/// not, so `[[ΑΓΝΩΣΤΟΣ]]` and `[[αγνωστοσ]]` draw two ghosts. Frozen graph
+/// contract 0b-3 pins this key as `to_lowercase`; only the owner's call can
+/// change it (a #1955 line, put to the owner in CB-32's PR).
 pub fn ghost_key(target_raw: &str) -> String {
     let trimmed = target_raw.trim();
     let stripped = trimmed

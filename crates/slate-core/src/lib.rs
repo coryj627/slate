@@ -74,6 +74,7 @@ pub mod links;
 pub mod links_db;
 pub mod math;
 mod more_panels;
+mod name_fold;
 pub mod oplog;
 pub mod oplog_compaction;
 pub(crate) mod oplog_events;

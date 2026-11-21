@@ -1931,8 +1931,9 @@ impl VaultSession {
     }
 
     /// Paged inbound-link query: every file that links TO `path`,
-    /// with a cached ±60-char snippet. External links never appear
-    /// here.
+    /// with the context core cached around the link (±60 bytes),
+    /// trimmed when read to start and end on whole words with "…"
+    /// where it was cut (#1782). External links never appear here.
     pub fn backlinks(&self, path: String, paging: Paging) -> Result<BacklinkPage, VaultError> {
         let page = self.inner.backlinks(&path, paging.into())?;
         Ok(page.into())

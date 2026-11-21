@@ -117,6 +117,14 @@ public sealed class RightPanePanelsTests : IDisposable
         }
         File.WriteAllText(
             Path.Combine(_fixture.Root, "rowcap.md"), repeats.ToString());
+        // #1705 (CB-32): a target whose sigma lowers apart from its link's,
+        // linked from inside a long run of words (a cut snippet, #1782).
+        File.WriteAllText(Path.Combine(_fixture.Root, "ΚΟΣΜΟΣ.md"), "# Kosmos\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "sigmalinker.md"),
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho "
+                + "[[κοσμος]] "
+                + "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho\n");
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -198,6 +206,23 @@ public sealed class RightPanePanelsTests : IDisposable
         Assert.Equal("Opens the source note.", row.AutomationHelpText);
         Assert.Equal("Backlinks, 1 entry", panels.BacklinksHeader);
         Assert.Null(panels.BacklinksEmptyMessage);
+    }
+
+    /// <summary>#1705 and #1782 (plan 47 CB-32): a note whose capital sigma
+    /// lowers apart from its link's lists the linking note in Backlinks, and
+    /// the row's spoken context starts and ends on whole words, with "…" on
+    /// each side that was cut.</summary>
+    [Fact]
+    public void ABacklinkThroughAFinalSigmaListsWithItsContextOnWholeWords()
+    {
+        var panels = LoadHost([], path: "ΚΟΣΜΟΣ.md");
+
+        BacklinkRowViewModel row = Assert.Single(panels.Backlinks);
+        Assert.Equal("sigmalinker.md", row.SourcePath);
+        Assert.Equal(
+            "Backlink from sigmalinker.md, context: …zeta eta theta iota kappa lambda mu nu xi omicron pi rho "
+                + "[[κοσμος]] alpha beta gamma delta epsilon zeta eta theta iota kappa…",
+            row.AutomationName);
     }
 
     [Fact]

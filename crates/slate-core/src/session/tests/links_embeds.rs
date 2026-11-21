@@ -497,6 +497,12 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
     let body = format!(
         "intro [[hub|{alias}]] outro\n\n![[hub|{alias}]]\n\n[{alias}]({long_url})\n\n![[big#{long_heading}]]\n"
     );
+    // CB-32 (#1782): a link longer than the ceiling whose left edge is cut,
+    // in prose long enough to cut its right edge too. Its alias is accents
+    // (`e` + U+0301), so a ceiling that lands between a letter and its
+    // accent shows.
+    let cut_alias = "e\u{301}".repeat(1500);
+    let cut_body = cut_paragraph(&format!("[[cuthub|{cut_alias}]]"));
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/src.md", body.as_bytes()).unwrap();
         p.write_file("notes/hub.md", b"# Hub\n").unwrap();
@@ -505,6 +511,8 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
             format!("# {long_heading}\n\nSection body.\n").as_bytes(),
         )
         .unwrap();
+        p.write_file("notes/cut.md", cut_body.as_bytes()).unwrap();
+        p.write_file("notes/cuthub.md", b"# Cut hub\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
@@ -568,6 +576,138 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
     assert!(
         matches!(resolved.resolution, crate::EmbedResolution::Section { .. }),
         "long heading anchor must still resolve"
+    );
+
+    // The cut row keeps the same ceiling, and never stacks two marks on
+    // one side: the ceiling's truncation takes the right "…" once, and
+    // lands on a grapheme boundary.
+    let cut_rows = [
+        session
+            .note_link_panels("notes/cuthub.md", Paging::first(50), 8, 4)
+            .unwrap()
+            .backlinks
+            .items
+            .into_iter()
+            .map(|row| row.snippet)
+            .collect::<Vec<_>>(),
+        session
+            .note_link_panels("notes/cut.md", Paging::first(50), 8, 4)
+            .unwrap()
+            .outgoing_links
+            .into_iter()
+            .map(|row| row.snippet)
+            .collect(),
+    ];
+    for rows in cut_rows {
+        let [snippet] = rows.as_slice() else {
+            panic!("one cut row: {rows:?}");
+        };
+        let shown: String = snippet.chars().take(40).collect();
+        assert!(snippet.len() <= ceiling, "within the ceiling: {shown:?}");
+        let inner = snippet
+            .strip_prefix('…')
+            .and_then(|rest| rest.strip_suffix('…'))
+            .unwrap_or_else(|| panic!("a mark on each side: {shown:?}"));
+        assert!(
+            !inner.starts_with('…') && !inner.ends_with('…'),
+            "one mark a side: {shown:?}"
+        );
+        assert!(inner.starts_with("zeta eta "), "a whole word: {shown:?}");
+        let start = cut_body.find(inner).expect("the note's own text");
+        assert!(
+            !cut_body[start + inner.len()..].starts_with('\u{301}'),
+            "the ceiling lands on a grapheme boundary: {shown:?}"
+        );
+    }
+}
+
+/// CB-32 (#1782): step 0's paragraph — more than sixty bytes of words on
+/// each side of the link, so the stored context is cut inside "epsilon"
+/// on the left and inside "lambda" on the right.
+const CUT_RUN: &str =
+    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho";
+
+fn cut_paragraph(link: &str) -> String {
+    format!("{CUT_RUN} {link} {CUT_RUN}")
+}
+
+/// What every read shows for [`cut_paragraph`]: whole words, and "…"
+/// joined to the word on each side that was cut.
+fn cut_paragraph_shown(link: &str) -> String {
+    format!(
+        "…zeta eta theta iota kappa lambda mu nu xi omicron pi rho {link} \
+         alpha beta gamma delta epsilon zeta eta theta iota kappa…"
+    )
+}
+
+#[test]
+fn a_snippet_is_trimmed_on_every_read() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/Target.md", b"# Target\n").unwrap();
+        p.write_file("notes/Long.md", cut_paragraph("![[Target]]").as_bytes())
+            .unwrap();
+        p.write_file("notes/Dangling.md", cut_paragraph("[[Missing]]").as_bytes())
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let shown = cut_paragraph_shown("![[Target]]");
+
+    let backlinks = session
+        .backlinks("notes/Target.md", Paging::first(10))
+        .unwrap();
+    assert_eq!(backlinks.items.len(), 1);
+    assert_eq!(backlinks.items[0].snippet, shown, "backlinks");
+
+    let outgoing = session.outgoing_links("notes/Long.md").unwrap();
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].snippet, shown, "outgoing_links");
+
+    let target_panels = session
+        .note_link_panels("notes/Target.md", Paging::first(10), 8, 4)
+        .unwrap();
+    assert_eq!(target_panels.backlinks.items.len(), 1);
+    assert_eq!(
+        target_panels.backlinks.items[0].snippet, shown,
+        "note_link_panels backlinks"
+    );
+    let source_panels = session
+        .note_link_panels("notes/Long.md", Paging::first(10), 8, 4)
+        .unwrap();
+    assert_eq!(source_panels.outgoing_links.len(), 1);
+    assert_eq!(
+        source_panels.outgoing_links[0].snippet, shown,
+        "note_link_panels outgoing_links"
+    );
+    assert_eq!(source_panels.embed_links.len(), 1);
+    assert_eq!(
+        source_panels.embed_links[0].snippet, shown,
+        "note_link_panels embed_links"
+    );
+
+    // The CLI's path.
+    let target_bundle = session
+        .note_load_bundle("notes/Target.md", Paging::first(10))
+        .unwrap();
+    assert_eq!(target_bundle.backlinks.items.len(), 1);
+    assert_eq!(
+        target_bundle.backlinks.items[0].snippet, shown,
+        "note_load_bundle backlinks"
+    );
+    let source_bundle = session
+        .note_load_bundle("notes/Long.md", Paging::first(10))
+        .unwrap();
+    assert_eq!(source_bundle.outgoing_links.len(), 1);
+    assert_eq!(
+        source_bundle.outgoing_links[0].snippet, shown,
+        "note_load_bundle outgoing_links"
+    );
+
+    let unresolved = session.list_unresolved_links(Paging::first(10)).unwrap();
+    assert_eq!(unresolved.items.len(), 1);
+    assert_eq!(
+        unresolved.items[0].snippet,
+        cut_paragraph_shown("[[Missing]]"),
+        "list_unresolved_links"
     );
 }
 
