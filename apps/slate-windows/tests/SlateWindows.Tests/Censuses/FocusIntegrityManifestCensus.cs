@@ -32,6 +32,13 @@
 //   xaml-items    a XAML ItemsSource given by a markup extension
 //   xaml-content  a XAML ContentControl's or ContentPresenter's Content given
 //                 by a markup extension
+//   xaml-command  a XAML Command= on an element that takes the keys itself,
+//                 not a menu row (plan 47 CB-17a, #1866)
+//   command       a C# write of a button's or a hyperlink's command (CB-17a)
+//
+// Each XAML trigger that sets IsEnabled to anything but True is a site of its
+// own, keyed by its condition (CB-17a); Visibility triggers keep one key per
+// carrier.
 //
 // A property set in an object creation's initializer, or anything a
 // constructor writes, is a new element's initial state — it holds no keys
@@ -58,6 +65,12 @@
 //                       fact of its own.
 //   exempt: <reason>    a fact the reason cites (SomethingTests.Method) must
 //                       exist
+//
+// A site that can turn a control off with the keys on it (an IsEnabled
+// trigger, binding or write, and every command site) takes only the witnesses
+// of FocusIntegrityManifestCensus.KeysFirst.cs (CB-17a, CD11): keys-first,
+// four checked exemptions, or a dated row that CB-17b ends. guard: and a fact
+// that only names such a site no longer witness it.
 //
 // SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites the manifest with the scraped sites,
 // keeping every assignment and leaving new sites unassigned, which fails
@@ -1071,8 +1084,18 @@ public sealed partial class FocusIntegrityManifestCensus
         {
             ["_doc"] = "W7-7 PR 4b (#1247, R-5; the owner's S6): every site that can take the element holding the keys away under them, "
                 + "and what witnesses its landing: a fact that names the site ('Class.Method'), 'guard: <scope>' for a site inside a "
-                + "guarded scope that neither is nor holds a region root, or 'exempt: <reason>'. FocusIntegrityManifestCensus scrapes "
-                + "the sites and judges each witness; SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
+                + "guarded scope that neither is nor holds a region root, or 'exempt: <reason>'. Plan 47 CB-17a (#1866, CD11): a site "
+                + "that can turn a control off with the keys on it (each IsEnabled trigger by its condition, an IsEnabled binding or "
+                + "write, and every command button, 'xaml-command' and 'command') takes only 'keys-first: Class.Method' (a fact whose "
+                + "own code names the site, a trigger's condition token or an unnamed button's command, and calls "
+                + "KeysFirstRecorder.AssertTheKeysLeaveFirst), 'exempt: not focusable', 'exempt: always on: Type.Property' (read from "
+                + "every construction of every property of that name), 'exempt: its own press never turns it off: <why>', 'exempt: "
+                + "never fires: <why> (Class.Method)', or 'dated: 2026-11-21; CB-17b (CD11): <mechanism>' for a key in DatedBaseline, "
+                + "whose count only falls. The press exemption's limit: another driver (a refresh's or a rescan's deselect, an "
+                + "in-place change of item, a find bar's mode switch) can still turn such a control off under the keys, and this "
+                + "census does not judge other drivers (#1955). A menu row is no command site: its menu gives the keys back before "
+                + "its command runs (MenuRowCommandTests). FocusIntegrityManifestCensus scrapes the sites and judges each witness; "
+                + "SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
             ["sites"] = new JsonObject(sites.OrderBy(entry => entry.Key, StringComparer.Ordinal)
                 .Select(entry => KeyValuePair.Create(entry.Key, (JsonNode?)JsonValue.Create(entry.Value)))),
         };

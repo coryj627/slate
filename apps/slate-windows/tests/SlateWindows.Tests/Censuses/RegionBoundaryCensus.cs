@@ -243,19 +243,35 @@ public sealed class RegionBoundaryCensus
                 return false;
             }
 
-            bool focusable = (string?)candidate.Attribute("Focusable") switch
-            {
-                "False" => false,
-                "True" => true,
-                { } bound when bound.StartsWith('{') => true,
-                _ => DefaultFocusable(type),
-            };
-            return focusable
+            return Focusable(candidate, type)
                 || (type.Assembly == typeof(MainWindow).Assembly && typeof(Control).IsAssignableFrom(type))
                 || typeof(ItemsControl).IsAssignableFrom(type)
                 || typeof(ContentControl).IsAssignableFrom(type) && candidate.Attribute("Content") is { } content && content.Value.StartsWith('{');
         });
     }
+
+    /// <summary>Whether <paramref name="element"/> itself can take the keys: a UIElement
+    /// focusable by its declaration (a bound Focusable may be) or its type's default
+    /// (#1866: FocusIntegrityManifestCensus's command sites). HoldsAStop's other clauses,
+    /// an element that holds focusables, are not asked.</summary>
+    internal static bool IsFocusable(XElement element) =>
+        !element.Name.LocalName.Contains('.', StringComparison.Ordinal)
+        && Resolve(element) is { } type
+        && Focusable(element, type);
+
+    /// <summary>The UIElement type an element names in its own document, or null for a
+    /// non-visual (a binding, a definition, a trigger) or a content element.</summary>
+    internal static Type? Resolve(XElement element) =>
+        Resolve(element, element.Document is { } document ? ClrNamespaces(document) : []);
+
+    private static bool Focusable(XElement element, Type type) =>
+        (string?)element.Attribute("Focusable") switch
+        {
+            "False" => false,
+            "True" => true,
+            { } bound when bound.StartsWith('{') => true,
+            _ => DefaultFocusable(type),
+        };
 
     /// <summary>Elements that are not placed where they are written:
     /// resources and styles (templates applied elsewhere, each inside the
