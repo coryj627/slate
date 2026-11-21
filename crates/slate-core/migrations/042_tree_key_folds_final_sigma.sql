@@ -22,6 +22,17 @@
 -- missing from the index (measured for CB-32). So the rebuild is what
 -- keeps every lookup right. Same replay discipline as 033, 037, 039 and
 -- 041: drop our owned index, then create it.
+--
+-- A link resolved under the old fold keeps its target until its source is
+-- indexed again, and a scan re-resolves only dangling rows. Only a target
+-- that holds a sigma can resolve differently under the new fold (a target
+-- with none folds the same way, and so does every file it can match), so
+-- those rows are set dangling here and the open's scan resolves them again
+-- at its tail. Until that scan ends, such a link reads as unresolved.
+UPDATE links SET target_path = NULL
+WHERE is_external = 0 AND target_path IS NOT NULL
+  AND (instr(target_raw, 'ς') > 0 OR instr(target_raw, 'σ') > 0 OR instr(target_raw, 'Σ') > 0);
+
 DROP INDEX IF EXISTS idx_dirs_parent_tree;
 CREATE INDEX idx_dirs_parent_tree
     ON dirs(parent_path, slate_tree_sort_key(name), path COLLATE BINARY);

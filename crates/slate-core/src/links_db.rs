@@ -1056,8 +1056,8 @@ fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
     // `[…](…)`, `![…](…)`, and the autolinks `<https://…>` and `<a@b.co>`.
     // When brackets beside the link qualify too (a wikilink's second `[`
     // starts a false place one byte in, when a `)`, `]` or `>` follows it),
-    // each cut test takes the place that marks a cut less, and each guard
-    // the place that keeps the most text: the left guard the smallest, the
+    // each cut test takes the place that reads a cut, and each guard the
+    // place that keeps the most text: the left guard the smallest, the
     // right guard the largest, so neither trims into the link.
     let first = span_start.min(SNIPPET_RADIUS);
     let last = span_start.min(SNIPPET_RADIUS + CHAR_ROUNDING);
@@ -1067,7 +1067,11 @@ fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
     };
     let largest = places.next_back().unwrap_or(smallest);
 
-    let left_cut = largest < span_start;
+    // A cut is read as a cut whenever any place says so: a false place one
+    // byte in must not hide a partial first word (Codex round 1). Marking a
+    // cut that did not happen costs one whole word under a "…", the loss
+    // CD22 accepted; hiding one leaves the broken word this trim removes.
+    let left_cut = smallest < span_start;
     let right_cut = snippet.len() - (smallest + span_len) >= SNIPPET_RADIUS;
     let start = if left_cut {
         left_edge(&snippet, smallest)
@@ -1720,6 +1724,31 @@ mod tests {
             let read = snippets_read_back(&source);
             for shown in read.backlinks.iter().chain(&read.outgoing) {
                 assert!(shown.contains(link), "{link} stays whole: {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bracket_beside_a_link_never_hides_a_cut() {
+        // The same false place, one byte past the link's start, must not
+        // read as "nothing was cut": with the link at bytes 61 to 63 the
+        // stored text starts inside "Reading", and the shown text starts
+        // on a whole word after a mark (Codex round 1).
+        for pad in 0..3 {
+            let source = format!(
+                "Reading {}{}see ([[Target]]) tail.",
+                " ".repeat(pad),
+                "words ".repeat(8)
+            );
+            let link_at = source.find("[[Target]]").unwrap();
+            assert_eq!(link_at, 61 + pad, "the fixture puts the link at {link_at}");
+            let read = snippets_read_back(&source);
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                assert!(
+                    shown.starts_with("…words "),
+                    "the cut is marked and starts on a word: {shown:?}"
+                );
+                assert!(shown.contains("([[Target]]) tail."), "{shown:?}");
             }
         }
     }

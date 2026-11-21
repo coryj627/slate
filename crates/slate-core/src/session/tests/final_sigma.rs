@@ -476,6 +476,94 @@ fn undoing_a_batch_move_onto_a_final_sigma_twin_is_refused_at_preflight() {
     assert!(tmp.path().join("dest").join("κοσμος.md").exists());
 }
 
+/// Stand a vault's cache back at version 41 with every index over the fold
+/// written by the old fold (NFC + `to_lowercase`), as a build before
+/// migration 042 left it; `old_rows` then writes rows as that build would.
+fn stand_back_at_41(root: &std::path::Path, old_rows: impl FnOnce(&rusqlite::Connection)) {
+    let conn = rusqlite::Connection::open(root.join(".slate").join("cache.sqlite")).unwrap();
+    crate::db::register_connection_functions(&conn).unwrap();
+    conn.create_scalar_function(
+        "slate_tree_sort_key",
+        1,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            use unicode_normalization::UnicodeNormalization;
+            let name = context.get::<Option<String>>(0)?;
+            Ok(name.map(|name| name.nfc().collect::<String>().to_lowercase()))
+        },
+    )
+    .unwrap();
+    let indexes: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
+                 AND sql LIKE '%slate_tree_sort_key%' ORDER BY name",
+            )
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(indexes.len(), 7, "{indexes:?}");
+    for (name, sql) in &indexes {
+        conn.execute_batch(&format!("DROP INDEX {name}; {sql};"))
+            .unwrap();
+    }
+    old_rows(&conn);
+    conn.execute("DELETE FROM schema_version WHERE version > 41", [])
+        .unwrap();
+}
+
+/// A link an older build resolved to one of a `ς`/`σ` pair by its exact
+/// spelling takes the pair's tiebreak after the upgrade with no save of
+/// its source: migration 042 clears the resolution of every internal link
+/// whose target carries a sigma, and the open's scan resolves them again
+/// with the new fold (Codex round 1).
+#[test]
+fn an_upgrade_resolves_a_sigma_link_again_without_a_save() {
+    let (tmp, session) = scanned(|provider| {
+        provider
+            .write_file("A.md", "[[οδοσ]] [[other]]\n".as_bytes())
+            .unwrap();
+        provider.write_file("other.md", "# o\n".as_bytes()).unwrap();
+        provider
+            .write_file("οδος.md", "# final\n".as_bytes())
+            .unwrap();
+    });
+    let pair_written = std::fs::write(tmp.path().join("οδοσ.md"), "# medial\n").is_ok()
+        && std::fs::read_to_string(tmp.path().join("οδος.md")).unwrap() == "# final\n";
+    if !pair_written {
+        // A volume that folds the two sigmas (APFS, by reading) cannot
+        // hold the pair, so there is nothing to resolve again.
+        return;
+    }
+    session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    drop(session);
+    // The older build resolved `[[οδοσ]]` to the exact spelling.
+    stand_back_at_41(tmp.path(), |conn| {
+        let changed = conn
+            .execute(
+                "UPDATE links SET target_path = 'οδοσ.md' WHERE target_raw = 'οδοσ'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    });
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        targets(&session, "A.md"),
+        vec![
+            ("οδοσ".to_string(), Some("οδος.md".to_string())),
+            ("other".to_string(), Some("other.md".to_string())),
+        ]
+    );
+}
+
 /// An index an older build wrote under the old fold is rebuilt by
 /// migration 042 at the next open, so with no rescan a save resolves
 /// `[[ΚΟΣΜΟΣ]]` to `κοσμος.md` through the rebuilt name index, and a create
@@ -493,44 +581,7 @@ fn an_upgraded_index_resolves_a_final_sigma_link_without_a_rescan() {
             .unwrap();
     });
     drop(session);
-    // Stand the cache back at version 41 with every index over the fold
-    // written by the old fold, as a build before migration 042 left it.
-    {
-        let conn =
-            rusqlite::Connection::open(tmp.path().join(".slate").join("cache.sqlite")).unwrap();
-        crate::db::register_connection_functions(&conn).unwrap();
-        conn.create_scalar_function(
-            "slate_tree_sort_key",
-            1,
-            rusqlite::functions::FunctionFlags::SQLITE_UTF8
-                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
-            |context| {
-                use unicode_normalization::UnicodeNormalization;
-                let name = context.get::<Option<String>>(0)?;
-                Ok(name.map(|name| name.nfc().collect::<String>().to_lowercase()))
-            },
-        )
-        .unwrap();
-        let indexes: Vec<(String, String)> = {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
-                     AND sql LIKE '%slate_tree_sort_key%' ORDER BY name",
-                )
-                .unwrap();
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .unwrap()
-                .map(Result::unwrap)
-                .collect()
-        };
-        assert_eq!(indexes.len(), 7, "{indexes:?}");
-        for (name, sql) in &indexes {
-            conn.execute_batch(&format!("DROP INDEX {name}; {sql};"))
-                .unwrap();
-        }
-        conn.execute("DELETE FROM schema_version WHERE version > 41", [])
-            .unwrap();
-    }
+    stand_back_at_41(tmp.path(), |_| {});
     let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     session
         .save_text("B.md", "[[ΚΟΣΜΟΣ]] [[κοσμος]]\n", None)
