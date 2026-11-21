@@ -147,8 +147,21 @@ impl VaultIndex for PreMoveIndex<'_> {
                 CandidateProbe::Names(with_moved_keys(keys, &self.mapping.moved_by_name))
             }
         };
-        for path in self.post.candidate_paths(&probe) {
-            selector.offer(self.mapping.old_path_of(path));
+        // The pre-move world offered its candidates in its own path order
+        // (`candidate_rows_sql` orders a path lookup by path; a basename's
+        // rank carries the path), so equal exact matches went to the
+        // byte-smallest pre-move path. The post-move order can put a moved
+        // twin after the one it used to precede (Codex round 3 on CB-32), so
+        // the mapped-back candidates are offered in pre-move path order.
+        let mut pre_move: Vec<&str> = self
+            .post
+            .candidate_paths(&probe)
+            .into_iter()
+            .map(|path| self.mapping.old_path_of(path))
+            .collect();
+        pre_move.sort_unstable();
+        for path in pre_move {
+            selector.offer(path);
         }
     }
 }
@@ -432,6 +445,45 @@ mod tests {
         post_paths: &[&str],
     ) -> Vec<LinkEdit> {
         plan_rewrites_for_source(source_path, text, mapping, &index(post_paths))
+    }
+
+    /// Codex round 3 on CB-32: between two files that answer one exact key
+    /// (case twins on a case-sensitive volume, `ς`/`σ` twins on NTFS since
+    /// #1705), the pre-move winner is the one the resolver offered first in
+    /// the pre-move world, its path order. Renaming that winner must rewrite
+    /// the link to its new name, whatever order the post-move index offers
+    /// the twins in.
+    #[test]
+    fn renaming_one_of_two_equal_key_twins_rewrites_the_exact_link_that_named_it() {
+        for (twin_a, twin_b, renamed, target, expected) in [
+            ("οδος.md", "οδοσ.md", "ψ.md", "/οδος", "[[ψ]]"),
+            ("NOTE.md", "Note.md", "zeta.md", "/note", "[[zeta]]"),
+        ] {
+            // The pre-move winner is the byte-smaller twin, `twin_a`.
+            let pre = resolve_link(
+                target,
+                None,
+                "Source.md",
+                &index(&["Source.md", twin_a, twin_b]),
+            );
+            assert!(
+                matches!(&pre, ResolvedLink::Resolved { target_path, .. } if target_path == twin_a),
+                "{target}: {pre:?}"
+            );
+            let mapping = moved(&[(twin_a, renamed)]);
+            let text = format!("See [[{target}]].\n");
+            let edits = plan(
+                "Source.md",
+                &text,
+                &mapping,
+                &["Source.md", twin_b, renamed],
+            );
+            assert_eq!(
+                apply_edits(&text, &edits),
+                format!("See {expected}.\n"),
+                "renaming {twin_a} beside {twin_b}"
+            );
+        }
     }
 
     // --- The spec's fixture matrix (byte-exact assertions) ---

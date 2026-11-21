@@ -297,6 +297,50 @@ fn the_sidebar_filter_finds_a_final_sigma_name_whichever_sigma_was_typed() {
     }
 }
 
+/// Renaming one of two files that answer one exact key keeps every exact
+/// link that named it pointing at it under its new name: the rename
+/// planner judges what the link meant before the move in the pre-move
+/// world's own candidate order (Codex round 3; the owner: "Fix it here").
+/// Run for `ς`/`σ` twins (NTFS holds them) and for case twins, which only
+/// a case-sensitive volume holds; on a volume that folds a pair, that
+/// arm has nothing to run and says so.
+#[test]
+fn renaming_one_of_two_twins_keeps_the_exact_link_on_it() {
+    for (twin_a, twin_b, renamed, link) in [
+        ("οδος.md", "οδοσ.md", "ψ.md", "[[/οδος]]"),
+        ("NOTE.md", "Note.md", "zeta.md", "[[/note]]"),
+    ] {
+        let (tmp, session) = make_vault(|provider| {
+            provider.write_file(twin_a, b"# a\n").unwrap();
+        });
+        let held = std::fs::write(tmp.path().join(twin_b), "# b\n").is_ok()
+            && std::fs::read_to_string(tmp.path().join(twin_a)).unwrap() == "# a\n"
+            && std::fs::read_dir(tmp.path()).unwrap().count() >= 2;
+        if !held {
+            // The two are one name on this volume: nothing to rename apart.
+            continue;
+        }
+        std::fs::write(tmp.path().join("Source.md"), format!("See {link}.\n")).unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert_eq!(
+            targets(&session, "Source.md")[0].1.as_deref(),
+            Some(twin_a),
+            "{link} names the byte-smaller twin before the rename"
+        );
+        session.rename_file(twin_a, renamed).unwrap();
+        // The cached row follows the rename by itself; what the file now
+        // says is the test. Resolving its text again must still find the
+        // renamed note, not the twin left behind.
+        let text = std::fs::read_to_string(tmp.path().join("Source.md")).unwrap();
+        session.save_text("Source.md", &text, None).unwrap();
+        assert_eq!(
+            targets(&session, "Source.md")[0].1.as_deref(),
+            Some(renamed),
+            "{link} follows {twin_a} to {renamed}: the source now reads {text:?}"
+        );
+    }
+}
+
 /// A `ς`/`σ` pair already in a vault (NTFS and a case-sensitive volume
 /// both hold one) behaves as case variants do: a link naming either takes
 /// the resolver's tiebreak, the byte-smaller path, and the collision gate
