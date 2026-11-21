@@ -584,7 +584,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
         {
-            ReportTerminalStatus($"Could not open vault: {exception.Message}", A11yPriority.High);
+            ReportTerminalStatus($"Could not open vault: {FailureDetail.Of(exception)}", A11yPriority.High);
             return;
         }
 
@@ -807,7 +807,7 @@ internal sealed partial class VaultLifecycleViewModel
         {
             if (generation == _generation)
             {
-                ReportTerminalStatus($"Unexpected vault error: {exception.Message}", A11yPriority.High);
+                ReportTerminalStatus($"Unexpected vault error: {FailureDetail.Of(exception)}", A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
                 // No vault is open: the one that failed leaves the window's
@@ -1246,7 +1246,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            string message = $"Could not save recent vaults: {exception.Message}";
+            string message = $"Could not save recent vaults: {FailureDetail.Of(exception)}";
             HostLog.Write(HostDiagnosticEvent.RecentVaultsPersistFailed, exception);
             ReportTerminalStatus(message, A11yPriority.High);
             return null;
@@ -1285,7 +1285,7 @@ internal sealed partial class VaultLifecycleViewModel
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             ReportTerminalStatus(
-                $"Could not update recent vaults: {exception.Message}",
+                $"Could not update recent vaults: {FailureDetail.Of(exception)}",
                 A11yPriority.High);
         }
     }

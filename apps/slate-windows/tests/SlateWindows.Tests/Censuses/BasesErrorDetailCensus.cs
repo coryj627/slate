@@ -29,7 +29,8 @@
 //   body this census checks), a TaskCompletionSource, an exception's
 //   constructor, a throw, or a type, pattern or null test. Anything else
 //   (ToString, interpolation, concatenation, string.Format, an object slot)
-//   is named.
+//   is named. ShellFailureDetailCensus runs this rule's text sinks alone
+//   (TextSinks) over every shell source.
 //
 // It fails closed on binding: the Bases sources must bind without errors, so
 // an unbound type can never hide a read.
@@ -706,6 +707,90 @@ public sealed class BasesErrorDetailCensus
             }
         }
     }
+
+    /// <summary>Rule 2's text sinks alone, which ShellFailureDetailCensus
+    /// runs over every shell source (#1890, plan 47 CB-15c): an exception, or
+    /// a value that carries one, made text directly. An interpolation hole, a
+    /// string concatenation (<c>+</c> or <c>+=</c>), a <c>ToString()</c> call
+    /// on it, or an argument to the framework's text builders
+    /// (<see cref="TextBuilders"/>). The other uses rule 2 names on the Bases
+    /// sources (a field, an object slot, a generic helper, a delegate) are not
+    /// sinks here. A stored exception whose Message is later read still meets
+    /// rule 1; but a holder of one that is itself made text (a record's
+    /// generated ToString), an erasure to object that is later made text, and
+    /// a serializer are beyond this list (ShellFailureDetailCensus's header
+    /// names them).</summary>
+    internal static IEnumerable<string> TextSinks(SemanticModel model, string file, Func<SyntaxNode, bool> isHelper)
+    {
+        INamedTypeSymbol exception = model.Compilation.GetTypeByMetadataName("System.Exception")
+            ?? throw new InvalidOperationException("System.Exception does not bind.");
+        foreach (SyntaxNode node in model.SyntaxTree.GetRoot().DescendantNodes())
+        {
+            // The cheap test on the parent's shape first, then the types: the
+            // census walks every expression of the shell.
+            if (node is ExpressionSyntax expression
+                && IsTextSinkShape(expression)
+                && !isHelper(node)
+                && IsExceptionValue(model, expression, exception)
+                && !CarriedOn(model, expression, exception)
+                && IsTextSink(model, expression))
+            {
+                yield return $"{file} line {Line(node)}: {expression} becomes text through `{Snippet(expression)}`; "
+                    + "use FailureDetail.Of.";
+            }
+        }
+    }
+
+    /// <summary>The framework types whose methods make their arguments text:
+    /// a string's Format, Concat and Join, a builder's Append and Insert, a
+    /// writer's Write, Convert.ToString, and the interpolation and debug
+    /// writers.</summary>
+    private static readonly HashSet<string> TextBuilders =
+    [
+        "System.String",
+        "System.Text.StringBuilder",
+        "System.IO.TextWriter",
+        "System.IO.StringWriter",
+        "System.Console",
+        "System.Convert",
+        "System.FormattableString",
+        "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler",
+        "System.Diagnostics.Debug",
+        "System.Diagnostics.Trace",
+    ];
+
+    /// <summary>Whether the parent has a sink's shape at all, by syntax
+    /// alone: an interpolation hole, a <c>+</c> or <c>+=</c>, a member access
+    /// or conditional access on the value, or an argument.</summary>
+    private static bool IsTextSinkShape(ExpressionSyntax expression) =>
+        expression.Parent is InterpolationSyntax
+            or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression }
+            or AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression }
+            or MemberAccessExpressionSyntax
+            or ConditionalAccessExpressionSyntax
+            or ArgumentSyntax;
+
+    /// <summary>Whether the parent makes <paramref name="expression"/>
+    /// text: see <see cref="TextSinks"/>.</summary>
+    private static bool IsTextSink(SemanticModel model, ExpressionSyntax expression) =>
+        expression.Parent switch
+        {
+            InterpolationSyntax hole => hole.Expression == expression,
+            BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } sum =>
+                model.GetTypeInfo(sum).Type?.SpecialType == SpecialType.System_String,
+            AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression } append =>
+                append.Right == expression && model.GetTypeInfo(append.Left).Type?.SpecialType == SpecialType.System_String,
+            MemberAccessExpressionSyntax access when access.Expression == expression =>
+                access.Name.Identifier.ValueText == "ToString",
+            ConditionalAccessExpressionSyntax conditional when conditional.Expression == expression =>
+                conditional.WhenNotNull.DescendantNodesAndSelf().OfType<MemberBindingExpressionSyntax>().FirstOrDefault()
+                    is { Name.Identifier.ValueText: "ToString" },
+            ArgumentSyntax { Parent.Parent: { } call } =>
+                model.GetSymbolInfo(call).Symbol is IMethodSymbol method
+                && TextBuilders.Contains(
+                    method.ContainingType.ContainingNamespace.ToDisplayString() + "." + method.ContainingType.MetadataName),
+            _ => false,
+        };
 
     /// <summary>One read of an exception's <c>Message</c>: where it is, and
     /// the access, pattern, arm or case it is part of.</summary>

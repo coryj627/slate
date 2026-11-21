@@ -1,7 +1,10 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows.Input;
+using System.Windows.Threading;
 using SlateWindows.Canvas;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -479,5 +482,99 @@ public sealed class CanvasFailureDetailTests : IDisposable
         AssertSaid(document, new CanvasA11yEvent.CanvasActionFailed(
             CanvasFailedAction.CanvasAction, "canvas action \"edit \\\"Unfiled thought\\\"\" rejected: unknown node \"loose\""));
         document.Shutdown();
+    }
+
+    /// <summary>Plan 47 CB-15c, Find 4: the board opened in a workspace, as
+    /// the Files sidebar opens one, with the <c>loose</c> card removed in core
+    /// behind the document, so its row still stands.</summary>
+    private CanvasDocumentViewModel OpenWithTheLooseCardGoneInCore(WorkspaceViewModel workspace)
+    {
+        workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        document.SeatSelectionSilently("loose");
+        ApplyBehindTheDocument(document, new CanvasOp.DeleteNode("loose"));
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+        return document;
+    }
+
+    /// <summary>The card editor did not open, and the document said, once,
+    /// the canvas's existing sentence for a card whose text cannot be
+    /// read.</summary>
+    private void AssertTheCardTextIsUnreadable(WorkspaceViewModel workspace, CanvasDocumentViewModel document)
+    {
+        Assert.Null(workspace.CanvasCardEditorSheet);
+        document.AnnouncerForTests.FlushForTests();
+        RenderedAnnouncement said = Assert.Single(_announced);
+        RenderedAnnouncement expected = SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+            new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.CardTextUnreadable())));
+        Assert.Equal(expected.Text, said.Text);
+        Assert.Equal(expected.Priority, said.Priority);
+        Assert.DoesNotMatch(FieldToken, said.Text);
+    }
+
+    /// <summary>Find 4: a row's Edit Card Text on a card core no longer holds
+    /// (its deletion committed in core before its publication applied here).
+    /// Core's refusal of the editor's seed read is caught: nothing escapes to
+    /// the dispatcher, no editor opens, and the canvas says the card's text
+    /// cannot be read.</summary>
+    [Fact]
+    public void RowActivationOnACardCoreNoLongerHoldsSaysItsTextIsUnreadable()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        CanvasDocumentViewModel document = OpenWithTheLooseCardGoneInCore(workspace);
+
+        Exception? thrown = Record.Exception(() => document.RequestCardEditor("loose"));
+
+        Assert.Null(thrown);
+        AssertTheCardTextIsUnreadable(workspace, document);
+    }
+
+    /// <summary>Find 4 through the palette: Canvas: Edit Card Text… on the
+    /// selected card core no longer holds, invoked through the palette's own
+    /// path. The command runs and fails no action: no editor opens, and the
+    /// canvas says the card's text cannot be read.</summary>
+    [Fact]
+    public void ThePalettesEditCardTextOnACardCoreNoLongerHoldsSaysItsTextIsUnreadable()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        CanvasDocumentViewModel document = OpenWithTheLooseCardGoneInCore(workspace);
+        var host = new WorkspaceCommandHost(workspace);
+        Assert.Null(SlateCommandRegistrar.DisabledReason(host, ChordTable.Ids.CanvasEditCard));
+        using var registry = new CommandRegistry();
+        SlateCommandRegistrar.RegisterAll(registry, host, Dispatcher.CurrentDispatcher);
+
+        Exception? thrown = Record.Exception(() => registry.InvokeById(ChordTable.Ids.CanvasEditCard));
+
+        Assert.Null(thrown);
+        AssertTheCardTextIsUnreadable(workspace, document);
+    }
+
+    /// <summary>The palette's command host over one workspace; the shell's
+    /// own commands do nothing here.</summary>
+    private sealed class WorkspaceCommandHost(WorkspaceViewModel workspace) : ISlateCommandHost
+    {
+        private static readonly ICommand Inert = new RelayCommand(_ => { }, _ => true);
+
+        public WorkspaceViewModel? Workspace => workspace;
+
+        public FilesSidebarViewModel? FileSidebar => null;
+
+        public QuickSwitcherViewModel? QuickSwitcher => null;
+
+        public ICommand OpenVaultCommand => Inert;
+
+        public ICommand CloseVaultCommand => Inert;
+
+        public ICommand ToggleSearchCommand => Inert;
+
+        public ICommand FindInNoteCommand => Inert;
+
+        public ICommand OpenSettingsCommand => Inert;
+
+        public ICommand SwitchThemeCommand => Inert;
+
+        public bool IsVaultOpen => true;
     }
 }

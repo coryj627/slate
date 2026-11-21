@@ -240,7 +240,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 Post(() => PublishProperties(
-                    generation, requestId, path, [], "", exception.Message, announce,
+                    generation, requestId, path, [], "", FailureDetail.Of(exception), announce,
                     discardDraftKey, []));
             }
         });

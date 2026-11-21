@@ -211,7 +211,7 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 InterleaveForTests?.Invoke();
-                Post(() => Publish(generation, requestId, path, [], null, exception.Message));
+                Post(() => Publish(generation, requestId, path, [], null, FailureDetail.Of(exception)));
             }
         });
     }

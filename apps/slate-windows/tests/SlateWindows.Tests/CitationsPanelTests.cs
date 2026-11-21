@@ -230,7 +230,8 @@ public sealed class CitationsPanelTests : IDisposable
         Assert.NotEmpty(panel.Rows);
 
         // Drive the failure through the publish seam: the worker's
-        // catch filter funnels every VaultException here, and this is
+        // catch takes every exception but out of memory, stack overflow
+        // and access violation and publishes its detail here, and this is
         // the deterministic way to assert the surface without faking a
         // broken session.
         panel.Publish(

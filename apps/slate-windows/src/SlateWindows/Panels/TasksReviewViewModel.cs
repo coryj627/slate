@@ -399,7 +399,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             // Re-validated AFTER the query, BEFORE publication
             // (adversarial round 16): a post-write failure that
@@ -620,7 +620,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             // Round 16: a quarantine registration during the query
             // means the appended rows may be ghosts — treat it as
@@ -808,7 +808,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 _repairs.EndMutation(path, indexConsistent: false);
                 leaseSettled = true;
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
                 vaultFailure = exception as VaultException;
                 // Round 11: the core writes the FILE before
                 // committing the index, so a non-conflict failure
@@ -881,7 +881,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                         {
                             if (!IsShutDown)
                             {
-                                _announce(new A11yEvent.TaskToggleFailed(fault.Message));
+                                _announce(new A11yEvent.TaskToggleFailed(FailureDetail.Of(fault)));
                             }
                         }
                         catch (Exception exception)

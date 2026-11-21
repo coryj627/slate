@@ -570,7 +570,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         }
         catch (VaultException exception)
         {
-            failure = exception.Message;
+            failure = FailureDetail.Of(exception);
             page = new VersionSummaryPage([], null, 0);
         }
         LoadInterleaveForTests?.Invoke();
@@ -691,7 +691,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
                 page = new VersionSummaryPage([], null, 0);
             }
             Post(() =>
@@ -957,7 +957,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             DiffInterleaveForTests?.Invoke();
             Post(() =>
@@ -1082,7 +1082,7 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
                 page = new DeletedFilePage([], null, 0);
             }
             Post(() =>

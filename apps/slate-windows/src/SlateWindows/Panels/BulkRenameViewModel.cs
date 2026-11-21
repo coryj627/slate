@@ -306,7 +306,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                error = exception.Message;
+                error = FailureDetail.Of(exception);
             }
             Post(() => PublishPreview(requestId, oldKey, newKey, report, error, oldKeyType));
         });
@@ -340,7 +340,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                error = exception.Message;
+                error = FailureDetail.Of(exception);
             }
             ran(new ApplyOutcome(report, error));
         });

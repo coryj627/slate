@@ -218,7 +218,7 @@ internal sealed partial class WorkspaceViewModel
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            notices.Add(exception.Message);
+            notices.Add(FailureDetail.Of(exception));
             // Core's set_bibliography_sources is ALL-OR-NOTHING, and
             // since #1082 a failure also CLEARS the table and index
             // rather than leaving the previous session's entries live.

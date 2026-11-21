@@ -236,7 +236,9 @@ public sealed class SyncDiagnosticsPanelTests : IDisposable
         panel.Reload();
 
         Assert.Equal(SyncDiagnosticsState.Error, panel.State);
-        Assert.Equal(thrown.Message, panel.LoadError);
+        // Plan 47 CB-15c (#1890): core's detail, never the binding's field
+        // dump ("@message=probe exploded").
+        Assert.Equal("probe exploded", panel.LoadError);
         Assert.Equal(1, publishes);
         // Neither half of the failed probe reached the published state.
         Assert.Same(rendered, panel.Report);

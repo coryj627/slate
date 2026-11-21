@@ -335,7 +335,7 @@ internal sealed partial class WorkspaceTabViewModel
                         path, indexConsistent: inner is VaultException.WriteConflict);
                     leaseSettled = true;
                     failure = inner as VaultException
-                        ?? new VaultException.InvalidArgument(inner.Message);
+                        ?? new VaultException.InvalidArgument(FailureDetail.Of(inner));
                     postFailureDiskHash = ReadBackDiskHashAfterFailure(path, failure);
                 }
             }
