@@ -896,6 +896,117 @@ mod tests {
             )
             .expect("Slate connections expose the deterministic tree sort key");
         assert_eq!(key, "étude.md");
+        // #1705 (CB-32): the registered function folds the final sigma as
+        // the Rust key does.
+        for name in ["ΚΟΣΜΟΣ.md", "κοσμος", "Κοσμος"] {
+            let key: String = conn
+                .query_row("SELECT slate_tree_sort_key(?1)", [name], |row| row.get(0))
+                .unwrap();
+            assert_eq!(key, tree_sort_key(name), "{name:?}");
+            assert!(key.starts_with("κοσμοσ"), "{name:?} folds to {key:?}");
+        }
+    }
+
+    /// #1705 (CB-32): the tree key gives one key for every sigma spelling,
+    /// and leaves every other name as NFC plus full-Unicode lowercase.
+    #[test]
+    fn the_tree_key_folds_both_sigmas_to_one() {
+        let key = tree_sort_key("ΚΟΣΜΟΣ");
+        for spelling in ["κοσμος", "Κοσμος", "κοσμοσ"] {
+            assert_eq!(tree_sort_key(spelling), key, "{spelling:?}");
+        }
+        assert_eq!(tree_sort_key("ΚΟΣΜΟΣ.md"), tree_sort_key("κοσμος.md"));
+        assert_eq!(tree_sort_key("Alpha.md"), "alpha.md");
+        assert_eq!(tree_sort_key("E\u{0301}TUDE"), "étude");
+        assert_eq!(tree_sort_key("日本語.md"), "日本語.md");
+    }
+
+    /// #1705 (CB-32): a cache an older build left at version 41, its seven
+    /// indexes over the fold written by the old fold, is rebuilt by
+    /// migration 042: integrity holds, and each index finds its row by the
+    /// new key. Without the rebuild SQLite reports nothing and the lookups
+    /// silently miss.
+    #[test]
+    fn migration_042_rebuilds_every_index_over_the_tree_key() {
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 41).expect("migrate to 41");
+        conn.create_scalar_function(
+            "slate_tree_sort_key",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                use unicode_normalization::UnicodeNormalization;
+                let name = context.get::<Option<String>>(0)?;
+                Ok(name.map(|name| name.nfc().collect::<String>().to_lowercase()))
+            },
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO files (path, name, extension, size_bytes, mtime_ms, content_hash, \
+                 parser_version, indexed_at_ms, is_markdown) \
+                 VALUES ('Φιλοσοφία/Λόγος.md', 'Λόγος.md', 'md', 1, 1, 'h', 1, 1, 1);
+             INSERT INTO files (path, name, extension, size_bytes, mtime_ms, content_hash, \
+                 parser_version, indexed_at_ms, is_markdown) \
+                 VALUES ('src.md', 'src.md', 'md', 1, 1, 'h', 1, 1, 1);
+             INSERT INTO dirs (path, parent_path, name) VALUES ('Λόγος', '', 'Λόγος');
+             INSERT INTO links (source_file_id, ordinal, target_raw, kind, is_embed, \
+                 is_external, snippet, span_start, span_end) \
+                 SELECT id, 0, 'notes/Λόγος', 'wikilink', 0, 0, '', 0, 1 FROM files WHERE path = 'src.md';
+             INSERT INTO links (source_file_id, ordinal, target_raw, kind, is_embed, \
+                 is_external, snippet, span_start, span_end) \
+                 SELECT id, 1, 'Κόσμος', 'wikilink', 0, 0, '', 0, 1 FROM files WHERE path = 'src.md';",
+        )
+        .expect("rows under the old fold");
+        assert_eq!(migrate(&mut conn).expect("migrate"), 42);
+
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        for (sql, key, index) in [
+            (
+                "SELECT COUNT(*) FROM files WHERE slate_tree_sort_key(path) = ?1",
+                "φιλοσοφία/λόγοσ.md",
+                "idx_files_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM files WHERE slate_tree_sort_key(name) = ?1",
+                "λόγοσ.md",
+                "idx_files_name_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM dirs WHERE slate_tree_sort_key(path) = ?1",
+                "λόγοσ",
+                "idx_dirs_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM dirs WHERE parent_path = '' AND slate_tree_sort_key(name) = ?1",
+                "λόγοσ",
+                "idx_dirs_parent_tree",
+            ),
+            (
+                "SELECT COUNT(*) FROM links WHERE target_path IS NULL AND is_external = 0 \
+                 AND slate_tree_sort_key(slate_link_target_path(target_raw)) = ?1",
+                "notes/λόγοσ",
+                "idx_links_target_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM links WHERE target_path IS NULL AND is_external = 0 \
+                 AND slate_tree_sort_key(slate_link_target_name(target_raw)) = ?1",
+                "κόσμοσ",
+                "idx_links_target_name_fold",
+            ),
+        ] {
+            let plan: String = conn
+                .query_row(&format!("EXPLAIN QUERY PLAN {sql}"), [key], |row| {
+                    row.get::<_, String>(3)
+                })
+                .unwrap();
+            assert!(plan.contains(index), "{sql} does not use {index}: {plan}");
+            let count: i64 = conn.query_row(sql, [key], |row| row.get(0)).unwrap();
+            assert_eq!(count, 1, "{index} misses {key:?}");
+        }
     }
 
     #[test]

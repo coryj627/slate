@@ -1019,6 +1019,49 @@ mod tests {
         }
     }
 
+    /// #1705 (CB-32): a target and a file whose names differ only in how a
+    /// capital sigma lowercases (final `ς` at a word's end, `σ` before more
+    /// letters, so a stem lowered alone and a path lowered whole fold
+    /// apart) resolve to each other, on every target form.
+    #[test]
+    fn a_target_and_a_file_that_differ_only_by_final_sigma_resolve() {
+        for file in ["ΚΟΣΜΟΣ.md", "κοσμος.md", "κοσμοσ.md"] {
+            let index = idx(&[file, "dir/ΚΟΣΜΟΣ.md", "other.md"]);
+            for target in [
+                "ΚΟΣΜΟΣ",
+                "κοσμος",
+                "Κοσμος",
+                "κοσμοσ",
+                "ΚΟΣΜΟΣ.md",
+                "/ΚΟΣΜΟΣ",
+            ] {
+                let resolved = resolve_link(target, None, "other.md", &index);
+                assert_eq!(winner(&resolved), Some(file), "[[{target}]] against {file}");
+            }
+            for target in ["dir/ΚΟΣΜΟΣ", "dir/κοσμος", "/dir/Κοσμος"] {
+                let resolved = resolve_link(target, None, "other.md", &index);
+                assert_eq!(
+                    winner(&resolved),
+                    Some("dir/ΚΟΣΜΟΣ.md"),
+                    "[[{target}]] against dir/ΚΟΣΜΟΣ.md"
+                );
+            }
+        }
+        // A name that already resolves stays a guard cell.
+        let index = idx(&["κοσμος2.md"]);
+        assert_eq!(
+            winner(&resolve_link("ΚΟΣΜΟΣ2", None, "other.md", &index)),
+            Some("κοσμος2.md")
+        );
+    }
+
+    fn winner(resolved: &ResolvedLink) -> Option<&str> {
+        match resolved {
+            ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+            _ => None,
+        }
+    }
+
     // --- Resolver-correct wikilink formatting (FL-04) ---
 
     #[test]

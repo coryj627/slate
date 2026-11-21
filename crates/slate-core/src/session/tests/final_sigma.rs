@@ -1,0 +1,430 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! #1705 (plan 47 CB-32, the owner's CD22): a name whose capital sigma
+//! lowercases to the final form `ς` in one spelling and to `σ` in another
+//! is one name to every match core makes: links on every route, the
+//! rename's rewrite, Quick Open, the Files sidebar filter, the collision
+//! gate and the batch move's preflight. One fold, `tree_sort_key`, is
+//! stored in the indexes and rebuilt once by migration 042.
+
+use super::common::*;
+use super::*;
+
+use crate::structural_batch::{
+    BatchFailureStage, BatchMoveRequest, BatchMoveState, StructuralBatchItem,
+};
+
+fn targets(session: &VaultSession, path: &str) -> Vec<(String, Option<String>)> {
+    session
+        .outgoing_links(path)
+        .unwrap()
+        .into_iter()
+        .map(|link| (link.target_raw, link.target_path))
+        .collect()
+}
+
+fn scanned(setup: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(setup);
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+fn quick_open(session: &VaultSession, query: &str) -> Vec<String> {
+    session
+        .switcher_rank_top_indexed(query, &[], 50, &CancelToken::new())
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| row.path)
+        .collect()
+}
+
+fn filtered(session: &VaultSession, query: &str) -> Vec<String> {
+    session
+        .filter_files(query, None, None, &[], Paging::first(50))
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|file| file.path)
+        .collect()
+}
+
+const EVERY_SPELLING: &str = "[[ΚΟΣΜΟΣ]] [[κοσμος]] [[Κοσμος]] [[κοσμοσ]] [[ΚΟΣΜΟΣ.md]] \
+     [[/ΚΟΣΜΟΣ]] ![[ΚΟΣΜΟΣ]] [[Οδος]] [[ΟΔΟΣ]] [[οδοσ]]\n";
+
+/// Every spelling resolves through a save's SQL pre-filter (the fold
+/// indexes of migrations 039 and 037), the embed's row included.
+#[test]
+fn a_save_resolves_a_final_sigma_target_through_the_fold_indexes() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .unwrap();
+        provider.write_file("ΟΔΟΣ.md", "# o\n".as_bytes()).unwrap();
+    });
+    session.save_text("A.md", EVERY_SPELLING, None).unwrap();
+    for (target, resolved) in targets(&session, "A.md") {
+        let expected = if target.to_lowercase().contains("κοσμο") {
+            "ΚΟΣΜΟΣ.md"
+        } else {
+            "ΟΔΟΣ.md"
+        };
+        assert_eq!(
+            resolved.as_deref(),
+            Some(expected),
+            "[[{target}]] after a save"
+        );
+    }
+}
+
+/// A cold scan resolves every spelling, and a row an older build left
+/// dangling (the state an upgrade leaves) heals at the next scan's tail.
+#[test]
+fn a_scan_heals_a_final_sigma_link_left_dangling() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("A.md", "[[ΚΟΣΜΟΣ]] [[κοσμος]]\n".as_bytes())
+            .unwrap();
+    });
+    assert_eq!(
+        targets(&session, "A.md"),
+        vec![
+            ("ΚΟΣΜΟΣ".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
+            ("κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
+        ],
+        "after the cold scan"
+    );
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .execute("UPDATE links SET target_path = NULL", [])
+        .unwrap();
+    session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert!(
+        targets(&session, "A.md")
+            .iter()
+            .all(|(_, resolved)| resolved.as_deref() == Some("ΚΟΣΜΟΣ.md")),
+        "the scan's tail heals the rows: {:?}",
+        targets(&session, "A.md")
+    );
+}
+
+/// A create heals a dangling row whose target spells the sigma the other
+/// way (CB-31's heal, through migration 041's folded target indexes).
+#[test]
+fn a_create_heals_a_final_sigma_target() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("A.md", "[[Κοσμος]] [[dir/ΚΟΣΜΟΣ]]\n".as_bytes())
+            .unwrap();
+    });
+    session.create_exclusive("ΚΟΣΜΟΣ.md", "# k\n").unwrap();
+    session.create_exclusive("dir/κοσμος.md", "# d\n").unwrap();
+    assert_eq!(
+        targets(&session, "A.md"),
+        vec![
+            ("Κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
+            ("dir/ΚΟΣΜΟΣ".to_string(), Some("dir/κοσμος.md".to_string())),
+        ]
+    );
+}
+
+/// An embed's preview resolves its target through the same fold.
+#[test]
+fn an_embed_of_a_final_sigma_target_renders() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n\nbody\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("A.md", "![[κοσμος]]\n".as_bytes())
+            .unwrap();
+    });
+    for target in ["κοσμος", "ΚΟΣΜΟΣ", "Κοσμος"] {
+        let resolution = session
+            .resolve_embed("A.md", target, None, &CancelToken::new())
+            .unwrap();
+        match resolution {
+            crate::EmbedResolution::FullNote { target_path, .. } => {
+                assert_eq!(target_path, "ΚΟΣΜΟΣ.md", "![[{target}]]");
+            }
+            other => panic!("![[{target}]] did not resolve: {other:?}"),
+        }
+    }
+}
+
+/// A rename rewrites every spelling that names the renamed note, including
+/// a source whose only link spells the stem with a medial sigma (it was no
+/// rewrite candidate while the candidate scan lowered stems alone).
+#[test]
+fn renaming_a_final_sigma_note_rewrites_every_link_that_names_it() {
+    let (tmp, session) = scanned(|provider| {
+        provider.write_file("ΟΔΟΣ.md", "# o\n".as_bytes()).unwrap();
+        provider
+            .write_file("C.md", "[[ΟΔΟΣ]] [[Οδος]] [[οδοσ]]\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("D.md", "Only [[οδοσ]] here.\n".as_bytes())
+            .unwrap();
+    });
+    session.rename_file("ΟΔΟΣ.md", "Δρομος.md").unwrap();
+    for source in ["C.md", "D.md"] {
+        let text = std::fs::read_to_string(tmp.path().join(source)).unwrap();
+        assert!(
+            !text.to_lowercase().contains("οδο"),
+            "{source} still names the old stem: {text:?}"
+        );
+        assert!(
+            targets(&session, source)
+                .iter()
+                .all(|(_, resolved)| resolved.as_deref() == Some("Δρομος.md")),
+            "{source}: {:?}",
+            targets(&session, source)
+        );
+    }
+}
+
+/// A move keeps every spelling resolved to the moved note.
+#[test]
+fn moving_a_final_sigma_note_keeps_every_link_that_names_it() {
+    let (_tmp, session) = scanned(|provider| {
+        provider.write_file("ΟΔΟΣ.md", "# o\n".as_bytes()).unwrap();
+        provider
+            .write_file("dir/keep.md", "# keep\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("C.md", "[[ΟΔΟΣ]] [[Οδος]] [[οδοσ]]\n".as_bytes())
+            .unwrap();
+    });
+    session.move_file("ΟΔΟΣ.md", "dir").unwrap();
+    assert!(
+        targets(&session, "C.md")
+            .iter()
+            .all(|(_, resolved)| resolved.as_deref() == Some("dir/ΟΔΟΣ.md")),
+        "{:?}",
+        targets(&session, "C.md")
+    );
+}
+
+/// Quick Open finds a name whichever sigma the reader typed or the name
+/// carries.
+#[test]
+fn quick_open_finds_a_final_sigma_name_whichever_sigma_was_typed() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("κοσμος2.md", "# k2\n".as_bytes())
+            .unwrap();
+        provider.write_file("ΟΔΟΣ.md", "# o\n".as_bytes()).unwrap();
+    });
+    for query in ["κοσμος", "ΚΟΣΜΟΣ", "κοσμοσ", "Κοσμος"] {
+        let rows = quick_open(&session, query);
+        assert!(
+            rows.contains(&"ΚΟΣΜΟΣ.md".to_string()),
+            "{query:?}: {rows:?}"
+        );
+        assert!(
+            rows.contains(&"κοσμος2.md".to_string()),
+            "{query:?}: {rows:?}"
+        );
+    }
+    assert!(quick_open(&session, "ΚΟΣΜΟΣ2").contains(&"κοσμος2.md".to_string()));
+    assert!(quick_open(&session, "οδος").contains(&"ΟΔΟΣ.md".to_string()));
+}
+
+/// The Files sidebar filter folds the typed word and every name the same
+/// way, so a partial word and either sigma find the note.
+#[test]
+fn the_sidebar_filter_finds_a_final_sigma_name_whichever_sigma_was_typed() {
+    let (_tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .unwrap();
+        provider.write_file("Λογος.md", "# l\n".as_bytes()).unwrap();
+        provider
+            .write_file("unrelated.md", "# u\n".as_bytes())
+            .unwrap();
+    });
+    for (query, expected) in [
+        ("κοσμοσ", "ΚΟΣΜΟΣ.md"),
+        ("κοσμος", "ΚΟΣΜΟΣ.md"),
+        ("ΚΟΣ", "ΚΟΣΜΟΣ.md"),
+        ("λογοσ", "Λογος.md"),
+        ("ΛΟΓΟΣ", "Λογος.md"),
+    ] {
+        assert_eq!(
+            filtered(&session, query),
+            vec![expected.to_string()],
+            "{query:?}"
+        );
+    }
+}
+
+/// A `ς`/`σ` pair already in a vault (NTFS and a case-sensitive volume
+/// both hold one) behaves as case variants do: a link naming either takes
+/// the resolver's tiebreak, the byte-smaller path, and the collision gate
+/// refuses a new twin for portability (APFS folds the two, by reading).
+#[test]
+fn a_final_sigma_pair_behaves_like_case_variants() {
+    let (tmp, session) = scanned(|provider| {
+        provider
+            .write_file("οδος.md", "# final\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("A.md", "[[οδοσ]] [[ΟΔΟΣ]] [[οδος]]\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("κοσμος.md", "# k\n".as_bytes())
+            .unwrap();
+    });
+    // The twin arrives outside Slate (the gate would refuse it), as it
+    // can on NTFS or a case-sensitive volume.
+    let pair_written = std::fs::write(tmp.path().join("οδοσ.md"), "# medial\n").is_ok()
+        && std::fs::read_to_string(tmp.path().join("οδος.md")).unwrap() == "# final\n";
+    if pair_written {
+        session
+            .rescan_with_progress(&CancelToken::new(), None)
+            .unwrap();
+        // `ς` (U+03C2) sorts before `σ` (U+03C3): the byte-smaller path wins.
+        assert!(
+            targets(&session, "A.md")
+                .iter()
+                .all(|(_, resolved)| resolved.as_deref() == Some("οδος.md")),
+            "{:?}",
+            targets(&session, "A.md")
+        );
+    }
+    let refused = session.create_exclusive("κοσμοσ.md", "# twin\n");
+    assert!(
+        refused.is_err(),
+        "the gate admitted a twin of κοσμος.md: {refused:?}"
+    );
+    let names: Vec<String> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|name| name == "κοσμοσ.md"),
+        "the twin was written: {names:?}"
+    );
+}
+
+/// The batch move's preflight folds as the single-item gate does, so a
+/// `ς`/`σ` twin and an NFD twin of an occupied destination are refused at
+/// preflight, not landed beside it.
+#[test]
+fn a_batch_move_refuses_a_final_sigma_twin_at_preflight() {
+    let (tmp, session) = scanned(|provider| {
+        provider
+            .write_file("dest/κοσμος.md", "# k\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("dest/caf\u{e9}.md", "# nfc\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("κοσμοσ.md", "# twin\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("cafe\u{301}.md", "# nfd\n".as_bytes())
+            .unwrap();
+    });
+    for name in ["κοσμοσ.md", "cafe\u{301}.md"] {
+        let report = session
+            .batch_move(BatchMoveRequest {
+                items: vec![StructuralBatchItem {
+                    path: name.to_string(),
+                    is_directory: false,
+                }],
+                new_parent: "dest".into(),
+            })
+            .unwrap();
+        assert_ne!(report.state, BatchMoveState::Succeeded, "{name:?} landed");
+        assert!(
+            report
+                .envelope
+                .preflight_failures
+                .iter()
+                .any(|failure| failure.stage == BatchFailureStage::Preflight),
+            "{name:?} was not refused at preflight: {report:?}"
+        );
+        assert!(tmp.path().join(name).exists(), "{name:?} left its source");
+    }
+}
+
+/// An index an older build wrote under the old fold is rebuilt by
+/// migration 042 at the next open, so a save resolves `[[κοσμος]]` through
+/// it at once, with no rescan.
+#[test]
+fn an_upgraded_index_resolves_a_final_sigma_link_without_a_rescan() {
+    let (tmp, session) = scanned(|provider| {
+        provider
+            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .unwrap();
+    });
+    drop(session);
+    // Stand the cache back at version 41 with every index over the fold
+    // written by the old fold, as a build before migration 042 left it.
+    {
+        let conn =
+            rusqlite::Connection::open(tmp.path().join(".slate").join("cache.sqlite")).unwrap();
+        crate::db::register_connection_functions(&conn).unwrap();
+        conn.create_scalar_function(
+            "slate_tree_sort_key",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                use unicode_normalization::UnicodeNormalization;
+                let name = context.get::<Option<String>>(0)?;
+                Ok(name.map(|name| name.nfc().collect::<String>().to_lowercase()))
+            },
+        )
+        .unwrap();
+        let indexes: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
+                     AND sql LIKE '%slate_tree_sort_key%' ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(indexes.len(), 7, "{indexes:?}");
+        for (name, sql) in &indexes {
+            conn.execute_batch(&format!("DROP INDEX {name}; {sql};"))
+                .unwrap();
+        }
+        conn.execute("DELETE FROM schema_version WHERE version > 41", [])
+            .unwrap();
+    }
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session
+        .save_text("A.md", "[[κοσμος]] [[Κοσμος]]\n", None)
+        .unwrap();
+    assert_eq!(
+        targets(&session, "A.md"),
+        vec![
+            ("κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
+            ("Κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
+        ]
+    );
+    let integrity: String = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+}

@@ -23481,6 +23481,8 @@ mod tests {
     mod links_embeds;
 
     mod save_link_lookup;
+    // #1705 (CB-32): one fold for a final sigma, on every match core makes.
+    mod final_sigma;
 
     mod link_pass;
 

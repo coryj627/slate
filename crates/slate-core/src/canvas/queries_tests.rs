@@ -868,3 +868,25 @@ fn proximity_order_includes_groups_and_respects_exclusions() {
         ids(model.reading_order.clone())
     );
 }
+
+/// #1705 (CB-32): the canvas filter folds a final sigma as every other
+/// name match in core does, so a partial word or either sigma finds a card.
+#[test]
+fn the_canvas_filter_finds_a_final_sigma_name_whichever_sigma_was_typed() {
+    let doc = serde_json::json!({
+        "nodes": [
+            {"id":"k","type":"text","text":"κοσμος","x":0,"y":0,"width":10,"height":10},
+            {"id":"o","type":"text","text":"other","x":100,"y":0,"width":10,"height":10},
+        ],
+        "edges": [],
+    })
+    .to_string();
+    let model = model_of(&doc);
+    for needle in ["ΚΟΣ", "κοσμοσ", "ΚΟΣΜΟΣ", "κοσμος"] {
+        assert_eq!(
+            ids(filter(&model, needle)),
+            vec!["k".to_string()],
+            "{needle:?}"
+        );
+    }
+}
