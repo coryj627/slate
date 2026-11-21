@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 
@@ -111,6 +112,62 @@ public sealed class KeysFirstRecorderTests
         });
 
         Assert.Same(rig.Second, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A fact whose act never turns its root off measured nothing about the keys
+    /// leaving first, so it fails rather than passing.</summary>
+    [Fact]
+    public void TheAssertionFailsWhenTheRootNeverGoesOff() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("First", rig.First, () => { }));
+
+        Assert.Contains("First never went off", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheAssertionFailsOnARootTheActNeverTurnsOff() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.Second);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("Second", rig.Second, () => rig.First.IsEnabled = false));
+
+        Assert.Contains("Second never went off", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheContentAssertionFailsWhenTheLinkNeverGoesOff() => WithAWindow(rig =>
+    {
+        Assert.True(rig.Link.Focus(), "premise: the link could not take the keys");
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("the link", rig.Link, () => { }));
+
+        Assert.Contains("the link never went off", failed.Message, StringComparison.Ordinal);
+    });
+
+    /// <summary>A popup's content lives in its own visual tree, so the keys on a button in a
+    /// popup that the root holds are inside the root by the logical tree only (a menu's
+    /// submenu rows are).</summary>
+    [Fact]
+    public void KeysInAPopupTheRootHoldsAreInside() => WithAWindow(rig =>
+    {
+        var inPopup = new Button { Content = "In the popup" };
+        var popup = new Popup { Child = inPopup, PlacementTarget = rig.First, StaysOpen = true };
+        rig.Panel.Children.Add(popup);
+        popup.IsOpen = true;
+        PumpedDispatcher.Drain();
+        TakeTheKeys(inPopup);
+        Assert.False(rig.Panel.IsAncestorOf(inPopup), "premise: the popup's content is outside the panel's visual tree");
+
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(rig.Panel), $"the keys on {inPopup} were not counted inside the panel that holds its popup");
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.Panel, () => rig.Panel.IsEnabled = false);
+
+        popup.IsOpen = false;
+        Assert.Equal([inPopup.ToString()], off);
     });
 
     private sealed record Rig(StackPanel Panel, Button First, Button Second, Hyperlink Link);

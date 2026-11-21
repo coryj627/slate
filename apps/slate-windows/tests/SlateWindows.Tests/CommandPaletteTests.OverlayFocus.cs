@@ -195,7 +195,9 @@ public sealed partial class CommandPaletteTests
         Assert.True(menu.IsEnabled, "premise: the menu is on with no overlay open");
 
         TextBox? field = null;
-        KeysFirstRecorder.AssertTheKeysLeaveFirst("the menu", item, () =>
+        // The menu itself is the root: an open menu's item lives in its popup and does not
+        // go off with the menu, but the recorder counts the keys on it as inside the menu.
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the menu", menu, () =>
         {
             field = OpenTheOverlay(host, overlay);
             host.Settle();

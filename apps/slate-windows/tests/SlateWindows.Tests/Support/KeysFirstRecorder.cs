@@ -21,11 +21,25 @@ internal static class KeysFirstRecorder
     /// <summary>Runs <paramref name="act"/> and fails, naming what held the keys, if
     /// <paramref name="root"/> turned off while the keys were on it or inside it. The root
     /// is the site's element, or a descendant that the site's change turns off with it (a
-    /// menu item, for the menu).</summary>
+    /// menu item, for the menu). It also fails when the act never turns the root off: such
+    /// a fact measured nothing about the keys leaving first.</summary>
     internal static void AssertTheKeysLeaveFirst(string what, UIElement root, Action act)
     {
-        List<string> offUnder = DisabledWithTheKeysInside(root, act);
+        bool wentOff = false;
+        DependencyPropertyChangedEventHandler off = (_, e) => wentOff |= e.NewValue is false;
+        List<string> offUnder;
+        root.IsEnabledChanged += off;
+        try
+        {
+            offUnder = DisabledWithTheKeysInside(root, act);
+        }
+        finally
+        {
+            root.IsEnabledChanged -= off;
+        }
+
         Assert.True(offUnder.Count == 0, $"{what} went off with the keys on {string.Join(", ", offUnder)}");
+        Assert.True(wentOff, $"{what} never went off in the act, so nothing about the keys leaving first was measured");
     }
 
     /// <summary>The same for a focusable content element (a Hyperlink), which holds the
@@ -33,8 +47,10 @@ internal static class KeysFirstRecorder
     internal static void AssertTheKeysLeaveFirst(string what, ContentElement root, Action act)
     {
         var offUnder = new List<string>();
+        bool wentOff = false;
         DependencyPropertyChangedEventHandler record = (_, e) =>
         {
+            wentOff |= e.NewValue is false;
             if (e.NewValue is false && ReferenceEquals(Keyboard.FocusedElement, root))
             {
                 offUnder.Add(Keyboard.FocusedElement?.ToString() ?? "nothing");
@@ -51,6 +67,7 @@ internal static class KeysFirstRecorder
         }
 
         Assert.True(offUnder.Count == 0, $"{what} went off with the keys on {string.Join(", ", offUnder)}");
+        Assert.True(wentOff, $"{what} never went off in the act, so nothing about the keys leaving first was measured");
     }
 
     /// <summary>Runs <paramref name="act"/> and returns the element that held the keys each
@@ -84,10 +101,32 @@ internal static class KeysFirstRecorder
     /// <summary>Whether the keys are on <paramref name="element"/> or inside it, by where
     /// they are rather than by its IsKeyboardFocusWithin: WPF moves the keys first and
     /// updates that flag along each chain after, so an ancestor's trigger can run while an
-    /// element the keys just left still reads true.</summary>
-    internal static bool TheKeysAreIn(UIElement element) =>
-        Keyboard.FocusedElement is DependencyObject keys
-        && (ReferenceEquals(keys, element) || (keys is Visual && element.IsAncestorOf(keys)));
+    /// element the keys just left still reads true. A popup's content (a submenu's rows) is
+    /// outside its holder's visual tree, so the walk also goes up the logical tree, and the
+    /// visual tree where an element has no logical parent (a template's parts).</summary>
+    internal static bool TheKeysAreIn(UIElement element)
+    {
+        if (Keyboard.FocusedElement is not DependencyObject keys)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(keys, element) || (keys is Visual && element.IsAncestorOf(keys)))
+        {
+            return true;
+        }
+
+        for (DependencyObject? at = keys; at is not null;
+            at = LogicalTreeHelper.GetParent(at) ?? (at is Visual ? VisualTreeHelper.GetParent(at) : null))
+        {
+            if (ReferenceEquals(at, element))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>The keys onto a menu item. A desktop whose session has no foreground window
     /// (the hosted runners, #1680) lets no menu keep the keys or open its popup: there the
