@@ -320,13 +320,18 @@ mod configured {
     ///
     /// The connection inside is private to this module, and
     /// [`configure_connection`] is the only function that gives it up. So
-    /// no open can hand out a `Connection` that went round the
-    /// configuration, on any target: with `open_connection` returning what
-    /// `open_unconfigured` gave it, or with a branch of the open returning
-    /// a connection it configured for itself, the crate does not compile
-    /// (`error[E0308]: mismatched types`, seen on Windows for the plain
-    /// branch and for the anchored one, which Windows compiles and macOS
-    /// alone runs).
+    /// an open made through `open_unconfigured` cannot hand out a
+    /// `Connection` that went round the configuration: with
+    /// `open_connection` returning what `open_unconfigured` gave it, or
+    /// with a branch of that open returning a connection it configured for
+    /// itself, the crate does not compile (`error[E0308]: mismatched
+    /// types`, seen on Windows for the plain branch and for the anchored
+    /// one, which Windows compiles and macOS alone runs).
+    ///
+    /// The type binds those opens and no others. A `Connection::open`
+    /// written anywhere else in the crate compiles and returns a connection
+    /// nobody configured. What catches that one is the text census,
+    /// `db::connection_census::product_code_opens_a_connection_only_through_db`.
     pub(super) struct Unconfigured(Connection);
 
     impl Unconfigured {
@@ -345,12 +350,38 @@ mod configured {
     /// a second look, and a marked statement is compiled again on every use
     /// once the statement cache has cleared its bindings. 38 of core's SQL
     /// literals were: four of them for every row of a bases view, and the
-    /// link panels' reads and the file summary on every call. What the
-    /// guarantee gives up is a plan chosen from a bound value, which in
-    /// this schema could only be an index prefix search for a bound
-    /// pattern; `db::connection_census` and
-    /// `no_like_can_use_an_index_prefix` hold that no statement can have
-    /// one.
+    /// link panels' reads and the file summary on every call.
+    ///
+    /// What the guarantee gives up is every use the planner makes of a
+    /// bound value. None changes a result; each can change a plan. SQLite
+    /// 3.54.1 has five (the numbers are lines of its `sqlite3.c`), and the
+    /// guards are facts in `db::connection_census` and in this file's
+    /// tests:
+    ///
+    /// 1. An index prefix search for a bound `LIKE` or `GLOB` pattern
+    ///    (`isLikeOrGlob`, 167914). Guarded:
+    ///    `no_product_statement_binds_a_glob_pattern` refuses a bound `GLOB`
+    ///    and the pragma that makes `LIKE` case-sensitive, and
+    ///    `no_like_can_use_an_index_prefix` holds that no index key is
+    ///    NOCASE.
+    /// 2. A partial index, or an index on an expression, that a bound value
+    ///    would have matched where the index holds a literal
+    ///    (`exprCompareVariable`, 119504). Guarded for partial indexes:
+    ///    `no_product_statement_binds_a_partial_index_condition` refuses a
+    ///    statement that binds a value where a partial index's condition has
+    ///    a literal. Not guarded for an index on an expression.
+    /// 3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`,
+    ///    87237). Not guarded. No product code runs `ANALYZE`, so there are
+    ///    no samples to probe.
+    /// 4. A bound `LIMIT`'s value in the row estimate and in the cost of a
+    ///    sort (`computeLimitRegisters`, 152150; `whereSortingCost`, 175288).
+    ///    Not guarded. Over the statements driven with the setting off and
+    ///    on for #1917 (59, then 84), it moved at most 4 VM steps a run and
+    ///    no plan.
+    /// 5. The lower selectivity guess for an unindexed `column = ?` whose
+    ///    bound value is -1, 0 or 1 (`whereLoopOutputAdjust`, 172802). Not
+    ///    guarded. It weighs one estimate against another; the same runs
+    ///    showed no plan move.
     ///
     /// No `cfg` in here: whichever branch opened the connection, it is
     /// configured the same way.
@@ -2423,12 +2454,12 @@ mod tests {
         (nocase, indexes_read)
     }
 
-    /// The plan SQLite picks for `sql` once `pattern` is bound to its one
+    /// The plan SQLite picks for `sql` once `value` is bound to its one
     /// parameter: binding expires a statement whose plan looks at the value,
     /// so the step compiles it again with the value in hand.
-    fn plan_once_bound(conn: &Connection, sql: &str, pattern: &str) -> String {
+    fn plan_once_bound(conn: &Connection, sql: &str, value: impl rusqlite::ToSql) -> String {
         let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-        explain.raw_bind_parameter(1, pattern).unwrap();
+        explain.raw_bind_parameter(1, value).unwrap();
         let mut rows = explain.raw_query();
         let mut plan = Vec::new();
         while let Some(row) = rows.next().unwrap() {
@@ -2443,8 +2474,10 @@ mod tests {
     }
 
     /// #1917: core's connections run under the query planner stability
-    /// guarantee, which gives up one thing Slate could ever lean on: an
-    /// index prefix search for a bound pattern. A `LIKE` can take one only
+    /// guarantee. Of the five uses of a bound value it gives up
+    /// (`configure_connection` lists them), this holds the first for
+    /// `LIKE`: an index prefix search for a bound pattern. A `LIKE` can
+    /// take one only
     /// when its case rule matches its index's collation: a case-sensitive
     /// `LIKE` on a BINARY index (the pragma, which
     /// `no_product_statement_binds_a_glob_pattern` refuses and
@@ -2520,6 +2553,50 @@ mod tests {
                 held.contains("SCAN") && !held.contains("SEARCH"),
                 "with the guarantee the same statement scans: {sql}: {held}"
             );
+        }
+    }
+
+    /// SQLite's own word on the second thing the guarantee gives up that a
+    /// statement could lean on: a partial index whose condition a bound
+    /// value would have met. `no_product_statement_binds_a_partial_index_condition`
+    /// refuses the statement; this shows what it would lose. If a later
+    /// SQLite changes it, this moves and that census wants another look.
+    #[test]
+    fn the_guarantee_gives_up_a_partial_index_whose_condition_is_bound() {
+        const SCHEMA: &str = "CREATE TABLE links (
+                 target_raw TEXT, target_path TEXT, is_external INTEGER NOT NULL
+             );
+             CREATE INDEX links_unresolved ON links(target_raw)
+             WHERE target_path IS NULL AND is_external = 0;";
+        const BOUND: &str = "SELECT COUNT(*) FROM links
+             WHERE target_raw = 'a' AND target_path IS NULL AND is_external = ?1";
+        const LITERAL: &str = "SELECT COUNT(*) FROM links
+             WHERE target_raw = ?1 AND target_path IS NULL AND is_external = 0";
+        let free = Connection::open_in_memory().unwrap();
+        free.execute_batch(SCHEMA).unwrap();
+        let guaranteed = Connection::open_in_memory().unwrap();
+        guaranteed.execute_batch(SCHEMA).unwrap();
+        guaranteed
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .unwrap();
+
+        let plan = plan_once_bound(&free, BOUND, 0_i64);
+        assert!(
+            plan.contains("links_unresolved"),
+            "without the guarantee the bound 0 proves the index's condition: {plan}"
+        );
+        let plan = plan_once_bound(&guaranteed, BOUND, 0_i64);
+        assert!(
+            !plan.contains("links_unresolved") && plan.contains("SCAN"),
+            "with the guarantee the same statement scans the table: {plan}"
+        );
+        // The condition written as the index has it keeps the index either way.
+        for conn in [&free, &guaranteed] {
+            let plan = plan_once_bound(conn, LITERAL, "a");
+            assert!(plan.contains("links_unresolved"), "{plan}");
         }
     }
 }

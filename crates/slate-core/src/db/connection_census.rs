@@ -11,8 +11,9 @@
 //!
 //! **No statement binds a `GLOB` pattern, and nothing switches `LIKE` to
 //! case-sensitive.** Under the guarantee the planner does not look at bound
-//! values, and the one thing that costs is an index prefix search for a
-//! bound pattern: `col GLOB ?` on an indexed column scans instead. A `LIKE`
+//! values (`configure_connection` in `db.rs` lists the five uses it gives
+//! up). One of them is an index prefix search for a bound pattern:
+//! `col GLOB ?` on an indexed column scans instead. A `LIKE`
 //! could take such a search only if it were case-sensitive (a pragma this
 //! census refuses) or its column's index were NOCASE (which
 //! `db::tests::no_like_can_use_an_index_prefix` refuses, by asking SQLite).
@@ -23,13 +24,28 @@
 //! `every_connection_core_opens_is_configured`. The type in `db.rs` makes
 //! such an open fail to compile, and this census holds the shape as text.
 //!
+//! **No statement binds a value where a partial index's condition has a
+//! literal.** That is the second of the five, and the other one a statement
+//! could lean on unnoticed: `is_external = ?1` no longer proves
+//! `is_external = 0`, so the statement loses the index and scans, with the
+//! same rows. The census reads the conditions from the migrated schema and
+//! refuses a product line that compares one of their columns with something
+//! bound. A condition that needs no value (`IS NULL`, `IS NOT NULL`) is not
+//! one of them. An index on an expression is matched the same way and is
+//! not guarded: a statement would have to bind a value where the indexed
+//! expression holds a literal.
+//!
 //! Its ceiling. It reads lines, not statements: it sees the spelling
 //! `Connection::open…` (called, or passed as a value) and the word `GLOB`
 //! in either case, as the operator or as the function `glob(pattern, text)`.
 //! A connection reached through an alias of the type, or a pattern operator
 //! assembled from pieces of a word, is not seen. Because it reads lines, a
 //! `GLOB` in a literal, in a `format!` template or in one clause of SQL
-//! assembled at run time is seen alike.
+//! assembled at run time is seen alike. The partial-index rule sees a
+//! column's name beside an operator and a parameter (or, in a list, a
+//! `format!` placeholder) on one line; a column name put in at run time is
+//! not seen, and an assignment written on a line of its own, away from its
+//! `SET`, reads as a comparison and is refused.
 
 use std::path::{Path, PathBuf};
 
@@ -235,6 +251,71 @@ fn glob_with_a_bound_pattern<'a>(lines: impl Iterator<Item = (usize, &'a str)>) 
 fn names_case_sensitive_like<'a>(lines: impl Iterator<Item = (usize, &'a str)>) -> Vec<usize> {
     lines
         .filter(|(_, text)| text.to_ascii_lowercase().contains("case_sensitive_like"))
+        .map(|(number, _)| number)
+        .collect()
+}
+
+/// How many partial indexes `conn`'s schema has, and the columns their
+/// conditions compare with a literal (a quoted string or a number), sorted.
+/// SQLite reports each index's SQL; `IS NULL` and `IS NOT NULL` name no
+/// literal and so no column here.
+fn columns_partial_indexes_compare_with_a_literal(
+    conn: &rusqlite::Connection,
+) -> (usize, Vec<String>) {
+    let condition = regex::Regex::new(r"(?is)\bWHERE\b(.*)$").unwrap();
+    let compared = regex::Regex::new(
+        r"(?i)\b(\w+)\s*(?:=|==|!=|<>|IS(?:\s+NOT)?|(?:NOT\s+)?IN)\s*\(?\s*(?:'|\d)",
+    )
+    .unwrap();
+    let indexes: Vec<String> = conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut partial = 0;
+    let mut columns = std::collections::BTreeSet::new();
+    for sql in indexes {
+        let Some(found) = condition.captures(&sql) else {
+            continue;
+        };
+        partial += 1;
+        for column in compared.captures_iter(&found[1]) {
+            columns.insert(column[1].to_ascii_lowercase());
+        }
+    }
+    (partial, columns.into_iter().collect())
+}
+
+/// The lines among `lines` that compare `column` with something bound: a
+/// parameter on either side of the operator, or a list that opens with a
+/// parameter or a `format!` placeholder.
+fn binds_a_partial_index_condition<'a>(
+    column: &str,
+    lines: impl Iterator<Item = (usize, &'a str)>,
+) -> Vec<usize> {
+    const BOUND: &str = r"(?:\?|:\w|@\w|\$\w)";
+    let on_the_right = regex::Regex::new(&format!(
+        r"(?i)\b{column}\b\s*(?:=|==|!=|<>|IS(?:\s+NOT)?|(?:NOT\s+)?IN)\s*(?:\(\s*(?:{BOUND}|\{{)|{BOUND})"
+    ))
+    .unwrap();
+    let on_the_left = regex::Regex::new(&format!(
+        r"(?i)(?:\?\d*|[:@$]\w+)\s*(?:=|==|!=|<>|IS(?:\s+NOT)?)\s*(?:\w+\.)?{column}\b"
+    ))
+    .unwrap();
+    lines
+        .filter(|(_, text)| {
+            on_the_left.is_match(text)
+                || on_the_right.find_iter(text).any(|found| {
+                    // `SET column = ?` assigns; it compares nothing.
+                    let before = &text[..found.start()];
+                    let assigns = before
+                        .rfind("SET ")
+                        .is_some_and(|set| before.rfind("WHERE").is_none_or(|filter| filter < set));
+                    !assigns
+                })
+        })
         .map(|(number, _)| number)
         .collect()
 }
@@ -507,6 +588,107 @@ fn no_product_statement_binds_a_glob_pattern() {
          column scans, and so would a LIKE made case-sensitive. Bind a range (`col >= ? AND \
          col < ?`) instead:\n  {}",
         found.join("\n  ")
+    );
+}
+
+/// The columns the schema's partial indexes compare with a literal today:
+/// `is_external = 0` (the two link fold indexes) and `value_kind NOT IN
+/// ('list', 'tag_list')` (`idx_properties_key_norm`). A new partial index
+/// with a literal in its condition moves this list, and its author reads
+/// why.
+const COLUMNS_A_PARTIAL_INDEX_HOLDS_TO_A_LITERAL: [&str; 2] = ["is_external", "value_kind"];
+
+#[test]
+fn no_product_statement_binds_a_partial_index_condition() {
+    let mut conn = super::open_in_memory(64).unwrap();
+    super::migrate(&mut conn).unwrap();
+    let (partial, columns) = columns_partial_indexes_compare_with_a_literal(&conn);
+    assert!(
+        partial >= 5,
+        "the walk must see the schema's partial indexes: {partial}"
+    );
+    assert_eq!(
+        columns, COLUMNS_A_PARTIAL_INDEX_HOLDS_TO_A_LITERAL,
+        "the columns a partial index's condition compares with a literal"
+    );
+
+    let crates = crates_root();
+    let mut found = Vec::new();
+    for (name, source) in product_sources() {
+        let lines = product_lines(&source);
+        for column in &columns {
+            let numbered = lines.iter().map(|line| (line.number, line.text));
+            for line in binds_a_partial_index_condition(column, numbered) {
+                found.push(format!(
+                    "{name}:{line}: {column} compared with a bound value"
+                ));
+            }
+        }
+    }
+    for file in sources(&crates.join("slate-core/migrations"), "sql") {
+        let name = relative(&file, &crates);
+        let source = std::fs::read_to_string(&file).unwrap();
+        for column in &columns {
+            for line in binds_a_partial_index_condition(column, migration_lines(&source)) {
+                found.push(format!(
+                    "{name}:{line}: {column} compared with a bound value"
+                ));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "core's connections run under the query planner stability guarantee (#1917), which \
+         does not use a bound value to prove a partial index's condition: a statement that \
+         binds the value loses the index and scans. Write the literal the index's condition \
+         has:\n  {}",
+        found.join("\n  ")
+    );
+}
+
+#[test]
+fn the_partial_index_census_sees_each_planted_shape() {
+    let planted = "\
+        \"WHERE links.target_path IS NULL AND links.is_external = ?2\",
+        \"WHERE l.is_external = 0 AND l.target_path = ?1\",
+        \"AND p.value_kind NOT IN (?1, ?2)\",
+        \"AND p.value_kind NOT IN ('list', 'tag_list')\",
+        \"UPDATE links SET is_external = ?3 WHERE rowid = ?1\",
+        \"UPDATE links SET target_raw = ?2 WHERE is_external = ?3\",
+        let is_external = looks_external(&url_string);
+        \"WHERE ?2 = is_external\",
+        format!(\"AND value_kind IN ({placeholders})\"),
+        \"AND value_kind = :kind\",
+        // WHERE is_external = ?2, in a comment
+        \"WHERE is_external IS ?1 OR value_kind == @kind\",
+        \"ON CONFLICT DO UPDATE SET value_kind = ?4\",
+";
+    let lines = product_lines(planted);
+    let numbered = || lines.iter().map(|line| (line.number, line.text));
+    assert_eq!(
+        binds_a_partial_index_condition("is_external", numbered()),
+        vec![1, 6, 8, 12]
+    );
+    assert_eq!(
+        binds_a_partial_index_condition("value_kind", numbered()),
+        vec![3, 9, 10, 12]
+    );
+
+    // The schema walk: a literal names its column, a NULL test names none.
+    let scratch = rusqlite::Connection::open_in_memory().unwrap();
+    scratch
+        .execute_batch(
+            "CREATE TABLE t (a, b, c, d);
+             CREATE INDEX plain ON t(a);
+             CREATE INDEX not_null ON t(a) WHERE b IS NOT NULL;
+             CREATE INDEX by_number ON t(a) WHERE c = 0 AND b IS NULL;
+             CREATE INDEX by_list ON t(a)
+             WHERE d NOT IN ('x', 'y');",
+        )
+        .unwrap();
+    assert_eq!(
+        columns_partial_indexes_compare_with_a_literal(&scratch),
+        (3, vec!["c".to_string(), "d".to_string()])
     );
 }
 

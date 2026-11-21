@@ -1686,12 +1686,34 @@ The same vault with 20,000 content-change events in the window (50 on each of
   32 it drops none (16.6 against 14.3 compiles a changed file, step 0). The time of
   that rescan did not move at any capacity: by the counts it is about 7 ms in
   900.
-- **What the guarantee gives up.** A plan chosen from a bound value. In this
-  schema that could only be an index prefix search for a bound `GLOB` or
-  `LIKE` pattern (26 against 640 µs a call on 10,001 files when planted, step
-  0), and no statement has one: `db::connection_census` refuses a bound
-  `GLOB`, and `no_like_can_use_an_index_prefix` holds that no index has a
-  NOCASE key and `LIKE` stays case-insensitive.
+- **What the guarantee gives up.** Every use the planner makes of a bound
+  value. None changes a result; each can change a plan. SQLite 3.54.1 has
+  five (the numbers are lines of its `sqlite3.c`), and the guards are facts in
+  `db::connection_census` and in `db.rs`'s tests:
+
+  1. An index prefix search for a bound `LIKE` or `GLOB` pattern
+     (`isLikeOrGlob`, 167914). Guarded:
+     `no_product_statement_binds_a_glob_pattern` refuses a bound `GLOB` and the
+     pragma that makes `LIKE` case-sensitive, and
+     `no_like_can_use_an_index_prefix` holds that no index key is NOCASE.
+  2. A partial index, or an index on an expression, that a bound value would
+     have matched where the index holds a literal (`exprCompareVariable`,
+     119504). Guarded for partial indexes:
+     `no_product_statement_binds_a_partial_index_condition` refuses a statement
+     that binds a value where a partial index's condition has a literal. Not
+     guarded for an index on an expression.
+  3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`, 87237). Not
+     guarded. No product code runs `ANALYZE`, so there are no samples to probe.
+  4. A bound `LIMIT`'s value in the row estimate and in the cost of a sort
+     (`computeLimitRegisters`, 152150; `whereSortingCost`, 175288). Not
+     guarded. Over the statements driven with the setting off and on for
+     #1917 (59, then 84), it moved at most 4 VM steps a run and no plan.
+  5. The lower selectivity guess for an unindexed `column = ?` whose bound
+     value is -1, 0 or 1 (`whereLoopOutputAdjust`, 172802). Not guarded. It
+     weighs one estimate against another; the same runs showed no plan move.
+
+  The first, planted, read 26 against 640 µs a call on 10,001 files (step 0).
+  No product statement has the first or the second today.
 - **The guards.**
   `session::tests::statement_class::no_statement_is_re_prepared_per_binding_on_any_driven_path`
   drives eleven flows through the public API and fails if any statement a
