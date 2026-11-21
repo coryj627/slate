@@ -1708,6 +1708,27 @@ public sealed class SvgPreviewGuardTests
             $"<style>.s{{fill:b\\6cue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
             false,
             true),
+        // Stage 14 (the delta merge judge's G3): an escaped custom property
+        // gives no blue to a fill that reads it. In the style attribute the
+        // decoder drops the definition; in a rule it keeps the escaped
+        // text, which is no paint; and a var() whose name is escaped finds
+        // nothing. Each keeps the group's pattern.
+        ["--a:b\\6cue in the style attribute, read over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:b\\6cue;fill:var(--a)'/></g>",
+            true,
+            true),
+        ["--a:b\\6cue from a rule, read over navy under a pattern group"] = (
+            $"<style>.s{{--a:b\\6cue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["an escaped name defines --a in the style attribute, read over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--\\61:blue;fill:var(--a)'/></g>",
+            true,
+            true),
+        ["var(--\\61) in the style attribute over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:blue;fill:var(--\\61)'/></g>",
+            true,
+            true),
     };
 
     /// <summary>
@@ -1729,7 +1750,9 @@ public sealed class SvgPreviewGuardTests
     /// and three through var(): 24 values that stand for the judge's 459,
     /// one or more from each class of what the decoder and the guard do
     /// with them across the judge's eight templates (the calibration
-    /// record's stage 12 section says how they were chosen).
+    /// record's stage 12 section says how they were chosen). Stage 14 adds
+    /// the judge's 15 templates (<see cref="JudgeTemplates"/>) for every
+    /// value at every place.
     /// </summary>
     [Fact]
     public void NoDeclarationTheDecoderDropsHidesAPatternFromTheGuard()
@@ -1774,6 +1797,7 @@ public sealed class SvgPreviewGuardTests
                 $"<g fill='{P}'><rect{Rect20} fill='{d}'/></g>",
                 $"<g fill='{P}'><rect{Rect20} style='fill:{d}'/></g>",
             }.Select(body => defs + body));
+            bodies.AddRange(JudgeTemplates(d).Select(body => defs + body));
         }
         foreach (string d in spellings)
         {
@@ -1822,11 +1846,40 @@ public sealed class SvgPreviewGuardTests
             }
         }
         Assert.Equal(GeneratedSpellingCount, generated.Count);
-        Assert.Equal(((38 + GeneratedSpellingCount + 10 + 2) * 15) + (24 * 3 * 18) + (12 * 4), bodies.Count);
+        Assert.Equal(((38 + GeneratedSpellingCount + 10 + 2) * 30) + (24 * 3 * 33) + (12 * 4), bodies.Count);
         Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
     }
 
     private const int GeneratedSpellingCount = 53;
+
+    /// <summary>
+    /// #1610 (stage 14): the delta merge judge's 15 templates for a fill
+    /// value <paramref name="d"/>: over the pattern attribute in the style
+    /// attribute and a rule, after a pattern rule, over navy under a
+    /// pattern group in the style attribute and a rule, through a custom
+    /// property three ways, in the fill attribute under a pattern group,
+    /// after navy in one style attribute and in an earlier rule,
+    /// <c>!important</c> over navy, and after another value in one rule (a
+    /// pattern, then blue) and in one style attribute.
+    /// </summary>
+    private static string[] JudgeTemplates(string d) =>
+    [
+        $"<rect{Rect20} fill='url(#p)' style='fill:{d}'/>",
+        $"<style>.s{{fill:{d}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<style>.p{{fill:url(#p)}} .s{{fill:{d}}}</style><rect class='p s'{Rect20}/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:{d}'/></g>",
+        $"<style>.s{{fill:{d}}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+        $"<rect{Rect20} fill='url(#p)' style='--a:{d};fill:var(--a)'/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:{d};fill:var(--a)'/></g>",
+        $"<style>.s{{--a:{d};fill:var(--a)}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='{d}'/></g>",
+        $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:{d}'/></g>",
+        $"<style>.s{{fill:#000080}} .s{{fill:{d}}}</style><g fill='url(#p)'><rect class='s'{Rect20}/></g>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:{d} !important'/></g>",
+        $"<style>.s{{fill:url(#p);fill:{d}}}</style><rect class='s'{Rect20}/>",
+        $"<style>.s{{fill:blue;fill:{d}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<rect{Rect20} fill='url(#p)' style='fill:blue;fill:{d}'/>",
+    ];
 
     /// <summary>
     /// #1610 (stage 13, the lead's ruling): spellings of paints the guard
@@ -1992,6 +2045,300 @@ public sealed class SvgPreviewGuardTests
             estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
             $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
         Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    public static TheoryData<string> SameRuleDeclarationCases() => [.. SameRuleDeclaration.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G1, stage 14): ExCSS keeps one
+    /// declaration of a property in a rule, the last, though a later one
+    /// never replaces an <c>!important</c> one, and the decoder drops a last
+    /// value it cannot read, so the earlier declaration in the same rule is
+    /// gone and the tier below applies. Two rules and the style attribute
+    /// keep both, so the earlier one applies there. A later name not
+    /// written in lower case replaces the earlier one only where the
+    /// decoder reads its value (measured), so where the guard cannot be
+    /// sure of that it counts both. Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(SameRuleDeclarationCases))]
+    public void OneRuleKeepsOnlyTheLastDeclarationOfAProperty(string name) =>
+        AssertPatternCountedAsPainted(name, SameRuleDeclaration[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> SameRuleDeclaration = new()
+    {
+        // The judge's rows: one rule, blue then a value the decoder drops.
+        ["one rule: blue, then a word"] = ($"<style>.s{{fill:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then nothing"] = ($"<style>.s{{fill:blue;fill:}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then rgb(1,2)"] = ($"<style>.s{{fill:blue;fill:rgb(1,2)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then #ff000"] = ($"<style>.s{{fill:blue;fill:#ff000}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then url(#nope) x"] = (
+            $"<style>.s{{fill:blue;fill:url(#nope) x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then calc(1)"] = ($"<style>.s{{fill:blue;fill:calc(1)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then url(#missing) unset"] = (
+            $"<style>.s{{fill:blue;fill:url(#missing) unset}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then a word, in a selector list"] = (
+            $"<style>.s, .t{{fill:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then a word, a stroke"] = (
+            $"<style>.s{{stroke:blue;stroke:x}}</style><rect class='s'{Rect20} fill='none' stroke-width='40' stroke='url(#p)'/>",
+            true,
+            true),
+        // !important: a later one replaces any; a later plain one never
+        // replaces an !important one.
+        ["one rule: blue, then a word !important"] = (
+            $"<style>.s{{fill:blue;fill:x !important}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue !important, then a word !important"] = (
+            $"<style>.s{{fill:blue !important;fill:x !important}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue !important, then a word"] = (
+            $"<style>.s{{fill:blue !important;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
+        // The other tiers keep both declarations.
+        ["two rules: blue, then a word"] = ($"<style>.s{{fill:blue}} .s{{fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["the style attribute: blue, then a word"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue;fill:x'/>", false, false),
+        // The reverse: the pattern is gone and nothing below paints.
+        ["one rule: the pattern, then a word"] = ($"<style>.s{{fill:url(#p);fill:x}}</style><rect class='s'{Rect20}/>", false, false),
+        // A name in another case.
+        ["one rule: FILL blue, then a word"] = ($"<style>.s{{FILL:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then FILL red"] = ($"<style>.s{{fill:blue;FILL:red}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["one rule: blue, then FILL as a word"] = ($"<style>.s{{fill:blue;FILL:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, true),
+        ["one rule: the pattern, then FILL as a word"] = ($"<style>.s{{fill:url(#p);FILL:x}}</style><rect class='s'{Rect20}/>", true, true),
+    };
+
+    public static TheoryData<string> IgnoredByTheDecoderCases() => [.. IgnoredByTheDecoder.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): a rule-tier winner can
+    /// be sure only where the guard recognises that the decoder applies its
+    /// rule: at the top level or in <c>@media</c> all, screen or none,
+    /// closed, with a selector list the guard parses, from a style element
+    /// in the SVG namespace whose type is none or text/css, matched by
+    /// class tokens split at ASCII whitespace and by attributes the
+    /// decoder reads. Anything else may apply or not. The decoder reads
+    /// <c>class</c> with no namespace only; <c>id</c>, <c>type</c>,
+    /// <c>fill</c> and <c>stroke</c> with no namespace or in the SVG,
+    /// XLink or XML namespace, and a namespaced fill or stroke only where
+    /// none without one applies; and every style attribute, in document
+    /// order. A style element the decoder does not apply joins nothing to
+    /// its stylesheet. Rules apply in document order, those inside
+    /// <c>@media</c> among them. Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(IgnoredByTheDecoderCases))]
+    public void ARuleOrAttributeTheDecoderIgnoresHidesNoPattern(string name) =>
+        AssertPatternCountedAsPainted(name, IgnoredByTheDecoder[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> IgnoredByTheDecoder = new()
+    {
+        // @media the decoder does not apply, and the three it does.
+        ["@media print"] = ($"<style>@media print{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media not all"] = ($"<style>@media not all{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media (max-width:1px)"] = ($"<style>@media (max-width:1px){{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media speech"] = ($"<style>@media speech{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media all and (color)"] = ($"<style>@media all and (color){{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media print inside @media all"] = (
+            $"<style>@media all{{@media print{{.s{{fill:blue}}}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["@media all, left open"] = ($"<style>@media all{{.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media all"] = ($"<style>@media all{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["@media SCREEN"] = ($"<style>@media SCREEN{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a bare @media"] = ($"<style>@media{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["@media only screen, which the guard does not read"] = (
+            $"<style>@media only screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // Rules after an @media block come after its rules.
+        ["@media all's blue, then a later pattern rule"] = (
+            $"<style>@media all{{.s{{fill:blue}}}}.t{{fill:url(#p)}}</style><rect class='s t'{Rect20}/>",
+            true,
+            true),
+        ["a pattern rule, then @media all's blue"] = (
+            $"<style>.t{{fill:url(#p)}}@media all{{.s{{fill:blue}}}}</style><rect class='s t'{Rect20}/>",
+            false,
+            false),
+        // Selector lists the decoder drops whole.
+        ["a list with an empty selector"] = ($"<style>.s,{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a bare #"] = ($"<style>.s,#{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a trailing combinator"] = ($"<style>.s,b>{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with an unknown pseudo-class"] = ($"<style>.s,rect:foo{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with an unknown pseudo-element"] = ($"<style>.s,rect::foo{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with :FIRST-CHILD"] = ($"<style>.s,rect:FIRST-CHILD{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with :is()"] = ($"<style>.s,rect:is(.x){{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a name that starts with a digit"] = ($"<style>.s,1a{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with two combinators in a row"] = ($"<style>.s,g+~rect{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class --a"] = ($"<style>.--a{{fill:blue}}</style><rect class='--a'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class -1"] = ($"<style>.-1{{fill:blue}}</style><rect class='-1'{Rect20} fill='url(#p)'/>", true, true),
+        ["the id -a"] = ($"<style>#-a{{fill:blue}}</style><rect id='-a'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class -a"] = ($"<style>.-a{{fill:blue}}</style><rect class='-a'{Rect20} fill='url(#p)'/>", false, false),
+        ["a list with a descendant selector"] = ($"<style>.s, g rect{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a list with :hover, which the guard does not read"] = (
+            $"<style>.s,rect:hover{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // A block left open.
+        ["the last rule left open"] = ($"<style>.s{{fill:blue</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the last rule left open after a rule"] = ($"<style>.t{{fill:red}} .s{{fill:blue</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the last rule left open by a string"] = ($"<style>.s{{fill:blue;x:'a}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a closed rule before an open one"] = ($"<style>.s{{fill:blue}}.t{{</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        // Style elements the decoder does not apply, and their text.
+        ["type=''"] = ($"<style type=''>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["type='text/xsl'"] = ($"<style type='text/xsl'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["xml:type='text/xsl'"] = ($"<style xml:type='text/xsl'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a style element in another namespace"] = ($"<style xmlns='urn:x'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["STYLE"] = ($"<STYLE>.s{{fill:blue}}</STYLE><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a text/xsl style left open, then a pattern rule"] = (
+            $"<style type='text/xsl'>.t{{fill:red</style><style>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
+        ["type='TEXT/CSS'"] = ($"<style type='TEXT/CSS'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["type='text/css; charset=utf-8', which the guard does not read"] = (
+            $"<style type='text/css; charset=utf-8'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // Class tokens split at ASCII whitespace only.
+        ["a class after a no-break space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#160;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after an em space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#x2003;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after an ideographic space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#x3000;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after a tab"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#9;s'{Rect20} fill='url(#p)'/>", false, false),
+        // Namespaced attributes.
+        ["o:class"] = ($"<style>.s{{fill:blue}}</style><rect xmlns:o='urn:x' o:class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["class in the SVG namespace"] = (
+            $"<style>.s{{fill:blue}}</style><rect xmlns:v='http://www.w3.org/2000/svg' v:class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["o:id"] = ($"<style>#s{{fill:blue}}</style><rect xmlns:o='urn:x' o:id='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["o:id after the pattern's id"] = (
+            "<defs><pattern id='q' xmlns:o='urn:x' o:id='z' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs><rect{Rect20} fill='url(#q)'/>",
+            true,
+            true),
+        ["o:fill under a pattern group"] = ($"<g fill='url(#p)'><rect xmlns:o='urn:x' o:fill='blue'{Rect20}/></g>", true, true),
+        ["an XHTML fill under a pattern group"] = (
+            $"<g fill='url(#p)'><rect xmlns:h='http://www.w3.org/1999/xhtml' h:fill='blue'{Rect20}/></g>",
+            true,
+            true),
+        ["xml:fill blue, then the pattern attribute"] = ($"<rect xml:fill='blue' fill='url(#p)'{Rect20}/>", true, true),
+        ["xml:fill blue, then xlink:fill the pattern"] = ($"<rect xml:fill='blue' xlink:fill='url(#p)'{Rect20}/>", true, true),
+        ["xml:fill the pattern under a blue fill attribute that is a word"] = (
+            $"<g fill='blue'><rect xml:fill='url(#p)' fill='x'{Rect20}/></g>",
+            true,
+            true),
+        ["xlink:fill the pattern"] = ($"<rect xlink:fill='url(#p)'{Rect20}/>", true, true),
+        ["the pattern attribute, then xml:fill blue"] = ($"<rect fill='url(#p)' xml:fill='blue'{Rect20}/>", true, true),
+        ["o:fill the pattern"] = ($"<rect xmlns:o='urn:x' o:fill='url(#p)'{Rect20}/>", false, false),
+        // Every style attribute applies, in document order.
+        ["the pattern in the style attribute, then o:style with a stroke"] = (
+            $"<rect xmlns:o='urn:x' style='fill:url(#p)' o:style='stroke:red'{Rect20}/>",
+            true,
+            true),
+        ["the pattern in the style attribute, then o:style blue"] = (
+            $"<rect xmlns:o='urn:x' style='fill:url(#p)' o:style='fill:blue'{Rect20}/>",
+            false,
+            false),
+    };
+
+    public static TheoryData<string> CommentedStylesheetCases() => [.. CommentedStylesheet.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G4, stage 14): a comment in a
+    /// stylesheet leaves its rules as sure as they are without it, as
+    /// ExCSS removes it, except one inside a declaration's text, where the
+    /// decoder may read something else (measured: inside a function's
+    /// arguments the value is dropped, inside a property's name the
+    /// declaration is), and an escape counts only in its own declaration.
+    /// Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(CommentedStylesheetCases))]
+    public void AStylesheetCommentLeavesOtherDeclarationsSure(string name) =>
+        AssertPatternCountedAsPainted(name, CommentedStylesheet[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> CommentedStylesheet = new()
+    {
+        ["a comment before the rule"] = ($"<style>/* land regions */ .s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the selector"] = ($"<style>.s/* x */{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the value"] = ($"<style>.s{{fill:blue /* x */}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment before the property"] = ($"<style>.s{{/**/fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the last rule"] = ($"<style>.s{{fill:blue}}/* .s{{fill:url(#p)}} */</style><rect class='s'{Rect20}/>", false, false),
+        ["an escape in another rule"] = ($"<style>.s{{fill:blue}} .t{{fill:r\\65 d}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment inside rgb()"] = ($"<style>.s{{fill:rgb(0,/**/0,255)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a comment inside the property's name"] = ($"<style>.s{{fi/**/ll:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a comment inside the value"] = ($"<style>.s{{fill:b/**/lue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, true),
+        ["a comment inside url()"] = ($"<style>.s{{fill:u/**/rl(#p)}}</style><rect class='s'{Rect20}/>", true, true),
+    };
+
+    /// <summary>Renders <paramref name="row"/>'s body in a
+    /// <see cref="Tile"/> document and checks that the decoder paints the
+    /// pattern as the row says, and that the guard counts it as the row
+    /// says.</summary>
+    private static void AssertPatternCountedAsPainted(string name, (string Body, bool Painted, bool Counted) row)
+    {
+        string source = Tile(row.Body);
+        Assert.Equal(row.Painted, DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            row.Counted == estimate.PatternMicroseconds > 0,
+            $"{name}: the decoder {(row.Painted ? "paints" : "does not paint")} the pattern; the term is {estimate.PatternMicroseconds:F1} us");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G1 and G2, stage 14): 6,000 rects
+    /// whose rule the decoder never applies keep the pattern and are
+    /// refused: one rule's blue replaced by a word the decoder drops over
+    /// the pattern attribute (6.8 s to decode here), and blue in
+    /// <c>@media print</c> over a pattern rule (7.1 s).
+    /// </summary>
+    [Theory]
+    [InlineData(".a{fill:blue;fill:x}", " fill='url(#pat)'")]
+    [InlineData(".a{fill:url(#pat)} @media print { .a{fill:blue} }", "")]
+    public void SixThousandRectsWhoseBlueRuleTheDecoderNeverAppliesAreRefused(string stylesheet, string fill)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><style>{stylesheet}</style>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect class='a' x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{fill}/>");
+        }
+        string source = s.Append("</svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G4, stage 14): the judge's map, a
+    /// hatch pattern on a group of 3,200 paths whose class rule fills them
+    /// a colour under a comment, is admitted with no pattern term, as it
+    /// is without the comment (the decoder draws it in 266 ms). Stage 13
+    /// refused it at an estimated 3,492 ms.
+    /// </summary>
+    [Fact]
+    public void AMapWhoseRuleHasACommentBeforeItIsAdmitted()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='600' height='600'>");
+        s.Append("<defs><pattern id='hatch' width='8' height='8' patternUnits='userSpaceOnUse'>");
+        s.Append("<path d='M0 8L8 0' stroke='#999'/></pattern></defs>");
+        s.Append("<style>/* land regions */ .r{fill:#ccddee}</style><g fill='url(#hatch)' stroke='#333'>");
+        for (int i = 0; i < 3_200; i++)
+        {
+            s.Append($"<path class='r' d='M{i % 60 * 10} {i / 60 * 10} h9 v9 h-9z'/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.Equal(0, estimate.PatternMicroseconds);
+        Assert.Equal(SvgRefusal.None, verdict);
     }
 
     /// <summary>The delta merge judge's major 2 document: a pattern, then
