@@ -17,12 +17,19 @@
 //! census refuses) or its column's index were NOCASE (which
 //! `db::tests::no_like_can_use_an_index_prefix` refuses, by asking SQLite).
 //!
+//! **The open has one exit, through the configuration.** Only macOS takes
+//! the anchored branch of the open, and no CI lane runs these tests there,
+//! so a configuration moved into one branch would be seen by no run of
+//! `every_connection_core_opens_is_configured`. The type in `db.rs` makes
+//! such an open fail to compile, and this census holds the shape as text.
+//!
 //! Its ceiling. It reads lines, not statements: it sees the spelling
-//! `Connection::open…(` and the upper-case word `GLOB`, as every SQL keyword
-//! in this codebase is written. A connection reached through an alias of the
-//! type, or a pattern operator assembled from pieces of a word, is not seen.
-//! Because it reads lines, a `GLOB` in a literal, in a `format!` template or
-//! in one clause of SQL assembled at run time is seen alike.
+//! `Connection::open…` (called, or passed as a value) and the word `GLOB`
+//! in either case, as the operator or as the function `glob(pattern, text)`.
+//! A connection reached through an alias of the type, or a pattern operator
+//! assembled from pieces of a word, is not seen. Because it reads lines, a
+//! `GLOB` in a literal, in a `format!` template or in one clause of SQL
+//! assembled at run time is seen alike.
 
 use std::path::{Path, PathBuf};
 
@@ -90,8 +97,9 @@ struct ProductLine<'a> {
 /// The lines of `source` that are product code. Comment lines are dropped,
 /// so prose about a name is not a use of it. Each top-level inline test
 /// module (`#[cfg(test)]` then `mod … {`, down to its closing brace in the
-/// first column) is skipped. An out-of-line `#[cfg(test)] mod tests;` skips
-/// nothing: product code may follow it.
+/// first column, or that one line when the module closes on it) is skipped.
+/// An out-of-line `#[cfg(test)] mod tests;` skips nothing: product code may
+/// follow it.
 fn product_lines(source: &str) -> Vec<ProductLine<'_>> {
     let function = regex::Regex::new(
         r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:(?:const|async|unsafe)\s+)*fn\s+(\w+)",
@@ -112,10 +120,16 @@ fn product_lines(source: &str) -> Vec<ProductLine<'_>> {
             }
             if item < lines.len() && inline_module.is_match(lines[item]) {
                 index = item + 1;
-                while index < lines.len() && lines[index] != "}" {
+                // `mod tests {}` closes on its own line: nothing follows it
+                // down to a brace in the first column.
+                let closes_on_its_line =
+                    lines[item].matches('{').count() == lines[item].matches('}').count();
+                if !closes_on_its_line {
+                    while index < lines.len() && lines[index] != "}" {
+                        index += 1;
+                    }
                     index += 1;
                 }
-                index += 1;
                 continue;
             }
         }
@@ -134,10 +148,11 @@ fn product_lines(source: &str) -> Vec<ProductLine<'_>> {
     product
 }
 
-/// Every place `source` opens a SQLite connection itself: the line and the
-/// function it is in.
+/// Every place `source` opens a SQLite connection itself, or names the
+/// function that would (`.map(Connection::open)` opens one too): the line
+/// and the function it is in.
 fn connection_opens(source: &str) -> Vec<(usize, Option<String>)> {
-    let opens = regex::Regex::new(r"Connection::(?:open\w*|from_handle\w*)\s*\(").unwrap();
+    let opens = regex::Regex::new(r"Connection::(?:open|from_handle)\w*").unwrap();
     product_lines(source)
         .into_iter()
         .filter(|line| opens.is_match(line.text))
@@ -152,10 +167,63 @@ fn may_open(name: &str, function: Option<&str>) -> bool {
         && function.is_some_and(|function| FUNCTIONS_THAT_OPEN.contains(&function))
 }
 
-/// The lines among `lines` that bind a `GLOB` pattern: the word `GLOB` not
-/// followed by a quoted literal pattern.
+/// What is wrong with the way `source` (`db.rs`) configures the connections
+/// it opens, one line for each break. The shape it holds:
+/// `open_unconfigured` has one caller, `open_connection`; and
+/// `configure_connection` is called by `open_connection` and
+/// `open_in_memory`, and by nothing else, so never inside one branch of the
+/// open.
+///
+/// It reads text, so it holds on every lane. That matters because only
+/// macOS takes the anchored branch of the open, and no CI lane runs core's
+/// tests there: a configuration moved into the other branch would pass
+/// `every_connection_core_opens_is_configured` everywhere it runs.
+fn breaks_of_the_one_exit(source: &str) -> Vec<String> {
+    const CONFIGURE: [&str; 2] = ["open_connection", "open_in_memory"];
+    let lines = product_lines(source);
+    let calls = |callee: &str| -> Vec<(usize, Option<String>)> {
+        let call = regex::Regex::new(&format!(r"\b{callee}\s*\(")).unwrap();
+        let definition = regex::Regex::new(&format!(r"\bfn\s+{callee}\b")).unwrap();
+        lines
+            .iter()
+            .filter(|line| call.is_match(line.text) && !definition.is_match(line.text))
+            .map(|line| (line.number, line.function.clone()))
+            .collect()
+    };
+    let mut breaks = Vec::new();
+    let opened = calls("open_unconfigured");
+    if !matches!(opened.as_slice(), [(_, Some(caller))] if caller == "open_connection") {
+        breaks.push(format!(
+            "open_unconfigured has one caller, open_connection, and here its callers are {opened:?}"
+        ));
+    }
+    let configured = calls("configure_connection");
+    for (line, caller) in &configured {
+        let caller = caller.as_deref().unwrap_or("no function");
+        if !CONFIGURE.contains(&caller) {
+            breaks.push(format!(
+                "line {line}: {caller} calls configure_connection; only {CONFIGURE:?} do, so no \
+                 branch of the open configures for itself"
+            ));
+        }
+    }
+    for must in CONFIGURE {
+        if !configured
+            .iter()
+            .any(|(_, caller)| caller.as_deref() == Some(must))
+        {
+            breaks.push(format!("{must} does not call configure_connection"));
+        }
+    }
+    breaks
+}
+
+/// The lines among `lines` that bind a `GLOB` pattern: the word `GLOB`, in
+/// either case, whose pattern is not a quoted literal. The pattern follows
+/// the operator (`path GLOB ?1`) and is the first argument of the function
+/// (`glob(?1, path)`); SQLite plans the two alike.
 fn glob_with_a_bound_pattern<'a>(lines: impl Iterator<Item = (usize, &'a str)>) -> Vec<usize> {
-    let glob = regex::Regex::new(r"\bGLOB\b\s*(.?)").unwrap();
+    let glob = regex::Regex::new(r"(?i)\bglob\b\s*(?:\(\s*)?(.?)").unwrap();
     lines
         .filter(|(_, text)| glob.captures_iter(text).any(|found| &found[1] != "'"))
         .map(|(number, _)| number)
@@ -232,6 +300,104 @@ fn product_code_opens_a_connection_only_through_db() {
 }
 
 #[test]
+fn the_open_has_one_exit_through_configure() {
+    let source = std::fs::read_to_string(crates_root().join(WHERE_CONNECTIONS_OPEN)).unwrap();
+    let breaks = breaks_of_the_one_exit(&source);
+    assert!(
+        breaks.is_empty(),
+        "every connection core opens is configured at the one exit of db::open_connection \
+         (#1917). Only macOS takes the anchored branch and no lane runs these tests there, so \
+         a configuration inside one branch would go unseen:\n  {}",
+        breaks.join("\n  ")
+    );
+}
+
+#[test]
+fn the_one_exit_census_sees_each_planted_shape() {
+    // The shape before the type, and the shape with it: both are one exit.
+    let by_reference = "\
+pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = open_unconfigured(path)?;
+    configure_connection(&conn)?;
+    Ok(conn)
+}
+// configure_connection(&conn) in a comment is prose.
+fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
+    Ok(())
+}
+fn open_unconfigured(path: &Path) -> rusqlite::Result<Connection> {
+    if anchored {
+        return Connection::open_with_flags_and_vfs(path, flags, vfs);
+    }
+    Connection::open(path)
+}
+pub fn open_in_memory() -> Result<Connection, DbError> {
+    let conn = Connection::open_in_memory()?;
+    configure_connection(&conn)?;
+    Ok(conn)
+}
+";
+    assert_eq!(breaks_of_the_one_exit(by_reference), Vec::<String>::new());
+    let by_type = "\
+pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
+    configure_connection(open_unconfigured(path)?)
+}
+mod configured {
+    pub(super) fn configure_connection(conn: Unconfigured) -> rusqlite::Result<Connection> {
+        Ok(conn.0)
+    }
+}
+fn open_unconfigured(path: &Path) -> rusqlite::Result<Unconfigured> {
+    Connection::open(path).map(Unconfigured::opened)
+}
+pub fn open_in_memory() -> Result<Connection, DbError> {
+    let conn = configure_connection(Unconfigured::opened(Connection::open_in_memory()?))?;
+    Ok(conn)
+}
+";
+    assert_eq!(breaks_of_the_one_exit(by_type), Vec::<String>::new());
+
+    // The configuration moved into one branch of the open.
+    let in_one_branch = by_reference
+        .replace(
+            "    let conn = open_unconfigured(path)?;\n    configure_connection(&conn)?;\n",
+            "    let conn = open_unconfigured(path)?;\n",
+        )
+        .replace(
+            "    Connection::open(path)\n}",
+            "    let conn = Connection::open(path)?;\n    configure_connection(&conn)?;\n    Ok(conn)\n}",
+        );
+    assert_eq!(
+        breaks_of_the_one_exit(&in_one_branch),
+        vec![
+            "line 14: open_unconfigured calls configure_connection; only [\"open_connection\", \
+             \"open_in_memory\"] do, so no branch of the open configures for itself"
+                .to_string(),
+            "open_connection does not call configure_connection".to_string(),
+        ]
+    );
+
+    // A second way to an unconfigured connection.
+    let a_second_caller = format!(
+        "{by_reference}fn open_reader(path: &Path) -> rusqlite::Result<Connection> {{\n    \
+         open_unconfigured(path)\n}}\n"
+    );
+    let breaks = breaks_of_the_one_exit(&a_second_caller);
+    assert_eq!(breaks.len(), 1, "{breaks:?}");
+    assert!(breaks[0].contains("open_reader"), "{breaks:?}");
+
+    // The in-memory open left as SQLite gives it.
+    let in_memory_bare = by_reference.replace(
+        "    let conn = Connection::open_in_memory()?;\n    configure_connection(&conn)?;\n",
+        "    let conn = Connection::open_in_memory()?;\n",
+    );
+    assert_eq!(
+        breaks_of_the_one_exit(&in_memory_bare),
+        vec!["open_in_memory does not call configure_connection".to_string()]
+    );
+}
+
+#[test]
 fn the_connection_census_sees_a_planted_open() {
     let planted = "\
 pub fn open_unconfigured(path: &Path) -> rusqlite::Result<Connection> {
@@ -260,6 +426,17 @@ mod inline_tests {
 fn after_an_inline_test_module() {
     let memory = Connection::open_in_memory();
 }
+
+#[cfg(test)]
+mod one_line_tests {}
+
+fn after_a_one_line_test_module() {
+    let each = paths.iter().map(rusqlite::Connection::open);
+}
+
+fn passes_the_open_as_a_value() {
+    let opener = Connection::open;
+}
 ";
     let opens = connection_opens(planted);
     assert_eq!(
@@ -269,6 +446,8 @@ fn after_an_inline_test_module() {
             (7, Some("product".to_string())),
             (14, Some("after_an_out_of_line_test_module".to_string())),
             (25, Some("after_an_inline_test_module".to_string())),
+            (32, Some("after_a_one_line_test_module".to_string())),
+            (36, Some("passes_the_open_as_a_value".to_string())),
         ]
     );
     // The allowed function's name is not enough: the file has to be db.rs.
@@ -341,10 +520,18 @@ fn the_pattern_census_sees_each_planted_shape() {
         \"WHERE name GLOB :pattern AND path NOT GLOB   'x*'\",
         conn.pragma_update(None, \"case_sensitive_like\", true)?;
         let glob_patterns = GLOBAL_LIMIT;
+        \"SELECT path FROM files WHERE glob(?1, path)\",
+        \"SELECT path FROM files WHERE path glob ?1\",
+        \"SELECT path FROM files WHERE glob('n*', path) AND path glob 'n*'\",
+        \"WHERE path Glob :pattern\",
+        \"WHERE GLOB ( ?2 , name )\",
 ";
     let lines = product_lines(planted);
     let numbered = || lines.iter().map(|line| (line.number, line.text));
-    assert_eq!(glob_with_a_bound_pattern(numbered()), vec![1, 4, 5]);
+    assert_eq!(
+        glob_with_a_bound_pattern(numbered()),
+        vec![1, 4, 5, 8, 9, 11, 12]
+    );
     assert_eq!(names_case_sensitive_like(numbered()), vec![6]);
 
     let migration = "\
@@ -352,10 +539,12 @@ fn the_pattern_census_sees_each_planted_shape() {
 CREATE INDEX i ON t(x) WHERE x GLOB 'a*';
 SELECT 1 WHERE x GLOB ?1;
 PRAGMA case_sensitive_like = ON;
+SELECT 1 WHERE glob(?1, x);
+SELECT 1 WHERE x glob 'a*';
 ";
     assert_eq!(
         glob_with_a_bound_pattern(migration_lines(migration)),
-        vec![3]
+        vec![3, 5]
     );
     assert_eq!(
         names_case_sensitive_like(migration_lines(migration)),

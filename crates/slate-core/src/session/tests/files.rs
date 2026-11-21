@@ -1055,8 +1055,14 @@ fn a_file_summary_is_prepared_once() {
         );
     }
     let conn = session.conn.lock().unwrap();
-    let summary = cached_statement(&conn, "WITH candidates AS")
-        .expect("the summary statement is in the statement cache");
+    // The whole opening of the summary's CTE: the directory page has a
+    // `WITH candidates AS MATERIALIZED (` of its own.
+    let summary = cached_statement(
+        &conn,
+        "WITH candidates AS ( SELECT id, path, name, mtime_ms, size_bytes, is_markdown, \
+         birthtime_ms FROM files WHERE path = ?1",
+    )
+    .expect("the summary statement is in the statement cache");
     assert!(
         summary.runs >= NOTES as i32,
         "the cached summary statement ran {} times for {NOTES} calls",

@@ -1606,15 +1606,18 @@ fn a_cached_join_is_re_prepared_only_without_the_setting() {
 
 /// A note that runs every statement the scan caches for a Markdown file:
 /// headings, links, an embed, tags, a task, a list property, an inline
-/// field, two block ids, two citations and a base fence.
+/// field, two block ids, two citations and a base fence. Each round's text
+/// has a length of its own, so a rewrite changes the file's size and the
+/// scan sees the change whatever the filesystem's timestamps resolve.
 fn a_note_with_every_kind_of_content(note: usize, round: usize) -> String {
+    let longer_each_round = "One more line.\n".repeat(round);
     format!(
         "---\ntitle: Title {note}\nstatus: open\ntags: [alpha, t{}]\n---\n# Note {note}\n\n\
          ## Part A\n\nBody #inline links [[n{:02}]] and embeds ![[n{:02}]].\n\n\
          ## Part B\n\n- [ ] task {note}\n\n## Part R{round}\nextra{round}:: 1\n\n\
          A cited claim [@smith2020, p. 4] here. ^r{round}a\n\n\
          Another paragraph [@doe2019]. ^r{round}b\n\n\
-         ```base\nviews:\n  - type: table\n    name: X{round}\n```\n",
+         ```base\nviews:\n  - type: table\n    name: X{round}\n```\n\n{longer_each_round}",
         note % 7,
         (note + 1) % 40,
         (note + 2) % 40,
