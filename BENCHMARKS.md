@@ -1645,29 +1645,30 @@ runs' medians, of five passes over the path.
 
 | Path | `main` at 46f50603 | This change |
 |---|---:|---:|
-| Bases view, `oplog.has_change_since` outside the pushed-down position, 10,001 rows | 1,006.5, 1,071.9 ms | 620.8, 672.1 ms |
-| DQL `TABLE file.tags`, 10,001 rows | 1,299.7, 1,252.8 ms | 988.2, 741.8 ms |
+| Bases view, `oplog.has_change_since` outside the pushed-down position: 10,001 files evaluated, 0 rows returned | 1,006.5, 1,071.9 ms | 620.8, 672.1 ms |
+| DQL `TABLE file.tags`, 10,001 rows returned | 1,299.7, 1,252.8 ms | 988.2, 741.8 ms |
 | `note_link_panels`, 2,000 notes | 342.3, 322.2 ms | 175.4, 162.7 ms |
 | `get_file_summary`, 2,000 notes | 427.3, 336.7 ms | 49.8, 50.1 ms |
 | `open_canvas`, a board of 1,000 file cards | 17.1, 17.1 ms | 11.8, 11.7 ms |
 
-That is about 104 to 65 µs a row of the bases view, 128 to 74 or 99 µs a row
-of the DQL table, 166 to 85 µs a note for the link panels and 191 to 25 µs a
+That is about 104 to 65 µs a file the bases view evaluates, 128 to 74 or 99 µs
+a row of the DQL table, 166 to 85 µs a note for the link panels and 191 to 25 µs a
 file summary.
 
 The same vault with 20,000 content-change events in the window (50 on each of
 400 notes) and every note last modified 60 days ago, so that
 `oplog.untouched_for` reads the log for every row. Medians of three passes:
 
-| Path, 10,001 rows | `main` at 46f50603 | This change |
+| Path, 10,001 files evaluated | `main` at 46f50603 | This change |
 |---|---:|---:|
-| Bases view, `oplog.has_change_since` outside the pushed-down position | 9,662.3, 8,202.0 ms | 625.3, 643.9 ms |
-| Bases view, `oplog.untouched_for` outside the pushed-down position | 9,111.8, 8,946.5 ms | 635.3, 671.7 ms |
+| Bases view, `oplog.has_change_since` outside the pushed-down position, 400 rows returned | 9,662.3, 8,202.0 ms | 625.3, 643.9 ms |
+| Bases view, `oplog.untouched_for` outside the pushed-down position, 9,601 rows returned | 9,111.8, 8,946.5 ms | 635.3, 671.7 ms |
 
 - **The two probes on the wrong index.** Outside the pushed-down position
   `oplog.has_change_since` and `oplog.untouched_for` walked
   `oplog_events_class_ts`: every content event of every note in the window,
-  for each row. On this log that is about 100,000 VM steps a row for a note
+  for each file the view evaluates. On this log that is about 100,000 VM steps
+  for a note
   with no events of its own (100,016 and 100,029, step 0's probe) against 19
   and 32 with `oplog_events_file_ts` named. The view's time no longer grows
   with the vault's history. In a debug build step 0 read 20.2 s for the
