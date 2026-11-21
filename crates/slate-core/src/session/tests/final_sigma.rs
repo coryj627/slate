@@ -297,6 +297,36 @@ fn the_sidebar_filter_finds_a_final_sigma_name_whichever_sigma_was_typed() {
     }
 }
 
+/// Renaming a note whose Markdown extension is written in capitals
+/// rewrites the links that name it: the rename's candidate scan folds the
+/// name before it strips the extension (Codex round 4). `Note.MD` reaches
+/// it with no sigma at all; `ΟΔΟΣ.MD` adds one.
+#[test]
+fn renaming_a_note_with_a_capital_extension_rewrites_the_links_that_name_it() {
+    for (file, link, renamed) in [
+        ("Note.MD", "[[note]]", "Road.md"),
+        ("ΟΔΟΣ.MD", "[[οδος]]", "Δρομος.md"),
+        ("Mixed.Md", "[[mixed]]", "Other.md"),
+    ] {
+        let (tmp, session) = scanned(|provider| {
+            provider.write_file(file, b"# x\n").unwrap();
+            provider
+                .write_file("Source.md", format!("Only {link} here.\n").as_bytes())
+                .unwrap();
+        });
+        assert_eq!(targets(&session, "Source.md")[0].1.as_deref(), Some(file));
+        session.rename_file(file, renamed).unwrap();
+        // The cached row follows the rename by itself; resolve the text again.
+        let text = std::fs::read_to_string(tmp.path().join("Source.md")).unwrap();
+        session.save_text("Source.md", &text, None).unwrap();
+        assert_eq!(
+            targets(&session, "Source.md")[0].1.as_deref(),
+            Some(renamed),
+            "renaming {file}: the source now reads {text:?}"
+        );
+    }
+}
+
 /// Renaming one of two files that answer one exact key keeps every exact
 /// link that named it pointing at it under its new name: the rename
 /// planner judges what the link meant before the move in the pre-move

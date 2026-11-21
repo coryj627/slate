@@ -19099,17 +19099,17 @@ fn collect_rewrite_candidates(
 > {
     let all_paths = crate::links_db::indexed_paths_in_path_order(conn)?;
     let stem_of = |s: &str| -> String {
-        let name = s.rsplit('/').next().unwrap_or(s);
-        let mut stem = name;
+        // The resolver's fold (#1705), applied to the whole name before the
+        // extension goes, so `Note.MD` and `ΟΔΟΣ.MD` lose theirs too (Codex
+        // round 4 on CB-32), and a stem lowered alone and the same stem
+        // lowered with its extension meet whatever their final sigma.
+        let name = crate::name_fold::fold_case(s.rsplit('/').next().unwrap_or(s));
         for ext in [".md", ".markdown", ".mdown", ".mkd"] {
-            if let Some(candidate) = stem.strip_suffix(ext) {
-                stem = candidate;
-                break;
+            if let Some(stem) = name.strip_suffix(ext) {
+                return stem.to_string();
             }
         }
-        // The resolver's fold (#1705): a stem lowered alone and the same
-        // stem lowered with its extension meet whatever their final sigma.
-        crate::name_fold::fold_case(stem)
+        name
     };
     let moved_stems: std::collections::HashSet<String> =
         moved.iter().map(|(old, _)| stem_of(old)).collect();
