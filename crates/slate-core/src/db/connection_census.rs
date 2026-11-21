@@ -28,12 +28,18 @@
 //! literal.** That is the second of the five, and the other one a statement
 //! could lean on unnoticed: `is_external = ?1` no longer proves
 //! `is_external = 0`, so the statement loses the index and scans, with the
-//! same rows. The census reads the conditions from the migrated schema and
-//! refuses a product line that compares one of their columns with something
-//! bound. A condition that needs no value (`IS NULL`, `IS NOT NULL`) is not
-//! one of them. An index on an expression is matched the same way and is
-//! not guarded: a statement would have to bind a value where the indexed
-//! expression holds a literal.
+//! same rows. The census asks SQLite which indexes are partial, reads each
+//! one's condition in full, and fails on a condition it cannot read: no
+//! partial index is passed over. It then refuses a product line that
+//! compares a column with something bound where a condition compares that
+//! column with a literal. By SQLite's rules a parameter stands in for a
+//! literal only as one side of a binary operator, so a column held in a
+//! list (`IN`, `BETWEEN`) or tested for NULL names nothing to refuse; SQLite
+//! is asked for each shape in
+//! `the_condition_reader_agrees_with_sqlite_on_each_planted_condition`. An
+//! index on an expression is matched the same way and is not guarded: a
+//! statement would have to bind a value where the indexed expression holds
+//! a literal.
 //!
 //! Its ceiling. It reads lines, not statements: it sees the spelling
 //! `Connection::open…` (called, or passed as a value) and the word `GLOB`
@@ -42,10 +48,14 @@
 //! assembled from pieces of a word, is not seen. Because it reads lines, a
 //! `GLOB` in a literal, in a `format!` template or in one clause of SQL
 //! assembled at run time is seen alike. The partial-index rule sees a
-//! column's name beside an operator and a parameter (or, in a list, a
-//! `format!` placeholder) on one line; a column name put in at run time is
-//! not seen, and an assignment written on a line of its own, away from its
-//! `SET`, reads as a comparison and is refused.
+//! column's name, an operator and a parameter (or, in a list, a `format!`
+//! placeholder) on one line. A comparison split over two lines, a column
+//! name put in at run time, and a comparison with a `format!` placeholder
+//! outside a list are not seen. It reads no table: a column of the same
+//! name in another table is refused too. An assignment written on a line of
+//! its own, away from its `SET`, reads as a comparison and is refused. A
+//! parameter inside an expression (`col = +?1`) is passed, and rightly:
+//! SQLite never read such a value.
 
 use std::path::{Path, PathBuf};
 
@@ -255,53 +265,462 @@ fn names_case_sensitive_like<'a>(lines: impl Iterator<Item = (usize, &'a str)>) 
         .collect()
 }
 
-/// How many partial indexes `conn`'s schema has, and the columns their
-/// conditions compare with a literal (a quoted string or a number), sorted.
-/// SQLite reports each index's SQL; `IS NULL` and `IS NOT NULL` name no
-/// literal and so no column here.
-fn columns_partial_indexes_compare_with_a_literal(
-    conn: &rusqlite::Connection,
-) -> (usize, Vec<String>) {
-    let condition = regex::Regex::new(r"(?is)\bWHERE\b(.*)$").unwrap();
-    let compared = regex::Regex::new(
-        r"(?i)\b(\w+)\s*(?:=|==|!=|<>|IS(?:\s+NOT)?|(?:NOT\s+)?IN)\s*\(?\s*(?:'|\d)",
-    )
-    .unwrap();
-    let indexes: Vec<String> = conn
-        .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+/// One token of a `CREATE INDEX` statement: as much of SQL's lexing as an
+/// index's condition needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SqlToken {
+    /// A bare word: a keyword or an unquoted name.
+    Word(String),
+    /// A quoted name: `"name"`, `[name]` or `` `name` ``.
+    Name(String),
+    /// A number, a string or a blob.
+    Literal(String),
+    /// An operator or a piece of punctuation.
+    Mark(String),
+}
+
+/// `sql` as tokens, comments dropped. A quote doubled inside a string or a
+/// quoted name is one quote.
+fn sql_tokens(sql: &str) -> Vec<SqlToken> {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut tokens = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let next = chars.get(at + 1).copied();
+        if c.is_whitespace() {
+            at += 1;
+        } else if c == '-' && next == Some('-') {
+            while at < chars.len() && chars[at] != '\n' {
+                at += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            at += 2;
+            while at < chars.len() && !(chars[at] == '*' && chars.get(at + 1) == Some(&'/')) {
+                at += 1;
+            }
+            at += 2;
+        } else if c == '\'' || c == '"' || c == '`' || c == '[' {
+            let close = if c == '[' { ']' } else { c };
+            let mut text = String::new();
+            at += 1;
+            while let Some(&inside) = chars.get(at) {
+                at += 1;
+                if inside != close {
+                    text.push(inside);
+                } else if close != ']' && chars.get(at) == Some(&close) {
+                    text.push(close);
+                    at += 1;
+                } else {
+                    break;
+                }
+            }
+            tokens.push(if c == '\'' {
+                SqlToken::Literal(format!("'{text}'"))
+            } else {
+                SqlToken::Name(text)
+            });
+        } else if matches!(c, 'x' | 'X') && next == Some('\'') {
+            let start = at;
+            at += 2;
+            while at < chars.len() && chars[at] != '\'' {
+                at += 1;
+            }
+            at += 1;
+            tokens.push(SqlToken::Literal(
+                chars[start..at.min(chars.len())].iter().collect(),
+            ));
+        } else if c.is_ascii_digit() || (c == '.' && next.is_some_and(|n| n.is_ascii_digit())) {
+            let start = at;
+            let hex = c == '0' && matches!(next, Some('x' | 'X'));
+            while at < chars.len() {
+                let part = chars[at];
+                let exponent_sign = !hex
+                    && matches!(part, '+' | '-')
+                    && at > start
+                    && matches!(chars[at - 1], 'e' | 'E');
+                if part.is_ascii_alphanumeric() || part == '.' || part == '_' || exponent_sign {
+                    at += 1;
+                } else {
+                    break;
+                }
+            }
+            tokens.push(SqlToken::Literal(chars[start..at].iter().collect()));
+        } else if c.is_alphabetic() || c == '_' {
+            let start = at;
+            while at < chars.len()
+                && (chars[at].is_alphanumeric() || chars[at] == '_' || chars[at] == '$')
+            {
+                at += 1;
+            }
+            tokens.push(SqlToken::Word(chars[start..at].iter().collect()));
+        } else {
+            let two: String = [c, next.unwrap_or(' ')].iter().collect();
+            if ["==", "!=", "<>", "<=", ">=", "||", "<<", ">>"].contains(&two.as_str()) {
+                tokens.push(SqlToken::Mark(two));
+                at += 2;
+            } else {
+                tokens.push(SqlToken::Mark(c.to_string()));
+                at += 1;
+            }
+        }
+    }
+    tokens
+}
+
+/// The condition of the partial index `sql` creates: the tokens after the
+/// `WHERE` that follows the closing parenthesis of its indexed columns.
+/// `None` when no `WHERE` stands there.
+fn condition_tokens(sql: &str) -> Option<Vec<SqlToken>> {
+    let tokens = sql_tokens(sql);
+    let is_mark =
+        |token: &SqlToken, mark: &str| matches!(token, SqlToken::Mark(found) if found == mark);
+    let mut at = tokens.iter().position(|token| is_mark(token, "("))?;
+    let mut depth = 0;
+    loop {
+        let token = tokens.get(at)?;
+        if is_mark(token, "(") {
+            depth += 1;
+        } else if is_mark(token, ")") {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        }
+        at += 1;
+    }
+    match tokens.get(at + 1) {
+        Some(SqlToken::Word(word)) if word.eq_ignore_ascii_case("WHERE") => {
+            Some(tokens[at + 2..].to_vec())
+        }
+        _ => None,
+    }
+}
+
+/// How a partial index's condition holds one of its columns. It decides
+/// whether a bound value could ever have proved the condition, by SQLite's
+/// own rules (`sqlite3ExprImpliesExpr` and `sqlite3ExprCompare` in
+/// `sqlite3.c`): a parameter stands in for a literal only where it is one
+/// side of a binary operator. SQLite compares the members of a list (`IN`,
+/// `BETWEEN`, a function's arguments) without looking at bound values, and
+/// proves `IS NOT NULL` from the shape of a term, whatever is bound.
+/// `the_condition_reader_agrees_with_sqlite_on_each_planted_condition` asks
+/// SQLite for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// Compared with a literal by a binary operator (`=`, `==`, `!=`, `<>`,
+    /// `<`, `<=`, `>`, `>=`, `IS`, `IS NOT`), on either side. A statement
+    /// that binds the same value where the literal stands reached the index
+    /// before the guarantee and does not under it.
+    ToALiteral,
+    /// In a list: `IN`, `NOT IN`, `BETWEEN`. No bound value proves it, with
+    /// the guarantee or without.
+    InAList,
+    /// `IS NULL`, `IS NOT NULL`, `ISNULL`, `NOTNULL`, `NOT NULL`. No value
+    /// is involved.
+    ForNull,
+    /// Compared with another column, or standing alone as a truth value.
+    WithNoLiteral,
+}
+
+impl Held {
+    fn in_words(self) -> &'static str {
+        match self {
+            Held::ToALiteral => "compared with a literal",
+            Held::InAList => "in a list",
+            Held::ForNull => "tested for NULL",
+            Held::WithNoLiteral => "with no literal",
+        }
+    }
+}
+
+enum Operand {
+    Column(String),
+    Literal,
+}
+
+/// Words that cannot be a column where an operand stands. With them, an
+/// expression this reader does not know is refused and not taken for a
+/// column.
+const NOT_AN_OPERAND: [&str; 22] = [
+    "AND", "OR", "NOT", "IS", "IN", "BETWEEN", "LIKE", "GLOB", "REGEXP", "MATCH", "CASE", "WHEN",
+    "THEN", "ELSE", "END", "CAST", "COLLATE", "EXISTS", "SELECT", "DISTINCT", "FROM", "ESCAPE",
+];
+
+/// A reader of the conditions a partial index is written with: columns
+/// (bare, or quoted in any of SQLite's three ways) compared with literals,
+/// tested for NULL or held in lists, joined by `AND`, `OR`, `NOT` and
+/// parentheses. Anything else is an error, and the census fails on it: a
+/// function, arithmetic, `LIKE`, `COLLATE`, `CASE`, a qualified name.
+struct ConditionReader<'a> {
+    tokens: &'a [SqlToken],
+    at: usize,
+    terms: Vec<(String, Held)>,
+}
+
+impl ConditionReader<'_> {
+    fn take_word(&mut self, word: &str) -> bool {
+        let found = matches!(self.tokens.get(self.at), Some(SqlToken::Word(next)) if next.eq_ignore_ascii_case(word));
+        self.at += usize::from(found);
+        found
+    }
+
+    fn take_mark(&mut self, mark: &str) -> bool {
+        let found = matches!(self.tokens.get(self.at), Some(SqlToken::Mark(next)) if next == mark);
+        self.at += usize::from(found);
+        found
+    }
+
+    fn either(&mut self) -> Result<(), String> {
+        self.both()?;
+        while self.take_word("OR") {
+            self.both()?;
+        }
+        Ok(())
+    }
+
+    fn both(&mut self) -> Result<(), String> {
+        self.negated()?;
+        while self.take_word("AND") {
+            self.negated()?;
+        }
+        Ok(())
+    }
+
+    fn negated(&mut self) -> Result<(), String> {
+        if self.take_word("NOT") {
+            return self.negated();
+        }
+        self.term()
+    }
+
+    fn term(&mut self) -> Result<(), String> {
+        if self.take_mark("(") {
+            self.either()?;
+            return if self.take_mark(")") {
+                Ok(())
+            } else {
+                Err("a parenthesis is not closed".to_string())
+            };
+        }
+        let left = self.operand()?;
+        for compares in ["=", "==", "!=", "<>", "<", "<=", ">", ">="] {
+            if self.take_mark(compares) {
+                let right = self.operand()?;
+                return self.compared(left, right);
+            }
+        }
+        if self.take_word("IS") {
+            self.take_word("NOT");
+            if self.take_word("NULL") {
+                return self.held(left, Held::ForNull);
+            }
+            let right = self.operand()?;
+            return self.compared(left, right);
+        }
+        if self.take_word("ISNULL") || self.take_word("NOTNULL") {
+            return self.held(left, Held::ForNull);
+        }
+        let negated = self.take_word("NOT");
+        if negated && self.take_word("NULL") {
+            return self.held(left, Held::ForNull);
+        }
+        if self.take_word("IN") {
+            if !self.take_mark("(") {
+                return Err("IN without a list".to_string());
+            }
+            loop {
+                if let Operand::Column(column) = self.operand()? {
+                    return Err(format!("the column {column} in an IN list"));
+                }
+                if !self.take_mark(",") {
+                    break;
+                }
+            }
+            if !self.take_mark(")") {
+                return Err("an IN list is not closed".to_string());
+            }
+            return self.held(left, Held::InAList);
+        }
+        if self.take_word("BETWEEN") {
+            let low = self.operand()?;
+            if !self.take_word("AND") {
+                return Err("BETWEEN without its AND".to_string());
+            }
+            let high = self.operand()?;
+            if matches!(low, Operand::Column(_)) || matches!(high, Operand::Column(_)) {
+                return Err("a column as a bound of BETWEEN".to_string());
+            }
+            return self.held(left, Held::InAList);
+        }
+        if negated {
+            return Err("NOT before something that is not NULL, IN or BETWEEN".to_string());
+        }
+        self.held(left, Held::WithNoLiteral)
+    }
+
+    fn operand(&mut self) -> Result<Operand, String> {
+        let Some(token) = self.tokens.get(self.at).cloned() else {
+            return Err("the condition ends where an operand should be".to_string());
+        };
+        self.at += 1;
+        match token {
+            SqlToken::Literal(_) => Ok(Operand::Literal),
+            SqlToken::Name(name) => Ok(Operand::Column(name.to_lowercase())),
+            SqlToken::Mark(sign) if sign == "+" || sign == "-" => {
+                let number = matches!(
+                    self.tokens.get(self.at),
+                    Some(SqlToken::Literal(text)) if !text.starts_with(['\'', 'x', 'X'])
+                );
+                if number {
+                    self.at += 1;
+                    Ok(Operand::Literal)
+                } else {
+                    Err("a sign before something that is not a number".to_string())
+                }
+            }
+            SqlToken::Mark(mark) => Err(format!("{mark} where an operand should be")),
+            SqlToken::Word(word) => {
+                let upper = word.to_ascii_uppercase();
+                if ["NULL", "TRUE", "FALSE"].contains(&upper.as_str()) {
+                    return Ok(Operand::Literal);
+                }
+                if NOT_AN_OPERAND.contains(&upper.as_str()) {
+                    return Err(format!("{word} where an operand should be"));
+                }
+                match self.tokens.get(self.at) {
+                    Some(SqlToken::Mark(mark)) if mark == "(" => {
+                        Err(format!("the function {word}"))
+                    }
+                    Some(SqlToken::Mark(mark)) if mark == "." => {
+                        Err(format!("the qualified name {word}."))
+                    }
+                    _ => Ok(Operand::Column(word.to_lowercase())),
+                }
+            }
+        }
+    }
+
+    fn compared(&mut self, left: Operand, right: Operand) -> Result<(), String> {
+        match (left, right) {
+            (Operand::Column(column), Operand::Literal)
+            | (Operand::Literal, Operand::Column(column)) => {
+                self.terms.push((column, Held::ToALiteral));
+            }
+            (Operand::Column(one), Operand::Column(other)) => {
+                self.terms.push((one, Held::WithNoLiteral));
+                self.terms.push((other, Held::WithNoLiteral));
+            }
+            (Operand::Literal, Operand::Literal) => {
+                return Err("two literals compared".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn held(&mut self, operand: Operand, held: Held) -> Result<(), String> {
+        match operand {
+            Operand::Column(column) => {
+                self.terms.push((column, held));
+                Ok(())
+            }
+            Operand::Literal => Err("a literal where a column should be".to_string()),
+        }
+    }
+}
+
+/// The columns a condition names, in the order written, and how it holds
+/// each.
+type Terms = Vec<(String, Held)>;
+
+/// A partial index: its name, and its condition read, or why it could not
+/// be.
+type PartialIndex = (String, Result<Terms, String>);
+
+/// Every column the condition names and how it holds it, in the order
+/// written, or why the condition could not be read.
+fn read_condition(tokens: &[SqlToken]) -> Result<Terms, String> {
+    let mut reader = ConditionReader {
+        tokens,
+        at: 0,
+        terms: Vec::new(),
+    };
+    reader.either()?;
+    match tokens.get(reader.at) {
+        None => Ok(reader.terms),
+        Some(left_over) => Err(format!("{left_over:?} is not part of a condition it knows")),
+    }
+}
+
+/// Every partial index of `conn`'s main schema, by name, with its condition
+/// read. SQLite says which indexes are partial (`PRAGMA index_list` marks
+/// them); the condition is the `WHERE` after the indexed columns in the
+/// index's own SQL. An index SQLite calls partial comes back as an error
+/// unless every term of its condition was read: none is passed over.
+fn partial_index_conditions(conn: &rusqlite::Connection) -> Vec<PartialIndex> {
+    let names: Vec<String> = conn
+        .prepare(
+            "SELECT l.name FROM sqlite_master t, pragma_index_list(t.name) l
+             WHERE t.type = 'table' AND l.\"partial\" = 1 ORDER BY l.name",
+        )
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let mut partial = 0;
-    let mut columns = std::collections::BTreeSet::new();
-    for sql in indexes {
-        let Some(found) = condition.captures(&sql) else {
-            continue;
-        };
-        partial += 1;
-        for column in compared.captures_iter(&found[1]) {
-            columns.insert(column[1].to_ascii_lowercase());
-        }
-    }
-    (partial, columns.into_iter().collect())
+    names
+        .into_iter()
+        .map(|name| {
+            let sql: Option<String> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [&name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let sql = sql.unwrap_or_default();
+            let read = match condition_tokens(&sql) {
+                None => Err(format!(
+                    "SQLite calls it partial and no WHERE follows its columns, in: {sql}"
+                )),
+                Some(tokens) => read_condition(&tokens).map_err(|why| format!("{why}, in: {sql}")),
+            };
+            (name, read)
+        })
+        .collect()
+}
+
+/// The columns whose literal a bound value could stand in for, among the
+/// conditions read: sorted, each once.
+fn columns_held_to_a_literal(conditions: &[PartialIndex]) -> Vec<String> {
+    let columns: std::collections::BTreeSet<String> = conditions
+        .iter()
+        .filter_map(|(_, read)| read.as_ref().ok())
+        .flatten()
+        .filter(|(_, held)| *held == Held::ToALiteral)
+        .map(|(column, _)| column.clone())
+        .collect();
+    columns.into_iter().collect()
 }
 
 /// The lines among `lines` that compare `column` with something bound: a
-/// parameter on either side of the operator, or a list that opens with a
-/// parameter or a `format!` placeholder.
+/// parameter (`?`, `?1`, `:name`, `@name`, `$name`) on either side of a
+/// comparison, `IS` or `IS NOT`; or `IN` and `BETWEEN` with a parameter, or
+/// a list that opens with a `format!` placeholder. The column may be quoted
+/// and in any case. `SET column = ?` on the `SET`'s own line assigns and is
+/// passed.
 fn binds_a_partial_index_condition<'a>(
     column: &str,
     lines: impl Iterator<Item = (usize, &'a str)>,
 ) -> Vec<usize> {
     const BOUND: &str = r"(?:\?|:\w|@\w|\$\w)";
+    const COMPARES: &str = r"(?:==|=|!=|<>|<=|>=|<|>|IS(?:\s+NOT)?)";
     let on_the_right = regex::Regex::new(&format!(
-        r"(?i)\b{column}\b\s*(?:=|==|!=|<>|IS(?:\s+NOT)?|(?:NOT\s+)?IN)\s*(?:\(\s*(?:{BOUND}|\{{)|{BOUND})"
+        r#"(?i)\b{column}\b\\?["\]`]?\s*(?:{COMPARES}|(?:NOT\s+)?IN|(?:NOT\s+)?BETWEEN)\s*(?:\(\s*(?:{BOUND}|\{{)|{BOUND})"#
     ))
     .unwrap();
     let on_the_left = regex::Regex::new(&format!(
-        r"(?i)(?:\?\d*|[:@$]\w+)\s*(?:=|==|!=|<>|IS(?:\s+NOT)?)\s*(?:\w+\.)?{column}\b"
+        r#"(?i)(?:^|[^:\w])(?:\?\d*|[:@$]\w+)\s*{COMPARES}\s*(?:\w+\.)?\\?["\[`]?{column}\b"#
     ))
     .unwrap();
     lines
@@ -591,24 +1010,66 @@ fn no_product_statement_binds_a_glob_pattern() {
     );
 }
 
-/// The columns the schema's partial indexes compare with a literal today:
-/// `is_external = 0` (the two link fold indexes) and `value_kind NOT IN
-/// ('list', 'tag_list')` (`idx_properties_key_norm`). A new partial index
-/// with a literal in its condition moves this list, and its author reads
-/// why.
-const COLUMNS_A_PARTIAL_INDEX_HOLDS_TO_A_LITERAL: [&str; 2] = ["is_external", "value_kind"];
+/// Every partial index in the schema today and how its condition holds its
+/// columns. A new partial index, or a changed condition, moves this list,
+/// and its author reads why the census cares.
+const PARTIAL_INDEX_CONDITIONS: [&str; 5] = [
+    "files_oplog_name_unique: oplog_name tested for NULL",
+    "idx_links_target_name_fold: target_path tested for NULL, is_external compared with a literal",
+    "idx_links_target_path_fold: target_path tested for NULL, is_external compared with a literal",
+    "idx_properties_key_norm: value_kind in a list",
+    "idx_tasks_priority: priority tested for NULL",
+];
+
+/// The columns a bound value could stand in for a literal on: `is_external
+/// = 0`, on the two link fold indexes. `value_kind NOT IN ('list',
+/// 'tag_list')` is a list, which no bound value proves.
+const COLUMNS_HELD_TO_A_LITERAL: [&str; 1] = ["is_external"];
+
+fn in_words(conditions: &[PartialIndex]) -> Vec<String> {
+    conditions
+        .iter()
+        .map(|(name, read)| match read {
+            Ok(terms) => format!(
+                "{name}: {}",
+                terms
+                    .iter()
+                    .map(|(column, held)| format!("{column} {}", held.in_words()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Err(why) => format!("{name}: NOT READ: {why}"),
+        })
+        .collect()
+}
 
 #[test]
 fn no_product_statement_binds_a_partial_index_condition() {
     let mut conn = super::open_in_memory(64).unwrap();
     super::migrate(&mut conn).unwrap();
-    let (partial, columns) = columns_partial_indexes_compare_with_a_literal(&conn);
+    let conditions = partial_index_conditions(&conn);
+
+    // Fail closed: every index SQLite calls partial was read in full.
+    let unread: Vec<String> = conditions
+        .iter()
+        .filter_map(|(name, read)| read.as_ref().err().map(|why| format!("{name}: {why}")))
+        .collect();
     assert!(
-        partial >= 5,
-        "the walk must see the schema's partial indexes: {partial}"
+        unread.is_empty(),
+        "a partial index's condition this census cannot read, so it cannot say whether a bound \
+         value could have proved it (#1917). Teach `read_condition` the shape, with a planted \
+         case SQLite judges in \
+         `the_condition_reader_agrees_with_sqlite_on_each_planted_condition`:\n  {}",
+        unread.join("\n  ")
     );
     assert_eq!(
-        columns, COLUMNS_A_PARTIAL_INDEX_HOLDS_TO_A_LITERAL,
+        in_words(&conditions),
+        PARTIAL_INDEX_CONDITIONS,
+        "the schema's partial indexes and how each condition holds its columns"
+    );
+    let columns = columns_held_to_a_literal(&conditions);
+    assert_eq!(
+        columns, COLUMNS_HELD_TO_A_LITERAL,
         "the columns a partial index's condition compares with a literal"
     );
 
@@ -646,49 +1107,281 @@ fn no_product_statement_binds_a_partial_index_condition() {
     );
 }
 
+/// The plan SQLite picks for `sql` once `value` is bound to `?1`: binding
+/// expires a statement whose plan looks at the value, so the step compiles
+/// it again with the value in hand.
+fn plan_once_bound(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    value: &rusqlite::types::Value,
+) -> String {
+    let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    explain.raw_bind_parameter(1, value).unwrap();
+    let mut rows = explain.raw_query();
+    let mut plan = Vec::new();
+    while let Some(row) = rows.next().unwrap() {
+        plan.push(row.get::<_, String>(3).unwrap());
+    }
+    plan.join(" / ")
+}
+
+/// SQLite is the judge of what the reader says. Each planted condition goes
+/// into a partial index on a scratch table, and the same condition with its
+/// literal bound goes into a query, planned without the guarantee and with
+/// it. Where SQLite uses the index without the guarantee and gives it up
+/// with it, the reader must list a column held to a literal: that is the
+/// statement the census exists to refuse. Where the reader lists none,
+/// SQLite must show the guarantee changed nothing. The reader may hold a
+/// column SQLite would not have proved (a literal written on the left);
+/// that way round costs only a refusal.
+#[test]
+fn the_condition_reader_agrees_with_sqlite_on_each_planted_condition() {
+    use rusqlite::types::Value;
+    let int = Value::Integer;
+    let text = |value: &str| Value::Text(value.to_string());
+    // (the index's condition, the query's term with ?1 for the literal, the
+    // value, whether the bound statement uses the index without the
+    // guarantee, the column the reader must hold to a literal)
+    let planted: Vec<(&str, &str, Value, bool, &[&str])> = vec![
+        ("c = 0", "c = ?1", int(0), true, &["c"]),
+        ("c = -1", "c = ?1", int(-1), true, &["c"]),
+        ("c = +1", "c = ?1", int(1), true, &["c"]),
+        ("c = 1.5", "c = ?1", Value::Real(1.5), true, &["c"]),
+        ("c = 0x10", "c = ?1", int(16), true, &["c"]),
+        ("c = 'it''s'", "c = ?1", text("it's"), true, &["c"]),
+        ("c == 0", "c == ?1", int(0), true, &["c"]),
+        ("c IS 0", "c IS ?1", int(0), true, &["c"]),
+        ("c IS NOT 0", "c IS NOT ?1", int(0), true, &["c"]),
+        ("c != 0", "c != ?1", int(0), true, &["c"]),
+        ("c <> 0", "c <> ?1", int(0), true, &["c"]),
+        ("c > 5", "c > ?1", int(5), true, &["c"]),
+        ("c >= 5", "c >= ?1", int(5), true, &["c"]),
+        ("c < 5", "c < ?1", int(5), true, &["c"]),
+        ("c <= 5", "c <= ?1", int(5), true, &["c"]),
+        ("c = 0 OR d = 1", "c = ?1", int(0), true, &["c", "d"]),
+        (
+            "b IS NULL AND c = 0",
+            "b IS NULL AND c = ?1",
+            int(0),
+            true,
+            &["c"],
+        ),
+        ("(c = 0)", "c = ?1", int(0), true, &["c"]),
+        ("NOT (c = 0)", "NOT (c = ?1)", int(0), true, &["c"]),
+        ("\"c\" = 0", "c = ?1", int(0), true, &["c"]),
+        ("[c] = 0", "c = ?1", int(0), true, &["c"]),
+        ("`c` = 0", "c = ?1", int(0), true, &["c"]),
+        ("C = 0", "c = ?1", int(0), true, &["c"]),
+        // The parameter on the left of the statement's term: SQLite turns the
+        // term round, and the bound value proves the condition all the same.
+        ("c = 0", "?1 = c", int(0), true, &["c"]),
+        // A literal on the left of the index's condition. SQLite proves
+        // neither of these from a bound value, with the guarantee or without;
+        // the reader holds the column all the same, since it cannot lose by
+        // it.
+        ("0 = c", "?1 = c", int(0), false, &["c"]),
+        ("0 = c", "c = ?1", int(0), false, &["c"]),
+        // Lists: no bound value proves them, with the guarantee or without.
+        ("c IN (1, 2)", "c IN (?1, 2)", int(1), false, &[]),
+        (
+            "c NOT IN ('x', 'y')",
+            "c NOT IN (?1, 'y')",
+            text("x"),
+            false,
+            &[],
+        ),
+        (
+            "c BETWEEN 1 AND 5",
+            "c BETWEEN ?1 AND 5",
+            int(1),
+            false,
+            &[],
+        ),
+        // NULL tests: no value is involved.
+        ("c IS NULL", "c IS ?1", Value::Null, false, &[]),
+        ("c IS NOT NULL", "c = ?1", int(3), true, &[]),
+        ("c NOTNULL", "c = ?1", int(3), true, &[]),
+    ];
+
+    let mut wrong = Vec::new();
+    for (condition, term, value, uses_it_without, held_to_a_literal) in planted {
+        let schema =
+            format!("CREATE TABLE t (a, b, c, d); CREATE INDEX planted ON t(a) WHERE {condition};");
+        let query = format!("SELECT COUNT(*) FROM t WHERE a = 'k' AND {term}");
+        let free = rusqlite::Connection::open_in_memory().unwrap();
+        free.execute_batch(&schema).unwrap();
+        let guaranteed = rusqlite::Connection::open_in_memory().unwrap();
+        guaranteed.execute_batch(&schema).unwrap();
+        guaranteed
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .unwrap();
+        let without = plan_once_bound(&free, &query, &value).contains("planted");
+        let with = plan_once_bound(&guaranteed, &query, &value).contains("planted");
+
+        // The reader, through the same walk the census uses.
+        let conditions = partial_index_conditions(&free);
+        let listed = columns_held_to_a_literal(&conditions);
+        if let [(_, Err(why))] = conditions.as_slice() {
+            wrong.push(format!("{condition}: not read: {why}"));
+            continue;
+        }
+        if without != uses_it_without {
+            wrong.push(format!(
+                "{condition}: without the guarantee `{term}` uses the index: {without}, and \
+                 this table says {uses_it_without}"
+            ));
+        }
+        let given_up = without && !with;
+        if given_up && listed.is_empty() {
+            wrong.push(format!(
+                "{condition}: the guarantee gives the index up for `{term}` and the reader \
+                 lists no column"
+            ));
+        }
+        if listed.is_empty() && without != with {
+            wrong.push(format!(
+                "{condition}: the reader says no bound value matters, and SQLite's plan moved"
+            ));
+        }
+        if listed != held_to_a_literal {
+            wrong.push(format!(
+                "{condition}: the reader holds {listed:?} to a literal, not {held_to_a_literal:?}"
+            ));
+        }
+        if !held_to_a_literal.is_empty() && uses_it_without && !given_up {
+            wrong.push(format!(
+                "{condition}: planted as a condition a bound value proves, and SQLite's plan \
+                 for `{term}` is the same with the guarantee and without (uses the index: \
+                 {without}, {with})"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn the_partial_index_census_sees_each_planted_shape() {
+    // The product side: each spelling of a bound comparison.
     let planted = "\
         \"WHERE links.target_path IS NULL AND links.is_external = ?2\",
         \"WHERE l.is_external = 0 AND l.target_path = ?1\",
-        \"AND p.value_kind NOT IN (?1, ?2)\",
-        \"AND p.value_kind NOT IN ('list', 'tag_list')\",
+        \"AND p.is_external NOT IN (?1, ?2)\",
+        \"AND p.is_external NOT IN (0, 1)\",
         \"UPDATE links SET is_external = ?3 WHERE rowid = ?1\",
         \"UPDATE links SET target_raw = ?2 WHERE is_external = ?3\",
         let is_external = looks_external(&url_string);
         \"WHERE ?2 = is_external\",
-        format!(\"AND value_kind IN ({placeholders})\"),
-        \"AND value_kind = :kind\",
+        format!(\"AND is_external IN ({placeholders})\"),
+        \"AND is_external = :external\",
         // WHERE is_external = ?2, in a comment
-        \"WHERE is_external IS ?1 OR value_kind == @kind\",
-        \"ON CONFLICT DO UPDATE SET value_kind = ?4\",
+        \"WHERE is_external IS ?1 OR Is_External == @external\",
+        \"ON CONFLICT DO UPDATE SET is_external = ?4\",
+        \"WHERE is_external >= $low AND 1 = 1\",
+        \"WHERE is_external BETWEEN ?1 AND ?2\",
+        \"WHERE \\\"is_external\\\" = ?\",
+        \"WHERE [is_external] <> ?7\",
+        \"WHERE is_external = (?1)\",
+        \"WHERE :x != l.`is_external` OR ?3 = \\\"is_external\\\"\",
+        \"WHERE is_external = +?1 AND is_external < 2\",
+        \"WHERE is_external IS NOT ?\",
 ";
     let lines = product_lines(planted);
     let numbered = || lines.iter().map(|line| (line.number, line.text));
     assert_eq!(
         binds_a_partial_index_condition("is_external", numbered()),
-        vec![1, 6, 8, 12]
-    );
-    assert_eq!(
-        binds_a_partial_index_condition("value_kind", numbered()),
-        vec![3, 9, 10, 12]
+        vec![1, 3, 6, 8, 9, 10, 12, 14, 15, 16, 17, 18, 19, 21]
     );
 
-    // The schema walk: a literal names its column, a NULL test names none.
+    // The schema walk, on a scratch schema: SQLite says which indexes are
+    // partial, each is read in full or comes back as an error, and a
+    // negative literal names its column as any literal does.
     let scratch = rusqlite::Connection::open_in_memory().unwrap();
     scratch
         .execute_batch(
-            "CREATE TABLE t (a, b, c, d);
+            "CREATE TABLE t (a, b, c, d, e, \"where\" TEXT);
              CREATE INDEX plain ON t(a);
+             CREATE INDEX on_an_expression ON t(lower(a), b);
              CREATE INDEX not_null ON t(a) WHERE b IS NOT NULL;
              CREATE INDEX by_number ON t(a) WHERE c = 0 AND b IS NULL;
              CREATE INDEX by_list ON t(a)
-             WHERE d NOT IN ('x', 'y');",
+             WHERE d NOT IN ('x', 'y');
+             CREATE INDEX by_negative ON t(a) WHERE e = -1;
+             CREATE INDEX by_a_column_named_where ON t(\"where\", lower(a)) -- WHERE e = 9
+             WHERE \"where\" > 'm';
+             CREATE INDEX by_a_function ON t(a) WHERE lower(d) = 'x';
+             CREATE INDEX by_arithmetic ON t(a) WHERE c + 1 = 2;
+             CREATE INDEX by_like ON t(a) WHERE d LIKE 'a%';",
         )
         .unwrap();
+    let conditions = partial_index_conditions(&scratch);
+    let read = in_words(&conditions);
+    assert_eq!(read.len(), 8, "{read:#?}");
     assert_eq!(
-        columns_partial_indexes_compare_with_a_literal(&scratch),
-        (3, vec!["c".to_string(), "d".to_string()])
+        read[..5],
+        [
+            "by_a_column_named_where: where compared with a literal",
+            "by_a_function: NOT READ: the function lower, in: CREATE INDEX by_a_function ON t(a) \
+             WHERE lower(d) = 'x'",
+            "by_arithmetic: NOT READ: Mark(\"+\") is not part of a condition it knows, in: \
+             CREATE INDEX by_arithmetic ON t(a) WHERE c + 1 = 2",
+            "by_like: NOT READ: Word(\"LIKE\") is not part of a condition it knows, in: CREATE \
+             INDEX by_like ON t(a) WHERE d LIKE 'a%'",
+            "by_list: d in a list",
+        ]
+    );
+    assert_eq!(
+        read[5..],
+        [
+            "by_negative: e compared with a literal",
+            "by_number: c compared with a literal, b tested for NULL",
+            "not_null: b tested for NULL",
+        ]
+    );
+    assert_eq!(columns_held_to_a_literal(&conditions), ["c", "e", "where"]);
+    // And the product rule refuses a bound comparison on the column the
+    // negative literal named.
+    let bound = "        \"SELECT 1 FROM t WHERE e = ?1\",\n";
+    let lines = product_lines(bound);
+    assert_eq!(
+        binds_a_partial_index_condition("e", lines.iter().map(|line| (line.number, line.text))),
+        vec![1]
+    );
+
+    // What the reader refuses to guess at.
+    for unknown in [
+        "lower(c) = 'x'",
+        "c + 1 = 2",
+        "c LIKE 'a%'",
+        "c = 0 AND length(d) > 1",
+        "c COLLATE NOCASE = 'a'",
+        "CASE WHEN c THEN 1 END",
+        "c IS DISTINCT FROM 0",
+        "t.c = 0",
+        "c IN (d, 1)",
+        "c BETWEEN d AND 5",
+        "1 = 1",
+        "c = - 'x'",
+        "(c = 0",
+        "c = 0 d = 1",
+        "c =",
+    ] {
+        assert!(
+            read_condition(&sql_tokens(unknown)).is_err(),
+            "{unknown}: read as {:?}",
+            read_condition(&sql_tokens(unknown))
+        );
+    }
+    // And what it reads without a literal in it.
+    assert_eq!(
+        read_condition(&sql_tokens("c = d AND b")),
+        Ok(vec![
+            ("c".to_string(), Held::WithNoLiteral),
+            ("d".to_string(), Held::WithNoLiteral),
+            ("b".to_string(), Held::WithNoLiteral),
+        ])
     );
 }
 

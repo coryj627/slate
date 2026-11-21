@@ -1699,9 +1699,10 @@ The same vault with 20,000 content-change events in the window (50 on each of
   2. A partial index, or an index on an expression, that a bound value would
      have matched where the index holds a literal (`exprCompareVariable`,
      119504). Guarded for partial indexes:
-     `no_product_statement_binds_a_partial_index_condition` refuses a statement
-     that binds a value where a partial index's condition has a literal. Not
-     guarded for an index on an expression.
+     `no_product_statement_binds_a_partial_index_condition` reads every partial
+     index's condition, or fails, and refuses a statement that compares a
+     column with a bound value where a condition compares that column with a
+     literal. Not guarded for an index on an expression.
   3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`, 87237). Not
      guarded. No product code runs `ANALYZE`, so there are no samples to probe.
   4. A bound `LIMIT`'s value in the row estimate and in the cost of a sort
