@@ -635,6 +635,12 @@ public sealed partial class FocusIntegrityManifestCensus
                 ["PlantedTests.InAnUninvokedLambda"] = "[Fact] void InAnUninvokedLambda() => RunSta(() => { var button = host.Pressed; Action measure = () => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); GC.KeepAlive(measure); });",
                 ["PlantedTests.CallInALocalFunction"] = "[Fact] void CallInALocalFunction() => RunSta(() => { var button = host.Pressed; void Measure() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"button\", button, () => button.Command.Execute(null)); GC.KeepAlive((Action)Measure); });",
                 ["PlantedTests.NameInALocalFunction"] = "[Fact] void NameInALocalFunction() => RunSta(() => { var button = host.Other; void Name() => _ = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"button\", button, () => button.Command.Execute(null)); });",
+                ["PlantedTests.InANewAction"] = "[Fact] void InANewAction() => RunSta(() => { var button = host.Pressed; GC.KeepAlive(new Action(() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)))); });",
+                ["PlantedTests.InALazy"] = "[Fact] void InALazy() => RunSta(() => { var button = host.Pressed; GC.KeepAlive(new Lazy<bool>(() => { KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); return true; })); });",
+                ["PlantedTests.InAThread"] = "[Fact] void InAThread() => RunSta(() => { var button = host.Pressed; GC.KeepAlive(new Thread(() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)))); });",
+                ["PlantedTests.InATask"] = "[Fact] void InATask() => RunSta(() => { var button = host.Pressed; GC.KeepAlive(Task.Run(() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)))); });",
+                ["PlantedTests.InAnUnknownRunner"] = "[Fact] void InAnUnknownRunner() => RunSta(() => { var button = host.Pressed; Later(() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null))); });",
+                ["PlantedTests.InADispatcherInvoke"] = "[Fact] void InADispatcherInvoke() => RunSta(() => { var button = host.Pressed; host.Shell.Dispatcher.Invoke(() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null))); });",
                 ["PlantedTests.InADispatchedLambda"] = "[Fact] void InADispatchedLambda() => RunSta(() => PumpedDispatcher.Run(() => { var button = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); }));",
             },
             new HashSet<string>(StringComparer.Ordinal),
@@ -657,6 +663,14 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.NotNull(judge.Judge(pressed, "keys-first: PlantedTests.InALocalFunction"));
         Assert.Contains("calls", judge.Judge(pressed, "keys-first: PlantedTests.InAnUninvokedLambda"), StringComparison.Ordinal);
         Assert.Null(judge.Judge(pressed, "keys-first: PlantedTests.InADispatchedLambda"));
+        // Codex round 2: only a named runner runs the lambda it is handed before it returns
+        // (RunSta, PumpedDispatcher.Run, a dispatcher's Invoke); a delegate, a Lazy, a thread, a
+        // task or any other consumer may never run it.
+        Assert.Null(judge.Judge(pressed, "keys-first: PlantedTests.InADispatcherInvoke"));
+        foreach (string kept in new[] { "InANewAction", "InALazy", "InAThread", "InATask", "InAnUnknownRunner" })
+        {
+            Assert.Contains("calls", judge.Judge(pressed, $"keys-first: PlantedTests.{kept}") ?? $"{kept} was taken as a witness", StringComparison.Ordinal);
+        }
         Assert.Contains("calls", judge.Judge(pressed, "keys-first: PlantedTests.CallInALocalFunction"), StringComparison.Ordinal);
         Assert.Contains("does not name the site", judge.Judge(pressed, "keys-first: PlantedTests.NameInALocalFunction"), StringComparison.Ordinal);
     }
@@ -1790,8 +1804,9 @@ public sealed partial class FocusIntegrityManifestCensus
         /// in the fact's own method: not a nameof, a method group, a string, a look-alike of
         /// the fact's own class, or a call inside a helper. It runs when the fact does: not in
         /// a local function, which runs only if called, and every lambda around it is handed
-        /// straight to a call or a construction (RunSta, a dispatcher), not kept in a variable
-        /// (Codex round 1, finding 2).</summary>
+        /// straight to a named runner that runs it before returning, not kept in a variable or
+        /// handed to a delegate, a Lazy, a thread, a task or any other consumer (Codex rounds 1
+        /// and 2).</summary>
         private static bool CallsTheRecorder(string source) =>
             SyntaxFactory.ParseMemberDeclaration(source) is { } method
             && method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
@@ -1807,10 +1822,31 @@ public sealed partial class FocusIntegrityManifestCensus
                     LocalFunctionStatementSyntax => false,
                     AnonymousFunctionExpressionSyntax lambda => lambda.Parent is ArgumentSyntax
                     {
-                        Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax },
-                    },
+                        Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax { Expression: var runner } },
+                    } && IsARunner(runner),
                     _ => true,
                 }));
+
+        /// <summary>The runners a keys-first fact may hand its body to, each of which runs the
+        /// lambda before it returns: RunSta (every keys-first witness today: the four
+        /// CommandPaletteTests overlay and launcher facts, EmptyPaneLauncherTests,
+        /// SidebarTreeKeysTests and FindInNoteBarTests), PumpedDispatcher.Run and a
+        /// dispatcher's Invoke. No other consumer counts.</summary>
+        private static bool IsARunner(ExpressionSyntax runner) => runner switch
+        {
+            IdentifierNameSyntax { Identifier.ValueText: "RunSta" } => true,
+            MemberAccessExpressionSyntax { Name.Identifier.ValueText: "RunSta" } => true,
+            MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Run", Expression: var owner } => LastName(owner) == "PumpedDispatcher",
+            MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Invoke", Expression: var owner } => LastName(owner) == "Dispatcher",
+            _ => false,
+        };
+
+        private static string? LastName(ExpressionSyntax expression) => expression switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+            _ => null,
+        };
 
         /// <summary>A fact's source without its local functions, whose code runs only if
         /// called: they do not name a site for it.</summary>
