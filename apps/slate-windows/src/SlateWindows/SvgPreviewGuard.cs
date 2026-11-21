@@ -2865,8 +2865,10 @@ internal static class SvgPreviewGuard
     /// (<see cref="CssText"/>): where it gives the same rules and
     /// declarations once the marks are gone, a declaration is plain when
     /// it holds no escape and no comment but at its ends, and a rule is
-    /// sure only when its selector is plain too. Where it does not, no rule
-    /// is sure and no declaration plain.
+    /// sure only when its selector is plain too and the marked reading is
+    /// sure of it, which it is not inside an <c>@media</c> block whose
+    /// header holds a mark (Codex's round 12, stage 14b). Where it does
+    /// not, no rule is sure and no declaration plain.
     /// </summary>
     private static void MarkPlainText(List<StyleRule> rules, List<StyleRule> marked)
     {
@@ -2891,6 +2893,7 @@ internal static class SvgPreviewGuard
             {
                 break;
             }
+            rule.Sure &= other.Sure;
             if (rule.Prelude is not null && !Plain(other.Prelude!))
             {
                 rule.Sure = false;
@@ -2938,7 +2941,9 @@ internal static class SvgPreviewGuard
     /// measured) only where it is at the top level or in <c>@media</c>
     /// all, screen or none (<see cref="MediaApplies"/>), every block around
     /// it and its own are closed, and its selector list parses
-    /// (<see cref="SelectorListParses"/>).
+    /// (<see cref="SelectorListParses"/>); in marked text, every
+    /// <c>@media</c> header around it is also unmarked
+    /// (<see cref="UnmarkedHeader"/>).
     /// </summary>
     private static List<StyleRule> StyleRules(string text, GuardSteps steps)
     {
@@ -2989,14 +2994,15 @@ internal static class SvgPreviewGuard
             Scanned((k - i) + (3L * (open - i)) + (bodyEnd - open));
             string prelude = text[i..open];
             int semicolon = prelude.LastIndexOf(';');
-            prelude = TrimComments(semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude);
+            string head = semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude;
+            prelude = TrimComments(head);
             if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
             {
                 Scanned(bodyEnd - open);
                 if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
                 {
                     outer.Push((k, end, sure));
-                    (i, end, sure) = (open + 1, bodyEnd, sure && closed && MediaApplies(prelude[6..]));
+                    (i, end, sure) = (open + 1, bodyEnd, sure && closed && MediaApplies(prelude[6..]) && UnmarkedHeader(head));
                     continue;
                 }
             }
@@ -3023,6 +3029,25 @@ internal static class SvgPreviewGuard
     /// screen</c>, <c>not print</c>) and drops more (<c>print</c>,
     /// <c>not all</c>, <c>(max-width:1px)</c>, <c>all and
     /// (color)</c>).</summary>
+    /// <summary>#1610 (Codex's round 12, stage 14b, measured): whether an
+    /// <c>@media</c> header in marked CSS text (<see cref="CssText"/>),
+    /// from its keyword to its block, holds no comment and no escape. The
+    /// decoder drops the block for a comment that touches the media type's
+    /// end (<c>@media screen/* desktop */{</c>) and for an escaped header,
+    /// and applies it for a comment after a space; the guard is sure of
+    /// none of them. Comments before the keyword sit between rules. Text
+    /// with no marks always passes.</summary>
+    private static bool UnmarkedHeader(string head)
+    {
+        Scanned(head.Length);
+        int start = 0;
+        while (start < head.Length && (char.IsWhiteSpace(head[start]) || head[start] == CommentMark))
+        {
+            start++;
+        }
+        return head.AsSpan(start).IndexOfAny(CommentMark, EscapeMark) < 0;
+    }
+
     private static bool MediaApplies(string query)
     {
         Scanned(query.Length);
