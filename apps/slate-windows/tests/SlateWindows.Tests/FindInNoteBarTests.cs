@@ -1210,6 +1210,33 @@ public sealed class FindInNoteBarTests
         Assert.Equal((2, 0), (shell.Editor.SelectionStart, shell.Editor.SelectionLength));
     });
 
+    /// <summary>#1866 (CD11): Close's command goes off as the bar closes, and the keys leave
+    /// the button first. Close hands them back to the editor before IsOpen falls, so the
+    /// button never goes off holding them, and a reader hears the editor, not
+    /// "unavailable". The keys-first witness of FindInNoteClose.</summary>
+    [Fact]
+    public void CloseLetsTheKeysGoBeforeItGoesOff() => RunSta(() =>
+    {
+        using var shell = new Shell("a b a b a");
+        shell.Open("a", caret: 2);
+        Button close = shell.Child<Button>("FindInNoteClose");
+        Assert.True(close.Focus(), "premise: Close could not take the keys");
+        shell.Settle();
+        Assert.True(close.IsKeyboardFocused, $"premise: the keys are on {Keyboard.FocusedElement}, not Close");
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Close find", close, () =>
+        {
+            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)new ButtonAutomationPeer(close)
+                .GetPattern(PatternInterface.Invoke);
+            invoke.Invoke();
+            shell.Settle();
+        });
+
+        Assert.False(shell.Find.IsOpen, "Close left the bar open");
+        Assert.False(close.IsEnabled, "premise: Close goes off once the bar is shut");
+        Assert.True(shell.Editor.TextArea.IsKeyboardFocused, $"the keys are on {Keyboard.FocusedElement}, not the editor");
+    });
+
     [Fact]
     public void TheBarIsASiblingOfTheEditorPeerNotAChild() => RunSta(() =>
     {

@@ -929,25 +929,31 @@ public sealed class SidebarTreeKeysTests : IDisposable
     /// R-3 (codex PR 2 round 4; spec review round 21): the Clear filter
     /// button, invoked the way UI Automation does, clears exactly as Escape
     /// does — and, having disabled itself, hands the keys to the filter
-    /// field instead of keeping them on a disabled control.
+    /// field instead of keeping them on a disabled control. It is the
+    /// keys-first witness of the button's command site (#1866, CD11): the
+    /// keys leave it before it goes off.
     /// </summary>
     [Fact]
     public void ClearButton_ClearsAnActiveFilterAndKeepsTheKeysInTheField() => RunSta(() =>
     {
         using var host = new TreeHost(NewVaultWithSpacedTag("clear-button"));
         host.Initialize();
+        Assert.Equal("SidebarFilterClear", AutomationProperties.GetAutomationId(host.ClearButton));
         foreach (Action<FilesSidebarViewModel> activate in Activations())
         {
             int before = ActivateFilter(host, activate);
             Assert.True(host.ClearButton.IsEnabled);
             Assert.True(host.ClearButton.Focus());
 
-            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
-                new System.Windows.Automation.Peers.ButtonAutomationPeer(host.ClearButton)
-                    .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
-            invoke.Invoke();
-            PumpedDispatcher.Drain();
-            PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+            KeysFirstRecorder.AssertTheKeysLeaveFirst("Clear filter", host.ClearButton, () =>
+            {
+                var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
+                    new System.Windows.Automation.Peers.ButtonAutomationPeer(host.ClearButton)
+                        .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+                invoke.Invoke();
+                PumpedDispatcher.Drain();
+                PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+            });
 
             AssertClearedOnce(host, before);
             Assert.Same(host.FilterField, Keyboard.FocusedElement);
