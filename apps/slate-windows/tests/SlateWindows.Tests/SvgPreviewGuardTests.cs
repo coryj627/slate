@@ -2308,6 +2308,44 @@ public sealed class SvgPreviewGuardTests
             $"<style>@\\6d edia print{{.t{{fill:red}}}} .s{{--a:b\\6cue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
             true,
             true),
+        // Stage 14b (Codex's round 12): an @media header with a comment or
+        // an escape between the keyword and its block. The decoder drops
+        // the block for a comment that touches the media type's end and
+        // for an escape (measured), and applies it for the others; the
+        // guard is sure of none of them, so it counts the pattern below.
+        // A comment before the keyword or inside the block sits between
+        // rules.
+        ["@media screen/* desktop */"] = (
+            $"<style>@media screen/* desktop */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["@media all/* x */"] = ($"<style>@media all/* x */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media scr\\65 en"] = ($"<style>@media scr\\65 en{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media screen /* desktop */, which the guard does not read"] = (
+            $"<style>@media screen /* desktop */ {{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media /* x */ screen, which the guard does not read"] = (
+            $"<style>@media /* x */ screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media/* x */screen, which the guard does not read"] = (
+            $"<style>@media/* x */screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media/* x */, which the guard does not read"] = (
+            $"<style>@media/* x */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["a comment before @media screen"] = ($"<style>/* x */@media screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment at the start of @media screen's block"] = (
+            $"<style>@media screen{{/* x */.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
+        ["a comment at the end of @media screen's block"] = (
+            $"<style>@media screen{{.s{{fill:blue}}/* x */}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
     };
 
     /// <summary>Renders <paramref name="row"/>'s body in a
@@ -2329,11 +2367,14 @@ public sealed class SvgPreviewGuardTests
     /// whose rule the decoder never applies keep the pattern and are
     /// refused: one rule's blue replaced by a word the decoder drops over
     /// the pattern attribute (6.8 s to decode here), and blue in
-    /// <c>@media print</c> over a pattern rule (7.1 s).
+    /// <c>@media print</c> over a pattern rule (7.1 s). Stage 14b (Codex's
+    /// round 12): blue in <c>@media screen/* desktop */</c> over the
+    /// pattern attribute (9.3 s here; 11.35 s in Codex's run).
     /// </summary>
     [Theory]
     [InlineData(".a{fill:blue;fill:x}", " fill='url(#pat)'")]
     [InlineData(".a{fill:url(#pat)} @media print { .a{fill:blue} }", "")]
+    [InlineData("@media screen/* desktop */{.a{fill:blue}}", " fill='url(#pat)'")]
     public void SixThousandRectsWhoseBlueRuleTheDecoderNeverAppliesAreRefused(string stylesheet, string fill)
     {
         var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><style>{stylesheet}</style>");
