@@ -114,22 +114,12 @@ public sealed partial class FocusIntegrityManifestCensus
             manifest = Manifest();
         }
 
-        string[] unlisted = [.. scraped.Keys.Where(site => !manifest.ContainsKey(site))];
-        string[] stale = [.. manifest.Keys.Where(site => !scraped.ContainsKey(site))];
         var judge = new WitnessJudge(Facts(), GuardedScopes(), ShellXaml(), Creators(), ShellCompilation.Compilation, DatedBaseline);
-        string[] unwitnessed =
-        [
-            .. manifest
-                .Where(entry => scraped.ContainsKey(entry.Key))
-                .Select(entry => (entry.Key, Verdict: judge.Judge(scraped[entry.Key], entry.Value)))
-                .Where(judged => judged.Verdict is not null)
-                .Select(judged => $"{judged.Key} → {judged.Verdict}"),
-        ];
-        string[] dated = DatedProblems(manifest, DatedCeiling);
-        Assert.True(unlisted.Length == 0, "Sites that can take the keys away with no witness in the manifest (S6):\n  " + string.Join("\n  ", unlisted));
-        Assert.True(stale.Length == 0, "Manifest entries whose site is gone:\n  " + string.Join("\n  ", stale));
-        Assert.True(unwitnessed.Length == 0, "Manifest witnesses that do not hold:\n  " + string.Join("\n  ", unwitnessed));
-        Assert.True(dated.Length == 0, "The dated rows (#1866, CD11) only shrink:\n  " + string.Join("\n  ", dated));
+        string[] unread = UnreadSyntax(
+            ShellCompilation.Sources.Select(entry => (entry.Source.Root, ShellCompilation.ModelFor(entry.Source))),
+            ShellXamlFiles().Select(path => (Path.GetFileName(path), XDocument.Load(path, LoadOptions.SetLineInfo))));
+        string[] problems = ManifestProblems(scraped, manifest, judge, DatedCeiling, unread);
+        Assert.True(problems.Length == 0, string.Join("\n", problems));
     }
 
     /// <summary>Codex PR 4b r1 F8's discriminating fact: the sites the first
@@ -502,6 +492,7 @@ public sealed partial class FocusIntegrityManifestCensus
             }
         }
 
+        XDocument[] everyDocument = [.. documents.Select(entry => entry.Document)];
         foreach ((string file, XDocument document) in documents)
         {
             var triggers = new Dictionary<string, XElement>(StringComparer.Ordinal);
@@ -517,7 +508,7 @@ public sealed partial class FocusIntegrityManifestCensus
                 // nothing off.
                 TriggerCondition? condition = property == "IsEnabled" ? ConditionOf(setter) : null;
                 if (condition is { SetsTrue: true }
-                    || CarrierOf(owner, condition is null ? null : (string?)setter.Attribute("TargetName")) is not { } carried)
+                    || CarrierOf(owner, condition is null ? null : (string?)setter.Attribute("TargetName"), condition is null ? null : everyDocument) is not { } carried)
                 {
                     // It turns nothing off, or it neither is nor holds anything
                     // that takes the keys.
@@ -533,8 +524,8 @@ public sealed partial class FocusIntegrityManifestCensus
                 sites[trigger] = new Site(trigger, carried.Element, carried.ResourceKey, null, null, carried.Names, condition?.Tokens);
             }
 
-            ScrapeStyleSetters(sites, file, document);
-            ScrapeXamlCommands(sites, file, document, [.. documents.Select(entry => entry.Document)]);
+            ScrapeStyleSetters(sites, file, document, everyDocument);
+            ScrapeXamlCommands(sites, file, document, everyDocument);
 
             foreach (XElement element in document.Descendants().Where(RegionBoundaryCensus.HoldsAStop))
             {
@@ -561,9 +552,12 @@ public sealed partial class FocusIntegrityManifestCensus
     /// <summary>Where a trigger's setter lands: a keyed style's or template's
     /// users (by its key), the element a setter's TargetName names, or the
     /// element an inline style or template is set on. Null when that element
-    /// neither is nor holds anything that takes the keys.</summary>
+    /// neither is nor holds anything that takes the keys. For an IsEnabled
+    /// site (<paramref name="commandSites"/> given), an unnamed carrier with a
+    /// command is keyed by its holder and command, as its command site is, so a
+    /// control inserted in front of it renames nothing (CB-17a review, m5).</summary>
     private static (string Identity, XElement? Element, string? ResourceKey, IReadOnlyList<string> Names)? CarrierOf(
-        XElement owner, string? targetName)
+        XElement owner, string? targetName, IReadOnlyList<XDocument>? commandSites = null)
     {
         if (targetName is not null
             && owner.Descendants().FirstOrDefault(element => (string?)element.Attribute(Xaml + "Name") == targetName) is { } part)
@@ -582,7 +576,10 @@ public sealed partial class FocusIntegrityManifestCensus
             return null;
         }
 
-        return (Identity(carrier) ?? $"line {((IXmlLineInfo)owner).LineNumber}", carrier, null, NamesOf(carrier));
+        string? identity = commandSites is not null && carrier is not null && Named(carrier) is null && carrier.Attribute("Command") is not null
+            ? CommandIdentity(carrier, commandSites)
+            : Identity(carrier);
+        return (identity ?? $"line {((IXmlLineInfo)owner).LineNumber}", carrier, null, NamesOf(carrier));
     }
 
     /// <summary>A trigger's key, with " #2" (and on) when another trigger of
@@ -1109,32 +1106,22 @@ public sealed partial class FocusIntegrityManifestCensus
             }) + "\n");
     }
 
-    /// <summary>Every fact in this project, as "Class.Method", with its
-    /// source.</summary>
+    /// <summary>Every fact in this project that xunit runs, as "Class.Method", with the
+    /// source of the method that carries its attribute.</summary>
     private static Dictionary<string, string> Facts()
     {
         HashSet<string> declared =
         [
             .. typeof(FocusIntegrityManifestCensus).Assembly.GetTypes()
                 .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                    .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).Any())
+                    .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).ToArray() is [var fact] && !NeverRuns(fact))
                     .Select(method => $"{type.Name}.{method.Name}")),
         ];
-        var facts = new Dictionary<string, string>(StringComparer.Ordinal);
         string tests = Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests");
-        foreach (string file in Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)))
-        {
-            foreach (MethodDeclarationSyntax method in CSharpSource.LoadPath(file).Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
-            {
-                if (method.Parent is TypeDeclarationSyntax type
-                    && declared.Contains($"{type.Identifier.ValueText}.{method.Identifier.ValueText}"))
-                {
-                    facts[$"{type.Identifier.ValueText}.{method.Identifier.ValueText}"] = method.ToFullString();
-                }
-            }
-        }
-
-        return facts;
+        return FactSources(
+            Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
+                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                .Select(file => CSharpSource.LoadPath(file).Root),
+            declared);
     }
 }
