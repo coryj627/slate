@@ -2150,10 +2150,15 @@ public sealed class SvgPreviewGuardTests
             $"<style>@media all{{@media print{{.s{{fill:blue}}}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
             true,
             true),
+        ["@media all inside @media print"] = (
+            $"<style>@media print{{@media all{{.s{{fill:blue}}}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
         ["@media all, left open"] = ($"<style>@media all{{.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
         ["@media all"] = ($"<style>@media all{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
         ["@media SCREEN"] = ($"<style>@media SCREEN{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
         ["a bare @media"] = ($"<style>@media{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["@mediaall, no @media"] = ($"<style>@mediaall{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
         ["@media only screen, which the guard does not read"] = (
             $"<style>@media only screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
             false,
@@ -2202,6 +2207,14 @@ public sealed class SvgPreviewGuardTests
             true,
             true),
         ["type='TEXT/CSS'"] = ($"<style type='TEXT/CSS'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["o:type='text/xsl', which the decoder does not read, on a pattern rule"] = (
+            $"<style xmlns:o='urn:x' o:type='text/xsl'>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
+        ["type='text/css; charset=utf-8' on a pattern rule"] = (
+            $"<style type='text/css; charset=utf-8'>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
         ["type='text/css; charset=utf-8', which the guard does not read"] = (
             $"<style type='text/css; charset=utf-8'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
             false,
@@ -2218,6 +2231,11 @@ public sealed class SvgPreviewGuardTests
             true,
             true),
         ["o:id"] = ($"<style>#s{{fill:blue}}</style><rect xmlns:o='urn:x' o:id='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["xml:id names the pattern"] = (
+            "<defs><pattern xml:id='q' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs><rect{Rect20} fill='url(#q)'/>",
+            true,
+            true),
         ["o:id after the pattern's id"] = (
             "<defs><pattern id='q' xmlns:o='urn:x' o:id='z' width='10' height='10' patternUnits='userSpaceOnUse'>"
             + $"<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs><rect{Rect20} fill='url(#q)'/>",
@@ -2276,6 +2294,16 @@ public sealed class SvgPreviewGuardTests
         ["a comment inside the property's name"] = ($"<style>.s{{fi/**/ll:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
         ["a comment inside the value"] = ($"<style>.s{{fill:b/**/lue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, true),
         ["a comment inside url()"] = ($"<style>.s{{fill:u/**/rl(#p)}}</style><rect class='s'{Rect20}/>", true, true),
+        // An escaped dot is part of a name, not a class (measured), so a
+        // selector with an escape is not one the guard is sure of.
+        ["an escaped dot in the selector"] = ($"<style>\\2e s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        // Where the escapes and comments change how the guard splits the
+        // stylesheet, it is sure of no rule: here an escaped @media keyword
+        // and an escaped custom property after it.
+        ["an escaped @media keyword, then an escaped custom property"] = (
+            $"<style>@\\6d edia print{{.t{{fill:red}}}} .s{{--a:b\\6cue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
     };
 
     /// <summary>Renders <paramref name="row"/>'s body in a
