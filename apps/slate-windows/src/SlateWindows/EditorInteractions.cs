@@ -658,12 +658,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             Interval = TimeSpan.FromSeconds(1),
         };
         _citationCloseTimer.Tick += CitationCloseTimer_Tick;
+        // CB-22 (#1661, CD14): both act at the editor's caret, so both are
+        // unavailable while the editor is hidden (reading mode). The tab
+        // says when that changes (EditorSurfaceChanged).
         ActivateAtCaretCommand = new RelayCommand(
             _ => ActivateAt(_tab.EditorCaretOffset, EditorInteractionOrigin.Keyboard),
-            _ => _tab.IsMarkdown);
+            _ => _tab.IsEditorVisible);
         PreviewEmbedCommand = new RelayCommand(
             _ => PreviewEmbedAt(_tab.EditorCaretOffset),
-            _ => _tab.IsMarkdown);
+            _ => _tab.IsEditorVisible);
         ClosePopoverCommand = new RelayCommand(
             _ => ClosePopover(requestFocus: true),
             _ => IsPopoverOpen);
@@ -849,6 +852,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         EditorInteractionOrigin origin = EditorInteractionOrigin.Keyboard)
     {
         ThrowIfDisposed();
+        if (EditorHidden)
+        {
+            // The press is taken and nothing more is to be done: a key that
+            // raced the switch is not handed on to the hidden editor.
+            return true;
+        }
         if (_tab.IsDirty && CachedTaskAt(utf16Offset, origin) is not null)
         {
             _announce(new A11yEvent.TaskToggleUnsaved(Path.GetFileName(_tab.Path)));
@@ -908,9 +917,36 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return false;
     }
 
+    /// <summary>CB-22 (#1661): the editor is not the surface the tab shows
+    /// (reading mode), so its caret is not on screen. No entry acts, speaks
+    /// or queues work for it: each returns at once, in silence.</summary>
+    private bool EditorHidden => !_tab.IsEditorVisible;
+
+    /// <summary>CB-22 (#1661): the tab switched between its editor and its
+    /// reading view. Both caret commands answer differently now, and a menu
+    /// item asks a command again only when told. Leaving the editor also
+    /// closes what belonged to it: an open popover, a preview still pending,
+    /// a hover and a load the reader asked it for, with nothing said and no
+    /// focus asked for.</summary>
+    internal void EditorSurfaceChanged()
+    {
+        ((RelayCommand)ActivateAtCaretCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)PreviewEmbedCommand).RaiseCanExecuteChanged();
+        if (EditorHidden)
+        {
+            CloseTransientUi();
+        }
+    }
+
     internal bool ActivateSpan(EditorSemanticSpan requested)
     {
         ThrowIfDisposed();
+        if (EditorHidden)
+        {
+            // As for a span that is gone: a UIA client's kept link element
+            // answers as a stale one does.
+            return false;
+        }
         if (_tab.EditorSession is not { SemanticReadsAvailable: true } session) { return false; }
         EditorSemanticSpan? span = session.InspectInRange(requested.StartUtf16,
             requested.StartUtf16 + requested.LengthUtf16).Spans.FirstOrDefault(candidate => candidate == requested);
@@ -967,6 +1003,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     public bool PreviewEmbedAt(int utf16Offset)
     {
         ThrowIfDisposed();
+        if (EditorHidden)
+        {
+            return true;
+        }
         HostLog.WriteUiAutomationDiagnostic(
             HostDiagnosticEvent.EditorEmbedPreviewRequested);
         if (_tab.IsDirty)
@@ -2045,7 +2085,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             _announce(new A11yEvent.TaskToggleUnsaved(Path.GetFileName(_tab.Path)));
             return true;
         }
-        if (!EnsureArtifactCacheReady(announceWhenUnavailable: true))
+        // CB-22 (#1661): a pointer on prose is silent while the note's links
+        // and tasks load, as it is at the math check above, and asks for no
+        // word when that load ends. A note changed on disk is another state:
+        // its sentence is true for either origin and says what to do.
+        if (!EnsureArtifactCacheReady(
+                announceWhenUnavailable: true,
+                announceWhileLoading: origin is EditorInteractionOrigin.Keyboard))
         {
             return true;
         }
@@ -2878,8 +2924,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             _citationLoadRequestedByUser = false;
         }
     }
-    private bool EnsureArtifactCacheReady(bool announceWhenUnavailable)
+    /// <param name="announceWhenUnavailable">Say why the cache cannot be
+    /// used.</param>
+    /// <param name="announceWhileLoading">CB-22 (#1661): the same for the
+    /// loading state alone, where it differs: false keeps a load the call
+    /// starts unspoken, now and when it ends. Unset, it follows
+    /// <paramref name="announceWhenUnavailable"/>.</param>
+    private bool EnsureArtifactCacheReady(bool announceWhenUnavailable, bool? announceWhileLoading = null)
     {
+        bool sayLoading = announceWhileLoading ?? announceWhenUnavailable;
         ulong sessionGeneration = _session.InteractionGeneration();
         bool matches = _tab.SavedContentHash is { } savedHash
             && string.Equals(_artifactCachePath, _tab.Path, StringComparison.Ordinal)
@@ -2898,9 +2951,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return false;
         }
 
-        _artifactLoadRequestedByUser |= announceWhenUnavailable;
+        _artifactLoadRequestedByUser |= sayLoading;
         QueueArtifactCacheRefresh();
-        if (announceWhenUnavailable)
+        if (sayLoading)
         {
             _announce(new A11yEvent.HostComposed(
                 "Editor interactions are still loading; try again.",
