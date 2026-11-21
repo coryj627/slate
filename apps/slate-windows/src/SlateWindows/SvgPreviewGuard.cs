@@ -3029,6 +3029,16 @@ internal static class SvgPreviewGuard
     /// screen</c>, <c>not print</c>) and drops more (<c>print</c>,
     /// <c>not all</c>, <c>(max-width:1px)</c>, <c>all and
     /// (color)</c>).</summary>
+    private static bool MediaApplies(string query)
+    {
+        Scanned(query.Length);
+        string text = query.Trim(AsciiWhitespace);
+        return (query.Length == 0 || Array.IndexOf(AsciiWhitespace, query[0]) >= 0)
+            && (text.Length == 0
+                || text.Equals("all", StringComparison.OrdinalIgnoreCase)
+                || text.Equals("screen", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>#1610 (Codex's round 12, stage 14b, measured): whether an
     /// <c>@media</c> header in marked CSS text (<see cref="CssText"/>),
     /// from its keyword to its block, holds no comment and no escape. The
@@ -3046,16 +3056,6 @@ internal static class SvgPreviewGuard
             start++;
         }
         return head.AsSpan(start).IndexOfAny(CommentMark, EscapeMark) < 0;
-    }
-
-    private static bool MediaApplies(string query)
-    {
-        Scanned(query.Length);
-        string text = query.Trim(AsciiWhitespace);
-        return (query.Length == 0 || Array.IndexOf(AsciiWhitespace, query[0]) >= 0)
-            && (text.Length == 0
-                || text.Equals("all", StringComparison.OrdinalIgnoreCase)
-                || text.Equals("screen", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
