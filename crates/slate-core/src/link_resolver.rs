@@ -49,6 +49,7 @@ use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
 use std::sync::OnceLock;
 
 use crate::links::{LinkAnchor, looks_external_for_resolver};
+use crate::name_fold::fold_case;
 
 /// Vault-relative paths the resolver can match against. Paths use
 /// forward slashes regardless of platform.
@@ -71,7 +72,8 @@ pub trait VaultIndex {
     }
 
     /// The indexed paths `probe` names (#1485): at least every path whose
-    /// lowercased whole path ([`CandidateProbe::Paths`]) or final component
+    /// folded whole path ([`fold_case`]: lowercased, the final sigma folded,
+    /// #1705) ([`CandidateProbe::Paths`]) or final component
     /// ([`CandidateProbe::Names`]) is one of its keys, each once, in index
     /// order — so a caller offering them in turn keeps the first-offered
     /// tie that [`Self::all_paths`] gives. The default filters every path;
@@ -81,11 +83,11 @@ pub trait VaultIndex {
             CandidateProbe::None => Vec::new(),
             CandidateProbe::Paths(keys) => self
                 .all_paths()
-                .filter(|path| keys.contains(&path.to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(path)))
                 .collect(),
             CandidateProbe::Names(keys) => self
                 .all_paths()
-                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(final_component(path))))
                 .collect(),
         }
     }
@@ -115,16 +117,16 @@ impl InMemoryVaultIndex {
 }
 
 /// [`InMemoryVaultIndex`]'s lookup by the keys a [`CandidateProbe`] names
-/// (#1429): every path's position under the hash of its lowercased whole
-/// path, and again under the hash of its lowercased final component —
+/// (#1429): every path's position under the hash of its folded whole path
+/// ([`fold_case`]), and again under the hash of its folded final component —
 /// each computed exactly as [`LinkCandidateSelector::offer`] compares —
 /// sorted, so one key's candidates are one run, in index order. Two keys
 /// that share a hash share a run: that adds only paths the selector
 /// rejects, and keeps every key's own paths in index order.
 struct CandidateTable {
-    /// `(hash of path.to_lowercase(), position)`, sorted.
+    /// `(hash of fold_case(path), position)`, sorted.
     by_path: Vec<(u64, usize)>,
-    /// `(hash of final_component(path).to_lowercase(), position)`, sorted.
+    /// `(hash of fold_case(final_component(path)), position)`, sorted.
     by_name: Vec<(u64, usize)>,
 }
 
@@ -135,8 +137,8 @@ impl CandidateTable {
         let mut by_path = Vec::with_capacity(paths.len());
         let mut by_name = Vec::with_capacity(paths.len());
         for (position, path) in paths.iter().enumerate() {
-            by_path.push((key_hash(&path.to_lowercase()), position));
-            by_name.push((key_hash(&final_component(path).to_lowercase()), position));
+            by_path.push((key_hash(&fold_case(path)), position));
+            by_name.push((key_hash(&fold_case(final_component(path))), position));
         }
         // The pairs are distinct (each position once), so the order is
         // total: by hash, then by position — index order within a run.
@@ -279,10 +281,10 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
     let paths: Vec<&str> = index.all_paths().collect();
     let target_stem_path = markdown_stem_path(target_path)?;
 
-    let target_folded = target_path.to_lowercase();
+    let target_folded = fold_case(target_path);
     if paths
         .iter()
-        .filter(|path| path.to_lowercase() == target_folded)
+        .filter(|path| fold_case(path) == target_folded)
         .count()
         != 1
     {
@@ -299,19 +301,19 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
     {
         return None;
     }
-    let target_stem_folded = target_stem.to_lowercase();
+    let target_stem_folded = fold_case(target_stem);
     let globally_unique_markdown_stem = paths
         .iter()
         .filter_map(|path| markdown_stem_path(path))
-        .filter(|stem_path| final_component(stem_path).to_lowercase() == target_stem_folded)
+        .filter(|stem_path| fold_case(final_component(stem_path)) == target_stem_folded)
         .count()
         == 1;
 
-    let target_stem_path_folded = target_stem_path.to_lowercase();
+    let target_stem_path_folded = fold_case(target_stem_path);
     let markdown_flavor_collision = paths
         .iter()
         .filter_map(|path| markdown_stem_path(path))
-        .filter(|stem_path| stem_path.to_lowercase() == target_stem_path_folded)
+        .filter(|stem_path| fold_case(stem_path) == target_stem_path_folded)
         .count()
         > 1;
     let retain_extension = target_stem.contains('.') || markdown_flavor_collision;
@@ -496,9 +498,9 @@ pub struct LinkCandidateSelector {
 }
 
 enum SelectorMode {
-    /// The lowercased exact keys, in priority order.
+    /// The folded exact keys ([`fold_case`]), in priority order.
     Exact { keys: Vec<String> },
-    /// The lowercased file name and the source's directories.
+    /// The folded file name ([`fold_case`]) and the source's directories.
     Basename {
         basename: String,
         has_extension: bool,
@@ -520,7 +522,7 @@ impl LinkCandidateSelector {
     pub fn new(target_raw: &str, source_path: &str) -> Option<Self> {
         let mode = match selector_target(target_raw)? {
             SelectorTarget::Exact(normalized) => {
-                let lower = normalized.to_lowercase();
+                let lower = fold_case(&normalized);
                 let mut keys = vec![lower.clone()];
                 if !has_extension(&normalized) {
                     keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
@@ -528,7 +530,7 @@ impl LinkCandidateSelector {
                 SelectorMode::Exact { keys }
             }
             SelectorTarget::Basename(normalized) => SelectorMode::Basename {
-                basename: normalized.to_lowercase(),
+                basename: fold_case(&normalized),
                 has_extension: has_extension(&normalized),
                 source_dirs: dir_components(source_path)
                     .into_iter()
@@ -564,7 +566,7 @@ impl LinkCandidateSelector {
         PATHS_OFFERED.with(|count| count.set(count.get() + 1));
         let rank = match &self.mode {
             SelectorMode::Exact { keys } => {
-                let lower = path.to_lowercase();
+                let lower = fold_case(path);
                 match keys.iter().position(|key| *key == lower) {
                     Some(index) => SelectorRank::Exact(index),
                     None => return,
@@ -575,7 +577,7 @@ impl LinkCandidateSelector {
                 has_extension,
                 source_dirs,
             } => {
-                let file = final_component(path).to_lowercase();
+                let file = fold_case(final_component(path));
                 if !basename_matches(&file, basename, *has_extension) {
                     return;
                 }
@@ -598,7 +600,8 @@ impl LinkCandidateSelector {
 
 /// The index rows [`resolve_link`] could match for a target (#1279), so a
 /// caller holding a database can fetch just those instead of snapshotting
-/// every path. Keys are lowercased the way the resolver compares; the
+/// every path. Keys are folded the way the resolver compares
+/// ([`fold_case`]: lowercased, the final sigma folded); the
 /// caller may fold further (a coarser fold only widens the set), and the
 /// resolver's selector over the fetched candidates still decides.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -629,8 +632,10 @@ pub(crate) enum SelectorTarget {
 /// Changing it needs a migration that rebuilds those indexes, and so does
 /// anything that changes its answers: [`looks_external_for_resolver`], or a
 /// toolchain whose `trim` reads a different White_Space table. A stale stored
-/// key is worse than a missed heal: SQLite reports the index corrupt when an
-/// UPDATE or DELETE cannot find its entry.
+/// key is worse than a missed heal: the bundled SQLite (3.54.1) reports
+/// nothing, every lookup by the new key misses silently, and only `PRAGMA
+/// integrity_check` lists the rows missing from the index (measured for
+/// #1705, whose fold change migration 042 rebuilds).
 ///
 /// A leading `./` or `/` is stripped, so `./notes/foo.md` and
 /// `/notes/foo.md` read as `notes/foo.md`; Obsidian renders a leading `/` as
@@ -670,13 +675,13 @@ pub fn candidate_probe(target_raw: &str) -> CandidateProbe {
 /// Gather all index entries whose final path component matches
 /// `basename` (case-insensitive, Markdown-extension-aware).
 fn collect_basename_matches<'a>(basename: &str, index: &'a dyn VaultIndex) -> Vec<&'a str> {
-    let basename_lower = basename.to_lowercase();
+    let basename_lower = fold_case(basename);
     let basename_has_ext = has_extension(basename);
     index
         .all_paths()
         .filter(|path| {
             basename_matches(
-                &final_component(path).to_lowercase(),
+                &fold_case(final_component(path)),
                 &basename_lower,
                 basename_has_ext,
             )
@@ -684,7 +689,7 @@ fn collect_basename_matches<'a>(basename: &str, index: &'a dyn VaultIndex) -> Ve
         .collect()
 }
 
-/// A lowercased file name matches a lowercased basename exactly, or — for a
+/// A folded file name matches a folded basename exactly, or — for a
 /// basename with no extension — as `basename.{md,markdown,mdown,mkd}`
 /// (`[[foo]]` matches `foo.md`, `foo.markdown`, ...).
 fn basename_matches(file_lower: &str, basename_lower: &str, basename_has_ext: bool) -> bool {
@@ -1016,6 +1021,49 @@ mod tests {
         match r {
             ResolvedLink::Resolved { target_path, .. } => target_path,
             other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    /// #1705 (CB-32): a target and a file whose names differ only in how a
+    /// capital sigma lowercases (final `ς` at a word's end, `σ` before more
+    /// letters, so a stem lowered alone and a path lowered whole fold
+    /// apart) resolve to each other, on every target form.
+    #[test]
+    fn a_target_and_a_file_that_differ_only_by_final_sigma_resolve() {
+        for file in ["ΚΟΣΜΟΣ.md", "κοσμος.md", "κοσμοσ.md"] {
+            let index = idx(&[file, "dir/ΚΟΣΜΟΣ.md", "other.md"]);
+            for target in [
+                "ΚΟΣΜΟΣ",
+                "κοσμος",
+                "Κοσμος",
+                "κοσμοσ",
+                "ΚΟΣΜΟΣ.md",
+                "/ΚΟΣΜΟΣ",
+            ] {
+                let resolved = resolve_link(target, None, "other.md", &index);
+                assert_eq!(winner(&resolved), Some(file), "[[{target}]] against {file}");
+            }
+            for target in ["dir/ΚΟΣΜΟΣ", "dir/κοσμος", "/dir/Κοσμος"] {
+                let resolved = resolve_link(target, None, "other.md", &index);
+                assert_eq!(
+                    winner(&resolved),
+                    Some("dir/ΚΟΣΜΟΣ.md"),
+                    "[[{target}]] against dir/ΚΟΣΜΟΣ.md"
+                );
+            }
+        }
+        // A name that already resolves stays a guard cell.
+        let index = idx(&["κοσμος2.md"]);
+        assert_eq!(
+            winner(&resolve_link("ΚΟΣΜΟΣ2", None, "other.md", &index)),
+            Some("κοσμος2.md")
+        );
+    }
+
+    fn winner(resolved: &ResolvedLink) -> Option<&str> {
+        match resolved {
+            ResolvedLink::Resolved { target_path, .. } => Some(target_path),
+            _ => None,
         }
     }
 
@@ -1395,11 +1443,11 @@ mod tests {
             CandidateProbe::None => 0,
             CandidateProbe::Paths(keys) => paths
                 .iter()
-                .filter(|path| keys.contains(&path.to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(path)))
                 .count(),
             CandidateProbe::Names(keys) => paths
                 .iter()
-                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(final_component(path))))
                 .count(),
         }
     }

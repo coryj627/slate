@@ -234,6 +234,20 @@ is not an identity — identity still comes from the filesystem (I1);
 the gate only says "do not create a second name that would alias this
 one somewhere."
 
+*I5's note for #1705 (plan 47 CB-32, the owner's CD22 answer of
+2026-11-16):* the fold is now NFC + Unicode lowercase with the final
+sigma (U+03C2) folded to sigma (U+03C3), the one fold the owner chose
+for every name match, stored in the index and rebuilt by migration 042.
+So the gate also refuses a `ς`/`σ` twin. NTFS keeps such a pair apart
+(measured on this repository's Windows host: both names coexist in one
+folder), while APFS, by reading, treats them as one name, so the
+refusal is the portability guard this row describes. A pair already in
+a vault behaves as case variants do: a link naming either takes the
+resolver's tiebreak, the byte-smaller path. Facts:
+`final_sigma::a_final_sigma_pair_behaves_like_case_variants`,
+`final_sigma::a_batch_move_refuses_a_final_sigma_twin_at_preflight`
+(the batch move's preflight now folds the same way).
+
 **I6 — Equivalence reaches the host; comparators stay ordinal, and the
 host RE-SEATS spellings instead.** `canonical_path` is exposed over FFI
 (`VaultSession::canonical_path`). Hosts keep `StringComparison.Ordinal`

@@ -13,9 +13,9 @@
 //! zone. Date terms declare *requirements*; the host supplies one exact
 //! half-open `[start_ms, end_ms)` UTC-instant window per requirement and
 //! core validates the pairing before SQL. Result order is effective-name
-//! ascending on the `slate_tree_sort_key` casefold (the ghost-key
-//! convention — reused, not re-implemented), tie-broken by byte-ordered
-//! path: a total order.
+//! ascending on the `slate_tree_sort_key` casefold (NFC, full-Unicode
+//! lowercase, the final sigma folded, #1705 — reused, not re-implemented),
+//! tie-broken by byte-ordered path: a total order.
 
 use crate::VaultError;
 
