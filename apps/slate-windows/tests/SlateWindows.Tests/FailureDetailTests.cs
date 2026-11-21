@@ -71,10 +71,29 @@ public sealed class FailureDetailTests
     public void ACommandActionFailureSaysItsMessageAndNoFieldDump() =>
         AssertSays("the vault exploded", new CommandException.ActionFailed("the vault exploded"));
 
-    /// <summary>An unknown command says which id was not found.</summary>
+    /// <summary>An unknown command says core's palette sentence for it, the
+    /// one the palette speaks (PaletteCommandNotFound).</summary>
     [Fact]
-    public void AnUnknownCommandSaysItsIdAndNoFieldDump() =>
-        AssertSays("Unknown command palette.missing", new CommandException.UnknownId("palette.missing"));
+    public void AnUnknownCommandSaysCoresSentenceAndNoFieldDump() =>
+        AssertSays("Command not found: palette.missing", new CommandException.UnknownId("palette.missing"));
+
+    /// <summary>The helper reads the command and hot exit errors variant by
+    /// variant. A variant the binding adds would fall to the last arm and
+    /// dump its fields, so the variant sets are pinned: a new one fails here
+    /// before a reader can meet it. (GraphSearchFailureDetailTests pins the
+    /// graph config's.)</summary>
+    [Fact]
+    public void TheCommandAndHotExitErrorsHaveTheVariantsTheHelperReads()
+    {
+        Assert.Equal(
+            ["ActionFailed", "UnknownId"],
+            typeof(CommandException).GetNestedTypes().Where(type => type.IsSubclassOf(typeof(CommandException)))
+                .Select(type => type.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["Damaged", "HeldElsewhere", "InvalidEntryId", "InvalidIncarnation", "Io"],
+            typeof(HotExitException).GetNestedTypes().Where(type => type.IsSubclassOf(typeof(HotExitException)))
+                .Select(type => type.Name).Order(StringComparer.Ordinal));
+    }
 
     /// <summary>A graph config refusal says the words the graph's own
     /// surface says for it (GraphConfigStore.Reason).</summary>
@@ -113,11 +132,12 @@ public sealed class FailureDetailTests
     private const string Reason = "the hot exit store could not be read";
 
     /// <summary>An aggregate says each inner failure's detail, joined by a
-    /// space: a vault error inside one says core's words, not its dump.</summary>
+    /// semicolon so two details never run together: a vault error inside one
+    /// says core's words, not its dump.</summary>
     [Fact]
     public void AnAggregateSaysEachInnerDetailAndNoFieldDump() =>
         AssertSays(
-            "Invalid path ../out.md: escapes the vault The device is not ready.",
+            "Invalid path ../out.md: escapes the vault; The device is not ready.",
             new AggregateException(
                 new VaultException.InvalidPath("../out.md", "escapes the vault"),
                 new IOException("The device is not ready.")));

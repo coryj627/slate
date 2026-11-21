@@ -161,8 +161,11 @@ public sealed class WorkspaceFailureDetailTests
         HistoryVersionRow first = TwoVersionsOpen(rig, path);
         rig.Alerts.Clear();
 
-        UnderTheAfterWriteSeam(() => rig.Workspace.RequestRestoreVersion(first));
-        rig.PumpUntil(() => !rig.Alerts.IsEmpty && rig.Workspace.SavesIdle, "the restore's alert");
+        UnderTheAfterWriteSeam(() =>
+        {
+            rig.Workspace.RequestRestoreVersion(first);
+            rig.PumpUntil(() => !rig.Alerts.IsEmpty && rig.Workspace.SavesIdle, "the restore's alert");
+        });
 
         string alert = Assert.Single(rig.Alerts);
         Assert.EndsWith(UnindexedOracle(rig), alert, StringComparison.Ordinal);

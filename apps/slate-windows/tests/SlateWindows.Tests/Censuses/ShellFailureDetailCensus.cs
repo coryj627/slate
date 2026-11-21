@@ -20,7 +20,9 @@
 //   string concatenation, ToString(), or an argument to the framework's text
 //   builders (string.Format, Concat and Join, StringBuilder, a TextWriter,
 //   Convert.ToString and the like).
-// The census BINDS the shell (ShellCompilation) and fails closed on binding.
+// FailureDetail.Of is exempt from rule 1 only: its own body is held to the
+// sinks like any other. The census BINDS the shell (ShellCompilation) and
+// fails closed on binding.
 //
 // How the shell got here. CB-15a's trial (main 26d353ef, 2026-11-18) found 96
 // reads in 32 files, held as dated rows under a baseline and ceilings while
@@ -38,7 +40,7 @@
 // command wrapper, the editor's embed preview and find in note), and the rows
 // went with them. The census alone holds 20 of CB-15c's: the four wraps that
 // hand an ordinary fault to core's renderer (WorkspaceViewModel's task toggle
-// and WorkspaceTabViewModel.WriteProperty), the five broad History catches,
+// and WorkspaceTabViewModel.WriteProperty), the five broad History reads,
 // the bulk rename's turn, TaskIndexRepairCoordinator.TryRepairNow's discarded
 // out value, the review's direct toggle's two, the embed preview's non-vault
 // catch, find in note's pattern error, the MathML property's inactive
@@ -60,6 +62,12 @@
 // - An exception erased to object, or handed to a generic helper, an
 //   interface or a delegate, and made text there: rule 2 in full names these
 //   on the Bases sources only.
+// - A holder made text: a record or class that stores an exception (such as
+//   the task toggle's outcome) and is itself interpolated or ToString'd says
+//   the exception's ToString, which holds the dump. No rule names it; rule
+//   2's trial found the shell's 14 stored exceptions reaching no text.
+// - A serializer or any text builder outside the sinks' list (a JSON
+//   serializer, a logger's formatter) handed an exception.
 // - A new uniffi error kind whose Message is a field dump: it reaches
 //   FailureDetail.Of's last arm and looks to rule 1 like any other exception.
 //   FailureDetailTests pins the kinds the binding declares today.
@@ -110,11 +118,7 @@ public sealed class ShellFailureDetailCensus
     public void NoShellExceptionIsMadeTextDirectly()
     {
         string[] sinks = [.. ShellCompilation.Sources.SelectMany(source =>
-        {
-            SemanticModel model = ShellCompilation.ModelFor(source.Source);
-            return BasesErrorDetailCensus.TextSinks(
-                model, source.Relative, BasesErrorDetailCensus.InTheHelper(model, Helper.Value));
-        })];
+            BasesErrorDetailCensus.TextSinks(ShellCompilation.ModelFor(source.Source), source.Relative, NoExemption))];
         Assert.True(
             sinks.Length == 0,
             "A shell exception is made text directly (interpolation, concatenation, ToString or a text builder), "
@@ -184,8 +188,7 @@ public sealed class ShellFailureDetailCensus
     public void TheSinksNameEveryWayAnExceptionBecomesTextDirectly(string body, string named)
     {
         (SemanticModel model, SemanticModel? _) = Planted(PlantedMember(body));
-        string[] sinks = [.. BasesErrorDetailCensus.TextSinks(
-            model, "Planted.cs", BasesErrorDetailCensus.InTheHelper(model, BasesErrorDetailCensus.TheHelper(model.Compilation)))];
+        string[] sinks = [.. BasesErrorDetailCensus.TextSinks(model, "Planted.cs", NoExemption)];
         if (named.Length == 0)
         {
             Assert.Empty(sinks);
@@ -196,6 +199,30 @@ public sealed class ShellFailureDetailCensus
             Assert.Contains(named, sink, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>The red team's minor 1: the helper is exempt from rule 1 only.
+    /// The real FailureDetail.cs with its last arm made text directly is
+    /// named by the sinks, so a change that stringifies a failure inside the
+    /// helper cannot pass both rules.</summary>
+    [Fact]
+    public void TheHelpersOwnBodyIsHeldToTheSinks()
+    {
+        const string lastArm = "_ => failure.Message,";
+        string helper = BasesErrorDetailCensus.PartialHelper;
+        Assert.True(helper.Contains(lastArm, StringComparison.Ordinal), $"premise: FailureDetail.Of ends with `{lastArm}`.");
+        (SemanticModel _, SemanticModel? clean) = Planted("namespace SlateWindows.Planted { }", failureDetail: helper);
+        Assert.Empty(BasesErrorDetailCensus.TextSinks(clean!, "FailureDetail.cs", NoExemption));
+
+        (SemanticModel _, SemanticModel? stringified) = Planted(
+            "namespace SlateWindows.Planted { }",
+            failureDetail: helper.Replace(lastArm, "_ => $\"{failure}\",", StringComparison.Ordinal));
+        string sink = Assert.Single(BasesErrorDetailCensus.TextSinks(stringified!, "FailureDetail.cs", NoExemption));
+        Assert.StartsWith("FailureDetail.cs line", sink, StringComparison.Ordinal);
+        Assert.Contains("{failure}", sink, StringComparison.Ordinal);
+    }
+
+    /// <summary>The sinks exempt no node: not even the helper's.</summary>
+    private static bool NoExemption(SyntaxNode node) => false;
 
     /// <summary>The real helper's read is exempt, by its symbol. A class named
     /// FailureDetail in another namespace with a method Of, and an overload of
@@ -289,17 +316,12 @@ public sealed class ShellFailureDetailCensus
                 return new Read(file, type, member, read.Line, read.Context);
             });
 
-    /// <summary>The declaration that holds a read's operation tree, keyed as
-    /// SaveChainAdmissionCensus keys one (HoldsAnOperationTree and MemberOf),
-    /// by its declared symbol: the member is the symbol's name (a method's,
-    /// an explicit interface implementation's qualified name included; a
-    /// finalizer's Finalize; an operator's or conversion's metadata name), a
-    /// constructor, static or not, is its type's name, and an accessor, an
-    /// expression-bodied property or indexer and a property initializer are
-    /// their property, event or indexer (this[]). A field initializer is its
-    /// field, and a primary constructor's base arguments are the type's name.
-    /// A lambda or local function counts to the member around it. The type is
-    /// the one that declares the member, by its full name (TypeKey).</summary>
+    /// <summary>The member and type a read's failure message names: the
+    /// nearest declaration that holds it, by its declared symbol, as
+    /// SaveChainAdmissionCensus names one (a lambda or local function counts
+    /// to the member around it, an accessor to its property, a constructor to
+    /// its type's name). With no rows left it only labels a failure; the
+    /// planted facts above assert it for a method.</summary>
     internal static (string Type, string Member) Holder(SemanticModel model, SyntaxNode node)
     {
         for (SyntaxNode? current = node.Parent; current is not null; current = current.Parent)

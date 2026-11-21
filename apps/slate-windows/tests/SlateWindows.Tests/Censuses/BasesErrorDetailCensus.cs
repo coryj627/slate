@@ -20,8 +20,7 @@
 // - No Bases member outside FailureDetail.Of reads Exception.Message
 //   (member access, conditional access, property or extended pattern).
 //   ShellFailureDetailCensus applies this rule, through MessageReads, to
-//   every shell source, and this second rule's text sinks alone, through
-//   TextSinks.
+//   every shell source.
 // - An expression whose type is an exception only flows on as an exception
 //   (a local, return or parameter of an exception type; never a field or
 //   property, where code the census does not read could reach it), into core's
@@ -30,7 +29,8 @@
 //   body this census checks), a TaskCompletionSource, an exception's
 //   constructor, a throw, or a type, pattern or null test. Anything else
 //   (ToString, interpolation, concatenation, string.Format, an object slot)
-//   is named.
+//   is named. ShellFailureDetailCensus runs this rule's text sinks alone
+//   (TextSinks) over every shell source.
 //
 // It fails closed on binding: the Bases sources must bind without errors, so
 // an unbound type can never hide a read.
@@ -715,16 +715,21 @@ public sealed class BasesErrorDetailCensus
     /// on it, or an argument to the framework's text builders
     /// (<see cref="TextBuilders"/>). The other uses rule 2 names on the Bases
     /// sources (a field, an object slot, a generic helper, a delegate) are not
-    /// sinks: a stored exception still meets rule 1 when its Message is read,
-    /// and an erasure to object that is later made text is beyond this
-    /// list.</summary>
+    /// sinks here. A stored exception whose Message is later read still meets
+    /// rule 1; but a holder of one that is itself made text (a record's
+    /// generated ToString), an erasure to object that is later made text, and
+    /// a serializer are beyond this list (ShellFailureDetailCensus's header
+    /// names them).</summary>
     internal static IEnumerable<string> TextSinks(SemanticModel model, string file, Func<SyntaxNode, bool> isHelper)
     {
         INamedTypeSymbol exception = model.Compilation.GetTypeByMetadataName("System.Exception")
             ?? throw new InvalidOperationException("System.Exception does not bind.");
         foreach (SyntaxNode node in model.SyntaxTree.GetRoot().DescendantNodes())
         {
+            // The cheap test on the parent's shape first, then the types: the
+            // census walks every expression of the shell.
             if (node is ExpressionSyntax expression
+                && IsTextSinkShape(expression)
                 && !isHelper(node)
                 && IsExceptionValue(model, expression, exception)
                 && !CarriedOn(model, expression, exception)
@@ -753,6 +758,17 @@ public sealed class BasesErrorDetailCensus
         "System.Diagnostics.Debug",
         "System.Diagnostics.Trace",
     ];
+
+    /// <summary>Whether the parent has a sink's shape at all, by syntax
+    /// alone: an interpolation hole, a <c>+</c> or <c>+=</c>, a member access
+    /// or conditional access on the value, or an argument.</summary>
+    private static bool IsTextSinkShape(ExpressionSyntax expression) =>
+        expression.Parent is InterpolationSyntax
+            or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression }
+            or AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression }
+            or MemberAccessExpressionSyntax
+            or ConditionalAccessExpressionSyntax
+            or ArgumentSyntax;
 
     /// <summary>Whether the parent makes <paramref name="expression"/>
     /// text: see <see cref="TextSinks"/>.</summary>
