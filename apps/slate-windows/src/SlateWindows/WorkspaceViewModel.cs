@@ -486,6 +486,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsReadingMode));
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(IsReadingVisible));
+        _editorInteractions?.EditorSurfaceChanged();
         // WB-22 (#1112): an open find bar stays open across the switch and
         // moves to the other surface, keeping its query and options.
         SyncFindInNoteMode();
