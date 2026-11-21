@@ -1725,6 +1725,10 @@ public sealed class SvgPreviewGuardTests
             $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--\\61:blue;fill:var(--a)'/></g>",
             true,
             true),
+        ["--a:b\\6cue in the style attribute over a rule's --a:blue, read over navy under a pattern group"] = (
+            $"<style>.s{{--a:blue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080' style='--a:b\\6cue'/></g>",
+            true,
+            true),
         ["var(--\\61) in the style attribute over navy under a pattern group"] = (
             $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:blue;fill:var(--\\61)'/></g>",
             true,
@@ -2343,6 +2347,35 @@ public sealed class SvgPreviewGuardTests
             estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
             $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
         Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): class tokens split at
+    /// ASCII whitespace only, as the decoder's do, in the estimate as in
+    /// the paint cascade. 3,000 paths whose class is <c>x</c>, a no-break
+    /// space and <c>s</c> take nothing from a rule <c>.s</c> that places a
+    /// marker and a clip path, so the estimate is the one with
+    /// <c>class='x'</c>.
+    /// </summary>
+    [Fact]
+    public void AClassAfterANoBreakSpaceTakesNoRuleInTheEstimate()
+    {
+        static double Estimate(string classList)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>");
+            s.Append("<marker id='m' markerWidth='4' markerHeight='4'><path d='M0 0 L4 4'/></marker>");
+            s.Append("<clipPath id='c'><circle r='5'/></clipPath></defs>");
+            s.Append("<style>.s{marker-start:url(#m);clip-path:url(#c)}</style>");
+            for (int i = 0; i < 3_000; i++)
+            {
+                s.Append($"<path class='{classList}' d='M{i % 100} {i / 100} l1 1 l1 0'/>");
+            }
+            SvgPreviewGuard.Check(s.Append("</svg>").ToString(), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.Milliseconds;
+        }
+        double alone = Estimate("x");
+        Assert.True(Estimate("x s") > alone + 100, "the rule's marker and clip path count for class='x s'");
+        Assert.Equal(alone, Estimate("x&#160;s"));
     }
 
     /// <summary>
