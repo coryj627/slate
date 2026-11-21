@@ -299,10 +299,10 @@ pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
 
 /// How many prepared statements a connection keeps for reuse. rusqlite's
 /// default is 16, and a rescan that mixes changed notes with unchanged ones
-/// runs 17 cached statements: at 16 every changed note after an unchanged
-/// one built 15 of them again (#1917). 32 holds that path with room, for
-/// about 330 KB more statement memory on a connection that has run
-/// everything.
+/// runs 17 cached statements: at 16 the cache dropped 15 of them, and the
+/// scan built them again, each time it moved between a changed note and an
+/// unchanged one (#1917). 32 holds that path with room, for about 330 KB
+/// more statement memory on a connection that has run everything.
 const STATEMENT_CACHE_CAPACITY: usize = 32;
 
 /// The configuration every connection core opens runs under (#1917).
@@ -312,12 +312,12 @@ const STATEMENT_CACHE_CAPACITY: usize = 32;
 /// it SQLite 3.54 marks a bound equality in a statement with more than one
 /// source or an `ORDER BY` (and a bound `LIMIT`) as worth a second look,
 /// and a marked statement is compiled again on every use once the statement
-/// cache has cleared its bindings: 38 of core's statements were, on every
-/// row of a bases view, every link panel and every file summary. What the
-/// guarantee gives up is a plan chosen from a bound value, which in this
-/// schema could only be an index prefix search for a bound pattern;
-/// `db::connection_census` and `no_like_can_use_an_index_prefix` hold that
-/// no statement can have one.
+/// cache has cleared its bindings. 38 of core's SQL literals were: four of
+/// them for every row of a bases view, and the link panels' reads and the
+/// file summary on every call. What the guarantee gives up is a plan chosen
+/// from a bound value, which in this schema could only be an index prefix
+/// search for a bound pattern; `db::connection_census` and
+/// `no_like_can_use_an_index_prefix` hold that no statement can have one.
 ///
 /// No `cfg` in here: whichever branch opened the connection, it is
 /// configured the same way.
