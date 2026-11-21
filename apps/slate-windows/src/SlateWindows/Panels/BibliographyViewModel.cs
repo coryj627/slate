@@ -570,7 +570,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 InterleaveForTests?.Invoke();
-                Post(() => PublishEntries(generation, requestId, [], exception.Message));
+                Post(() => PublishEntries(generation, requestId, [], FailureDetail.Of(exception)));
             }
         });
     }
@@ -600,7 +600,7 @@ internal sealed class BibliographyViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 InterleaveForTests?.Invoke();
-                Post(() => PublishUnresolved(generation, requestId, [], exception.Message));
+                Post(() => PublishUnresolved(generation, requestId, [], FailureDetail.Of(exception)));
             }
         });
     }

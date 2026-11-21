@@ -187,7 +187,7 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
             {
                 // The pre-registration stays: the path remains
                 // quarantined until a later attempt lands.
-                error = exception.Message;
+                error = FailureDetail.Of(exception);
                 return false;
             }
         }
@@ -243,7 +243,7 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
                 catch (Exception exception) when (
                     exception is not OutOfMemoryException)
                 {
-                    lastError = exception.Message;
+                    lastError = FailureDetail.Of(exception);
                 }
             }
         }
