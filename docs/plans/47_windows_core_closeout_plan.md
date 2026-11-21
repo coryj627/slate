@@ -4,10 +4,11 @@ Status: adopted by the owner's delivery instruction of 2026-11-15.
 Drafted on 2026-11-13; corrected on 2026-11-14 and 2026-11-15 for twelve
 merges that landed around it (§2.6). The owner answered §3 on
 2026-11-16; the answers are in §3.1, and nine of them depart from the
-recommendation. Waves C0 to C7 are delivered (CB-0 to CB-14, CB-15a,
-CB-19, CB-24, CB-25, CB-27, CB-28 and CB-30, merged from 2026-11-16 to
-19), and wave C8 (CB-31, CB-15b and CB-29) is next. §12 keeps the
-delivery record.
+recommendation. Waves C0 to C8 are delivered (CB-0 to CB-14, CB-15a,
+CB-15b, CB-19, CB-24, CB-25 and CB-27 to CB-31, merged from 2026-11-16
+to 21, with the owner-directed invalid-search change in wave C8), and
+wave C9 (CB-15c, CB-17a and CB-32) is next. §12 keeps the delivery
+record.
 Written from the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -399,7 +400,7 @@ leaves it no second step (§3.1).
 
 Recorded 2026-11-16. An answer here supersedes the recommendation in
 the table above. No row remains pending, apart from the second steps of
-CD12(b), CD20, CD25, CD27 and CD29; CD8's order, which CB-14 changed
+CD12(b), CD25, CD27 and CD29; CD8's order, which CB-14 changed
 and which waits for the owner (§12, Wave C6); two points of CD19 that
 CB-28's delivery left for the owner (§12, Wave C7); and whether the
 #1991 call covers every route through a tab, as that row reads it
@@ -407,7 +408,9 @@ CB-28's delivery left for the owner (§12, Wave C7); and whether the
 2026-11-15 and 2026-11-16, and every decision row is dated 2026-11-16.
 The Run process row is dated 2026-11-15, the day of the delivery
 instruction. The #1991 row is a later call, dated 2026-11-18, on an
-issue that CB-9b's spec work filed. CD1 is overtaken and has no answer.
+issue that CB-9b's spec work filed. The CD20 (second step) and CD9
+(wording) rows are later calls, dated 2026-11-20, in wave C8. CD1 is
+overtaken and has no answer.
 
 Some rows also carry a call the owner did not make. It is marked "the
 plan lead's call, 2026-11-16": how the answered work is cut into chunks
@@ -429,6 +432,8 @@ owner can change any of them.
 | CD41 | 2026-11-16 | **As recommended: the odd date is accepted.** A quarantined note lists with size 0 and no real modified time until the file reads again. A marked row is filed for Milestone W. | CB-8's PR writes `not delivered: VoiceOver pass` with its ledger line, and files the marked row |
 | Run process | 2026-11-15 | **How the chunks are delivered.** The owner's delivery instruction, as §2.6 and §4 rule 9 state it: one red team on a light PR; the red team and then Codex rounds until it approves on every other PR, with an independent judge at 14 rounds; Codoki at 3/5 or a recorded bypass, and every check green, before a merge; merges one at a time, pinned to the head; up to two principal engineers a wave, each directing up to three workers, and never more than eight agents at once. | §4 rule 9; §6's first paragraph; the Review line of each first-wave spec |
 | #1991 | 2026-11-18 | **A task toggle made through a tab counts as the reader's own edit.** It stays on the tab's undo stack and is undoable. An undo that takes it back is ordinary editor behaviour, and a save then writes what the reader sees. The call is read as covering every route through a tab (the editor, the reading view, and the Tasks panel and Tasks Review through an open tab), since the reader makes the toggle on each. | #1991 is closed as not planned, with no code change. CB-9b's no-undo rule (its Design 0) stays for the writes the reader did not make: property writes, the bulk rename, Bases cell edits, the tag edit and link rewrites. CB-14's landed-but-unindexed path splices no tab, rebaselines none and leaves every undo stack as it was. |
+| CD20 (second step) | 2026-11-20 | **One estimated decode time and one limit, 3 s,** in place of the two limits CD20 put. The owner picked 3 s from CB-29's calibration table, after approving the CI-runner probe run; no real plotting export was fetched first. | CB-29's guard refuses an SVG whose estimated decode passes 3,000 ms (`MaxEstimatedDecodeMilliseconds`); a matplotlib-shaped scatter is admitted up to 3,425 points and refused from 3,426. CD20 has no step left. §12's Wave C8 record says how. |
+| CD9 (wording) | 2026-11-20 | **"Plain words. Please change it."** The answer to #2020's "For the owner" section: under CD9 the search's invalid-query sentence had become core's developer text. | Core's invalid-query detail is a plain sentence, "Check the quotes, symbols and operators in your search.", after "Search error:" on both hosts and in Bases' `file.matches`, delivered by #2028 (§12). |
 
 Two adopted rows changed in delivery by the lead's rulings, and §12's
 Wave C6 record says how. CB-14 speaks CD8's tab sentence before the new
@@ -444,6 +449,14 @@ whether it gets one waits for the owner. So does a consequence of the
 deadline that CB-28's PR names as its third departure: successful
 decodes count against the 20 seconds and are not cached. §12's Wave C7
 record says how.
+
+In wave C8 the owner answered CD20's second step and gave CD9's
+invalid-query sentence its wording (the two 2026-11-20 rows above).
+One question from that wave waits for the owner: an open search
+overlay does not announce a second refused search, since its line is
+the same and contract 29's S7 announces a summary only when it
+changes; the recorded alternative is a sentence for each refused query
+(§12's Wave C8 record).
 
 ## 4. Rules (every chunk)
 
@@ -740,9 +753,9 @@ Sequenced on purpose, because they share files:
 | `Panels/PanelWorkScheduler.cs` | CB-9a (`StartTrackedWork`), then any chunk that adds panel work; no later chunk is named for it yet |
 | `Support/StaThread.cs` | CB-1 only; CB-2's stall dump goes through the runtime's own dump path |
 | `ShellAccessibilityTests*.cs` (the gate) | CB-7, CB-19, CB-24, CB-17b, CB-20, CB-21, CB-36, CB-39, CB-38b (the popover journey), CB-26 (only if its design adds a journey), CB-40, CB-18; never two in a wave that edit the same partial file |
-| `crates/slate-core/src/session.rs` | CB-8, CB-12, CB-9b (branched from CB-12's merge, 6b098c1e), CB-31, CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
+| `crates/slate-core/src/session.rs` | CB-8, CB-12, CB-9b (branched from CB-12's merge, 6b098c1e), CB-31 (merged; `index_file` now returns `Result<bool, VaultError>`, `true` when it wrote the path's first row, and CB-32 meets that signature), CB-32 (if its one-time rebuild starts there), CB-33, then CB-45b and the phases after it |
 | `crates/slate-core/src/db.rs` | CB-32 (the fold's migration), then CB-45b (the reader connection) |
-| `a11y.rs`, the corpus and the variant count | CB-14, then CB-32 (only if the rebuild speaks), then CB-16 (the import events), then CB-20b, then CB-26 (only if folding announces); plan 44's WB-30 takes the next slot |
+| `a11y.rs`, the corpus and the variant count | CB-14, then #2028 (merged: the constant `SEARCH_QUERY_UNREADABLE` and its test; no event or variant), then CB-32 (only if the rebuild speaks), then CB-16 (the import events), then CB-20b, then CB-26 (only if folding announces); plan 44's WB-30 takes the next slot |
 | `crates/slate-uniffi/src/lib.rs` | CB-14 (a new event), CB-28 (one doc comment), CB-16 (the import events), CB-23 (the three panel lines), CB-20b (a new event), CB-26 (the callout), CB-45b (the first phase of the scan-lock design); never two in a wave |
 | `diagram.rs`, `EditorInteractions.cs` | CB-27, CB-28, CB-29, then CB-15c and CB-22 |
 | `WorkspaceViewModel*.cs`, `Panels/TasksReviewViewModel.cs` | CB-9a, CB-11, CB-9b, CB-14, CB-15a (one line of `WorkspaceViewModel.Properties.cs`, `EditTagAtItsTurn`, the tag edit's failure detail), CB-15c, CB-22 |
@@ -750,8 +763,8 @@ Sequenced on purpose, because they share files:
 | `VaultLifecycleViewModel.cs`, `Panels/BulkRenameViewModel.cs`, `Bases/BaseSurfaceView.cs`, `Graph/ConnectionsLeafView.cs`, `Graph/GraphInspectorView.cs` | CB-10 (`OpenVaultAsync` in `VaultLifecycleViewModel.cs` only), then CB-9b, CB-15a, CB-15b and CB-15c (each only where its spec names one of them), then CB-17b (the self-disabling groups, `reading/04_focus_and_peers.md:485-493`); no other C10 chunk edits them. CB-9a's spec edits none of them |
 | `MainWindow.xaml`, `MainWindow*.cs`, `WorkspaceTemplates.xaml` | CB-19, CB-24 (`MainWindow.AppMenu.cs`, onto the shared resting-pointer hold; `MainWindow.FilesToolbar.cs` and `MainWindow.RailMore.cs`, the two menus found on the way), CB-17a, CB-17b (the sheets, and the property-row and launcher buttons), CB-16, CB-23, CB-35, CB-38, CB-38b, CB-40, CB-18 |
 | `focus_integrity_manifest.json` | CB-17a, CB-17b, CB-16, CB-18, then any chunk that adds a focus site |
-| `Reading/` (`ReadingDocumentBuilder`, `ReadingSurface`, `ReadingContentViewModel`) | CB-28, CB-15c, CB-20, CB-21, CB-20b, CB-26 |
-| `links_db.rs` | CB-32, then CB-33 |
+| `Reading/` (`ReadingDocumentBuilder`, `ReadingSurface`, `ReadingContentViewModel`) | CB-28, CB-29 (`ReadingDocumentBuilder`, `ReadingContentViewModel` and `ReadingEmbedArtifact`, merged), CB-15c, CB-20, CB-21, CB-20b, CB-26 |
+| `links_db.rs` | CB-31 (merged: `heal_rows_naming_first_indexed` replaces `heal_after_create`), then CB-32, then CB-33 |
 | `CommandPaletteViewModel.cs`, `28_palette_contracts.md`, contract 40 | CB-34, then CB-38, then CB-38b (with `ModalSurfaces.cs` and its tests). Contract 40's R rows are in a row of their own above, for CB-10 and CB-9a |
 | `Canvas/CanvasRendererView.cs`, `CanvasRendererPeers.cs`, `CanvasRendererPeerTests.cs` | CB-36, then CB-37 |
 | `chords.json`, `ChordTable.cs`, the parity matrix | CB-20b; CB-26, if its design gives folding a chord |
@@ -782,7 +795,7 @@ Plan 44 §7 applies. Per kind of chunk, what its PR body quotes:
 | What | When | Chunk |
 |---|---|---|
 | Answer §3 | Done on 2026-11-16 (§3.1) | all |
-| The second step of CD12(b), CD20, CD25, CD27 and CD29: read the spike, the calibration table, the diagnosis, the proposed popover rule or the probe, and answer | In that chunk's PR | CB-20 CB-29 CB-37 CB-38b CB-41 |
+| The second step of CD12(b), CD20, CD25, CD27 and CD29: read the spike, the calibration table, the diagnosis, the proposed popover rule or the probe, and answer | In that chunk's PR; CD20's was answered on 2026-11-20 (3 s, §3.1) | CB-20 CB-29 CB-37 CB-38b CB-41 |
 | Read the short designs for CB-26 and CB-36 (the plan lead's call, 2026-11-16, §3.1), CB-40's design step (CD28) and CB-45's design (CD34) | Before that chunk's code; CB-36's after its scan is seen to fail and before the chip code; CB-45's before CB-45b starts | CB-26 CB-36 CB-40 CB-45 |
 | The ruleset `PUT` from #1639, so #1565 can close | Any time; the week's watch is met | (audit) |
 | `/design-sync`, so #1756 can close | Any time | (audit) |
@@ -935,6 +948,10 @@ started:
 | CB-24 | `specs/cb24_a_resting_pointer_leaves_the_keys_on_a_menus_first_row.md` |
 | CB-28 | `specs/cb28_a_timed_out_svg_decode_is_remembered.md` |
 | #2016 (not a chunk) | `specs/fix2016_forward_tab_wraps_from_the_windows_last_stop.md` |
+| CB-15b | `specs/cb15b_canvas_graph_and_search_speak_cores_words.md` |
+| CB-31 | `specs/cb31_a_first_index_heals_the_links_that_name_it.md` |
+| invalid-search plain words (not a chunk: owner direction) | `specs/invalid_search_plain_words.md` |
+| CB-29 | `specs/cb29_the_svg_guard_refuses_documents_that_decode_slowly.md` |
 
 CB-13's and CB-27's specs were written on 2026-11-16 at 7c2d45e0 and
 each ends with the corrections its delivery made. Wave C5's specs were
@@ -947,7 +964,14 @@ same step 0, red team and closing record. Wave C7's specs were written
 on 2026-11-18 and cite `main` at 26d353ef, with the same three parts.
 The spec for #2016, a find taken early in that wave, records its step 0
 on `main` at 5b890dd9 and ends with what its delivery changed; its red
-teams read the diff.
+teams read the diff. Wave C8's chunk specs were written on 2026-11-19
+and cite `main` at 16ad788d, with the same three parts; CB-29's also
+holds the calibration table the owner picked the limit from, and its
+evidence is committed under `47_windows_core_closeout/calibration/cb29/`.
+The spec for the invalid-search change, which the owner directed during
+that wave, was written on 2026-11-20 at c4d1cd60, with its own step 0,
+red team and closing record. Where these specs name probe outputs or
+working notes kept outside the repository, those stay local.
 
 The reading notes behind every chunk are in
 `47_windows_core_closeout/reading/`: nine reports, one per code area,
@@ -1083,6 +1107,10 @@ owner's call, a second answer, a rebuild or a ledger line.
 | CB-24 | #2014 | 2026-11-18 (5b890dd9) | #1849; #1846 by comment (CD16) | 4 / 3 / 0 / 1 | Filed #2013: a context menu WPF's service opens from the keys lands no row, and a resting pointer gives the keys to the row under it (in the editor, Shift+F10 3 of 3 and the Apps key 1 of 1). The judge's two accepted minors: the two close-fade hosted facts pass vacuously where menus do not fade, and the gate grew (CI ran it in 25 min 25 s of its 35-minute limit). Not delivered: a run at 100 % scale (CI's DPI and animation setting are unknown; red on main was seen only at 200 % with animations on), touch and pen, a real mouse right-click during a close fade, and Shift+F10 on a row of the open menu. No Mac work owed |
 | CB-15a | #2015 | 2026-11-19 (cc16f7e3) | none (Refs #1890, open for CB-15b and CB-15c; CD9) | 8 / 5 / 1 / 1 | Filed #2012: a folder listing fails when another session commits during it (core refuses even a first page and the host never restarts), and some of core's details read as developer text. One line on #1955: the Copy link failure is spoken at High on Windows and at Medium on the Mac. One line on #1956: the Copy link sentence, which is host-composed and is the Mac's, plus leads that repeat the path an InvalidPath detail names. For the owner: whether Windows adopts the Mac's specific unavailable reason, "Select exactly one Markdown file to copy its wikilink."; today the palette gives its generic "This command is not available right now.". CB-15b and CB-15c inherit ShellFailureDetailCensus's 61 dated rows (73 reads) and its baseline. Not delivered: the synchronous tree refresh path has no fact (a path only tests take; the census holds it); the Markdown refusal and the disabled buttons after a header selection were not heard under NVDA; the other three uniffi error types and an AggregateException still dump their fields if they ever reach the helper. No Mac work owed |
 | #2016 (not a chunk: found by CB-15a's NVDA run, taken early) | #2017 | 2026-11-19 (57b9fbbb) | #2016 | 5 / 4 / 1 / 0 | One line on #1955 (comment 7001021616): with the palette open, an external activation request leaves the keys on the bare window; main does the same. Intended changes the lead ruled: with a canvas open (seen in the test suite's window only), the logo, the content pane's border and the rail's two ends keep their arrows (the rail's ends by a Contained group); with no vault open, the logo keeps its arrows and the workspace chords; on the welcome view with a recent vault, Shift+Tab from the logo lands on the last recent vault. Not delivered: Narrator and VoiceOver passes; CI runs of the 15 logo facts, which skip on hosted runners under the #1680 guard (the two test classes' local Release run, 43 passed, 0 skipped). No Mac work owed |
+| CB-15b | #2020 | 2026-11-19 (15cba369) | none (Refs #1890, open for CB-15c; CD9) | 7 / 1 / 0 / 3 | Filed #2019 (a canvas that never opened says "The previous snapshot is read-only." after a rename), #2021 (a launch is silent at random under NVDA: launch lines raised before the window's focus event are dropped; two main launches silent, one head launch spoken; five more launches could not take the foreground) and #2022 (a canvas undo or redo that core refuses says nothing; found by the merge judge, by reading). One comment on #2012 with step 0's developer-text table, including a search column filter classified as a database error. One #1956 comment: the canvas open failure's lead repeats its path, and the graph config's notices are host text the FFI crate already words. One #1954 line: the Mac's search and graph humanReadable arms should adopt core's detail; the #1527 note is posted. Departure: the graph's invalid-query sentence was not heard under NVDA, because no input reaches it (core's graph build fails only with Db) and head has no such sentence; a hosted fact pins it. Not delivered: VoiceOver pass (no Mac speech changes); a fact for CanvasRemoveFromGroup (census-only, a race the lease's lock forbids). For the owner: under CD9 the search's invalid-query sentence reads as developer text; #2020's "For the owner" has the before and after |
+| CB-31 | #2024 | 2026-11-20 (c4d1cd60) | #1704 | 3 / 1 / 1 / 1 | #1954: two lines, by reading (a first-indexing repair's Created now refreshes the Mac's template list, comment 7027208954; handleSidebarFileChange ignores .created, so that row's metadata is not refreshed, comment 7027505455). Filed #2023: an open Windows reading view keeps drawing a link unresolved after core heals it, and refuses to follow it. One comment on #1981 (7025682510): a stopped case-only move's recovery leaves the links at the deleted alias spelling. Ruling 4 taken in the PR: a repair that writes a path's first row announces Created, with doc 21's two rules amended. index_file now returns Result<bool, VaultError> (§6 note for CB-32). Not delivered: a Mac run and VoiceOver (nothing spoken changes, by reading); a whole Windows unit run at the merged head (it ran at 71d4f8ab, 7,838 + 3 passed). No NVDA owed |
+| invalid-search plain words (owner, 2026-11-20) | #2028 | 2026-11-20 (925f0a42) | none (Refs #2012, #1527; owner direction, rulings 1-8) | 6 / 2 / 1 / 2 | Fixed here: a damaged index classified as a refused query; a damaged schema's SQLITE_CORRUPT read as a refused query (merge judge). Filed #2026, #2027. #1955 line 7036192406 (Bases interpreter path: damaged index a view error, exit 2). Judge comment 7036024550. Not delivered: VoiceOver pass (#1954 7034192987). For the owner: a second refused search in an open overlay is silent (S7) |
+| CB-29 | #2029 | 2026-11-21 (e8956899) | #1610 (CD20) | 1 / 1 / 0 / 0 | Owner answers: one estimated decode time and one limit, 3 s (CD20's second step, 2026-11-20); the CI-runner probe was approved (Namespace EPYC-v4, about 1.13x the desktop); the merge-judge loop was ended after stage 14 (2026-11-20), and stage 14b fixed Codex round 12's stage 14 regression (a comment or escape in an @media header). Register: in the PR body, 14 routes that fall back to main's 5 s budget and CB-28's memory, every one erring toward refusing; on the judge's 7,508 rendered documents, 0 hidden and 1,378 over-counts. Not delivered: no real-world export beyond core's mermaid and the repo's pie (downloading one needs the owner); d:path(), duplicate ids and arcs follow the IL; the 40 ns step cost is measured on two shapes; header placements were probed by sample. #1954 line posted (EmbedView.swift:161 has no cost guard either); no Mac speech changes. NVDA ran on 9c23729f, and later stages add no sentence. Not decided, as briefed: a diagram-stage deadline, and a bounded cache of successful decodes (#1955). Found and fixed: the probe tool now maps the cost sentence to "refused". Judge record comment 7058816967. |
 
 CB-0, beyond its docs PR: it opened #1954 ("Mac work owed by plan 47"),
 #1955 ("Plan 47 deferred finds") and #1956 (CD38's catalogue, in
@@ -1737,3 +1765,327 @@ open, they agreed.
 | A canvas open (seen in the test suite's window, not tried in the running app on `main`): the menu bar's logo with Left or Right, the content pane's border with any arrow, and the rail's ends (Down on More panels, Up on the bare strip) | the arrow leaves the stop | the stop keeps it |
 | No vault open: Alt onto the logo, then Left, Ctrl+Alt+Left or Ctrl+Alt+Shift+Left | the keys go into the welcome view (for the two chords, inferred from WPF's source, not run) | the keys stay on the logo |
 | The welcome view with a recent vault: Alt onto the logo, then Shift+Tab | Open Vault, past the recent vaults | the last recent vault, the welcome view's true last stop |
+
+Wave C8, 2026-11-19 to 21. CB-15b (#2020) merged as 15cba369 on
+2026-11-19, CB-31 (#2024) as c4d1cd60 on 2026-11-20, the invalid-search
+change (#2028) as 925f0a42 on 2026-11-20, and CB-29 (#2029) as
+e8956899 on 2026-11-21, in that order. Three principals worked the
+wave: S took CB-15b; T took CB-31 and then CB-29; and U took the
+invalid-search change, which the owner directed on 2026-11-20, during
+the wave, in answer to #2020's "For the owner" section (below). It is
+not a chunk, and it changed no slot. Each spec had a step 0 measurement
+and a fresh Opus red team before code (blockers, major or medium, and
+minor or low: CB-15b 0, 4 and 15; CB-31 2, 2 and 8; CB-29 2, 11 and 11;
+the invalid-search change 1, conditional on its Call 4, then 3 and 11).
+Each diff had a fresh Opus red team: CB-15b's found 1 blocker, 5 minors
+and 1 nit; CB-31's 0 blockers, 1 major and 5 minors; CB-29's, at
+3e057460, 1 blocker, 3 majors and 6 minors; and the invalid-search
+change's 0 blockers, 0 majors, 9 minors and 7 nits. Codex approved
+CB-15b in round 1 (43992f2e), CB-31 in round 1, and the invalid-search
+change in round 1 (2f2bf36a) and again in round 2, on the merge
+judge's delta. CB-29 took 13 rounds (below).
+
+As in waves C6 and C7, each PR had the lead's independent merge judge,
+recorded on the PR. CB-15b's judge
+([#2020, comment 7023737556](https://github.com/coryj627/slate/pull/2020#issuecomment-7023737556))
+said Merge, with no blocker or major: its minor 1, the mutation line,
+was met by the mutation run; its minor 2, read from the code, is
+#2022; and its nit on the fact count was corrected in the PR body.
+CB-31's judge
+([#2024, comment 7027494715](https://github.com/coryj627/slate/pull/2024#issuecomment-7027494715))
+said Merge and asked only for edits to the PR body: the two Windows
+effects a first-indexing repair's Created no longer triggers (the clean
+tab's staleness check and the History refresh), `open_base` named
+beside `open_canvas` as healing without a file event, as on `main`, and
+the §6 note on `index_file`'s return type, which this docs PR carries.
+The invalid-search change's judge
+([#2028, comment 7036024550](https://github.com/coryj627/slate/pull/2028#issuecomment-7036024550))
+said Merge, with no blocker or major. Its minor 1 and nit 4 were taken,
+red first (37d28b85, then cf7bdbb8): a cached MATCH statement
+re-prepared against a damaged schema fails with SQLITE_CORRUPT and a
+message that says "syntax error", which the text-only classifier heard
+as the reader's query, so `map_fts5_error` now reads refusal texts on
+an SQLITE_ERROR only; and the CLI's search comments say what
+`InvalidQuery` now carries. Its #1955 line is comment 7036192406: on
+the Bases interpreter path a damaged index is a view error, and
+`slate query` exits 2. CB-29's judges are below.
+
+The lead ruled CB-15b's eight calls on 2026-11-19. The graph's
+invalid-query arm cannot be reached, since core's graph build fails
+only with `Db`, so a hosted fact pins it through `FetchGateForTests`;
+NVDA covers the Connections failure, the inspector's read-only notice
+and the search's invalid-query sentence; and the departure from "on
+search and on graph" is recorded (Call 1). Core's developer-text
+details stay, with one comment on #2012 that carries step 0's table,
+and under CD9 the search's invalid-query sentence becomes "Search
+error: FTS5 could not parse ...", where it was "Search query is
+invalid"; the PR body's "For the owner" section gave the before and
+after (Call 2). `GraphConfigStore.Reason` uses the FFI crate's Display
+words, on Windows only (Call 3). The CD9 amendment lines go into
+contracts 29 (under SD-6) and 35 (Call 4). The Mac gets a #1954 line,
+and the PR writes `not delivered: VoiceOver pass`, since no Mac speech
+changes (Call 5). Row 11 keeps its real-refusal fact, about 11 s long,
+which waits on a condition (Call 6). The canvas that never opened and
+says "The previous snapshot is read-only." after a rename is filed as
+High, #2019, since its fix changes a contract 34 row and a spoken
+sentence (Call 7). Row 7, `CanvasRemoveFromGroup`, is census-only: its
+catch needs a race the lease's lock forbids (Call 8). Under NVDA
+2026.3.1 every expected phrase was heard on base and head. The search's
+`AND` said "Search error: Search query is invalid: FTS5 could not parse
+"AND": fts5: syntax error near "AND"" on base and "Search error: FTS5
+could not parse "AND": fts5: syntax error near "AND"" on head.
+Connections, after its root note was deleted on disk, said "Couldn't
+load connections: @path=hub.md, @reason=no such note in the graph
+under the active filter" on base and "Couldn't load connections:
+Invalid path hub.md: no such note in the graph under the active
+filter" on head. New Card on a read-only canvas said "Canvas action
+failed: @message=Access is denied. (os error 5)" on base and "Canvas
+action failed: Access is denied. (os error 5)" on head. The NVDA pass
+also found #2021: a launch is silent at random under NVDA, because
+launch lines raised before the window's focus event are dropped.
+`ShellFailureDetailCensus` now holds 39 dated rows and 47 reads, which
+CB-15c inherits.
+
+The lead ruled CB-31's six calls on 2026-11-19. `index_file` returns
+`Result<bool, VaultError>`, `true` when it wrote the path's first row,
+and CB-32 meets the changed signature (§6's `session.rs` row) (Call 1).
+The helper, `heal_rows_naming_first_indexed`, lives in `links_db.rs`
+and replaces `heal_after_create` (Call 2). One Windows twin,
+`TheSavedQueryExportHealsTheLinksThatNameIt`, covers the saved-query
+export, and every other route has a core fact (Call 3). Call 4 departs from the
+recommendation: a repair that first-indexes a path announces Created,
+not Modified (`session.rs:9318`). It was fixed in the PR, since
+`session.rs` was already changed, with doc 21's two recorded rules
+amended (the diff red team's major) and a #1954 line for the Mac's
+template list. The reading view's link after a heal got one Windows
+probe (Call 5); it was red on the branch, so it was filed as #2023 (an
+open reading view keeps drawing a healed link unresolved and refuses
+to follow it), and the fact is not in the PR. Step 0's table is on
+#1704 (comment 7019271663) (Call 6). Outside the diff, the diff red
+team found that a stopped case-only move's recovery deletes the alias
+row and leaves the link rows that point at it, which is a comment on
+#1981 (7025682510). No NVDA run was owed.
+
+The owner directed the invalid-search change on 2026-11-20: "Plain
+words. Please change it." The lead's example, which the owner saw, was
+"This search can't be read. Check its quotes and operators." Step 0
+ran 77 queries on `main` at c4d1cd60: 49 were refused as `InvalidQuery`
+(operators, quotes, and everyday text with one symbol, such as
+`#project`, `don't` and `e.g.`), 11 failed as `Db` with "no such
+column" (`foo:bar`, `well-known`, dates and links), and 17 ran. The
+lead ruled the eight calls on 2026-11-20. The sentence, after "Search
+error:", is "Check the quotes, symbols and operators in your search.",
+which completes every lead and names symbols, the commonest cause
+(Call 1). "Search error:" stays (Call 2). The column-filter, hyphen and
+NEAR class takes the sentence too, and #2012 stays open (Call 3).
+Bases follows on both of its paths (Call 4). A Mac-only throwaway draft
+PR, #2025, showed the Swift test red on `main`'s Mac code, with four
+assertion failures; it is closed and its branch deleted (Call 5).
+Ordinary text with a symbol refused as a search is filed as #2026
+(Call 6). A second refused search in an open overlay is not announced,
+consistent with contract 29's S7, and is put to the owner (Call 7). A
+damaged full-text index classified as a refused query is this change's
+own defect and was fixed in the PR, red first (Find 1). Under NVDA
+2026.3.1 every expected phrase was heard on base and head, seven
+phrases in all; the search's `AND` said "Search error: Check the
+quotes, symbols and operators in your search." on head, and the Bases
+preview "Preview failed: file.matches: Check the quotes, symbols and
+operators in your search.". The pass also found #2027: Add condition in
+the Windows Bases builder moves focus to the Quick filter, on `main`
+and head. The whole Windows unit run passed 7,883, with 2 skipped and 0
+failed, and `cargo test --workspace` passed 3,328. A
+`SlateWindows.Tests` window took the foreground at 01:08:54 without
+holding the desktop lock. The comments are on #2012 (7034196605), #1954
+(7034192987) and #1527 (7034193336). Contract 29 records the owner's
+call under SD-6.
+
+The lead ruled CB-29's thirteen calls on 2026-11-19. Calls 2, 3, 5, 6
+and 9 to 13 were taken as recommended, Call 13 with all four IL costs
+in scope.
+Call 7 departs from the recommendation: a measurement on a Namespace CI
+runner is taken, in a column of its own. Calls 1 (one limit, not two),
+4 (the limit, recommended at 2 s) and 8 (a real plotting export first)
+went to the owner. The CI-runner probe's push was first refused by the
+session's permission system, so nothing reached GitHub, until the
+owner's word (below). The lead then pushed `claude/cb29-runner-probe`
+(3fddedd7) and dispatched run 44673476749, on a Namespace EPYC-v4 with
+8 cores and 16 GiB: the runner's decodes take a median 1.13 times the
+desktop's, and 1.45 times on stylesheets. At 2 s the desktop refuses
+25 documents that decode in under 5 s and the runner 20, and the
+runner admits one past 5 s, a single 6.3 s outlier run of one compound
+stylesheet document. The probe branch is deleted. The owner's table,
+from the shipped guard at 9c23729f over 313 documents, reads:
+
+| Limit | Refused, decoding under 5 s (of them, under 1 s) | Admitted, decoding past 5 s |
+|---|---|---|
+| 1 s | 55 (4) | 0 |
+| 2 s | 25 (0) | 0 |
+| 3 s | 15 | 1 |
+| 5 s | 5 | 2 |
+| 10 s | 0 | 20 |
+
+The largest real document decodes in 76.4 ms. The merge judge then
+measured a matplotlib-shaped scatter: at N = 3,000 it decodes in 1,752
+ms and is estimated at 2,313 ms, so at 2 s a scatter past about 2,800
+points would be refused. Once the limit was pinned, the largest scatter
+admitted was 1,951 points at 1 s (a 0.67 s decode), 2,785 at 2 s (1.3
+s), 3,425 at 3 s (1.9 s), 4,440 at 5 s (3.1 s) and 6,305 at 10 s (5.9
+s), and the lead's recommendation moved to 3 s. Under NVDA, on
+9c23729f, head said "Image not shown: it would take too long to
+decode." on four slow cards, ran no decoder, and the leaf decided in at
+most 1.7 s; base burned 27.5 s of CPU on each abandoned decoder.
+
+CB-29's reviews ran longer than any chunk's so far. The diff red team's
+blocker was the guard's own time, unbounded on the caller (a `var()`
+by declarations shape took 16.7 s and a duplicate-id fan-out 2.7 s),
+fixed with a linear guard and a step budget that refuses with the cost
+sentence. Its majors were CSS comment and escape tricks, `@keyframes`
+read as rules, and an owner's table drawn from an earlier estimator,
+now regenerated from the shipped guard and replacing step 0's table on
+#1610. Codex ran 13 rounds, with approves at rounds 4, 8, 9, 10, 11
+and 13, plus two launches that returned no verdict. Rounds 1 to 3
+found 5, 2 and 3 findings of one class, equivalent inputs the guard
+priced apart, and after round 3 the lead ruled the class closed by
+structure: every character a scan touches is charged, one multiplier
+counts every cloned instance (`use`, `marker` and `pattern`), and
+rounds stop when the findings fall in a closed class or belong in the
+register. Round 4 approved be8e2de7. The first merge judge, on
+be8e2de7
+([#2029, comment 7035422298](https://github.com/coryj627/slate/pull/2029#issuecomment-7035422298)),
+said Merge once the limit is recorded. Its minors asked for the limit
+to be pinned by a fact and a boundary pair, and for cost refusals to be
+remembered and the guard's time charged to the note's 20-second
+deadline; both were done. Its register point found patterns material
+(10,000 rects with a 10-child swatch decoded in 33 to 41 s against an
+estimate of 0), so a fifth term was added, and clip paths were measured
+as not material. Rounds 5 to 7 each found one false refusal or miss in
+the pattern code. The lead ruled that fill and stroke follow the
+decoder's cascade, that `currentColor` is a colour and clears a
+pattern (reversing the lead's first ruling, once the decoder was
+measured), that the whole `var()` class closes in stage 9 against a
+measured table, and that cases the guard cannot know, such as
+combinator rules, keep counting, with a register line. Round 8
+approved 7ae94ac1, which carries the owner's 3 s.
+
+A delta judge read the change from 7ae94ac1 on, in four looks. The
+first said Merge after fixes, with two majors: a declaration the
+decoder drops still won the guard's cascade (6,000 rects estimated at
+0 ms decoded in 13.2 s), and copied custom-property scopes allocated
+about 2 GB from a 738 KB file. Both were fixed red first in stage 11
+(c9f00133), with its minors and one nit, and Codex round 9 approved.
+The second look, at c9f00133, found a reference with `inherit` that
+kept a hidden pattern and a scope-cap regression, fixed in stage 12
+(1f31be9a); Codex round 10 approved. The third look, at 1f31be9a, found
+a reference written as `URL(` and escaped paints in a style attribute;
+the lead ruled the class closed by positive recognition (a winning
+paint clears a lower pattern only where the guard is sure of it), with
+a case-insensitive match and one register line, in stage 13
+(5ff69475), and Codex round 11 approved. The fourth look, at 5ff69475,
+found G1 to G4: the same rule's last declaration, a rule's
+applicability, escaped custom definitions, and a stage 13 regression in
+which a comment made a whole stylesheet unsure (a real map file was
+estimated at 3,492 ms against a 272 ms decode). The lead ruled all four
+fixed, at the level of the rule. The owner was asked whether to end
+the judge loop after stage 14, since what remained took hostile input,
+stayed bounded by `main`'s 5 s budget and matched `main`'s behaviour,
+and answered on 2026-11-20: "Stop after stage 14". So CB-29 merged once
+Codex approved stage 14's head and CI was green, with no further judge
+round, and later hostile spellings go in the register. Stage 14
+(9f462970) fixed G1 to G4. Codex round 12 found a stage 14 regression:
+a comment at the end of an `@media` header makes the decoder drop the
+block, and the guard stayed sure of it (6,000 rects admitted at 6.75
+ms decoded in 11.35 s). Stage 14b fixed it, red first, and the guard
+is now sure of an `@media` block only where its header holds no
+comment and no escape. Codex round 13 approved 137325cf. The judge's
+record is
+[#2029, comment 7058816967](https://github.com/coryj627/slate/pull/2029#issuecomment-7058816967).
+The whole unit run passed 8,350 with 0 failed on 8e68457a, and the
+final head only moves a doc comment. On the Mac lane,
+`ConnectionsPanelTests.testTheLoadingRowFollowsConnectionsLoading`
+failed twice on 9f462970 and passed when the lead reran run
+44866794750; `NoteHeader_AMovedPointerHoversAndAStillClickWorksTheRow`
+failed once on 5ff69475, with a 1044 by 788 window on a 1024 by 768
+desktop, and passed after. Neither is filed.
+
+The owner's answers in wave C8, all in chat on 2026-11-20:
+
+- CB-29's CI-runner probe: "Push and run the probe". The lead pushed
+  the probe branch and dispatched run 44673476749 (above).
+- CB-29's decode limit, CD20's second step: "3s". One estimated decode
+  time and one limit, as built (Call 1);
+  `MaxEstimatedDecodeMilliseconds` is 3,000, and the boundary is a
+  scatter of 3,425 points admitted and 3,426 refused. No real plotting
+  export was fetched (Call 8). §3.1 has the row.
+- The invalid-query wording: "Plain words. Please change it." This
+  answers CB-15b's question, whether the search's invalid-query
+  sentence, which CD9 had made core's developer text, waits for core's
+  reword on #2012. #2028 delivered it. §3.1 has the row.
+- CB-29's judge loop: "Stop after stage 14" (above).
+
+CD37: wave C8's start read was posted on 2026-11-19 on #480 (comment
+7016355486), #1493 (7016355977) and #1628 (7016356445): no change
+since wave C7. `mathcat` 0.7.8 clears the cooldown on 2026-11-23, and
+§8's watch row for #1628 is still not met. Wave C9's start reads the
+lists again.
+
+Shared files. CB-31 changed `index_file`'s return to
+`Result<bool, VaultError>`, which CB-32 meets, and joins §6's
+`links_db.rs` row; CB-29 joins the `Reading/` row; and #2028 joins the
+`a11y.rs` row with one constant and no event. No §6 row names CB-15b's
+canvas files (`CanvasDocumentViewModel.cs`, `CanvasMutationFunnel.cs`),
+`FailureDetail.cs`, its graph files (`ConnectionsLeafViewModel.cs`,
+`GraphConfigStore.cs`, `GraphDocumentViewModel.cs`,
+`GraphPublication.cs`), `Search/SearchOverlayViewModel.cs`, or
+contracts 29 and 35. #2028 edited `SearchOverlayViewModel.cs`, its
+tests' `GraphSearchFailureDetailTests.cs` and contract 29 after
+CB-15b's merge, and also core's `search_db.rs`, `bases/engine.rs` and
+`lib.rs`, the CLI's `search.rs` and the Mac's `AppState.swift`. No row
+names CB-29's `SvgPreviewGuard.cs`, `HostLog.cs` or its probe tool, or
+CB-31's doc 21.
+
+Defects on `main` that wave C8 found and filed, none placed in a wave
+yet; each waits for the owner's call, beside #1974, #1976, #1977,
+#1980, #1981, #1988 to #1990, #1992 to #1995, #1999, #2000, #2003 to
+#2006, #2012 and #2013 above:
+
+- #2019 (CB-15b): a canvas that never opened says "The previous
+  snapshot is read-only." after a rename. Filed as High, since its fix
+  changes contract 34's A3 table and a spoken sentence.
+- #2021 (CB-15b's NVDA pass): a launch is silent at random under NVDA,
+  because launch lines raised before the window's focus event are
+  dropped (two `main` launches silent, one head launch spoken).
+- #2022 (CB-15b's merge judge, by reading): a canvas undo or redo that
+  core refuses says nothing.
+- #2023 (CB-31): an open Windows reading view keeps drawing a link
+  unresolved after core heals it, and refuses to follow it.
+- #2026 (the invalid-search change): ordinary text with a symbol, such
+  as a tag, a contraction or an email address, is refused as a search.
+- #2027 (the invalid-search change's NVDA pass): Add condition in the
+  Windows Bases builder moves focus to the Quick filter.
+
+Taken in the wave's own PRs, each red first: CB-15b's test comment
+that no session fault is inducible from a real vault; CB-31's
+first-indexing repair that announced Modified (ruling 4); and the
+invalid-search change's damaged index and damaged schema, each
+classified as a refused query.
+
+One question from wave C8 waits for the owner: a second refused search
+in an open overlay is silent on both hosts, since its line is the same
+and contract 29's S7 announces a summary only when it changes; the
+recorded alternative is a sentence for each refused query. The
+questions from earlier waves are still open: CB-14's order, which
+departs from CD8; whether the MathCAT report is filed upstream; whether
+Codex runs at effort xhigh or stays at high; whether the owner's #1991
+call covers every route through a tab; CB-28's two points, a bounded
+cache of successful decodes and a deadline for the diagram stage,
+which CB-29 also left undecided; and whether Windows adopts the Mac's
+specific reason when Copy link is unavailable.
+
+The wave left six empty worktree folders on the lead's machine:
+`cb15b-core-words`, `cb15b-codex`, `cb31-heal-on-first-index`,
+`cb29-svg-cost-guard`, `cb29-runner-probe` and
+`invalid-search-plain-words`. A Codex broker, a build or test host, or
+an agent's working directory holds each one, and the permission system
+refused their removal, so they are left for the owner.
+
+Wave C8 is done. Wave C9 (CB-15c, CB-17a and CB-32) is next.
