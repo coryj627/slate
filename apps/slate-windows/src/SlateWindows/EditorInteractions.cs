@@ -2087,8 +2087,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
         // CB-22 (#1661): a pointer on prose is silent while the note's links
-        // and tasks load, as it is at the math check above, and asks for no
-        // word when that load ends. A pointer on a checkbox still hears why
+        // and tasks load, as it is at the math check in ActivateAt, and asks
+        // for no word when that load ends. A pointer on a checkbox still hears why
         // nothing happened, where the list in place can vouch for the click:
         // it names a checkbox there and was read from this note's saved text,
         // so only the session has moved on (any scan or core write does that

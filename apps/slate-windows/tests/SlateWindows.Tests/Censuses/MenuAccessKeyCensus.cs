@@ -19,8 +19,10 @@
 //
 // CB-22 gave the Editor menu's two shared keys letters of their own. The
 // sixteen other shared keys it found stand in the dated table below, each
-// with its items and what the key does today, until CB-22b puts their letters
-// to the owner as one table and ends every row.
+// with its items and what the key does today. The list is recorded at
+// https://github.com/coryj627/slate/issues/1955#issuecomment-7066667520 and
+// is the work of plan 47 CB-22b (added by the C10 docs PR), which puts the
+// letters to the owner as one table and ends every row.
 
 using System.Xml;
 using System.Xml.Linq;
@@ -57,7 +59,7 @@ public sealed class MenuAccessKeyCensus
         string Dated,
         string Reason);
 
-    private const string Sweep = "ended by CB-22b";
+    private const string Sweep = "plan 47 CB-22b, see the class comment";
 
     /// <summary>The shared keys CB-22 found beside the Editor menu's own two
     /// and did not move. A row that matches no shared key is an error, and so

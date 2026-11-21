@@ -416,7 +416,7 @@ public sealed class EditorSurfaceCommandTests
     [InlineData("prose", true)]
     [InlineData("checkbox", false)]
     [InlineData("checkbox", true)]
-    public void ACtrlClickOnPlainProseStaysSilentWhileTheCacheLoads(string target, bool theLoadFaults) => RunSta(() =>
+    public void ACtrlClickStaysSilentWhileTheNotesFirstTaskListLoads(string target, bool theLoadFaults) => RunSta(() =>
     {
         using var vault = new Vault();
         var announced = new List<A11yEvent>();
@@ -661,7 +661,7 @@ public sealed class EditorSurfaceCommandTests
     /// unavailable, its key A must reach no other command: before Actual Size
     /// had a key of its own, A reset the reader's text size.</summary>
     [Fact]
-    public void TheAccessKeyAOpensNothingElseInReadingMode() => RunSta(() =>
+    public void TheAccessKeyARunsNothingElseInReadingMode() => RunSta(() =>
     {
         using var host = new ShownShell(("source.md", SourceText), ("target.md", TargetText));
         host.Workspace.OpenPath("source.md");
