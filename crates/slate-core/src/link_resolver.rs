@@ -123,9 +123,9 @@ impl InMemoryVaultIndex {
 /// that share a hash share a run: that adds only paths the selector
 /// rejects, and keeps every key's own paths in index order.
 struct CandidateTable {
-    /// `(hash of path.to_lowercase(), position)`, sorted.
+    /// `(hash of fold_case(path), position)`, sorted.
     by_path: Vec<(u64, usize)>,
-    /// `(hash of final_component(path).to_lowercase(), position)`, sorted.
+    /// `(hash of fold_case(final_component(path)), position)`, sorted.
     by_name: Vec<(u64, usize)>,
 }
 

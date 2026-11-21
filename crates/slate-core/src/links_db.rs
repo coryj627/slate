@@ -1054,8 +1054,11 @@ fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
     // the stored text cannot say where. A link of the span's length starts
     // with `[`, `!` or `<` and ends with `]`, `)` or `>`: `[[…]]`, `![[…]]`,
     // `[…](…)`, `![…](…)`, and the autolinks `<https://…>` and `<a@b.co>`.
-    // When brackets beside the link qualify too, each side takes the place
-    // that trims it less.
+    // When brackets beside the link qualify too (a wikilink's second `[`
+    // starts a false place one byte in, when a `)`, `]` or `>` follows it),
+    // each cut test takes the place that marks a cut less, and each guard
+    // the place that keeps the most text: the left guard the smallest, the
+    // right guard the largest, so neither trims into the link.
     let first = span_start.min(SNIPPET_RADIUS);
     let last = span_start.min(SNIPPET_RADIUS + CHAR_ROUNDING);
     let mut places = (first..=last).filter(|&at| holds_link_at(&snippet, at, span_len));
@@ -1065,15 +1068,14 @@ fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
     let largest = places.next_back().unwrap_or(smallest);
 
     let left_cut = largest < span_start;
-    let link_end = smallest + span_len;
-    let right_cut = snippet.len() - link_end >= SNIPPET_RADIUS;
+    let right_cut = snippet.len() - (smallest + span_len) >= SNIPPET_RADIUS;
     let start = if left_cut {
-        left_edge(&snippet, largest)
+        left_edge(&snippet, smallest)
     } else {
         0
     };
     let end = if right_cut {
-        right_edge(&snippet, link_end)
+        right_edge(&snippet, (largest + span_len).min(snippet.len()))
     } else {
         snippet.len()
     };
@@ -1683,6 +1685,41 @@ mod tests {
             );
             for shown in read.backlinks.iter().chain(&read.outgoing) {
                 assert_whole_words(&source, shown, link);
+            }
+        }
+    }
+
+    #[test]
+    fn a_bracket_beside_a_link_never_lets_the_trim_into_it() {
+        // A wikilink's second `[` is a false place one byte in whenever a
+        // `)`, `]` or `>` follows the link; with no word to start on in the
+        // left context, the edge falls back to the guard, which must be the
+        // link's first byte, not the false place (CB-32's red team).
+        let cases = [
+            (
+                format!(
+                    "Checksum sha256:{} ([[Checksums]]) and the rest of it.",
+                    "ab12".repeat(16)
+                ),
+                "[[Checksums]]",
+            ),
+            (
+                format!("{} ([[Target]]) tail.", "a1".repeat(60)),
+                "[[Target]]",
+            ),
+            (
+                format!("{} ![[diagram.png]]) end", "=".repeat(59)),
+                "![[diagram.png]]",
+            ),
+            (
+                format!("{} <[[ab]]> {}", "-".repeat(58), "-".repeat(58)),
+                "[[ab]]",
+            ),
+        ];
+        for (source, link) in cases {
+            let read = snippets_read_back(&source);
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                assert!(shown.contains(link), "{link} stays whole: {shown:?}");
             }
         }
     }

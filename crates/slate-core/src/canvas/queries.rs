@@ -302,13 +302,13 @@ pub fn group_rect_around(model: &CanvasModel, members: &[NodeId]) -> Option<Rect
 /// separator never matches. Both are shipped mac behaviour, preserved
 /// deliberately.
 ///
-/// Both sides are lowercased with [`str::to_lowercase`] before the
-/// containment test. That is Unicode's `Lowercase_Mapping`,
-/// locale-independent and NOT a case fold: it is full (one scalar can
-/// become several — `İ` U+0130 lowercases to `i` + combining dot
-/// above), and it leaves the pairs case folding would collapse (`ß`
-/// stays `ß` and never matches `SS`; final sigma is the documented
-/// exception it does handle). So this diverges from mac's
+/// Both sides are lowercased with [`crate::name_fold::fold_case`] before
+/// the containment test: [`str::to_lowercase`], then the final sigma folded
+/// to sigma (#1705), so `ΚΟΣ` finds `κοσμος`. `to_lowercase` is Unicode's
+/// `Lowercase_Mapping`, locale-independent and NOT a case fold: it is full
+/// (one scalar can become several — `İ` U+0130 lowercases to `i` +
+/// combining dot above), and it leaves the pairs case folding would
+/// collapse (`ß` stays `ß` and never matches `SS`). So this diverges from mac's
 /// `localizedCaseInsensitiveContains` — locale-sensitive, no full
 /// mapping — AND from a strict simple case fold, in different places.
 /// The three agree across ASCII and Latin-1, which is the whole fixture

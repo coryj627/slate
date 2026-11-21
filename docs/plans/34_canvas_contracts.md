@@ -14706,10 +14706,13 @@ is `i` + combining dot), `ß`, and a query carrying a newline. Each is
 pinned by test rather than merely described (0b-14).
 
 *CD-22's note for #1705 (plan 47 CB-32, the owner's CD22 answer of
-2026-11-16):* the crate's one case rule is now `name_fold::fold_case`,
-`str::to_lowercase` followed by the final sigma (U+03C2) folded to sigma
-(U+03C3), because `to_lowercase` reads Final_Sigma's context and a name
-lowered alone and lowered with its extension fold apart. The owner chose
+2026-11-16):* core's case rule for name matches is now
+`name_fold::fold_case`, `str::to_lowercase` followed by the final sigma
+(U+03C2) folded to sigma (U+03C3), because `to_lowercase` reads
+Final_Sigma's context and a name lowered alone and lowered with its
+extension fold apart. This is the second case rule CD-22 argued against,
+taken on the owner's call: tags, property values, heading anchors and the
+graph's ghost key and name filter keep `to_lowercase`. The owner chose
 one fold stored in the index for every name match, so `canvas_filter`
 uses it too: `ΚΟΣ` and `κοσμοσ` now find a card titled `κοσμος`
 (`the_canvas_filter_finds_a_final_sigma_name_whichever_sigma_was_typed`).

@@ -322,6 +322,11 @@ fn a_final_sigma_pair_behaves_like_case_variants() {
         session
             .rescan_with_progress(&CancelToken::new(), None)
             .unwrap();
+        // A rescan does not revisit an unchanged source's resolved rows, so
+        // the source is saved again to resolve against the pair.
+        session
+            .save_text("A.md", "[[οδοσ]] [[ΟΔΟΣ]] [[οδος]]\n", None)
+            .unwrap();
         // `ς` (U+03C2) sorts before `σ` (U+03C3): the byte-smaller path wins.
         assert!(
             targets(&session, "A.md")
@@ -388,14 +393,103 @@ fn a_batch_move_refuses_a_final_sigma_twin_at_preflight() {
     }
 }
 
+/// Two selected items whose destinations are a `ς`/`σ` or an NFD/NFC pair
+/// collide at preflight, as they would on APFS.
+#[test]
+fn a_batch_move_refuses_two_items_whose_destinations_fold_together() {
+    let (tmp, session) = scanned(|provider| {
+        for path in [
+            "a/κοσμος.md",
+            "b/κοσμοσ.md",
+            "a/caf\u{e9}.md",
+            "b/cafe\u{301}.md",
+        ] {
+            provider.write_file(path, b"# x\n").unwrap();
+        }
+        provider.write_file("dest/keep.md", b"# keep\n").unwrap();
+    });
+    for (one, two) in [
+        ("a/κοσμος.md", "b/κοσμοσ.md"),
+        ("a/caf\u{e9}.md", "b/cafe\u{301}.md"),
+    ] {
+        let report = session
+            .batch_move(BatchMoveRequest {
+                items: [one, two]
+                    .into_iter()
+                    .map(|path| StructuralBatchItem {
+                        path: path.to_string(),
+                        is_directory: false,
+                    })
+                    .collect(),
+                new_parent: "dest".into(),
+            })
+            .unwrap();
+        assert_ne!(
+            report.state,
+            BatchMoveState::Succeeded,
+            "{one} and {two} landed"
+        );
+        assert_eq!(
+            report.envelope.preflight_failures.len(),
+            2,
+            "{one} and {two}: {report:?}"
+        );
+        assert!(tmp.path().join(one).exists() && tmp.path().join(two).exists());
+    }
+}
+
+/// Undoing a batch move whose original place now holds a `ς`/`σ` twin is
+/// refused at the undo's preflight, not landed beside the twin.
+#[test]
+fn undoing_a_batch_move_onto_a_final_sigma_twin_is_refused_at_preflight() {
+    let (tmp, session) = scanned(|provider| {
+        provider.write_file("κοσμος.md", b"# moved\n").unwrap();
+        provider.write_file("dest/keep.md", b"# keep\n").unwrap();
+    });
+    let moved = session
+        .batch_move(BatchMoveRequest {
+            items: vec![StructuralBatchItem {
+                path: "κοσμος.md".to_string(),
+                is_directory: false,
+            }],
+            new_parent: "dest".into(),
+        })
+        .unwrap();
+    assert_eq!(moved.state, BatchMoveState::Succeeded, "{moved:?}");
+    // The twin arrives outside Slate, which NTFS allows.
+    std::fs::write(tmp.path().join("κοσμοσ.md"), "# twin\n").unwrap();
+    session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    let undone = session
+        .undo_batch_move(moved.op_id.expect("the move's op id"))
+        .unwrap();
+    assert_ne!(undone.state, BatchMoveState::Succeeded, "{undone:?}");
+    assert!(
+        undone
+            .envelope
+            .preflight_failures
+            .iter()
+            .any(|failure| failure.stage == BatchFailureStage::Preflight),
+        "{undone:?}"
+    );
+    assert!(tmp.path().join("dest").join("κοσμος.md").exists());
+}
+
 /// An index an older build wrote under the old fold is rebuilt by
-/// migration 042 at the next open, so a save resolves `[[κοσμος]]` through
-/// it at once, with no rescan.
+/// migration 042 at the next open, so with no rescan a save resolves
+/// `[[ΚΟΣΜΟΣ]]` to `κοσμος.md` through the rebuilt name index, and a create
+/// heals a dangling `[[Οδος]]` through the rebuilt target index. The two
+/// names carry an authored final sigma, so their old keys differ from the
+/// new ones: without the rebuild both lookups miss silently.
 #[test]
 fn an_upgraded_index_resolves_a_final_sigma_link_without_a_rescan() {
     let (tmp, session) = scanned(|provider| {
         provider
-            .write_file("ΚΟΣΜΟΣ.md", "# k\n".as_bytes())
+            .write_file("κοσμος.md", "# k\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("A.md", "[[Οδος]]\n".as_bytes())
             .unwrap();
     });
     drop(session);
@@ -439,14 +533,21 @@ fn an_upgraded_index_resolves_a_final_sigma_link_without_a_rescan() {
     }
     let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     session
-        .save_text("A.md", "[[κοσμος]] [[Κοσμος]]\n", None)
+        .save_text("B.md", "[[ΚΟΣΜΟΣ]] [[κοσμος]]\n", None)
         .unwrap();
     assert_eq!(
-        targets(&session, "A.md"),
+        targets(&session, "B.md"),
         vec![
-            ("κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
-            ("Κοσμος".to_string(), Some("ΚΟΣΜΟΣ.md".to_string())),
-        ]
+            ("ΚΟΣΜΟΣ".to_string(), Some("κοσμος.md".to_string())),
+            ("κοσμος".to_string(), Some("κοσμος.md".to_string())),
+        ],
+        "a save resolves through the rebuilt name index"
+    );
+    session.create_exclusive("ΟΔΟΣ.md", "# o\n").unwrap();
+    assert_eq!(
+        targets(&session, "A.md"),
+        vec![("Οδος".to_string(), Some("ΟΔΟΣ.md".to_string()))],
+        "a create heals through the rebuilt target index"
     );
     let integrity: String = session
         .conn
