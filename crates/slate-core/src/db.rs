@@ -281,14 +281,61 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
     Ok(conn)
 }
 
-/// A bare connection to `path`, with the VFS the path needs (plan 43 PR 22a,
-/// #940): a session's anchored cache path (`/.slate-fd/<token>/...`, from
-/// `CacheDir::sqlite_path`) opens through the unix VFS variant the
-/// descriptor hook expects (`anchored::VFS`); every other path through the
-/// default, as before. The compaction worker's connection and the facts'
-/// second connections open here too, so every connection to an anchored
-/// cache resolves through the held `.slate`.
+/// A connection to `path`, with the VFS the path needs (plan 43 PR 22a,
+/// #940) and core's configuration ([`configure_connection`], #1917). The
+/// compaction worker's connection and the facts' second connections open
+/// here too, so every connection to an anchored cache resolves through the
+/// held `.slate`, and every connection core opens is configured alike.
+///
+/// It has one exit on purpose. The open has two branches, and a session's
+/// cache takes the first on macOS and Linux and the second on Windows:
+/// configuring after one of them only would leave the other platforms'
+/// sessions without it.
 pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = open_unconfigured(path)?;
+    configure_connection(&conn)?;
+    Ok(conn)
+}
+
+/// How many prepared statements a connection keeps for reuse. rusqlite's
+/// default is 16, and a rescan that mixes changed notes with unchanged ones
+/// runs 17 cached statements: at 16 every changed note after an unchanged
+/// one built 15 of them again (#1917). 32 holds that path with room, for
+/// about 330 KB more statement memory on a connection that has run
+/// everything.
+const STATEMENT_CACHE_CAPACITY: usize = 32;
+
+/// The configuration every connection core opens runs under (#1917).
+///
+/// The query planner stability guarantee: SQLite picks a statement's plan
+/// from its SQL and the schema, never from the values bound to it. Without
+/// it SQLite 3.54 marks a bound equality in a statement with more than one
+/// source or an `ORDER BY` (and a bound `LIMIT`) as worth a second look,
+/// and a marked statement is compiled again on every use once the statement
+/// cache has cleared its bindings: 38 of core's statements were, on every
+/// row of a bases view, every link panel and every file summary. What the
+/// guarantee gives up is a plan chosen from a bound value, which in this
+/// schema could only be an index prefix search for a bound pattern;
+/// `db::connection_census` and `no_like_can_use_an_index_prefix` hold that
+/// no statement can have one.
+///
+/// No `cfg` in here: whichever branch opened the connection, it is
+/// configured the same way.
+fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
+    conn.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+        true,
+    )?;
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+    Ok(())
+}
+
+/// A bare connection to `path`: a session's anchored cache path
+/// (`/.slate-fd/<token>/...`, from `CacheDir::sqlite_path`) opens through
+/// the unix VFS variant the descriptor hook expects (`anchored::VFS`);
+/// every other path through the default, as before. Only
+/// [`open_connection`] calls it.
+fn open_unconfigured(path: &Path) -> rusqlite::Result<Connection> {
     #[cfg(any(
         all(
             any(target_os = "macos", target_os = "linux"),
@@ -331,6 +378,7 @@ pub(crate) fn sqlite_open_path(path: &Path) -> std::borrow::Cow<'_, Path> {
 #[cfg(test)]
 pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
     let conn = Connection::open_in_memory()?;
+    configure_connection(&conn)?;
     register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
