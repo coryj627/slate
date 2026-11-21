@@ -3691,6 +3691,10 @@ impl SqlVaultLookup<'_> {
     /// One EXISTS-shaped probe for the O-6 temporal-operator eval
     /// fallback (OR/NOT filter positions, where SQL pushdown can't
     /// fire).
+    ///
+    /// The statement comes from the statement cache (#1917): a view runs
+    /// each probe once for every row, and a probe compiled for every row
+    /// was most of what the row cost.
     fn exists_query(
         &self,
         sql: &str,
@@ -3699,8 +3703,8 @@ impl SqlVaultLookup<'_> {
     ) -> Result<bool, EvalError> {
         use rusqlite::OptionalExtension as _;
         self.conn
-            .query_row(sql, params, |_| Ok(()))
-            .optional()
+            .prepare_cached(sql)
+            .and_then(|mut probe| probe.query_row(params, |_| Ok(())).optional())
             .map(|row| row.is_some())
             .map_err(|error| EvalError::InvalidArgument {
                 function: function.to_string(),
@@ -3804,9 +3808,21 @@ impl VaultLookup for SqlVaultLookup<'_> {
         self.resolve_link_from(target, self.source_path)
     }
 
+    // The five probes below that read `oplog_events` name the index that
+    // holds one note's events in time order (#1917). Left to choose, SQLite
+    // took `oplog_events_class_ts` for `has_change_since` and
+    // `untouched_for`: every content event of every note in the window, for
+    // each row of the view, where the note's own events are a handful. The
+    // other three already used `oplog_events_file_ts`, and the name keeps
+    // them there. If a migration ever drops or renames the index, the probe
+    // does not prepare and the view says so in-band, as any probe error
+    // does; `a_temporal_probe_reads_only_its_own_notes_events` reads each
+    // probe's plan.
+
     fn oplog_has_change_since(&self, path: &str, cutoff_ms: i64) -> Result<bool, EvalError> {
         self.exists_query(
-            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+            "SELECT 1 FROM oplog_events e INDEXED BY oplog_events_file_ts
+             JOIN files f ON f.id = e.file_id
              WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2 LIMIT 1",
             rusqlite::params![path, cutoff_ms],
             "oplog.has_change_since",
@@ -3820,7 +3836,8 @@ impl VaultLookup for SqlVaultLookup<'_> {
         cutoff_ms: i64,
     ) -> Result<bool, EvalError> {
         self.exists_query(
-            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+            "SELECT 1 FROM oplog_events e INDEXED BY oplog_events_file_ts
+             JOIN files f ON f.id = e.file_id
              WHERE f.path = ?1 AND e.event_class IN (2, 3, 5)
                AND (e.property_key = ?2 OR e.event_class = 5)
                AND e.ts_ms >= ?3 LIMIT 1",
@@ -3836,7 +3853,8 @@ impl VaultLookup for SqlVaultLookup<'_> {
         cutoff_ms: i64,
     ) -> Result<bool, EvalError> {
         self.exists_query(
-            "SELECT 1 FROM oplog_events e JOIN files f ON f.id = e.file_id
+            "SELECT 1 FROM oplog_events e INDEXED BY oplog_events_file_ts
+             JOIN files f ON f.id = e.file_id
              WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2
                AND e.deleted_text LIKE '%' || ?3 || '%' ESCAPE '\\' LIMIT 1",
             rusqlite::params![path, cutoff_ms, like_escape(pattern)],
@@ -3874,7 +3892,8 @@ impl VaultLookup for SqlVaultLookup<'_> {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT e.deleted_text FROM oplog_events e JOIN files f ON f.id = e.file_id
+                "SELECT e.deleted_text FROM oplog_events e INDEXED BY oplog_events_file_ts
+                 JOIN files f ON f.id = e.file_id
                  WHERE f.path = ?1 AND e.event_class = 1 AND e.ts_ms >= ?2
                    AND e.deleted_text IS NOT NULL",
             )
@@ -3927,7 +3946,7 @@ impl VaultLookup for SqlVaultLookup<'_> {
             "SELECT 1 FROM files f
              WHERE f.path = ?1 AND f.mtime_ms < ?2
                AND NOT EXISTS (
-                   SELECT 1 FROM oplog_events e
+                   SELECT 1 FROM oplog_events e INDEXED BY oplog_events_file_ts
                    WHERE e.file_id = f.id AND e.event_class = 1 AND e.ts_ms >= ?2
                ) LIMIT 1",
             rusqlite::params![path, cutoff_ms],

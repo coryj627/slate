@@ -22281,16 +22281,20 @@ struct DbTitleSource<'a> {
 
 impl crate::canvas::model::FileTitleSource for DbTitleSource<'_> {
     fn title_for(&self, vault_path: &str) -> Option<String> {
+        // From the statement cache (#1917): a board asks once for every
+        // file card, on every pass that reads its titles.
         self.conn
-            .query_row(
+            .prepare_cached(
                 "SELECT p.value_text FROM properties p
                  JOIN files f ON f.id = p.file_id
                  WHERE f.path = ?1 AND p.key = 'title' AND p.value_kind = 'text'
                  LIMIT 1",
-                rusqlite::params![vault_path],
-                |row| row.get::<_, String>(0),
             )
-            .optional()
+            .and_then(|mut title| {
+                title
+                    .query_row(rusqlite::params![vault_path], |row| row.get::<_, String>(0))
+                    .optional()
+            })
             .ok()
             .flatten()
             // `value_text` stores the JSON encoding of the property
