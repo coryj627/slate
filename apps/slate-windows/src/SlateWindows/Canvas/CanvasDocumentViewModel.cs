@@ -3295,26 +3295,39 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         CanvasHandleLease lease = loaded.Lease;
         bool inspectionOnly = loaded.Population.Disposition == CanvasLoadDisposition.RecoveredReadOnly;
         CanvasEditorSeed? seed = null;
-        _ = lease.Invoke(
-            () =>
-            {
-                CanvasPublication now = _slot.Current;
-                return !now.Retired && now.Names(lease);
-            },
-            handle =>
-            {
-                if (inspectionOnly)
+        try
+        {
+            _ = lease.Invoke(
+                () =>
                 {
-                    // Full text remains readable without issuing a writable
-                    // editor seed for the recovered snapshot.
-                    string? text = _session.CanvasNodeText(handle, nodeId);
-                    seed = text is null ? null : new CanvasEditorSeed(text, loaded.Population.ContentHash);
-                }
-                else
+                    CanvasPublication now = _slot.Current;
+                    return !now.Retired && now.Names(lease);
+                },
+                handle =>
                 {
-                    seed = _session.CanvasEditorSeed(handle, nodeId);
-                }
-            });
+                    if (inspectionOnly)
+                    {
+                        // Full text remains readable without issuing a writable
+                        // editor seed for the recovered snapshot.
+                        string? text = _session.CanvasNodeText(handle, nodeId);
+                        seed = text is null ? null : new CanvasEditorSeed(text, loaded.Population.ContentHash);
+                    }
+                    else
+                    {
+                        seed = _session.CanvasEditorSeed(handle, nodeId);
+                    }
+                });
+        }
+        catch (VaultException)
+        {
+            // Plan 47 CB-15c (#1890), Find 4: core no longer holds the card,
+            // because its deletion committed in core before its publication
+            // applied here. Its text cannot be read, so the arm below says
+            // so and no editor opens. The catch keeps core's refusal from
+            // reaching the palette as an action failure and, on every other
+            // route, the dispatcher, which has no handler for it.
+            seed = null;
+        }
         if (seed is null)
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(

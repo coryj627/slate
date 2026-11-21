@@ -194,9 +194,10 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException exception)
         {
-            // Core's message, relayed verbatim — the recorded refusal
-            // presentation (T7); inline and focusable, never announced.
-            flow.PresentCreateFailure(trimmed, exception.Message);
+            // Core's detail of the refusal (FailureDetail.Of), relayed as it
+            // is: the recorded refusal presentation (T7); inline and
+            // focusable, never announced.
+            flow.PresentCreateFailure(trimmed, FailureDetail.Of(exception));
             return;
         }
 

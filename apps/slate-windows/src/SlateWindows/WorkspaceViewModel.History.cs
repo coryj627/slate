@@ -247,7 +247,7 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -257,7 +257,7 @@ internal sealed partial class WorkspaceViewModel
                 // An admitted restore always ends: a fault outside
                 // VaultException (a core panic) is a failed restore, never
                 // a ticket left holding the note's chain.
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             RunOnSaveDispatcher(() =>
             {
@@ -477,7 +477,7 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -487,7 +487,7 @@ internal sealed partial class WorkspaceViewModel
                 // Plan 47 CB-9a: a fault outside VaultException (a core
                 // panic) is a failed create, so the row still gets its
                 // answer.
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             RunOnDispatcher(() =>
             {
@@ -609,7 +609,7 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -619,7 +619,7 @@ internal sealed partial class WorkspaceViewModel
                 // An admitted recover always ends: a fault outside
                 // VaultException (a core panic) is a failed recover, never a
                 // ticket left holding the path's chain.
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             RunOnSaveDispatcher(() => Publish(destinationExists, failure));
         });
@@ -642,7 +642,7 @@ internal sealed partial class WorkspaceViewModel
                         return;
                     }
                     _ = recovered.TrySetException(fault);
-                    FailRecover(completed, fault.Message);
+                    FailRecover(completed, FailureDetail.Of(fault));
                 });
             },
             CancellationToken.None,
@@ -764,7 +764,7 @@ internal sealed partial class WorkspaceViewModel
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -772,7 +772,7 @@ internal sealed partial class WorkspaceViewModel
                     and not AccessViolationException)
             {
                 // Plan 47 CB-9a: as for Restore As a version, above.
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             RunOnDispatcher(() =>
             {

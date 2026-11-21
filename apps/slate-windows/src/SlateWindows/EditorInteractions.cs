@@ -1589,7 +1589,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             // Anything else is not core's error to word: its own message
             // is the detail, mac's localizedDescription arm.
             outcome = new EmbedPreviewOutcome.Unavailable(
-                new EmbedUnresolvedReason.ReadError(exception.Message));
+                new EmbedUnresolvedReason.ReadError(FailureDetail.Of(exception)));
         }
         finally
         {

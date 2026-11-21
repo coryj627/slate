@@ -703,7 +703,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         }
         catch (SearchPatternException exception)
         {
-            Error = exception.Message;
+            Error = FailureDetail.Of(exception);
             return null;
         }
     }

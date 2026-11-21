@@ -167,7 +167,7 @@ internal sealed class DispatcherCommandAction : CommandAction
             // crash the app instead of announcing a failure and staying
             // open (P9/P10). It also makes this method's own documented
             // contract true.
-            throw new CommandException.ActionFailed(exception.Message);
+            throw new CommandException.ActionFailed(FailureDetail.Of(exception));
         }
     }
 }

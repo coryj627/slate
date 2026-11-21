@@ -204,7 +204,7 @@ internal sealed class SyncDiagnosticsViewModel : PanelWorkScheduler
             // rendered report for one that has no config beside it.
             report = null;
             config = null;
-            failure = exception.Message;
+            failure = FailureDetail.Of(exception);
         }
         LoadInterleaveForTests?.Invoke();
         Post(() =>

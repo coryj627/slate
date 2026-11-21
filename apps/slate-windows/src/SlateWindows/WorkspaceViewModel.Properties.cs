@@ -310,7 +310,7 @@ internal sealed partial class WorkspaceViewModel
             // runs even when the failure's sentence throws.
             AdmittedPublication.RunEvery(
                 () => _announce(new A11yEvent.PropertyEditFailed(
-                    failure?.Message ?? "unknown failure")),
+                    failure is null ? "unknown failure" : FailureDetail.Of(failure))),
                 () => ReconcileAfterReadBack(path, postFailureDiskHash));
         };
 
@@ -638,7 +638,7 @@ internal sealed partial class WorkspaceViewModel
             // runs even when the failure's sentence throws.
             AdmittedPublication.RunEvery(
                 () => _announce(new A11yEvent.PropertyEditFailed(
-                    failure?.Message ?? "unknown failure")),
+                    failure is null ? "unknown failure" : FailureDetail.Of(failure))),
                 () => ReconcileAfterReadBack(path, postFailureDiskHash));
         };
 
@@ -855,7 +855,7 @@ internal sealed partial class WorkspaceViewModel
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            EndBulkRenameApply(apply, () => sheet.PublishApply(apply, null, exception.Message), done);
+            EndBulkRenameApply(apply, () => sheet.PublishApply(apply, null, FailureDetail.Of(exception)), done);
         }
         return done.Task;
     }

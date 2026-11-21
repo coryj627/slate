@@ -1647,7 +1647,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             published));
         Saves.TrackWorker(worker);
         // The backstop: a worker that faults anyway (outside the worker's own
-        // catches) still ends the toggle and frees the note's chain.
+        // catches) still ends the toggle and frees the note's chain. A
+        // completion speaks for itself. With none behind the tab (the editor's
+        // activate-at-cursor, the reading view), the tab says the toggle
+        // failed, as it does for a failed outcome, while the toggle is still
+        // its own (plan 47 CB-15c).
         _ = worker.ContinueWith(
             faulted => _dispatcher.BeginInvoke(
                 DispatcherPriority.Normal,
@@ -1663,11 +1667,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                     }
                     try
                     {
-                        completion?.Invoke(
-                            null,
-                            new VaultException.InvalidArgument(faulted.Exception!.GetBaseException().Message),
-                            null,
-                            false);
+                        var failure = new VaultException.InvalidArgument(
+                            FailureDetail.Of(faulted.Exception!.GetBaseException()));
+                        if (completion is not null)
+                        {
+                            completion(null, failure, null, false);
+                        }
+                        else if (!_disposed && generation == _taskToggleGeneration)
+                        {
+                            var failed = new A11yEvent.TaskToggleFailed(SlateUniffiMethods.VaultErrorDetail(failure));
+                            Status = SlateUniffiMethods.A11yRender(failed).Text;
+                            announce(failed);
+                        }
                     }
                     finally
                     {
@@ -1823,7 +1834,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                         path, indexConsistent: inner is VaultException.WriteConflict);
                     leaseSettled = true;
                     VaultException error = inner as VaultException
-                        ?? new VaultException.InvalidArgument(inner.Message);
+                        ?? new VaultException.InvalidArgument(FailureDetail.Of(inner));
                     outcome = new TaskToggleOutcome(
                         null,
                         error,
@@ -1849,7 +1860,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             // no-write, no lease was taken.
             outcome = new TaskToggleOutcome(
                 null,
-                new VaultException.InvalidArgument(exception.Message),
+                new VaultException.InvalidArgument(FailureDetail.Of(exception)),
                 null);
         }
 

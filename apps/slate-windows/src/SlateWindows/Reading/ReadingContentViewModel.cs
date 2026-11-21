@@ -1223,7 +1223,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 0,
                 [],
                 ViewError: null,
-                ExecuteError: failure.Message);
+                ExecuteError: FailureDetail.Of(failure));
         }
         finally
         {

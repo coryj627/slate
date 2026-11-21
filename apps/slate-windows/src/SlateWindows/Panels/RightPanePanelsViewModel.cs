@@ -476,7 +476,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                 // Broadened past VaultException (round 3): a session
                 // torn down mid-flight throws the binding's disposal
                 // guard, and an uncaught worker fault is unobserved.
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             Post(() =>
             {
@@ -814,7 +814,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             Post(() => PublishOutline(
                 path, generation, requestId, headings, total,
@@ -917,7 +917,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                     and not StackOverflowException
                     and not AccessViolationException)
             {
-                failure = exception.Message;
+                failure = FailureDetail.Of(exception);
             }
             // Epoch, not HasPendingFor, re-checked AFTER the query
             // (adversarial rounds 16-17): a post-write failure that

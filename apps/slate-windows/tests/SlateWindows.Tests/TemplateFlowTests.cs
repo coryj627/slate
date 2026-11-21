@@ -412,8 +412,10 @@ public sealed class TemplateFlowTests
             Assert.Equal(TemplateFlowStep.Name, flow.Step);
             Assert.Equal("Taken", flow.NoteName);
             // VERBATIM, not merely present (red team, tests finding 8):
-            // the expected text is core's own message for the identical
-            // conflict, obtained independently of the code under test.
+            // the expected text is core's own rendering of the identical
+            // conflict (VaultErrorDetail, core's renderer, not the host's
+            // FailureDetail helper the code under test calls), never the
+            // binding's field dump (plan 47 CB-15c, #1890).
             string expectedMessage;
             try
             {
@@ -423,7 +425,7 @@ public sealed class TemplateFlowTests
             }
             catch (VaultException expectedException)
             {
-                expectedMessage = expectedException.Message;
+                expectedMessage = SlateUniffiMethods.VaultErrorDetail(expectedException);
             }
 
             Assert.Equal(expectedMessage, flow.ValidationError);
