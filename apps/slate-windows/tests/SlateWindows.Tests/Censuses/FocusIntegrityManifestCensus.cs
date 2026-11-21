@@ -32,6 +32,13 @@
 //   xaml-items    a XAML ItemsSource given by a markup extension
 //   xaml-content  a XAML ContentControl's or ContentPresenter's Content given
 //                 by a markup extension
+//   xaml-command  a XAML Command= on an element that takes the keys itself,
+//                 not a menu row (plan 47 CB-17a, #1866)
+//   command       a C# write of a button's or a hyperlink's command (CB-17a)
+//
+// Each XAML trigger that sets IsEnabled to anything but True is a site of its
+// own, keyed by its condition (CB-17a); Visibility triggers keep one key per
+// carrier.
 //
 // A property set in an object creation's initializer, or anything a
 // constructor writes, is a new element's initial state — it holds no keys
@@ -59,6 +66,12 @@
 //   exempt: <reason>    a fact the reason cites (SomethingTests.Method) must
 //                       exist
 //
+// A site that can turn a control off with the keys on it (an IsEnabled
+// trigger, binding or write, and every command site) takes only the witnesses
+// of FocusIntegrityManifestCensus.KeysFirst.cs (CB-17a, CD11): keys-first,
+// four checked exemptions, or a dated row that CB-17b ends. guard: and a fact
+// that only names such a site no longer witness it.
+//
 // SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites the manifest with the scraped sites,
 // keeping every assignment and leaving new sites unassigned, which fails
 // until a witness is written.
@@ -79,7 +92,7 @@ namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "focus-integrity-manifest")]
 [Trait("tier", "census")]
-public sealed class FocusIntegrityManifestCensus
+public sealed partial class FocusIntegrityManifestCensus
 {
     private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
     private static readonly string[] StateProperties = ["Visibility", "IsEnabled", "Focusable"];
@@ -101,20 +114,12 @@ public sealed class FocusIntegrityManifestCensus
             manifest = Manifest();
         }
 
-        string[] unlisted = [.. scraped.Keys.Where(site => !manifest.ContainsKey(site))];
-        string[] stale = [.. manifest.Keys.Where(site => !scraped.ContainsKey(site))];
-        var judge = new WitnessJudge(Facts(), GuardedScopes(), ShellXaml(), Creators());
-        string[] unwitnessed =
-        [
-            .. manifest
-                .Where(entry => scraped.ContainsKey(entry.Key))
-                .Select(entry => (entry.Key, Verdict: judge.Judge(scraped[entry.Key], entry.Value)))
-                .Where(judged => judged.Verdict is not null)
-                .Select(judged => $"{judged.Key} → {judged.Verdict}"),
-        ];
-        Assert.True(unlisted.Length == 0, "Sites that can take the keys away with no witness in the manifest (S6):\n  " + string.Join("\n  ", unlisted));
-        Assert.True(stale.Length == 0, "Manifest entries whose site is gone:\n  " + string.Join("\n  ", stale));
-        Assert.True(unwitnessed.Length == 0, "Manifest witnesses that do not hold:\n  " + string.Join("\n  ", unwitnessed));
+        var judge = new WitnessJudge(Facts(), GuardedScopes(), ShellXaml(), Creators(), ShellCompilation.Compilation, DatedBaseline);
+        string[] unread = UnreadSyntax(
+            ShellCompilation.Sources.Select(entry => (entry.Source.Root, ShellCompilation.ModelFor(entry.Source))),
+            ShellXamlFiles().Select(path => (Path.GetFileName(path), XDocument.Load(path, LoadOptions.SetLineInfo))));
+        string[] problems = ManifestProblems(scraped, manifest, judge, DatedCeiling, unread);
+        Assert.True(problems.Length == 0, string.Join("\n", problems));
     }
 
     /// <summary>Codex PR 4b r1 F8's discriminating fact: the sites the first
@@ -132,6 +137,12 @@ public sealed class FocusIntegrityManifestCensus
         Assert.Contains("collection SlateWindows.FilesSidebarViewModel.ApplyTags Tags", scraped.Keys);
         Assert.Contains("collection SlateWindows.Bases.BaseQueryBuilderViewModel.RemoveCondition ConditionRows", scraped.Keys);
         Assert.Contains(scraped.Keys, site => site.StartsWith("ui-state SlateWindows.Bases.BaseSurfaceView.", StringComparison.Ordinal) && site.EndsWith(" _list Visibility", StringComparison.Ordinal));
+        // #1866 (CD11): a command button, named and unnamed; a command written in a
+        // constructor's initializer; and one IsEnabled trigger of the menu's seventeen.
+        Assert.Contains("xaml-command MainWindow.xaml SidebarExpandLoaded ExpandLoadedCommand", scraped.Keys);
+        Assert.Contains("xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteCommand", scraped.Keys);
+        Assert.Contains("command SlateWindows.Bases.BaseSurfaceView..ctor _failedEdit", scraped.Keys);
+        Assert.Contains("xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True", scraped.Keys);
     }
 
     /// <summary>Each class of site is caught in planted source, and the
@@ -259,7 +270,8 @@ public sealed class FocusIntegrityManifestCensus
 
     /// <summary>A guard witness holds only for a site strictly inside a
     /// guarded scope that neither is nor contains a region root; a fact
-    /// witness only when the fact names the site.</summary>
+    /// witness only when the fact names the site. (The inner sites hide their
+    /// button: one that turns it off takes no guard, #1866.)</summary>
     [Fact]
     public void AGuardWitnessOnlyCoversASiteInsideAGuardedRoot()
     {
@@ -270,10 +282,10 @@ public sealed class FocusIntegrityManifestCensus
               <Grid x:Name="Columns">
                 <Border x:Name="Pane" Visibility="{Binding PaneShown}">
                   <Border x:Name="FilesPaneBorder">
-                    <Button x:Name="Inner" IsEnabled="{Binding Ready}" />
+                    <Button x:Name="Inner" Visibility="{Binding Ready}" />
                   </Border>
                 </Border>
-                <Button x:Name="Loose" IsEnabled="{Binding Ready}" />
+                <Button x:Name="Loose" Visibility="{Binding Ready}" />
               </Grid>
             </Window>
             """,
@@ -284,16 +296,16 @@ public sealed class FocusIntegrityManifestCensus
             new HashSet<string>(["Columns", "FilesPaneBorder"], StringComparer.Ordinal),
             [xaml]);
 
-        Assert.Null(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "guard: FilesPaneBorder"));
-        Assert.Null(judge.Judge(sites["xaml-binding Planted.xaml Loose IsEnabled"], "guard: Columns"));
-        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Loose IsEnabled"], "guard: FilesPaneBorder"));
+        Assert.Null(judge.Judge(sites["xaml-binding Planted.xaml Inner Visibility"], "guard: FilesPaneBorder"));
+        Assert.Null(judge.Judge(sites["xaml-binding Planted.xaml Loose Visibility"], "guard: Columns"));
+        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Loose Visibility"], "guard: FilesPaneBorder"));
         // The pane holds a region root: no guard covers its collapse, a fact
         // naming it does.
         Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Pane Visibility"], "guard: Columns"));
         Assert.Null(judge.Judge(sites["xaml-binding Planted.xaml Pane Visibility"], "Facts.ThePaneHides"));
-        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "Facts.ThePaneHides"));
-        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "guard: Nowhere"));
-        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner IsEnabled"], "exempt: "));
+        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner Visibility"], "Facts.ThePaneHides"));
+        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner Visibility"], "guard: Nowhere"));
+        Assert.NotNull(judge.Judge(sites["xaml-binding Planted.xaml Inner Visibility"], "exempt: "));
     }
 
     /// <summary>A fact names a site in its CODE — an identifier or a string
@@ -344,14 +356,18 @@ public sealed class FocusIntegrityManifestCensus
     /// <summary>A scraped site: its key, the XAML element that carries it
     /// (or the resource key its carrier is used by), the C# type declaring it
     /// and the receiver it writes, and the names a fact witnessing it must
-    /// mention.</summary>
+    /// mention; for a keys-first witness also one of its tokens (an IsEnabled
+    /// trigger's condition, an unnamed command button's command), and for a
+    /// command site the command its binding names (#1866, CD11).</summary>
     internal sealed record Site(
         string Key,
         XElement? Element,
         string? ResourceKey,
         INamedTypeSymbol? DeclaringType,
         string? Member,
-        IReadOnlyList<string> Names);
+        IReadOnlyList<string> Names,
+        IReadOnlyList<string>? Tokens = null,
+        string? Command = null);
 
     /// <summary>The shell's scraped sites.</summary>
     internal static SortedDictionary<string, Site> Sites() =>
@@ -372,11 +388,20 @@ public sealed class FocusIntegrityManifestCensus
         IEnumerable<(string File, XDocument Document)> xaml)
     {
         var sites = new SortedDictionary<string, Site>(StringComparer.Ordinal);
+        (string File, XDocument Document)[] documents = [.. xaml];
+        HashSet<string> focusless = FocuslessNames(documents.Select(entry => entry.Document));
         foreach ((CompilationUnitSyntax root, SemanticModel model) in sources)
         {
             foreach (AssignmentExpressionSyntax assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>()
                 .Where(assignment => assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)))
             {
+                if (ScrapeACommandWrite(sites, model, assignment, focusless))
+                {
+                    // A button's command, in an initializer or a constructor too:
+                    // the command lives on with the button (#1866, CD11).
+                    continue;
+                }
+
                 if (assignment.Parent is InitializerExpressionSyntax)
                 {
                     // An object creation's initial state: the new element
@@ -425,6 +450,11 @@ public sealed class FocusIntegrityManifestCensus
 
                 string name = member.Name.Identifier.ValueText;
                 SeparatedSyntaxList<ArgumentSyntax> arguments = call.ArgumentList.Arguments;
+                if (ScrapeACommandCall(sites, model, call, member, focusless))
+                {
+                    continue;
+                }
+
                 if (name is "SetValue" or "SetCurrentValue" or "SetBinding")
                 {
                     bool operations = member.Expression.ToString() == "BindingOperations";
@@ -452,7 +482,7 @@ public sealed class FocusIntegrityManifestCensus
                     }
                     else if (StateProperties.Contains(target))
                     {
-                        Add(sites, model, call, "ui-state", receiver, target);
+                        Add(sites, model, call, "ui-state", receiver, target, constructorWrite: BindsAState(name, target));
                     }
                 }
                 else if (CollectionMutators.Contains(name) && IsObservedCollection(model.GetTypeInfo(member.Expression).Type))
@@ -462,39 +492,46 @@ public sealed class FocusIntegrityManifestCensus
             }
         }
 
-        foreach ((string file, XDocument document) in xaml)
+        XDocument[] everyDocument = [.. documents.Select(entry => entry.Document)];
+        foreach ((string file, XDocument document) in documents)
         {
+            var triggers = new Dictionary<string, XElement>(StringComparer.Ordinal);
             foreach (XElement setter in document.Descendants().Where(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") is "IsEnabled" or "Visibility"
+                && PropertyName((string?)element.Attribute("Property")) is "IsEnabled" or "Visibility"
                 && element.Ancestors().Any(ancestor => ancestor.Name.LocalName.EndsWith(".Triggers", StringComparison.Ordinal))))
             {
                 XElement owner = setter.Ancestors().First(ancestor =>
                     ancestor.Name.LocalName is "Style" or "ControlTemplate" or "DataTemplate");
-                string property = (string)setter.Attribute("Property")!;
-                if ((string?)owner.Attribute(Xaml + "Key") is { } key)
+                string property = PropertyName((string?)setter.Attribute("Property"))!;
+                // #1866 (CD11): each IsEnabled trigger that can turn its carrier off is
+                // a site of its own, keyed by its condition; one that sets True turns
+                // nothing off.
+                TriggerCondition? condition = property == "IsEnabled" ? ConditionOf(setter) : null;
+                if (condition is { SetsTrue: true }
+                    || CarrierOf(owner, condition is null ? null : (string?)setter.Attribute("TargetName"), condition is null ? null : everyDocument) is not { } carried)
                 {
-                    string keyed = $"xaml-trigger {file} {owner.Name.LocalName}:{key} {property}";
-                    sites[keyed] = new Site(keyed, null, key, null, null, [key]);
+                    // It turns nothing off, or it neither is nor holds anything
+                    // that takes the keys.
                     continue;
                 }
 
-                XElement? carrier = owner.Parent?.Parent;
-                if (carrier is not null && !RegionBoundaryCensus.HoldsAStop(carrier))
+                string trigger = $"xaml-trigger {file} {carried.Identity} {property}";
+                if (condition is not null)
                 {
-                    // It neither is nor holds anything that takes the keys.
-                    continue;
+                    trigger = Distinct(triggers, $"{trigger} when {condition.Text}", condition.Trigger);
                 }
 
-                string identity = Identity(carrier) ?? $"line {((IXmlLineInfo)owner).LineNumber}";
-                string trigger = $"xaml-trigger {file} {identity} {property}";
-                sites[trigger] = new Site(trigger, carrier, null, null, null, NamesOf(carrier));
+                sites[trigger] = new Site(trigger, carried.Element, carried.ResourceKey, null, null, carried.Names, condition?.Tokens);
             }
+
+            ScrapeStyleSetters(sites, file, document, everyDocument);
+            ScrapeXamlCommands(sites, file, document, everyDocument);
 
             foreach (XElement element in document.Descendants().Where(RegionBoundaryCensus.HoldsAStop))
             {
                 foreach (XAttribute attribute in element.Attributes().Where(attribute => attribute.Value.StartsWith('{')))
                 {
-                    string local = attribute.Name.LocalName;
+                    string local = PropertyName(attribute.Name.LocalName)!;
                     string? key = StateProperties.Contains(local)
                         ? $"xaml-binding {file} {Identity(element)} {local}"
                         : local == "ItemsSource" ? $"xaml-items {file} {Identity(element)}"
@@ -512,8 +549,71 @@ public sealed class FocusIntegrityManifestCensus
         return sites;
     }
 
+    /// <summary>Where a trigger's setter lands: a keyed style's or template's
+    /// users (by its key), the element a setter's TargetName names, or the
+    /// element an inline style or template is set on. Null when that element
+    /// neither is nor holds anything that takes the keys. For an IsEnabled
+    /// site (<paramref name="commandSites"/> given), an unnamed carrier with a
+    /// command is keyed by its holder and command, as its command site is, so a
+    /// control inserted in front of it renames nothing (CB-17a review, m5).</summary>
+    private static (string Identity, XElement? Element, string? ResourceKey, IReadOnlyList<string> Names)? CarrierOf(
+        XElement owner, string? targetName, IReadOnlyList<XDocument>? commandSites = null)
+    {
+        if (targetName is not null
+            && owner.Descendants().FirstOrDefault(element => (string?)element.Attribute(Xaml + "Name") == targetName) is { } part)
+        {
+            return RegionBoundaryCensus.HoldsAStop(part) ? (Identity(part)!, part, null, NamesOf(part)) : null;
+        }
+
+        if ((string?)owner.Attribute(Xaml + "Key") is { } key)
+        {
+            return ($"{owner.Name.LocalName}:{key}", null, key, [key]);
+        }
+
+        XElement? carrier = owner.Parent?.Parent;
+        if (carrier is not null && !RegionBoundaryCensus.HoldsAStop(carrier))
+        {
+            return null;
+        }
+
+        string? identity = commandSites is not null && carrier is not null && Named(carrier) is null && PropertyAttribute(carrier, "Command") is not null
+            ? CommandIdentity(carrier, commandSites)
+            : Identity(carrier);
+        return (identity ?? $"line {((IXmlLineInfo)owner).LineNumber}", carrier, null, NamesOf(carrier));
+    }
+
+    /// <summary>A trigger's key, with " #2" (and on) when another trigger of
+    /// the same carrier has the same condition.</summary>
+    private static string Distinct(Dictionary<string, XElement> keyed, string key, XElement trigger)
+    {
+        string candidate = key;
+        for (int ordinal = 2; keyed.TryGetValue(candidate, out XElement? taken) && !ReferenceEquals(taken, trigger); ordinal++)
+        {
+            candidate = $"{key} #{ordinal}";
+        }
+
+        keyed[candidate] = trigger;
+        return candidate;
+    }
+
+    /// <summary>The names of the XAML elements that are declared out of the
+    /// keys' reach (Focusable="False").</summary>
+    private static HashSet<string> FocuslessNames(IEnumerable<XDocument> documents) =>
+    [
+        .. documents.SelectMany(document => document.Descendants())
+            .Where(element => IsFalse(PropertyAttribute(element, "Focusable")?.Value))
+            .Select(element => (string?)element.Attribute(Xaml + "Name"))
+            .OfType<string>(),
+    ];
+
     private static void Add(
-        SortedDictionary<string, Site> sites, SemanticModel model, SyntaxNode node, string kind, string receiver, string? property)
+        SortedDictionary<string, Site> sites,
+        SemanticModel model,
+        SyntaxNode node,
+        string kind,
+        string receiver,
+        string? property,
+        bool constructorWrite = false)
     {
         ISymbol? member = model.GetEnclosingSymbol(node.SpanStart);
         while (member is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction or MethodKind.LocalFunction })
@@ -521,9 +621,11 @@ public sealed class FocusIntegrityManifestCensus
             member = member.ContainingSymbol;
         }
 
-        if (member is IMethodSymbol { MethodKind: MethodKind.Constructor } || node.Ancestors().Any(ancestor => ancestor is ConstructorDeclarationSyntax))
+        if (!constructorWrite
+            && (member is IMethodSymbol { MethodKind: MethodKind.Constructor } || node.Ancestors().Any(ancestor => ancestor is ConstructorDeclarationSyntax)))
         {
-            // A constructor's writes: the element holds no keys yet.
+            // A constructor's writes: the element holds no keys yet. A button's
+            // command and a binding of IsEnabled live on with the element.
             return;
         }
 
@@ -654,12 +756,23 @@ public sealed class FocusIntegrityManifestCensus
         IReadOnlyDictionary<string, string> facts,
         IReadOnlySet<string> guarded,
         IReadOnlyList<XDocument> documents,
-        IReadOnlyDictionary<string, string[]>? creators = null)
+        IReadOnlyDictionary<string, string[]>? creators = null,
+        Compilation? commands = null,
+        IReadOnlyCollection<string>? dated = null)
     {
         private readonly Dictionary<XDocument, HashSet<XElement>> _regionRoots = [];
+        private KeysFirstRule? _keysFirst;
 
         public string? Judge(Site site, string witness)
         {
+            // #1866 (CD11): a site that can turn a control off with the keys on it,
+            // and the keys-first and dated kinds, are judged by their own rule.
+            _keysFirst ??= new KeysFirstRule(facts, documents, commands, dated ?? []);
+            if (_keysFirst.Judges(site, witness, out string? ruled))
+            {
+                return ruled;
+            }
+
             if (witness.StartsWith("exempt: ", StringComparison.Ordinal))
             {
                 if (witness.Length <= 12)
@@ -711,7 +824,7 @@ public sealed class FocusIntegrityManifestCensus
 
         /// <summary>The identifiers and string literals of a fact's source,
         /// trivia — comments, doc comments — left out.</summary>
-        private static HashSet<string> CodeTokens(string source) =>
+        internal static HashSet<string> CodeTokens(string source) =>
         [
             .. SyntaxFactory.ParseTokens(source)
                 .Where(token => token.IsKind(SyntaxKind.IdentifierToken) || token.IsKind(SyntaxKind.StringLiteralToken))
@@ -968,8 +1081,18 @@ public sealed class FocusIntegrityManifestCensus
         {
             ["_doc"] = "W7-7 PR 4b (#1247, R-5; the owner's S6): every site that can take the element holding the keys away under them, "
                 + "and what witnesses its landing: a fact that names the site ('Class.Method'), 'guard: <scope>' for a site inside a "
-                + "guarded scope that neither is nor holds a region root, or 'exempt: <reason>'. FocusIntegrityManifestCensus scrapes "
-                + "the sites and judges each witness; SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
+                + "guarded scope that neither is nor holds a region root, or 'exempt: <reason>'. Plan 47 CB-17a (#1866, CD11): a site "
+                + "that can turn a control off with the keys on it (each IsEnabled trigger by its condition, an IsEnabled binding or "
+                + "write, and every command button, 'xaml-command' and 'command') takes only 'keys-first: Class.Method' (a fact whose "
+                + "own code names the site, a trigger's condition token or an unnamed button's command, and calls "
+                + "KeysFirstRecorder.AssertTheKeysLeaveFirst), 'exempt: not focusable', 'exempt: always on: Type.Property' (read from "
+                + "every construction of every property of that name), 'exempt: its own press never turns it off: <why>', 'exempt: "
+                + "never fires: <why> (Class.Method)', or 'dated: 2026-11-21; CB-17b (CD11): <mechanism>' for a key in DatedBaseline, "
+                + "whose count only falls. The press exemption's limit: another driver (a refresh's or a rescan's deselect, an "
+                + "in-place change of item, a find bar's mode switch) can still turn such a control off under the keys, and this "
+                + "census does not judge other drivers (#1955). A menu row is no command site: its menu gives the keys back before "
+                + "its command runs (MenuRowCommandTests). FocusIntegrityManifestCensus scrapes the sites and judges each witness; "
+                + "SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
             ["sites"] = new JsonObject(sites.OrderBy(entry => entry.Key, StringComparer.Ordinal)
                 .Select(entry => KeyValuePair.Create(entry.Key, (JsonNode?)JsonValue.Create(entry.Value)))),
         };
@@ -983,32 +1106,22 @@ public sealed class FocusIntegrityManifestCensus
             }) + "\n");
     }
 
-    /// <summary>Every fact in this project, as "Class.Method", with its
-    /// source.</summary>
+    /// <summary>Every fact in this project that xunit runs, as "Class.Method", with the
+    /// source of the method that carries its attribute.</summary>
     private static Dictionary<string, string> Facts()
     {
         HashSet<string> declared =
         [
             .. typeof(FocusIntegrityManifestCensus).Assembly.GetTypes()
                 .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                    .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).Any())
+                    .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).ToArray() is [var fact] && !NeverRuns(fact))
                     .Select(method => $"{type.Name}.{method.Name}")),
         ];
-        var facts = new Dictionary<string, string>(StringComparer.Ordinal);
         string tests = Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests");
-        foreach (string file in Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)))
-        {
-            foreach (MethodDeclarationSyntax method in CSharpSource.LoadPath(file).Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
-            {
-                if (method.Parent is TypeDeclarationSyntax type
-                    && declared.Contains($"{type.Identifier.ValueText}.{method.Identifier.ValueText}"))
-                {
-                    facts[$"{type.Identifier.ValueText}.{method.Identifier.ValueText}"] = method.ToFullString();
-                }
-            }
-        }
-
-        return facts;
+        return FactSources(
+            Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
+                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                .Select(file => CSharpSource.LoadPath(file).Root),
+            declared);
     }
 }

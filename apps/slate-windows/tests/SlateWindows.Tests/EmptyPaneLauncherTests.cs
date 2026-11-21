@@ -143,38 +143,24 @@ public sealed class EmptyPaneLauncherTests
     /// <summary>#1690: an action that holds the keys as the palette opens goes off only once
     /// the palette's field has taken them, and that's in the same turn the palette opens, so
     /// no key pressed meanwhile reaches the action under it. Off while it held them, NVDA said
-    /// "unavailable" before the field.</summary>
+    /// "unavailable" before the field. This is the keys-first witness of the launcher style's
+    /// modal surface trigger (#1866, CD11).</summary>
     [Fact]
     public void AnActionGoesOffOnlyAfterThePaletteTakesTheKeys() => RunSta(() =>
     {
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
         Button search = Launcher(host).Children.OfType<Button>().Last();
+        Assert.Same(search.FindResource("Slate.LauncherRowStyle"), search.Style);
         host.Shell.Activate();
         host.Settle();
         Assert.True(
             search.Focus() && ReferenceEquals(search, Keyboard.FocusedElement),
             $"keyboard premise: Search Vault could not take the keys (they are on {Keyboard.FocusedElement})");
 
-        var offWithTheKeys = new List<string>();
-        DependencyPropertyChangedEventHandler record = (_, e) =>
-        {
-            if (e.NewValue is false && CommandPaletteTests.TheKeysAreIn(search))
-            {
-                offWithTheKeys.Add(host.Shell.OpenModalSurface?.ToString() ?? "no surface");
-            }
-        };
-        search.IsEnabledChanged += record;
-        try
-        {
-            host.Lifecycle.Palette.Open();
-        }
-        finally
-        {
-            search.IsEnabledChanged -= record;
-        }
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Search Vault", search, () => host.Lifecycle.Palette.Open());
 
-        Assert.True(offWithTheKeys.Count == 0, $"Search Vault went off holding the keys under {string.Join(", ", offWithTheKeys)}.");
+        Assert.True(host.Shell.IsModalSurfaceOpen, "premise: the palette is a modal surface");
         Assert.Same(host.Shell.CommandPaletteSearchTextBox, Keyboard.FocusedElement);
         Assert.False(search.IsEnabled, "Search Vault stayed on under the palette.");
     });
