@@ -560,6 +560,65 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    /// <summary>#1610 (CB-29): a rendered diagram whose SVG the guard refuses
+    /// for its cost shows the honest header with core's cost sentence as its
+    /// reason. The outcome is not transient: the guard's verdict is the same
+    /// on every refresh. Nothing reaches the decoder.</summary>
+    [Fact]
+    public void ADiagramWhoseSvgIsRefusedForItsCostShowsCoresSentence()
+    {
+        RunSta(() =>
+        {
+            (List<(ReadingBlock, ReadingBlockInlines)> model, DiagramBlock rendered) = RenderedFlowchart();
+            // #1581's first row, reproduced by CB-29's step 0 (40.5 s to decode).
+            var costly = new DiagramBlock(
+                Source: rendered.Source,
+                Dialect: rendered.Dialect,
+                Svg: System.Text.Encoding.UTF8.GetBytes(SlowSvgDocuments.Generate("A_star_g R=3000 E=13000")),
+                PngFallback: null,
+                StructuredDescription: rendered.StructuredDescription,
+                RenderStatus: new DiagramRenderStatus.Ok(),
+                Line: rendered.Line,
+                ByteOffset: rendered.ByteOffset);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            var decodes = new ParkedSvgDecodes();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = decodes.Ending;
+            try
+            {
+                int pool = ReadingDocumentBuilder.MaximumRenderedDiagramSvgBytes;
+                DiagramOutcome.Failed failed = Assert.IsType<DiagramOutcome.Failed>(
+                    ReadingDocumentBuilder.ResolveDiagramOutcome(costly, ref pool));
+                Assert.Equal("Diagram could not be rendered", failed.Header);
+                Assert.Equal("Image not shown: it would take too long to decode.", failed.Reason);
+                Assert.False(failed.Transient);
+
+                ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+                    model,
+                    new ReadingListBuildContext(),
+                    Array.Empty<CodeBlock>(),
+                    Array.Empty<MathBlock>(),
+                    new[] { costly });
+                string text = new System.Windows.Documents.TextRange(
+                    built.Document.ContentStart,
+                    built.Document.ContentEnd).Text;
+                int header = text.IndexOf("Diagram could not be rendered", StringComparison.Ordinal);
+                int said = text.IndexOf(
+                    "Image not shown: it would take too long to decode.", StringComparison.Ordinal);
+                Assert.True(header >= 0, text);
+                Assert.True(said > header, text);
+                Assert.Equal(0, decodes.Runs);
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                Assert.True(SpinWait.SpinUntil(
+                    () => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)));
+            }
+        });
+    }
+
     /// <summary>A one-step flowchart's reading model and its rendered
     /// diagram, an 8x8 SVG.</summary>
     private static (List<(ReadingBlock, ReadingBlockInlines)> Model, DiagramBlock Rendered) RenderedFlowchart()

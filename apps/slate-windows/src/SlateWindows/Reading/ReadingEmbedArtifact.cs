@@ -39,8 +39,9 @@ internal sealed record ReadingEmbedArtifact(
 /// dispatcher can place it; when it is null, <see cref="FailureReason"/> is
 /// core's sentence for a decode past its budget, refused at the cap,
 /// refused because its bytes ran past their budget before (the same
-/// sentence as the first time), or stopped by the projection's decode
-/// deadline (#1635); or null for an ordinary failure, whose sentence is the
+/// sentence as the first time), stopped by the projection's decode
+/// deadline (#1635), or refused by the guard for what it would cost to
+/// decode (#1610); or null for an ordinary failure, whose sentence is the
 /// builder's.
 /// <see cref="BudgetRefused"/> marks a decode the projection's decoded-pixel
 /// pool refused, before its raster was allocated or before it began, which

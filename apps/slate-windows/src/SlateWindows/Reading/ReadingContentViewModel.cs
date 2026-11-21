@@ -1040,9 +1040,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         long imagePool = FetchedEmbedImageByteBudget;
         long svgPixels = ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
             ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
-        // #1635 (CD19): the projection's SVG decodes share one deadline, so a
-        // note of slow images costs a refresh at most its 20 seconds of
-        // waiting; past it the rest say so without entering the decoder.
+        // #1635 (CD19): the projection's SVG decodes, and the guard's checks
+        // before them (#1610), share one deadline, so a note of slow images
+        // costs a refresh at most its 20 seconds and the one check that
+        // crosses it; past it the rest say so without entering the guard or
+        // the decoder. An image refused for its cost or timed out at its
+        // whole budget is remembered by its bytes, so a later refresh says
+        // so at once.
         EditorInteractionCoordinator.SvgDecodeDeadline svgDeadline =
             EditorInteractionCoordinator.SvgDecodeDeadline.ForProjection();
         foreach (string key in keys)

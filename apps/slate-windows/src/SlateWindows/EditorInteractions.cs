@@ -3285,6 +3285,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         s_svgDecodeBusyMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
             "image-busy", SvgDecodeBudgetSeconds);
 
+    private static string? s_svgDecodeCostRefusedMessage;
+
+    /// <summary>#1610 (CB-29): core's sentence for an SVG the guard refused
+    /// for what it would cost to decode (the "image-cost" form). Nothing was
+    /// decoded, so it names no budget; core's form takes none. Read
+    /// once.</summary>
+    internal static string SvgDecodeCostRefusedMessage =>
+        s_svgDecodeCostRefusedMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
+            "image-cost", SvgDecodeBudgetSeconds);
+
     /// <summary>#1635 (CD19): how long one projection's SVG decodes may wait
     /// in all. A projection is the reading view's refresh, a Ctrl+E
     /// popover's card or the embeds leaf's batch.</summary>
@@ -3299,22 +3309,37 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         s_svgProjectionDecodeDeadlineMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
             "note-images", SvgProjectionDecodeDeadlineSeconds);
 
-    /// <summary>#1635 (CD19): how many timed-out decodes a memory keeps.
-    /// Remembering one more drops the oldest.</summary>
+    /// <summary>#1635 (CD19): how many decodes that timed out a memory keeps.
+    /// Remembering one more drops the oldest of them.</summary>
     internal const int MaxRememberedSvgDecodeTimeouts = 256;
 
+    /// <summary>#1610 (the delta merge judge's minor 4, stage 11): how many
+    /// SVGs the guard refused for their cost a memory keeps, apart from the
+    /// timeouts, so no number of cost refusals evicts a timeout. Remembering
+    /// one more drops the oldest of them.</summary>
+    internal const int MaxRememberedSvgCostRefusals = 256;
+
     /// <summary>#1635 (CD19): the SVG decodes that ran out their whole budget,
-    /// by a hash of their bytes, oldest first. A remembered decode is refused
-    /// at once with the sentence it got the first time, before a slot or a
-    /// thread. Nothing clears it: it lasts as long as the
-    /// <see cref="SvgDecodeSlots"/> it sits on, which for the app's own is
-    /// the life of the process. Only a caller writes it, once it has
-    /// abandoned the decode; never the decoder thread.</summary>
+    /// and (#1610, the merge judge's minor 2) the SVGs the guard refused for
+    /// their cost, by a hash of their bytes, oldest first. A remembered
+    /// decode is refused at once with the sentence it got the first time,
+    /// before the guard, a slot or a thread. Nothing clears it: it lasts as
+    /// long as the <see cref="SvgDecodeSlots"/> it sits on, which for the
+    /// app's own is the life of the process. Only a caller writes it, once it
+    /// has abandoned the decode or the guard has refused it; never the
+    /// decoder thread.</summary>
     internal sealed class SvgDecodeTimeoutMemory
     {
         private readonly Lock _gate = new();
-        private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
-        private readonly Queue<string> _arrivals = new();
+
+        /// <summary>Each key, and whether the guard refused it for its cost
+        /// rather than its decode timing out.</summary>
+        private readonly Dictionary<string, bool> _keys = new(StringComparer.Ordinal);
+
+        /// <summary>The timeouts and the cost refusals, each oldest first,
+        /// each evicted only by its own kind.</summary>
+        private readonly Queue<string> _timeouts = new();
+        private readonly Queue<string> _costRefusals = new();
 
         /// <summary>The key a decode is remembered by: the upper-case hex of
         /// its bytes' SHA-256, a string, so the set compares by value.</summary>
@@ -3336,24 +3361,37 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             lock (_gate)
             {
-                return _keys.Contains(key);
+                return _keys.ContainsKey(key);
             }
         }
 
-        /// <summary>Remembers <paramref name="key"/>. A key already held
-        /// changes nothing; one past the capacity drops the oldest.</summary>
-        internal void Remember(string key)
+        /// <summary>Whether <paramref name="key"/> is remembered, and if so
+        /// whether for its cost (#1610) rather than a timeout.</summary>
+        internal bool TryRecall(string key, out bool forCost)
         {
             lock (_gate)
             {
-                if (!_keys.Add(key))
+                return _keys.TryGetValue(key, out forCost);
+            }
+        }
+
+        /// <summary>Remembers <paramref name="key"/> as a decode that timed
+        /// out, or with <paramref name="forCost"/> as an SVG the guard
+        /// refused for its cost (#1610). A key already held changes nothing;
+        /// one past its kind's capacity drops the oldest of that kind.</summary>
+        internal void Remember(string key, bool forCost = false)
+        {
+            lock (_gate)
+            {
+                if (!_keys.TryAdd(key, forCost))
                 {
                     return;
                 }
-                _arrivals.Enqueue(key);
-                if (_arrivals.Count > MaxRememberedSvgDecodeTimeouts)
+                Queue<string> arrivals = forCost ? _costRefusals : _timeouts;
+                arrivals.Enqueue(key);
+                if (arrivals.Count > (forCost ? MaxRememberedSvgCostRefusals : MaxRememberedSvgDecodeTimeouts))
                 {
-                    _keys.Remove(_arrivals.Dequeue());
+                    _keys.Remove(arrivals.Dequeue());
                 }
             }
         }
@@ -3361,11 +3399,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     /// <summary>#1635 (CD19): what is left of one projection's decoding time.
     /// Each SVG decode waits for its own budget or what is left, whichever is
-    /// shorter, and is charged for it; once less than a millisecond is left,
-    /// the rest are refused without entering the decoder. It counts decode
-    /// time only, not the work between decodes, so its sentence is true when
-    /// it is said. A projection's decodes run on one thread, so it is not
-    /// locked.</summary>
+    /// shorter, and is charged for it, and (#1610, the merge judge's minor 2)
+    /// the guard's check before it is charged the time it took; once less
+    /// than a millisecond is left, the rest are refused without entering the
+    /// guard or the decoder. It counts the checks and decodes only, not the
+    /// work between them, so its sentence is true when it is said. A
+    /// projection's decodes run on one thread, so it is not locked.</summary>
     internal sealed class SvgDecodeDeadline
     {
         private TimeSpan _left;
@@ -3490,40 +3529,158 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// later fact. Never set by the app.</summary>
     internal static bool SvgDecodeProcessMemoryOffForTests { get; set; }
 
+    [ThreadStatic]
+    private static Func<TimeSpan, TimeSpan>? svgGuardChargeForTests;
+
+    /// <summary>Test seam: what a projection's deadline is charged for one
+    /// guard check, given the time the check took, per caller thread (#1610,
+    /// the merge judge's minor 2).</summary>
+    internal static Func<TimeSpan, TimeSpan>? SvgGuardChargeForTests
+    {
+        get => svgGuardChargeForTests;
+        set => svgGuardChargeForTests = value;
+    }
+
+    /// <summary>Test seam: <see cref="SvgGuardChargeForTests"/> for every
+    /// caller thread that hasn't set its own. The unit-test host sets it to
+    /// charge nothing as it loads, so the exact waits #1635's facts read are
+    /// not moved by a check's microseconds; the facts about the charge set
+    /// their own. Never set by the app.</summary>
+    internal static Func<TimeSpan, TimeSpan>? SvgGuardChargeDefaultForTests { get; set; }
+
     /// <summary>#1635: the sentence an SVG decode would refuse these bytes
     /// with before it decodes anything, or null. The memory first, so a
     /// remembered image says what it said the first time whatever was decoded
-    /// before it; then the projection's spent deadline. It takes no slot,
-    /// starts no thread, reserves no pixels and charges no deadline. A caller
-    /// that refuses an SVG for its own reason, as the reading view does once
-    /// its pixel pool is spent, asks it first, so the image still says these
-    /// sentences (Codex round 2).</summary>
+    /// before it; then the projection's spent deadline; then the guard's
+    /// cost refusal (#1610), which the memory then keeps. It takes no slot,
+    /// starts no thread and reserves no pixels; of the deadline it takes the
+    /// guard's own time. A caller that refuses an SVG for its own reason, as
+    /// the reading view does once its pixel pool is spent, asks it first, so
+    /// the image still says these sentences (Codex round 2).</summary>
     internal static string? SvgDecodeRefusalBeforeDecoding(byte[] bytes, SvgDecodeDeadline? deadline) =>
         SvgDecodeRefusalBeforeDecoding(
-            bytes, deadline, SvgDecodeSlotsForTests ?? s_svgDecodeSlots, out _, out _);
+            bytes, deadline, SvgDecodeSlotsForTests ?? s_svgDecodeSlots, out _, out _, out _);
 
+    /// <summary>The checks before decoding. <paramref name="source"/> is
+    /// the document as text once the guard admits it, and null when it is
+    /// refused, with or without a sentence: then nothing decodes it.</summary>
     private static string? SvgDecodeRefusalBeforeDecoding(
         byte[] bytes,
         SvgDecodeDeadline? deadline,
         SvgDecodeSlots slots,
         out SvgDecodeTimeoutMemory? memory,
-        out string? key)
+        out string? key,
+        out string? source)
     {
+        source = null;
         memory = SvgDecodeProcessMemoryOffForTests && ReferenceEquals(slots, s_svgDecodeSlots)
             ? null
             : slots.TimeoutMemory;
+        // #1610 (the delta merge judge's nit 5): the hash the memory is read
+        // by is charged to the projection's deadline with whatever follows
+        // it, on every path, so no path hashes for free.
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
         key = memory is null ? null : SvgDecodeTimeoutMemory.KeyOf(bytes);
-        if (key is not null && memory!.Contains(key))
+        if (key is not null && memory!.TryRecall(key, out bool rememberedForCost))
         {
-            HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedRemembered, $"bytes={bytes.Length}");
-            return SvgDecodeTimeExceededMessage;
+            deadline?.Charge(GuardCharge(System.Diagnostics.Stopwatch.GetElapsedTime(started)));
+            HostLog.WriteDetail(
+                HostDiagnosticEvent.SvgDecodeRefusedRemembered,
+                rememberedForCost ? $"bytes={bytes.Length}, cost" : $"bytes={bytes.Length}");
+            return rememberedForCost ? SvgDecodeCostRefusedMessage : SvgDecodeTimeExceededMessage;
         }
         if (deadline is { IsSpent: true })
         {
+            deadline.Charge(GuardCharge(System.Diagnostics.Stopwatch.GetElapsedTime(started)));
             HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
             return SvgProjectionDecodeDeadlineMessage;
         }
-        return null;
+        // #1610 (the merge judge's minor 2): the guard runs on the caller,
+        // before any slot, so its own time (and the hash's) is charged to the
+        // projection's deadline as a decode's is, and a refusal for cost is
+        // remembered, so a note's next refresh says it without checking
+        // again.
+        string? refusal;
+        bool forCost = false;
+        try
+        {
+            refusal = CheckSvgBeforeDecoding(bytes, out source, out forCost);
+        }
+        finally
+        {
+            deadline?.Charge(GuardCharge(System.Diagnostics.Stopwatch.GetElapsedTime(started)));
+        }
+        if (forCost && key is not null)
+        {
+            memory!.Remember(key, forCost: true);
+        }
+        return refusal;
+    }
+
+    /// <summary>What a projection's deadline is charged for a guard check
+    /// that took <paramref name="took"/>: that, or what a test seam
+    /// says.</summary>
+    private static TimeSpan GuardCharge(TimeSpan took) =>
+        (SvgGuardChargeForTests ?? SvgGuardChargeDefaultForTests)?.Invoke(took) ?? took;
+
+    /// <summary>
+    /// #1610 (CB-29): <see cref="SvgPreviewGuard"/>'s verdict, on the
+    /// caller, before any slot or thread. A document it refuses for what it
+    /// would cost to decode, for more renders than its cap (which bounds
+    /// the same work) or for spending its step budget says core's cost
+    /// sentence, and <paramref name="forCost"/> is true, so the caller
+    /// remembers it (the merge judge's minor 2). Any other refusal, and
+    /// bytes the guard cannot read, give no sentence, so the caller says its
+    /// own. The text is decoded from UTF-8 once, here, and handed to the
+    /// decoder. An exception keeps the decode's own filter: a fatal one is
+    /// not caught, any other is logged by its type and gives nothing, never
+    /// a failed projection.
+    /// </summary>
+    private static string? CheckSvgBeforeDecoding(byte[] bytes, out string? source, out bool forCost)
+    {
+        source = null;
+        forCost = false;
+        string text;
+        SvgRefusal refusal;
+        SvgDecodeEstimate estimate;
+        try
+        {
+            text = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(bytes);
+            refusal = SvgPreviewGuard.Check(text, MaxPreviewImageBytes, out estimate);
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeCheckFailed, exception);
+            return null;
+        }
+        forCost = refusal is SvgRefusal.DecodeCost or SvgRefusal.RenderedElements;
+        switch (refusal)
+        {
+            case SvgRefusal.None:
+                source = text;
+                return null;
+            case SvgRefusal.DecodeCost when estimate.StepsSpent:
+                // The guard spent its step budget (the red team's B1): no
+                // estimate was reached, so the guard is the term.
+                HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedForCost, "term=" + estimate.LargestTerm);
+                return SvgDecodeCostRefusedMessage;
+            case SvgRefusal.DecodeCost:
+                HostLog.WriteDetail(
+                    HostDiagnosticEvent.SvgDecodeRefusedForCost,
+                    "estimateMs=" + estimate.Milliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)
+                        + ", term=" + estimate.LargestTerm);
+                return SvgDecodeCostRefusedMessage;
+            case SvgRefusal.RenderedElements:
+                HostLog.WriteDetail(HostDiagnosticEvent.SvgDecodeRefusedForCost, "term=renders");
+                return SvgDecodeCostRefusedMessage;
+            default:
+                return null;
+        }
     }
 
     private static ImageSource? DecodeSvgImage(
@@ -3535,12 +3692,21 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     {
         SvgDecodeSlots slots = SvgDecodeSlotsForTests ?? s_svgDecodeSlots;
         // #1635 (CD19): the memory, then the projection's deadline, then the
-        // cap: core's order after the memory. The memory and its key come
-        // back, so the bytes are hashed once.
+        // guard (#1610), then the cap: core's order after the memory. The
+        // memory and its key come back, so the bytes are hashed once, and so
+        // does the text the guard admitted, so they are decoded once.
         failureReason = SvgDecodeRefusalBeforeDecoding(
-            bytes, deadline, slots, out SvgDecodeTimeoutMemory? memory, out string? key);
-        if (failureReason is not null)
+            bytes, deadline, slots, out SvgDecodeTimeoutMemory? memory, out string? key, out string? source);
+        if (failureReason is not null || source is null)
         {
+            return null;
+        }
+        if (deadline is { IsSpent: true })
+        {
+            // The guard's own check spent what was left (#1610, the merge
+            // judge's minor 2): no decoder starts for a wait of nothing.
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeRefusedPastDeadline);
+            failureReason = SvgProjectionDecodeDeadlineMessage;
             return null;
         }
         if (Volatile.Read(ref slots.Abandoned) >= MaxAbandonedSvgDecodes
@@ -3594,7 +3760,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 try
                 {
                     png = bodyForTests is null
-                        ? RenderSvgToPng(bytes, reserve, out spent)
+                        ? RenderSvgToPng(source, reserve, out spent)
                         : bodyForTests(bytes, reserve);
                 }
                 catch (Exception exception)
@@ -3766,25 +3932,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
 
     /// <summary>The Skia half of the SVG decode, on the decode thread: the
-    /// guard, the parse, the raster and the PNG the WPF half decodes.
+    /// parse, the raster and the PNG the WPF half decodes, of a document the
+    /// guard admitted on the caller (#1610).
     /// <paramref name="reserveDecodedBytes"/> runs here while the caller
     /// waits.</summary>
     private static byte[]? RenderSvgToPng(
-        byte[] bytes,
+        string source,
         Func<long, bool>? reserveDecodedBytes,
         out bool budgetSpent)
     {
         budgetSpent = false;
         try
         {
-            string source = new UTF8Encoding(
-                encoderShouldEmitUTF8Identifier: false,
-                throwOnInvalidBytes: true).GetString(bytes);
-            if (!IsSafeSvg(source))
-            {
-                return null;
-            }
-
             var document = ParseSecureSvg(source);
             if (document is null)
             {

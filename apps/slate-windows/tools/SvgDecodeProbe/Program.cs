@@ -27,10 +27,13 @@ internal static class Program
         EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = int.MaxValue;
         var image = EditorInteractionCoordinator.DecodeImage(
             bytes, "image/svg+xml", out string? failureReason);
+        // The guard's cost refusal carries core's sentence (#1610): it is the
+        // guard's verdict, not an abandoned decode.
         Console.WriteLine(
             image is not null ? "decoded"
-            : failureReason is not null ? "abandoned"
-            : "refused");
+            : failureReason is null
+                || failureReason == EditorInteractionCoordinator.SvgDecodeCostRefusedMessage ? "refused"
+            : "abandoned");
         return 0;
     }
 }

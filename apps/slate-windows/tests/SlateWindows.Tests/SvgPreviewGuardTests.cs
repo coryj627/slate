@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Text;
+using System.Text.RegularExpressions;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -39,7 +41,8 @@ public sealed class SvgPreviewGuardTests
     /// <summary>The shapes real documents use stay inside every cap:
     /// Illustrator's class rules, Mermaid's markers, an icon sheet's
     /// reuse, a filter's chained inputs, a stylesheet's gradient fills
-    /// and each cap itself.</summary>
+    /// and each cap itself. #1610 (CB-29): each, and the repository's own
+    /// SVG, is estimated at under a tenth of the decode limit.</summary>
     [Fact]
     public void AcceptsTheShapesRealDocumentsUse()
     {
@@ -77,14 +80,2738 @@ public sealed class SvgPreviewGuardTests
                 + "\"}</style>" + Square),
             Svg("<style>/* " + Repeat("url(#a)", SvgPreviewGuard.MaxUrlReferencesPerValue + 1)
                 + " */rect{fill:red}</style>" + Square),
+            // Custom properties that name each other in a cycle are one node,
+            // never a render cycle (Codex's review, stage 4).
+            Svg("<style>svg{--a:var(--b, url(#p));--b:var(--a)}</style>"
+                + "<defs><pattern id='p' width='4' height='4'>" + Square + "</pattern></defs>"
+                + "<rect width='16' height='16' fill='var(--a)'/>"),
         ];
 
-        foreach (string source in accepted)
+        string pie = File.ReadAllText(
+            Path.Combine(SourceText.RepoRoot(), "demo-vault", "attachments", "pie.svg"));
+        foreach (string source in accepted.Append(pie))
         {
             Assert.True(
                 Check(source) == nameof(SvgRefusal.None),
                 $"refused ({Check(source)}): {source[..Math.Min(source.Length, 200)]}");
+            double estimate = EstimateOf(source).Milliseconds;
+            Assert.True(
+                estimate < SvgPreviewGuard.MaxEstimatedDecodeMilliseconds / 10.0,
+                $"estimated at {estimate:F1} ms: {source[..Math.Min(source.Length, 200)]}");
         }
+    }
+
+    private static SvgDecodeEstimate EstimateOf(string source) =>
+        SvgPreviewGuard.Estimate(source, 8 * 1024 * 1024);
+
+    public static TheoryData<string> SlowDocumentCases() => [.. SlowDocuments.Keys];
+
+    /// <summary>
+    /// #1610 (CB-29): a document that would hold a decoder for many seconds
+    /// is refused for its cost before anything decodes it. Each row is sized
+    /// to estimate past 10 seconds, so it is refused at any limit the owner
+    /// picks from the calibration table: #1581's four reproductions, a
+    /// plotting library's scatter, a one-rule stylesheet over many uses,
+    /// markers inherited from a group, each selector shape whose query is not
+    /// linear (descendant chains over nested groups, general siblings,
+    /// of-type pseudo-classes), a <c>var()</c> fallback that re-resolves past
+    /// the depth limit, declarations on elements that draw nothing, a
+    /// marker set through <c>var()</c>, and a pattern that paints many
+    /// shapes, however it reaches them. The two rows that expand
+    /// exponentially (four <c>var()</c> references per level at 15 levels,
+    /// about 1.07e9 lookups; six descendant steps over 254 nested groups,
+    /// hours by arithmetic) cost the guard itself under 100 ms on this
+    /// fact's own stopwatch: the median of <see cref="WallClockBudget"/>'s
+    /// warm readings, so a loaded runner does not reach it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(SlowDocumentCases))]
+    public void RefusesEachSlowDocumentForItsCost(string name)
+    {
+        (Func<string> build, bool timed) = SlowDocuments[name];
+        string source = build();
+        Assert.Equal(nameof(SvgRefusal.DecodeCost), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate > 10_000, $"{name}: estimated at {estimate:F0} ms");
+        if (timed)
+        {
+            TimeSpan guardTime = WallClockBudget.WarmMedian(() =>
+            {
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024);
+                stopwatch.Stop();
+                Assert.Equal(SvgRefusal.DecodeCost, verdict);
+                return stopwatch.Elapsed;
+            });
+            Assert.True(
+                guardTime < TimeSpan.FromMilliseconds(100),
+                $"{name}: the guard took {guardTime.TotalMilliseconds:F1} ms");
+        }
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, bool Timed)> SlowDocuments = new()
+    {
+        // #1581's four rows, reproduced by step 0 (40.5 s, 135.6 s, 34.8 s, 50.0 s).
+        ["#1581 A: 3,000 universal rules over 13,000 groups"] = (() => SlowSvgDocuments.Generate("A_star_g R=3000 E=13000"), false),
+        ["#1581 B: 15,000 universal rules over 8,000 rects"] = (() => SlowSvgDocuments.Generate("A_star_rect R=15000 E=8000"), false),
+        ["#1581 C: var() doubling at 15 levels over 5,000 rects"] = (() => SlowSvgDocuments.Generate("C_double D=15 E=5000"), false),
+        ["#1581 D: a 2,000-rect marker on a 10,000-vertex polyline"] = (() => SlowSvgDocuments.Generate("D_marker M=2000 V=10000"), false),
+        // 17.4 s; one global rule and a use per point.
+        ["a plotting scatter of 10,000 points"] = (() => SlowSvgDocuments.Generate("G_scatter N=10000"), false),
+        // 30.3 s; the same uses without the rule decode in 2.0 s.
+        ["one rule over 10,000 uses"] = (() => SlowSvgDocuments.Generate("A_use R=1 G=4 U=10000"), false),
+        // Estimated at 1.8 ms a rect: 7,000 passes 10 s (1,000 decode in 2.6 s).
+        ["a 100-rect marker inherited from a group by 7,000 rects"] = (() => SlowSvgDocuments.Generate("D_rects_inherit M=100 N=7000"), false),
+        // The follow-up measured each: 33.0 s, past 60 s, 20.6 s.
+        ["four descendant steps over 128 nested groups"] = (() => SlowSvgDocuments.Generate("N_desc K=4 R=1 D=128"), false),
+        ["two general-sibling steps over 3,000 rects"] = (() => SlowSvgDocuments.Generate("N_sib K=3 R=1 N=3000"), false),
+        ["ten first-of-type rules over 10,000 rects"] = (() => SlowSvgDocuments.Generate("N_nth Q=1 R=10 N=10000"), false),
+        // Each level's fallback names the level below once more, so a chain
+        // past the depth limit is resolved again from every level: 0.4 to
+        // 0.9 ms a rect in the follow-up.
+        ["a var() fallback chain past the depth limit over 30,000 rects"] = (() => SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000"), false),
+        // 3.7 s at 10,000; desc draws nothing, and still takes every declaration.
+        ["1,000 custom properties on 25,000 desc elements"] = (() => SlowSvgDocuments.Generate("N_unstyled T=1 Q=2 D=1000 N=25000"), false),
+        // The follow-up: marker-mid:var(--m) costs what the attribute does.
+        ["a 2,000-rect marker set through var() on a 10,000-vertex polyline"] = (() => SlowSvgDocuments.Generate("D_var M=2000 V=10000"), false),
+        ["four var() references per level at 15 levels"] = (() => SlowSvgDocuments.Generate("C_kary K=4 D=15 E=1"), true),
+        ["six descendant steps over 254 nested groups"] = (() => DeepDescendant("", ""), true),
+        // The red team's M1: the stylesheet and a style attribute are read as
+        // ExCSS reads them. A comment marker inside a string or a url()
+        // argument opens no comment; a comment, even one holding a
+        // semicolon, separates nothing; an escape names what it resolves to.
+        ["six descendant steps after a string that holds /*"] = (() => DeepDescendant("rect{x:\"/*\"} ", " /*\"*/"), false),
+        ["six descendant steps after a url() that holds /*"] = (() => DeepDescendant("rect{fill:url(/*)} ", " /**/"), false),
+        ["a var() fallback chain defined after a string that holds /*"] = (
+            () => SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000")
+                .Replace("<style>svg{", "<style>a{b:\"/*\"} svg{", StringComparison.Ordinal)
+                .Replace("}</style>", "} /**/</style>", StringComparison.Ordinal),
+            false),
+        ["a marker set after an empty comment in a style attribute"] = (() => StyledMarker("/**/marker-mid:url(#m)"), false),
+        ["a marker set after a comment that holds ; in a style attribute"] = (() => StyledMarker("/* ; */marker-mid:url(#m)"), false),
+        ["a marker set by an escaped property name in a style attribute"] = (() => StyledMarker("m\\61rker-mid:url(#m)"), false),
+        // The red team's m4 and m6: vertices from arcs with compact flags
+        // and from a CSS d:path(), the widest of two markers sharing an id,
+        // and a marker set through var() in a style attribute.
+        ["a 2,000-rect marker on 10,000 arcs written with compact flags"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' d='M0 0"
+                + string.Concat(Enumerable.Range(0, 10_000).Select(i => $" A1 1 0 00{i % 400} {i / 400}")) + "'/>"),
+            false),
+        ["a 2,000-rect marker on a path a CSS d:path() draws through 10,000 vertices"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='d:path(\"M0 0"
+                + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}")) + "\")'/>"),
+            false),
+        ["a 2,000-rect marker on a path a stylesheet d:path() draws through 10,000 vertices"] = (
+            () => MarkedShape("<style>path{d:path(\"M0 0"
+                + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}"))
+                + "\")}</style><path fill='none' stroke='black' marker-mid='url(#m)'/>"),
+            false),
+        ["a 2,000-rect marker named by the second of two elements with its id"] = (
+            () => SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+                .Replace("<defs>", "<defs><marker id='m'><rect width='1' height='1'/></marker>", StringComparison.Ordinal),
+            false),
+        ["a 2,000-rect marker set through var() in a style attribute"] = (() => SlowSvgDocuments.Generate("D_varinline M=2000 V=10000"), false),
+        // Codex's review (stage 4): a var() whose name nothing defines
+        // resolves its fallback, so a marker named in a fallback, at any
+        // depth, or in a declared property's own fallback, is placed at
+        // full cost, whichever route sets it.
+        ["a 2,000-rect marker set by a var() fallback in a presentation attribute"] = (
+            () => MarkerSetBy(" marker-mid='var(--undefined, url(#m))'"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback in a style attribute"] = (
+            () => StyledMarker("marker-mid:var(--undefined, url(#m))"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback in a stylesheet rule"] = (
+            () => MarkerSetBy("", "polyline{marker-mid:var(--undefined, url(#m))}"),
+            false),
+        ["a 2,000-rect marker set by a var() fallback nested one level"] = (
+            () => MarkerSetBy(" marker-mid='var(--a, var(--b, url(#m)))'"),
+            false),
+        ["a 2,000-rect marker named by a declared property's own var() fallback"] = (
+            () => MarkerSetBy(" marker-mid='var(--p)'", "svg{--p:var(--undefined, url(#m))}"),
+            false),
+        // Codex's round 1 (stage 4), equivalent inputs whose estimate fell:
+        // path geometry a custom property draws, inline, in a stylesheet and
+        // behind a definition's own fallback;
+        ["a 2,000-rect marker on a path whose d a style attribute's custom property draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--p:path(\"" + LongPathData + "\");d:var(--p)'/>"),
+            false),
+        ["a 2,000-rect marker on a path whose d a stylesheet's custom property draws"] = (
+            () => MarkedShape("<style>svg{--p:path(\"" + LongPathData + "\")} path{d:var(--p)}</style>"
+                + "<path fill='none' stroke='black' marker-mid='url(#m)'/>"),
+            false),
+        ["a 2,000-rect marker on a path whose d a custom property's own fallback draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--p:var(--undefined, path(\""
+                + LongPathData + "\"));d:var(--p)'/>"),
+            false),
+        // a marker a use sets, which the shapes of its instance inherit;
+        ["a 2,000-rect marker on a path whose d a chain of two custom properties draws"] = (
+            () => MarkedShape("<path fill='none' stroke='black' marker-mid='url(#m)' style='--q:path(\""
+                + LongPathData + "\");--p:var(--q);d:var(--p)'/>"),
+            false),
+        ["a 2,000-rect marker a use sets on the polyline it draws"] = (
+            () => MarkedShape("<defs><polyline id='p' fill='none' stroke='black' points='" + LongPoints + "'/></defs>"
+                + "<use href='#p' marker-mid='url(#m)'/>"),
+            false),
+        ["a 2,000-rect marker a use sets on the polyline of the group it draws"] = (
+            () => MarkedShape("<defs><g id='p'><polyline fill='none' stroke='black' points='" + LongPoints + "'/></g></defs>"
+                + "<use href='#p' marker-mid='url(#m)'/>"),
+            false),
+        // a fallback chain beside another element's literal definitions of
+        // its names, which do not erase the chain's fallback cost;
+        ["a var() fallback chain beside a group that defines its names as literals"] = (
+            () => BeforeEnd(
+                SlowSvgDocuments.Generate("C_fb F=1 D=16 E=30000"),
+                "<g style='" + string.Concat(Enumerable.Range(1, 16).Select(k => $"--v{k}:1;")) + "'/>"),
+            false),
+        // and custom-property names that end in a valid escaped character,
+        // which name the same property wherever they are written.
+        ["var() doubling at 15 levels over names ending in an escaped private-use character"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\E000 "),
+            false),
+        ["a 2,000-rect marker named through an escaped private-use character in its id"] = (
+            () => StyledMarker("marker-mid:url(#m\\E000 )").Replace("<marker id='m'", "<marker id='m&#xE000;'", StringComparison.Ordinal),
+            false),
+        ["a 2,000-rect marker named through an escaped supplementary character in its id"] = (
+            () => StyledMarker("marker-mid:url(#m\\1F600 )").Replace("<marker id='m'", "<marker id='m&#x1F600;'", StringComparison.Ordinal),
+            false),
+        ["var() doubling at 15 levels over names ending in an escaped semicolon"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\;"),
+            false),
+        // Codex's round 2: a use's instance runs every selector branch again.
+        ["one rule of 3,000 class branches over a symbol of 100 rects that 500 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_branches B=3000 T=100 U=500 S=1"),
+            false),
+        // Measured: each instance runs the descendant chains again over its
+        // own nesting, about 0.35 s an instance here (18.1 s in all).
+        ["ten rules of four descendant steps over a symbol of 32 nested groups that 50 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_desc K=4 R=10 D=32 U=50"),
+            false),
+        // Codex's round 3: marker content recompiles at every placement, a
+        // use's stylesheet scope in it included, and each instance takes
+        // the declarations its rules land.
+        ["a marker holding a use under 1,000 rules on a 4,000-vertex polyline"] = (
+            () => SlowSvgDocuments.Generate("M_use R=1000 E=1000 V=4000 U=1"),
+            false),
+        ["a marker holding a use of a group that holds a use, under 1,000 rules on a 4,000-vertex polyline"] = (
+            () => SlowSvgDocuments.Generate("M_use R=1000 E=1000 V=4000 U=1 N=2"),
+            false),
+        // Pins: content cloned through a pattern (measured: a pattern's use
+        // costs again for each painted element, 784 ms at 200 against 60 ms
+        // at 1) and a marker on a shape inside a use's instance.
+        ["a pattern holding a use under 1,000 rules that 3,000 rects are painted with"] = (
+            () => SlowSvgDocuments.Generate("P_use R=1000 K=3000 U=1"),
+            false),
+        ["a 2,000-rect marker on a 1,000-vertex polyline in a symbol that 10 uses draw"] = (
+            () => Svg("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>"
+                + string.Concat(Enumerable.Range(0, 2_000).Select(i => $"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1'/>"))
+                + "</marker><symbol id='s'><polyline fill='none' stroke='black' marker-mid='url(#m)' points='"
+                + string.Concat(Enumerable.Range(0, 1_000).Select(i => $"{i % 400},{i / 400} ")) + "'/></symbol></defs>"
+                + Repeat("<use href='#s'/>", 10)),
+            false),
+        ["one rule of 1,000 custom properties over a symbol of 100 rects that 300 uses draw"] = (
+            () => SlowSvgDocuments.Generate("U_decls D=1000 T=100 U=300"),
+            false),
+        ["var() doubling at 15 levels over names ending in an escaped supplementary character"] = (
+            () => Regex.Replace(SlowSvgDocuments.Generate("C_double D=15 E=2000"), @"--v(\d+)", @"--v$1\1F600 "),
+            false),
+        // The merge judge's register check (stage 7): each shape a pattern
+        // paints costs about 0.34 us per element of the document, whatever
+        // the pattern holds, so a swatch an exporter writes is slow on many
+        // shapes. Measured, one decode each: 36.7 s, 33.2 s, 14.4 s, 11.0 s,
+        // 10.3 s and 39.2 s.
+        ["a pattern swatch that 10,000 rects fill"] = (() => SlowSvgDocuments.Generate("P_paint K=10000"), false),
+        ["a pattern swatch that 10,000 rects inherit from their group"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=10000 I=1"),
+            false),
+        ["a pattern swatch that 3,000 rects fill among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000"),
+            false),
+        ["a pattern swatch a stylesheet rule sets on 3,000 rects among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000 S=1"),
+            false),
+        ["a pattern swatch 3,000 rects fill through var() among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=3000 X=10000 V=1"),
+            false),
+        ["a symbol of 100 rects filling a pattern swatch that 100 uses draw, among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=100 U=100 X=10000"),
+            false),
+        // The same rects inherit the swatch from the 100 uses that draw
+        // them: 41.2 s, added after a mutation that drops a use's paint
+        // escaped the rows above.
+        ["a symbol of 100 rects that inherit a pattern swatch from each of 100 uses, among 10,000 plain rects"] = (
+            () => SlowSvgDocuments.Generate("P_paint K=100 U=100 X=10000 I=1"),
+            false),
+    };
+
+    /// <summary>Path data of 10,001 vertices.</summary>
+    private static readonly string LongPathData =
+        "M0 0" + string.Concat(Enumerable.Range(1, 10_000).Select(i => $" L{i % 400} {i / 400}"));
+
+    /// <summary>A polyline's 10,000 points.</summary>
+    private static readonly string LongPoints =
+        string.Concat(Enumerable.Range(0, 10_000).Select(i => $"{i % 400},{i / 400} "));
+
+    /// <summary><paramref name="source"/> with <paramref name="markup"/>
+    /// before its closing tag.</summary>
+    private static string BeforeEnd(string source, string markup)
+    {
+        int end = source.LastIndexOf("</svg>", StringComparison.Ordinal);
+        return source[..end] + markup + source[end..];
+    }
+
+    /// <summary>#1581's marker row (a 2,000-rect marker on a 10,000-vertex
+    /// polyline) with its marker-mid attribute replaced by
+    /// <paramref name="attribute"/>, under a stylesheet of
+    /// <paramref name="stylesheet"/> when it is not empty.</summary>
+    private static string MarkerSetBy(string attribute, string stylesheet = "")
+    {
+        string source = SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+            .Replace(" marker-mid='url(#m)'", attribute, StringComparison.Ordinal);
+        return stylesheet.Length == 0
+            ? source
+            : source.Replace("<defs>", "<style>" + stylesheet + "</style><defs>", StringComparison.Ordinal);
+    }
+
+    /// <summary>Six descendant steps over 254 nested groups, the rule placed
+    /// between <paramref name="before"/> and <paramref name="after"/>.</summary>
+    private static string DeepDescendant(string before, string after) =>
+        Svg("<style>" + before + "g g g g g g rect{fill:red}" + after + "</style>"
+            + Repeat("<g>", 254) + Square + Repeat("</g>", 254));
+
+    /// <summary>#1581's marker row with the marker set by a style attribute
+    /// of <paramref name="style"/> in place of the marker-mid attribute.</summary>
+    private static string StyledMarker(string style) =>
+        SlowSvgDocuments.Generate("D_marker M=2000 V=10000")
+            .Replace(" marker-mid='url(#m)'", $" style='{style}'", StringComparison.Ordinal);
+
+    /// <summary>A marker of 2,000 rects with the id <c>m</c>, then
+    /// <paramref name="shape"/>.</summary>
+    private static string MarkedShape(string shape) =>
+        Svg("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>"
+            + string.Concat(Enumerable.Range(0, 2_000).Select(i => $"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1' fill='red'/>"))
+            + "</marker></defs>" + shape);
+
+    public static TheoryData<string, string> HostileShapes() => new()
+    {
+        { "T_varrule B=320000 V=32000", nameof(SvgRefusal.None) },
+        { "T_dupid N=16000", nameof(SvgRefusal.RenderedElements) },
+        { "T_prelude K=20000 U=1000", nameof(SvgRefusal.None) },
+        // Codex's round 2: 50,000 gradients sharing one id that 50,000
+        // distinct custom properties name (2 MB).
+        { "T_gradvar N=50000", nameof(SvgRefusal.None) },
+        // Codex's round 3: one custom property whose quoted url() argument
+        // holds 128,000 more url( openings (512 KB).
+        { "T_urlnest N=128000", nameof(SvgRefusal.None) },
+    };
+
+    /// <summary>
+    /// #1610 (the red team's B1): the guard runs on the caller, so its own
+    /// time is bounded on the shapes that made it super-linear: one rule of
+    /// 320,000 branches and 32,000 var() declarations (1.1 MB, 16.7 s of
+    /// guard), 16,000 references to an id 16,000 elements share (480 KB,
+    /// 2.7 s), and one block of 20,000 classes whose 1,000 declarations
+    /// name url() targets (the same product through a stylesheet's keys,
+    /// found on the way). Each is judged in under a second, the median of
+    /// <see cref="WallClockBudget"/>'s warm readings.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(HostileShapes))]
+    public void TheGuardsOwnTimeStaysBounded(string label, string verdict)
+    {
+        string source = SlowSvgDocuments.Generate(label);
+        TimeSpan guardTime = WallClockBudget.WarmMedian(() =>
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            string said = Check(source);
+            stopwatch.Stop();
+            Assert.Equal(verdict, said);
+            return stopwatch.Elapsed;
+        });
+        Assert.True(
+            guardTime < TimeSpan.FromSeconds(1),
+            $"{label}: the guard took {guardTime.TotalMilliseconds:F1} ms");
+    }
+
+    /// <summary>#1610 (the red team's B1): past its step budget the guard
+    /// stops counting and refuses for the document's cost, naming the guard
+    /// as the term, so any path that grows past linear ends in bounded time
+    /// on the caller.</summary>
+    [Fact]
+    public void PastItsStepBudgetTheGuardRefusesForTheCost()
+    {
+        string source = SlowSvgDocuments.Generate("G_scatter N=500");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        SvgPreviewGuard.StepBudgetForTests = 1_000;
+        try
+        {
+            SvgRefusal refusal = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            Assert.Equal(SvgRefusal.DecodeCost, refusal);
+            Assert.True(estimate.StepsSpent);
+            Assert.Equal("guard", estimate.LargestTerm);
+        }
+        finally
+        {
+            SvgPreviewGuard.StepBudgetForTests = null;
+        }
+    }
+
+    /// <summary>#1610 (the red team's B1): a quarter of the step budget admits
+    /// 8 MiB of rects, 6,313,640 steps (guard-estimates.csv): the budget only
+    /// ends a check no real or calibration document comes near. The most
+    /// steps any of them takes, 12,958,636 on 8 MiB of stylesheet, stays
+    /// inside half the budget
+    /// (<see cref="EachScanStaysInsideTheStepBudgetAtTheCap"/>).</summary>
+    [Fact]
+    public void TheStepBudgetAdmitsEightMebibytesOfRects()
+    {
+        string source = SlowSvgDocuments.Generate("Big_rects N=150092");
+        SvgPreviewGuard.StepBudgetForTests = SvgPreviewGuard.MaxGuardSteps / 4;
+        try
+        {
+            SvgRefusal refusal = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            Assert.False(estimate.StepsSpent);
+            Assert.Equal(SvgRefusal.None, refusal);
+        }
+        finally
+        {
+            SvgPreviewGuard.StepBudgetForTests = null;
+        }
+    }
+
+    /// <summary>#1610 (Codex's round 2): each use render re-applies the
+    /// stylesheet to its instance, and every selector branch queries the
+    /// instance's elements, so one rule of 1,000 class branches over a
+    /// symbol 500 uses draw weighs about what 1,000 one-branch rules
+    /// do.</summary>
+    [Fact]
+    public void AUseInstanceQueriesEveryBranchOfARule()
+    {
+        double branches = EstimateOf(SlowSvgDocuments.Generate("U_branches B=1000 T=100 U=500 S=1")).Milliseconds;
+        double rules = EstimateOf(SlowSvgDocuments.Generate("U_branches B=1000 T=100 U=500 S=0")).Milliseconds;
+        Assert.True(
+            branches / rules is >= 0.5 and <= 2,
+            $"one rule of 1,000 branches: {branches:F0} ms; 1,000 rules: {rules:F0} ms");
+    }
+
+    public static TheoryData<string> CombinatorKinds() =>
+    [
+        "U_desc K=4 R=10 D=32",
+        "U_flat Q=1 R=50 T=300",
+        "U_flat Q=2 R=50 T=300",
+    ];
+
+    /// <summary>#1610 (Codex's round 2): each use render re-runs the
+    /// stylesheet's combinator work over its instance (measured for
+    /// descendant chains, about 0.35 s an instance of a symbol whose own
+    /// estimate is 0.5 s), so 20 uses of a symbol whose stylesheet work is
+    /// mostly descendant chains, sibling reads or of-type reads add at least
+    /// half of 20 times the document's own stylesheet term.</summary>
+    [Theory]
+    [MemberData(nameof(CombinatorKinds))]
+    public void AUseInstanceTakesItsSubtreesCombinatorWork(string shape)
+    {
+        SvgDecodeEstimate alone = EstimateOf(SlowSvgDocuments.Generate(shape + " U=0"));
+        SvgDecodeEstimate used = EstimateOf(SlowSvgDocuments.Generate(shape + " U=20"));
+        double added = used.Milliseconds - alone.Milliseconds;
+        double floor = 20 * 0.5 * alone.StylesheetMicroseconds / 1000;
+        Assert.True(added >= floor, $"{shape}: 20 uses add {added:F0} ms, under {floor:F0} ms");
+    }
+
+    /// <summary>#1610 (Codex's round 3): each use render applies its rules'
+    /// declarations to the instance's elements again, so with the rules and
+    /// branches fixed, 990 more custom properties in the one rule over a
+    /// symbol of 100 rects that 150 uses draw add at least half of what they
+    /// land on every instance.</summary>
+    [Fact]
+    public void AUseInstanceTakesTheDeclarationsItsRulesLand()
+    {
+        double few = EstimateOf(SlowSvgDocuments.Generate("U_decls D=10 T=100 U=150")).Milliseconds;
+        double many = EstimateOf(SlowSvgDocuments.Generate("U_decls D=1000 T=100 U=150")).Milliseconds;
+        double floor = 0.5 * 150 * 100 * 990 * SvgDecodeRates.MatchedCustomDeclaration / 1000;
+        Assert.True(many - few >= floor, $"990 more declarations add {many - few:F0} ms, under {floor:F0} ms");
+    }
+
+    public static TheoryData<string> LargestAdmittedInputs() =>
+    [
+        "stylesheet", "attributes", "points", "path data", "style attributes", "url arguments",
+        "css path", "custom properties", "comments and strings", "escapes", "class lists",
+    ];
+
+    /// <summary>
+    /// #1610 (stage 6, the lead's closure of the guard-time class): every
+    /// scan charges the characters it touches, so the guard's own time is
+    /// linear in its input; fed its largest admitted input (a document of
+    /// about the 8 MiB cap made of what the scan reads), each scan's
+    /// check stays inside half the step budget, and charges every
+    /// character it reads.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(LargestAdmittedInputs))]
+    public void EachScanStaysInsideTheStepBudgetAtTheCap(string scan)
+    {
+        string source = LargestInput(scan);
+        Assert.InRange(source.Length, 7 * 1024 * 1024, 8 * 1024 * 1024);
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.False(estimate.StepsSpent, $"{scan}: the step budget was spent");
+        Assert.True(
+            estimate.Steps <= SvgPreviewGuard.MaxGuardSteps / 2,
+            $"{scan}: {estimate.Steps:N0} steps of {SvgPreviewGuard.MaxGuardSteps:N0}");
+        // Every character read is charged, at most 16 to a step.
+        Assert.True(
+            estimate.Steps * 16 >= source.Length,
+            $"{scan}: {estimate.Steps:N0} steps for {source.Length:N0} characters");
+    }
+
+    /// <summary>A document of about the 8 MiB cap made of what one scan
+    /// reads.</summary>
+    private static string LargestInput(string scan)
+    {
+        const int Cap = (8 * 1024 * 1024) - 4096;
+        static string Fill(string head, string unit, string tail)
+        {
+            var text = new StringBuilder(Cap);
+            text.Append(head);
+            while (text.Length + unit.Length + tail.Length < Cap)
+            {
+                text.Append(unit);
+            }
+            return text.Append(tail).ToString();
+        }
+        return scan switch
+        {
+            "stylesheet" => SlowSvgDocuments.Generate("Big_style N=383126"),
+            "attributes" => SlowSvgDocuments.Generate("Big_rects N=150092"),
+            "points" => SlowSvgDocuments.Generate("Big_points N=1119023"),
+            "path data" => Svg(Fill("<path d='M0 0", " A1 1 0 0 1 3 4", "'/>")),
+            "style attributes" => Svg(Fill("", "<rect width='1' height='1' style='fill:red;stroke:blue;stroke-width:2'/>", "")),
+            "url arguments" => Svg(Fill(
+                "<defs><linearGradient id='g'><stop offset='0'/></linearGradient></defs>",
+                "<rect width='1' height='1' fill='url(#g)'/>",
+                "")),
+            "css path" => Svg(Fill("<path style='d:path(\"M0 0", " L1 2", "\")'/>")),
+            "custom properties" => Svg(Fill("<style>svg{", "--p:url(#g) var(--q, 1);", "}</style><rect width='1' height='1' fill='var(--p)'/>")),
+            "comments and strings" => Svg(Fill("<style>", "/* a comment */ a{content:\"a string\"}", "</style>" + Square)),
+            "escapes" => Svg(Fill("<style>", ".a\\62 c{fill:\\72 ed}", "</style>" + Square)),
+            "class lists" => Svg(Fill("<style>.a{fill:red}</style>", "<rect class='a b c d e f g h' width='1' height='1'/>", "")),
+            _ => throw new ArgumentException(scan, nameof(scan)),
+        };
+    }
+
+    public static TheoryData<char> WalkingCombinators() => ['>', '+'];
+
+    /// <summary>#1610 (the red team's m1): a child or adjacent-sibling step
+    /// is weighed as one more walk of the document per pass, wide: ExCSS
+    /// reads a level or a sibling for each element the walk reaches.</summary>
+    [Theory]
+    [MemberData(nameof(WalkingCombinators))]
+    public void AChildOrAdjacentStepWeighsOneMoreWalk(char combinator)
+    {
+        static string Document(string selector) =>
+            Svg("<style>" + Repeat(selector + "{fill:red}", 100) + "</style><g>"
+                + Repeat("<rect width='1' height='1'/>", 1_000) + "</g>");
+        double plain = EstimateOf(Document("rect")).Microseconds;
+        double stepped = EstimateOf(Document("g" + combinator + "rect")).Microseconds;
+        double walk = 100 * 1_003 * SvgDecodeRates.QueryPerBranchElement;
+        Assert.InRange(stepped - plain, walk * 0.99, walk * 1.01);
+    }
+
+    public static TheoryData<string> RareLeftCompounds() =>
+    [
+        // Ten general-sibling rules whose left compound one rect of 10,000
+        // carries: the wide count reads every sibling list for every rect
+        // (14 s); the left compound's matches read one (1.4 ms).
+        "sibling",
+        // Ten descendant rules whose left compound only the innermost of 200
+        // nested groups carries, 50 rects in each: the depth bound counts
+        // every ancestor of every rect (0.6 s); the left compound's
+        // descendants are 50.
+        "descendant",
+    ];
+
+    /// <summary>#1610 (the red team's m2): a branch of one step counts only
+    /// what its left compound's matches read: for a descendant step their
+    /// descendants, for a general-sibling step their sibling lists.</summary>
+    [Theory]
+    [MemberData(nameof(RareLeftCompounds))]
+    public void AOneStepBranchCountsWhatItsLeftCompoundMatchesRead(string shape)
+    {
+        string source = shape == "sibling"
+            ? Svg("<style>" + Repeat(".a ~ rect{fill:red}", 10) + "</style><rect class='a' width='1' height='1'/>"
+                + Repeat("<rect width='1' height='1'/>", 9_999))
+            : Svg("<style>" + Repeat(".a rect{fill:red}", 10) + "</style>"
+                + string.Concat(Enumerable.Range(1, 200).Select(depth =>
+                    (depth == 200 ? "<g class='a'>" : "<g>") + Repeat("<rect width='1' height='1'/>", 50)))
+                + Repeat("</g>", 200));
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate < 200, $"{shape}: estimated at {estimate:F1} ms");
+    }
+
+    public static TheoryData<string, double> CalibratedDocuments() => new()
+    {
+        { "A_class R=5000 E=6000", 2834.6 },
+        { "A_list R=2500 S=4 E=10000", 9373.4 },
+        { "A_type R=1000 E=3000", 3375.2 },
+        { "A_use R=1 G=4 U=3000", 2569.8 },
+        { "C_double D=15 E=1000", 6291.7 },
+        { "D_marker M=500 V=1000", 1326.1 },
+        // The follow-up's selector counts, each its count x its fitted rate
+        // (f2-est-depth.csv): the depth bound x 0.05985 us (13.4 s to
+        // decode), sibling-list reads x 0.01437 us (1.9 s), and rules x the
+        // sibling-list size per match x 0.01993 us (1.9 s).
+        { "N_desc K=3 R=10 D=128", 13820.7 },
+        { "N_sib K=2 R=1 N=10000", 1437.3 },
+        { "N_nth Q=1 R=10 N=3000", 1794.3 },
+    };
+
+    /// <summary>#1610 (CB-29): one document per count, each estimated within
+    /// 10% of the estimate the committed calibration records for it (the
+    /// <c>est2Ms</c> column of
+    /// <c>docs/plans/47_windows_core_closeout/calibration/cb29/est.csv</c>,
+    /// and for the selector counts the follow-up's count times its fitted
+    /// rate, <c>followup2.md</c> and <c>f2-est-depth.csv</c> there), so a
+    /// later change to the counting is seen against the calibration. A_list's
+    /// rules have four selectors each, so a count of rules in place of
+    /// branches is a quarter of it.</summary>
+    [Theory]
+    [MemberData(nameof(CalibratedDocuments))]
+    public void EstimatesTrackTheCalibration(string label, double calibratedMilliseconds)
+    {
+        double estimate = EstimateOf(SlowSvgDocuments.Generate(label)).Milliseconds;
+        Assert.True(
+            Math.Abs(estimate - calibratedMilliseconds) <= calibratedMilliseconds * 0.10,
+            $"{label}: estimated at {estimate:F1} ms; the calibration records {calibratedMilliseconds:F1} ms");
+    }
+
+    public static TheoryData<string, double> QuickDocuments() => new()
+    {
+        // Attribute selectors filed by attribute: about 89 ms (under * every
+        // rule would land on every rect, about 1 s).
+        { "A_attr R=300 E=3000", 300 },
+        // Past the depth limit Svg.Custom gives up at once: 31 ms to decode.
+        { "C_double D=16 E=1000", 50 },
+        // The scatter at 500 points with its rule: about 76 ms.
+        { "G_scatter N=500", 250 },
+        // No <style>, so no use term: 2.0 s to decode, all of it drawing.
+        { "A_use_nostyle G=4 U=10000", 50 },
+        // Markers at a line's start and end only: about 4 ms (as marker-mid, 1.3 s).
+        { "D_start M=500 V=1000", 200 },
+        // A marker inside a marker is not placed (the follow-up: 157 ms with
+        // the inner marker, 135 ms without): about 199 ms.
+        { "D_nested M=10 VO=2000 VI=200", 500 },
+        // nth-child decodes in linear time (the follow-up: 164 ms): about 112 ms.
+        { "N_nth Q=2 R=10 N=10000", 500 },
+        // A property repeated in one rule is applied once (the follow-up: 70 ms).
+        { "N_unstyled T=1 Q=1 D=1000 N=10000", 300 },
+        // A reference that resolves never reaches its fallback: two fallback
+        // references per level at 15 levels over 100 rects decode in 7 ms
+        // (counting every var( as a copy gives 275 s).
+        { "C_fb F=2 D=15 E=100", 200 },
+        // The follow-up's selector counts admit what decodes quickly: ten
+        // rules of four descendant steps over 32 nested groups, 363 ms to
+        // decode, about 370 ms; one general-sibling step over 3,000 rects,
+        // 241 ms, about 133 ms; one first-of-type rule over 3,000 rects,
+        // 223 ms, about 182 ms.
+        { "N_desc K=4 R=10 D=32", 600 },
+        { "N_sib K=2 R=1 N=3000", 600 },
+        { "N_nth Q=1 R=1 N=3000", 600 },
+        // The red team's M2: Svg.Custom reads @media and skips every other
+        // block at-rule, so keyframe stops are not rules filed under every
+        // element: 300 animated rects among 1,000.
+        { "A_keyframes A=300 E=1000", 300 },
+        // Stage 7: a pattern swatch on 1,000 rects decodes in about 0.45 s, and
+        // one that paints ten shapes among 20,000 plain rects in 0.46 s, its
+        // drawing; neither the swatch's content nor an unpainted shape counts
+        // as a paint. A custom property that holds the pattern paints only
+        // the shapes that use it, not the element that defines it, in a
+        // stylesheet or in a style attribute around every shape.
+        { "P_paint K=1000", 600 },
+        { "P_paint K=10 X=20000", 200 },
+        { "P_paint K=10 X=5000 V=1", 200 },
+        { "P_paint K=10 X=5000 V=2", 200 },
+    };
+
+    /// <summary>#1610 (CB-29): the shapes the estimate's corrections exist
+    /// for are admitted, each estimated under its own bound, which sits
+    /// above the row's estimate and under a second, so the row holds at any
+    /// limit the owner picks.</summary>
+    [Theory]
+    [MemberData(nameof(QuickDocuments))]
+    public void AdmitsWhatDecodesQuickly(string label, double boundMilliseconds)
+    {
+        string source = SlowSvgDocuments.Generate(label);
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        double estimate = EstimateOf(source).Milliseconds;
+        Assert.True(estimate < boundMilliseconds, $"{label}: estimated at {estimate:F1} ms");
+    }
+
+    /// <summary>
+    /// #1610 (the merge judge's minor 1): the decode limit is 3,000 ms, the
+    /// owner's pick from the calibration table (CD20, 2026-11-20), and it is
+    /// where the verdict turns: a plotting scatter of 3,425 points,
+    /// estimated within 1% under it (2,999.2 ms), is admitted, and the
+    /// scatter of one point more, within 1% over it (3,000.9 ms), is
+    /// refused.
+    /// </summary>
+    [Fact]
+    public void TheDecodeLimitIsWhereTheVerdictTurns()
+    {
+        const int limit = 3_000;
+        const int points = 3_425;
+        Assert.Equal(limit, SvgPreviewGuard.MaxEstimatedDecodeMilliseconds);
+        string under = SlowSvgDocuments.Generate($"G_scatter N={points}");
+        string over = SlowSvgDocuments.Generate($"G_scatter N={points + 1}");
+        double below = EstimateOf(under).Milliseconds;
+        double above = EstimateOf(over).Milliseconds;
+        Assert.True(below > limit * 0.99 && below <= limit, $"{points} points: estimated at {below:F1} ms");
+        Assert.True(above > limit && above <= limit * 1.01, $"{points + 1} points: estimated at {above:F1} ms");
+        Assert.Equal(nameof(SvgRefusal.None), Check(under));
+        Assert.Equal(nameof(SvgRefusal.DecodeCost), Check(over));
+    }
+
+    /// <summary>A drawing program's pattern swatch of ten children.</summary>
+    private const string Swatch =
+        "<pattern id='pat' width='12' height='12' patternUnits='userSpaceOnUse'>"
+        + "<rect width='12' height='12' fill='#f4f1e8'/>"
+        + "<path d='M 0 12 L 12 0' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M -3 3 L 3 -3' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M 9 15 L 15 9' stroke='#5b4a3a' stroke-width='0.8'/>"
+        + "<path d='M 0 6 L 6 0' stroke='#8a7a6a' stroke-width='0.4'/>"
+        + "<circle cx='3' cy='9' r='1' fill='#2f6f8f'/>"
+        + "<circle cx='9' cy='3' r='1' fill='#2f6f8f'/>"
+        + "<circle cx='9' cy='9' r='0.6' fill='#8f2f4f'/>"
+        + "<circle cx='3' cy='3' r='0.6' fill='#8f2f4f'/>"
+        + "<polygon points='5,5 7,5 6,7' fill='#3a5b4a'/>"
+        + "</pattern>";
+
+    /// <summary>3,000 rects in a group, each with <paramref name="rect"/>'s
+    /// attributes for its index, under <paramref name="stylesheet"/>, beside
+    /// <see cref="Swatch"/>: the documents stage 8 decoded. With every rect
+    /// painting the swatch, the pattern term is about 3.07 s.</summary>
+    private static string PaintedGroup(string stylesheet, string group, Func<int, string> rect)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        if (stylesheet.Length > 0)
+        {
+            s.Append("<style>").Append(stylesheet).Append("</style>");
+        }
+        s.Append($"<g{group}>");
+        for (int i = 0; i < 3_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{rect(i)}/>");
+        }
+        return s.Append("</g></svg>").ToString();
+    }
+
+    private static string PaintedGroup(string stylesheet, string group, string rect) =>
+        PaintedGroup(stylesheet, group, _ => rect);
+
+    public static TheoryData<string> PaintCascadeCases() => [.. PaintCascade.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 5, stage 8): a shape's own fill and stroke follow
+    /// the cascade the decoder uses, each property on its own. Each case
+    /// either leaves the pattern term at 0 with the verdict None, or counts
+    /// the pattern. Its decode, one each in stage 8, is in its row's
+    /// comment.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PaintCascadeCases))]
+    public void AShapesOwnPaintFollowsTheDecodersCascade(string name)
+    {
+        (Func<string> build, bool counted) = PaintCascade[name];
+        string source = build();
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        if (counted)
+        {
+            Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+        }
+        else
+        {
+            Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+            Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        }
+    }
+
+    private const string PatternFill = " fill='url(#pat)'";
+
+    internal static readonly Dictionary<string, (Func<string> Build, bool Counted)> PaintCascade = new()
+    {
+        // Each source of a colour clears the group's pattern: 44, 108, 52
+        // and 66 ms to decode, where the rects that keep it take 3.3 s.
+        ["a colour in the presentation attribute"] = (() => PaintedGroup("", PatternFill, " fill='red'"), false),
+        ["a colour in the style attribute"] = (() => PaintedGroup("", PatternFill, " style='fill:red'"), false),
+        ["a colour from a type rule"] = (() => PaintedGroup("rect{fill:red}", PatternFill, ""), false),
+        ["a colour from a class rule"] = (() => PaintedGroup(".s{fill:red}", PatternFill, " class='s'"), false),
+        // none, a missing reference and a defined var(): 47, 41 and 73 ms.
+        ["none"] = (() => PaintedGroup("", PatternFill, " fill='none'"), false),
+        ["a reference to no element"] = (() => PaintedGroup("", PatternFill, " fill='url(#missing)'"), false),
+        ["a var() the root defines as a colour"] = (() => PaintedGroup("svg{--c:red}", PatternFill, " fill='var(--c)'"), false),
+        ["a var() with a colour fallback"] = (() => PaintedGroup("", PatternFill, " fill='var(--undefined, red)'"), false),
+        // Stroke on its own, and both: 33 and 47 ms; the kept stroke, 3.2 s.
+        ["a stroke of none under a pattern stroke"] = (() => PaintedGroup("", " stroke='url(#pat)'", " stroke='none'"), false),
+        ["a pattern stroke kept"] = (() => PaintedGroup("", " stroke='url(#pat)'", ""), true),
+        ["both cleared under a pattern fill and stroke"] = (
+            () => PaintedGroup("", " fill='url(#pat)' stroke='url(#pat)'", " fill='red' stroke='red'"),
+            false),
+        // What keeps the parent's paint: inherit (3.2 s) and a var() nothing
+        // defines (3.2 s). currentColor is a colour: the decoder draws it so
+        // (46 and 81 ms), and the lead's stage 9 ruling follows it.
+        ["inherit"] = (() => PaintedGroup("", PatternFill, " fill='inherit'"), true),
+        ["a var() nothing defines"] = (() => PaintedGroup("", PatternFill, " fill='var(--undefined)'"), true),
+        ["a var() nothing defines, in the style attribute"] = (
+            () => PaintedGroup("", PatternFill, " style='fill:var(--undefined)'"),
+            true),
+        ["currentColor"] = (() => PaintedGroup("", PatternFill, " fill='currentColor'"), false),
+        // The reverse: a rule sets the pattern under a solid group (2.5 s).
+        ["a class rule that sets the pattern under a red group"] = (
+            () => PaintedGroup(".p{fill:url(#pat)}", " fill='red'", " class='p'"),
+            true),
+        // The cascade: the style attribute beats a rule (46 ms), a rule beats
+        // the presentation attribute (61 ms), and an !important rule beats
+        // the style attribute (2.6 s).
+        ["the style attribute over a pattern rule"] = (
+            () => PaintedGroup(".p{fill:url(#pat)}", "", " class='p' style='fill:red'"),
+            false),
+        ["a colour rule over a pattern attribute"] = (
+            () => PaintedGroup(".p{fill:red}", "", " class='p' fill='url(#pat)'"),
+            false),
+        ["an !important pattern rule over the style attribute"] = (
+            () => PaintedGroup(".p{fill:url(#pat) !important}", "", " class='p' style='fill:red'"),
+            true),
+        // Specificity over source order (46 ms), then source order (2.6 s).
+        ["a compound colour rule over a later class pattern rule"] = (
+            () => PaintedGroup("rect.p{fill:red} .p{fill:url(#pat)}", "", " class='p'"),
+            false),
+        ["a later pattern rule over an earlier colour rule of the same specificity"] = (
+            () => PaintedGroup(".p{fill:red} .p{fill:url(#pat)}", "", " class='p'"),
+            true),
+        // Where the guard cannot tell a rule matches, it counts the pattern:
+        // a selector with a combinator (55 ms), and an id many elements
+        // share, under a pattern group with a colour rule (3.7 to 3.9 s) and
+        // under a red group with a pattern rule (2.0 s).
+        ["a colour rule whose selector has a combinator"] = (() => PaintedGroup("g > rect{fill:red}", PatternFill, ""), true),
+        ["a pattern rule naming an id 3,000 rects share, under a red group"] = (
+            () => PaintedGroup("#i{fill:url(#pat)}", " fill='red'", " id='i'"),
+            true),
+        ["a colour rule naming an id 3,000 rects share"] = (() => PaintedGroup("#i{fill:red}", PatternFill, " id='i'"), true),
+        // A use's own colour clears the group's pattern for its instance
+        // (160 ms; 23.1 s where the instance keeps it).
+        ["a colour a use sets on its instance"] = (
+            () => Svg("<defs>" + Swatch + "<symbol id='s'>" + Repeat("<rect width='7' height='7'/>", 100)
+                + "</symbol></defs><g fill='url(#pat)'>" + Repeat("<use href='#s' fill='red'/>", 3_000 / 100)
+                + "</g>" + Repeat("<rect width='1' height='1' fill='red'/>", 20_000)),
+            false),
+        ["a use's instance that keeps the group's pattern"] = (
+            () => Svg("<defs>" + Swatch + "<symbol id='s'>" + Repeat("<rect width='7' height='7'/>", 100)
+                + "</symbol></defs><g fill='url(#pat)'>" + Repeat("<use href='#s'/>", 3_000 / 100)
+                + "</g>" + Repeat("<rect width='1' height='1' fill='red'/>", 20_000)),
+            true),
+    };
+
+    /// <summary><see cref="PaintedGroup(string, string, string)"/>'s group
+    /// inside <paramref name="outerOpen"/> and <paramref name="outerClose"/>:
+    /// the documents stage 9 decoded.</summary>
+    private static string ScopedGroup(string stylesheet, string outerOpen, string outerClose, string group, string rect)
+    {
+        string source = PaintedGroup(stylesheet, group, rect);
+        int open = source.IndexOf($"<g{group}>", StringComparison.Ordinal);
+        return source[..open] + outerOpen + source[open..^"</svg>".Length] + outerClose + "</svg>";
+    }
+
+    /// <summary>A symbol of 100 rects filled with <c>var(--c)</c>, drawn by
+    /// 30 uses in a group whose fill is the pattern, beside 20,000 plain
+    /// rects: <paramref name="defs"/> holds the symbol (<c>{rects}</c>
+    /// marks its content), or is empty for one in a <c>defs</c> that
+    /// defines <c>--c:red</c>.</summary>
+    private static string UsedSymbol(string defs, string useGroup, string useAttrs)
+    {
+        string rects = string.Concat(Enumerable.Range(0, 100).Select(
+            i => $"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='var(--c)'/>"));
+        string defsOpen = defs.Length == 0 ? "<defs style='--c:red'>" : "<defs>";
+        string symbol = defs.Length == 0 ? $"<symbol id='s'>{rects}</symbol>" : defs.Replace("{rects}", rects, StringComparison.Ordinal);
+        return $"<svg {Ns} width='800' height='800'>{defsOpen}{Swatch}{symbol}</defs><g{useGroup}>"
+            + Repeat($"<use href='#s'{useAttrs}/>", 30) + "</g>"
+            + Repeat("<rect width='1' height='1' fill='red'/>", 20_000) + "</svg>";
+    }
+
+    public static TheoryData<string> VarScopeCases() => [.. VarScope.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 6, stage 9): a <c>var()</c> in a fill takes what
+    /// its custom property holds in the element's scope, as the decoder
+    /// resolves it. Each row was decoded once in stage 9 and is counted,
+    /// cleared or malformed as the decoder made it, but the combinator rule,
+    /// which the guard cannot match and so keeps counting.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VarScopeCases))]
+    public void AVarTakesWhatItsPropertyHoldsInTheElementsScope(string name)
+    {
+        (Func<string> build, string expected) = VarScope[name];
+        string source = build();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        switch (expected)
+        {
+            case "counted":
+                Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+                break;
+            case "cleared":
+                Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+                Assert.Equal(SvgRefusal.None, verdict);
+                break;
+            default:
+                Assert.Equal(expected, verdict.ToString());
+                break;
+        }
+    }
+
+    private const string ReadsC = " fill='var(--c)'";
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> VarScope = new()
+    {
+        // The baselines: 3,498 ms where the rects keep the group's pattern,
+        // 50 ms where they are red.
+        ["the rects keep the group's pattern"] = (() => ScopedGroup("", "", "", PatternFill, ""), "counted"),
+        ["the rects are red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red'"), "cleared"),
+        // An ancestor's definition: style 69 ms, type rule 69 ms, class rule
+        // 90 ms; a combinator rule 63 ms, which the guard cannot match and
+        // counts. As an attribute it is no XML: the decoder draws nothing.
+        ["--c:red in an ancestor's style attribute"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:red'", ReadsC), "cleared"),
+        ["--c='red' as an ancestor's attribute"] = (() => ScopedGroup("", "", "", PatternFill + " --c='red'", ReadsC), "Malformed"),
+        ["--c:red from a type rule on an ancestor"] = (() => ScopedGroup("g{--c:red}", "", "", PatternFill, ReadsC), "cleared"),
+        ["--c:red from a class rule on an ancestor"] = (() => ScopedGroup(".k{--c:red}", "", "", PatternFill + " class='k'", ReadsC), "cleared"),
+        ["--c:red from a combinator rule on an ancestor"] = (() => ScopedGroup("svg > g{--c:red}", "", "", PatternFill, ReadsC), "counted"),
+        // Fallbacks: --c undefined 116 ms; --c a pattern under a red group
+        // 3,248 ms; --c a colour 61 ms.
+        ["a fallback with --c undefined"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--c, red)'"), "cleared"),
+        ["a fallback with --c a pattern"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:url(#pat)'", " fill='var(--c, red)'"),
+            "counted"),
+        ["a fallback with --c a colour"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:blue'", " fill='var(--c, red)'"), "cleared"),
+        // Chains: to a colour 52 ms, to a pattern 3,275 ms, through an outer
+        // group 54 ms, to nothing 3,296 ms, a cycle 3,241 ms.
+        ["--a:var(--b) with --b a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b);--b:red'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b) with --b a pattern"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--a:var(--b);--b:url(#pat)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--b) with --b on an outer group"] = (
+            () => ScopedGroup("", "<g style='--b:red'>", "</g>", PatternFill + " style='--a:var(--b)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b) with --b undefined"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a and --b reading each other"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b);--b:var(--a)'", " fill='var(--a)'"),
+            "counted"),
+        // Shadowing: an inner colour over an outer pattern 48 ms; an inner
+        // pattern over an outer colour 3,152 ms.
+        ["an inner --c colour over an outer --c pattern"] = (
+            () => ScopedGroup("", "<g style='--c:url(#pat)'>", "</g>", PatternFill + " style='--c:red'", ReadsC),
+            "cleared"),
+        ["an inner --c pattern over an outer --c colour"] = (
+            () => ScopedGroup("", "<g style='--c:red'>", "</g>", " fill='red' style='--c:url(#pat)'", ReadsC),
+            "counted"),
+        // The element's own definition: style 37 ms, rule 44 ms; two levels
+        // up 38 ms; the root 37 ms; a sibling branch only 3,246 ms.
+        ["--c:red in the rect's own style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='--c:red'" + ReadsC), "cleared"),
+        ["--c:red from a rule on the rect"] = (() => ScopedGroup(".r{--c:red}", "", "", PatternFill, " class='r'" + ReadsC), "cleared"),
+        ["--c:red two levels up"] = (() => ScopedGroup("", "<g style='--c:red'><g>", "</g></g>", PatternFill, ReadsC), "cleared"),
+        ["--c:red on the root"] = (() => ScopedGroup("svg{--c:red}", "", "", PatternFill, ReadsC), "cleared"),
+        ["--c:red on a sibling branch only"] = (() => ScopedGroup("", "<g style='--c:red'/>", "", PatternFill, ReadsC), "counted"),
+        // The var() in the rect's style attribute 33 ms or a rule 61 ms; the
+        // rect's own --c pattern over the group's colour 3,012 ms;
+        // currentColor with color on the group 56 ms.
+        // Since stage 13 a var() in the style attribute or a rule is no paint
+        // the guard is sure of, so the group's pattern stays counted.
+        ["fill:var(--c) in the rect's style attribute"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='fill:var(--c)'"),
+            "counted"),
+        ["fill:var(--c) from a rule on the rect"] = (
+            () => ScopedGroup(".v{fill:var(--c)}", "", "", PatternFill + " style='--c:red'", " class='v'"),
+            "counted"),
+        ["the rect's own --c pattern over the group's --c colour"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:url(#pat)'" + ReadsC),
+            "counted"),
+        ["currentColor with color red on the group"] = (
+            () => ScopedGroup("", "", "", PatternFill + " color='red'", " fill='currentColor'"),
+            "cleared"),
+        // Through a use, the instance reads the scope of the symbol it draws
+        // and the symbol's ancestors, not the use's: no definition 23.9 s;
+        // --c:red around the uses 23.4 s or on each use 23.2 s; on the symbol
+        // 238 ms, a group around it in defs 135 ms, defs itself 241 ms.
+        ["uses with no definition"] = (() => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill, ""), "counted"),
+        ["uses in a group that defines --c:red"] = (
+            () => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill + " style='--c:red'", ""),
+            "counted"),
+        ["uses that each define --c:red"] = (
+            () => UsedSymbol("<symbol id='s'>{rects}</symbol>", PatternFill, " style='--c:red'"),
+            "counted"),
+        ["a symbol that defines --c:red"] = (
+            () => UsedSymbol("<symbol id='s' style='--c:red'>{rects}</symbol>", PatternFill, ""),
+            "cleared"),
+        ["a symbol inside a group in defs that defines --c:red"] = (
+            () => UsedSymbol("<g style='--c:red'><symbol id='s'>{rects}</symbol></g>", PatternFill, ""),
+            "cleared"),
+        ["a symbol in a defs that defines --c:red"] = (() => UsedSymbol("", PatternFill, ""), "cleared"),
+    };
+
+    /// <summary>Whether <paramref name="source"/>'s pattern term counts the
+    /// rects (over a second) or is 0 with the verdict None.</summary>
+    private static void AssertPatternTerm(string name, string source, string expected)
+    {
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double pattern = estimate.PatternMicroseconds / 1000;
+        if (expected == "counted")
+        {
+            Assert.True(pattern > 1_000, $"{name}: the pattern term is {pattern:F1} ms");
+        }
+        else
+        {
+            Assert.True(pattern == 0, $"{name}: the pattern term is {pattern:F1} ms");
+            Assert.Equal(SvgRefusal.None, verdict);
+        }
+    }
+
+    public static TheoryData<string> VarFallbackCases() => [.. VarFallback.Keys];
+
+    /// <summary>
+    /// #1610 (Codex's round 7, stage 10): a <c>var()</c> fallback, wherever
+    /// the decoder selects it (in a fill, or inside a custom property's
+    /// definition), gives what the same literal value gives: <c>inherit</c>
+    /// and any value the decoder cannot read as a paint keep the parent's
+    /// paint, a pattern is a pattern, and a colour, <c>none</c>,
+    /// <c>currentColor</c>, a missing reference or nothing clears it. A
+    /// definition's own <c>inherit</c>, <c>unset</c> and <c>initial</c> act
+    /// on the property, as CSS has it. Each row was decoded once in stage 10.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VarFallbackCases))]
+    public void AFallbackGivesWhatTheSameLiteralGives(string name)
+    {
+        (Func<string> build, string expected) = VarFallback[name];
+        AssertPatternTerm(name, build(), expected);
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> VarFallback = new()
+    {
+        // A fallback in the fill: inherit 3,336 ms; a pattern under a red
+        // group 3,142 ms; a reference on to a pattern 3,069 ms or to a
+        // colour 47 ms; a defined --c's colour over an inherit fallback
+        // 32 ms; none 34 ms, currentColor 73 ms, a missing reference 27 ms.
+        ["var(--missing, inherit) in the fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, inherit)'"), "counted"),
+        ["var(--missing, url(#pat)) under a red group"] = (() => ScopedGroup("", "", "", " fill='red'", " fill='var(--missing, url(#pat))'"), "counted"),
+        ["var(--missing, var(--other)) with --other a pattern under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--other:url(#pat)'", " fill='var(--missing, var(--other))'"),
+            "counted"),
+        ["var(--missing, var(--other)) with --other a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--other:blue'", " fill='var(--missing, var(--other))'"),
+            "cleared"),
+        ["var(--c, inherit) with --c a colour"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " fill='var(--c, inherit)'"), "cleared"),
+        ["var(--missing, none)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, none)'"), "cleared"),
+        ["var(--missing, currentColor)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, currentColor)'"), "cleared"),
+        ["var(--missing, url(#missing))"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, url(#missing))'"), "cleared"),
+        // The fallback a defined --c passes over is never read: 62 ms.
+        ["var(--c, url(#pat)) with --c a colour under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " fill='var(--c, url(#pat))'"),
+            "cleared"),
+        // Values the decoder cannot read as a paint keep the parent's: unset
+        // 3,536 ms, initial 3,442 ms, foo 3,313 ms; an inherit two fallbacks
+        // deep 3,401 ms; a fallback and a word after it 3,188 ms.
+        ["var(--missing, unset)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, unset)'"), "counted"),
+        ["var(--missing, initial)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, initial)'"), "counted"),
+        ["var(--missing, foo)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, foo)'"), "counted"),
+        ["var(--missing, var(--missing2, inherit))"] = (
+            () => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, var(--missing2, inherit))'"),
+            "counted"),
+        ["var(--missing, red) blue"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing, red) blue'"), "counted"),
+        // An empty fallback clears in the fill attribute 32 ms, the style
+        // attribute 48 ms and a rule 55 ms; an empty value written in the
+        // style attribute 3,467 ms or a rule 2,521 ms keeps the parent's,
+        // the decoder dropping the declaration.
+        ["var(--missing,) in the fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='var(--missing,)'"), "cleared"),
+        ["fill:var(--missing,) in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:var(--missing,)'"), "counted"),
+        ["fill:var(--missing,) from a rule"] = (() => ScopedGroup(".v{fill:var(--missing,)}", "", "", PatternFill, " class='v'"), "counted"),
+        ["an empty fill in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:'"), "counted"),
+        ["an empty fill from a rule"] = (() => ScopedGroup(".v{fill:;}", "", "", PatternFill, " class='v'"), "counted"),
+        // A fallback inside a definition: inherit passed on, read by the
+        // fill 3,151 ms, by a fill with a colour fallback 3,510 ms, from the
+        // rect's own definition over the group's colour 3,631 ms or with a
+        // colour fallback 3,421 ms.
+        ["--a:var(--missing,inherit) on the group, read by the fill"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,inherit)'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--missing, inherit) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing, inherit)'", " fill='var(--a, red)'"),
+            "counted"),
+        ["the rect's own --a:var(--missing, inherit) over the group's --a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:red'", " style='--a:var(--missing, inherit)' fill='var(--a)'"),
+            "counted"),
+        ["the rect's own --a:var(--missing, inherit), read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--a:var(--missing, inherit)' fill='var(--a, red)'"),
+            "counted"),
+        // A definition with no value: 50 ms read as var(--a, red); on to
+        // a colour 49 ms, on to nothing 3,301 ms; an empty fallback 68 ms.
+        ["--a:var(--missing) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing)'", " fill='var(--a, red)'"),
+            "cleared"),
+        ["--a:var(--missing, var(--other)) with --other a colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--other:red;--a:var(--missing, var(--other))'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--missing, var(--other)) with --other undefined"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing, var(--other))'", " fill='var(--a)'"),
+            "counted"),
+        ["--a:var(--missing,) on the group, read as var(--a, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,)'", " fill='var(--a, red)'"),
+            "cleared"),
+        // A definition that reads itself takes its fallback, never the
+        // parent's value: 37, 64, 57 and 68 ms, and 67 ms with none.
+        ["--a:var(--b, red) and --b:var(--a)"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--a:var(--b, red);--b:var(--a)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--a, red)"] = (() => ScopedGroup("", "", "", PatternFill + " style='--a:var(--a, red)'", " fill='var(--a)'"), "cleared"),
+        ["--a:var(--a, red) under an outer --a pattern"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--a, red)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--b, red) and --b:var(--a) under an outer --a pattern"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--b, red);--b:var(--a)'", " fill='var(--a)'"),
+            "cleared"),
+        ["--a:var(--a) under an outer --a pattern, read as var(--a, red)"] = (
+            () => ScopedGroup("", "<g style='--a:url(#pat)'>", "</g>", " fill='red' style='--a:var(--a)'", " fill='var(--a, red)'"),
+            "cleared"),
+        // A definition's keywords act on the property: inherit 69 ms,
+        // INHERIT 37 ms and unset 60 ms take the parent's colour; initial
+        // has no value, so the fallback is read (3,449 and 67 ms); revert
+        // keeps the red group's paint (140 ms).
+        ["the rect's own --c:inherit under the group's --c colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='--c:inherit' fill='var(--c)'"),
+            "cleared"),
+        ["--c:INHERIT on the group under an outer --c colour"] = (
+            () => ScopedGroup("", "<g style='--c:red'>", "</g>", PatternFill + " style='--c:INHERIT'", " fill='var(--c)'"),
+            "cleared"),
+        ["the rect's own --c:unset under the group's --c colour"] = (
+            () => ScopedGroup("", "", "", PatternFill + " style='--c:red'", " style='--c:unset' fill='var(--c)'"),
+            "cleared"),
+        ["the rect's own --c:initial, read as var(--c, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:initial' fill='var(--c, url(#pat))'"),
+            "counted"),
+        ["the rect's own --c:initial, read as var(--c, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--c:initial' fill='var(--c, red)'"),
+            "cleared"),
+        ["the rect's own --c:revert, read as var(--c, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--c:red'", " style='--c:revert' fill='var(--c, url(#pat))'"),
+            "cleared"),
+        // A definition the decoder cannot read as a paint passes that on:
+        // the rect's own 3,281 ms, the group's 3,393 ms.
+        ["the rect's own --c:foo, read as var(--c, red)"] = (
+            () => ScopedGroup("", "", "", PatternFill, " style='--c:foo' fill='var(--c, red)'"),
+            "counted"),
+        ["--c:foo on the group, read by the fill"] = (() => ScopedGroup("", "", "", PatternFill + " style='--c:foo'", " fill='var(--c)'"), "counted"),
+        // An empty definition holds nothing, which clears: from the style
+        // attribute 48 and 55 ms, from a rule 51 and 86 ms.
+        ["--a: on the group, read as var(--a, url(#pat)) under a red group"] = (
+            () => ScopedGroup("", "", "", " fill='red' style='--a:;'", " fill='var(--a, url(#pat))'"),
+            "cleared"),
+        ["--a: on the group, read by the fill"] = (() => ScopedGroup("", "", "", PatternFill + " style='--a:;'", " fill='var(--a)'"), "cleared"),
+        [".k{--a:;} on the group, read as var(--a, url(#pat)) under a red group"] = (
+            () => ScopedGroup(".k{--a:;}", "", "", " fill='red' class='k'", " fill='var(--a, url(#pat))'"),
+            "cleared"),
+        [".k{--a:;} on the group, read by the fill"] = (
+            () => ScopedGroup(".k{--a:;}", "", "", PatternFill + " class='k'", " fill='var(--a)'"),
+            "cleared"),
+    };
+
+    public static TheoryData<string> PaintLiteralCases() => [.. PaintLiteral.Keys];
+
+    /// <summary>
+    /// #1610 (stage 10, the audit after Codex's round 7): a fill the decoder
+    /// cannot read as a paint keeps the parent's paint, as
+    /// <c>inherit</c> does, and only a colour, <c>none</c>,
+    /// <c>currentColor</c> or a reference with nothing or a colour after it
+    /// clears it. Each row was decoded once in stage 10, the rects under a
+    /// group whose fill is the pattern.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PaintLiteralCases))]
+    public void APaintTheDecoderCannotReadKeepsTheParentsPaint(string name)
+    {
+        (Func<string> build, string expected) = PaintLiteral[name];
+        AssertPatternTerm(name, build(), expected);
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> PaintLiteral = new()
+    {
+        // Keywords the decoder does not take keep the parent's paint: unset
+        // 3,657 ms, UNSET 3,410 ms, initial 3,643 ms, revert 3,670 ms,
+        // revert-layer 3,402 ms; in the style attribute 3,349 and 3,407 ms.
+        ["unset"] = (() => ScopedGroup("", "", "", PatternFill, " fill='unset'"), "counted"),
+        ["UNSET"] = (() => ScopedGroup("", "", "", PatternFill, " fill='UNSET'"), "counted"),
+        ["initial"] = (() => ScopedGroup("", "", "", PatternFill, " fill='initial'"), "counted"),
+        ["revert"] = (() => ScopedGroup("", "", "", PatternFill, " fill='revert'"), "counted"),
+        ["revert-layer"] = (() => ScopedGroup("", "", "", PatternFill, " fill='revert-layer'"), "counted"),
+        ["fill:unset in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:unset'"), "counted"),
+        ["fill:initial in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:initial'"), "counted"),
+        // So do words that are no colour: foo 3,376 ms, rde 3,381 ms, in the
+        // style attribute 3,353 ms; two colours 3,436 ms, none and a colour
+        // 3,405 ms, a missing reference and a word 3,353 ms; INHERIT 3,410 ms.
+        ["foo"] = (() => ScopedGroup("", "", "", PatternFill, " fill='foo'"), "counted"),
+        ["rde"] = (() => ScopedGroup("", "", "", PatternFill, " fill='rde'"), "counted"),
+        ["fill:foo in the style attribute"] = (() => ScopedGroup("", "", "", PatternFill, " style='fill:foo'"), "counted"),
+        ["red blue"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red blue'"), "counted"),
+        ["none red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='none red'"), "counted"),
+        ["url(#missing) foo"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) foo'"), "counted"),
+        ["INHERIT"] = (() => ScopedGroup("", "", "", PatternFill, " fill='INHERIT'"), "counted"),
+        // What clears: an empty fill attribute 52 ms, transparent 70 ms,
+        // rgb() 91 ms, #f00 71 ms, currentcolor 50 ms, a colour and a space
+        // 36 ms, a missing reference alone 38 ms or with a colour 37 ms or
+        // none 35 ms.
+        ["an empty fill attribute"] = (() => ScopedGroup("", "", "", PatternFill, " fill=''"), "cleared"),
+        ["transparent"] = (() => ScopedGroup("", "", "", PatternFill, " fill='transparent'"), "cleared"),
+        ["rgb(1,2,3)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='rgb(1,2,3)'"), "cleared"),
+        ["#f00"] = (() => ScopedGroup("", "", "", PatternFill, " fill='#f00'"), "cleared"),
+        ["currentcolor"] = (() => ScopedGroup("", "", "", PatternFill, " fill='currentcolor'"), "cleared"),
+        ["a colour and a space"] = (() => ScopedGroup("", "", "", PatternFill, " fill='red '"), "cleared"),
+        ["url(#missing)"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing)'"), "cleared"),
+        ["url(#missing) red"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) red'"), "cleared"),
+        ["url(#missing) none"] = (() => ScopedGroup("", "", "", PatternFill, " fill='url(#missing) none'"), "cleared"),
+        // The pattern with a colour after it, under a red group: 3,147 ms.
+        ["url(#pat) red under a red group"] = (() => ScopedGroup("", "", "", " fill='red'", " fill='url(#pat) red'"), "counted"),
+        // context-fill outside a marker clears (35 ms), but a marker takes
+        // the element it marks' paint, so the guard counts it, as it counts
+        // a rule it cannot match.
+        ["context-fill"] = (() => ScopedGroup("", "", "", PatternFill, " fill='context-fill'"), "counted"),
+    };
+
+    /// <summary>#1610 (Codex's round 7): a fallback that passes
+    /// <c>inherit</c> on through a custom property gives the rects the
+    /// pattern term a literal <c>inherit</c> gives them.</summary>
+    [Fact]
+    public void AnIndirectInheritFallbackGivesTheSamePatternTermAsALiteralInherit()
+    {
+        SvgPreviewGuard.Check(
+            ScopedGroup("", "", "", PatternFill + " style='--a:var(--missing,inherit)'", " fill='var(--a)'"),
+            8 * 1024 * 1024,
+            out SvgDecodeEstimate indirect);
+        SvgPreviewGuard.Check(ScopedGroup("", "", "", PatternFill, " fill='inherit'"), 8 * 1024 * 1024, out SvgDecodeEstimate literal);
+        Assert.True(literal.PatternMicroseconds > 1_000_000, $"a literal inherit's term is {literal.PatternMicroseconds:F0} us");
+        Assert.Equal(literal.PatternMicroseconds, indirect.PatternMicroseconds);
+    }
+
+    /// <summary>
+    /// #1610 (stage 10): no fill the guard reads as clearing the parent's
+    /// paint is one the decoder reads as keeping it, in a presentation
+    /// attribute, the style attribute or a rule. The decoder's reading is
+    /// Svg.Custom's own parse of one rect under a group whose fill is the
+    /// pattern, which decoded the same as the stage 10 rows did; the
+    /// guard's is whether the rect adds to the pattern term. The guard may
+    /// count a paint the decoder clears (an unusual colour form), never the
+    /// reverse.
+    /// </summary>
+    [Fact]
+    public void NoPaintTheGuardClearsKeepsTheParentsPaintInTheDecoder()
+    {
+        var values = new List<string>
+        {
+            "red", "none", "NONE", "nOnE", "inherit", "INHERIT", "unset", "initial", "revert", "revert-layer",
+            "foo", "rde", "redd", "r", "0", "-", "--", "--a", "", " ", "transparent", "currentColor", "currentcolor",
+            "CURRENTCOLOR", "context-fill", "context-stroke", "red blue", "none red", "red icc-color(x)", "icc-color(x)",
+            "#f", "#f0", "#f00", "#ff00", "#ff000", "#ff0000", "#ff00000", "#ff000080", "#ff0000801", "#gg0000",
+            "#FF0000", "#ABCD", "#ff 00 00", "#",
+            "rgb(1,2,3)", "rgb(1, 2, 3)", "rgb( 1 , 2 , 3 )", "rgb(1 2 3)", "rgb(10%,20%,30%)", "rgb(1.5,2,3)",
+            "rgb(-1,2,3)", "rgb(+1,2,3)", "rgb(.5,2,3)", "rgb(-.5,2,3)", "rgb(1.,2,3)", "rgb(1e2,2,3)", "rgb(300,2,3)",
+            "rgb(1,2)", "rgb(1,2,3,4)", "rgb(1,2,3,4,5)", "rgb()", "rgb(a,b,c)", "rgb(0x10,2,3)", "rgb(1deg,2,3)",
+            "rgb(1,2,3", "rgb(1,2,3) foo", "rgb (1,2,3)", "RGB(1,2,3)", "rGb(1,2,3)", "rgba(1,2,3,0.5)",
+            "RGBA(1,2,3,0.5)", "rgba(1,2,3)", "rgba(1,2,3,50%)", "rgba(1,2,3,-1)", "rgb(1%,2%,3%,4%)",
+            "hsl(120,50%,50%)", "hsl(1%,2,3)", "hsl(1.5deg,2,3)", "HSLA(1,2,3,0.5)", "hsla(1,2,3)",
+            "grey", "Grey", "GREY", "greY", "darkgrey", "Darkgrey", "DARKGREY", "lightGrey", "slategrey",
+            "rebeccapurple", "REBECCAPURPLE", "rEd", "ThreeDFace", "InfoBackground", "ButtonFace",
+            "url(#missing)", "url(#missing) red", "url(#missing)red", "url(#missing) none", "url(#missing) foo",
+            "url(#missing) inherit", "url(#missing) currentColor", "url(#missing) #f00", "url(#missing) rgb(1,2)",
+            "url(#missing) GREY", "url(#missing) red blue", "url(#missing) url(#missing2)", "url(#missing",
+            "URL(#missing)", "Url(#missing) red", "url('#missing')", "url( #missing )", "url(missing)",
+            "url(#pat)", "url(#pat) red", "url(#pat) foo", "var(--x)", "'red'",
+        };
+        foreach (string name in Enum.GetNames<System.Drawing.KnownColor>())
+        {
+            values.Add(name);
+            values.Add(name.ToLowerInvariant());
+            values.Add(name.ToUpperInvariant());
+        }
+        const string Head = "<defs><pattern id='pat' width='4' height='4' patternUnits='userSpaceOnUse'><rect width='2' height='2'/></pattern></defs>";
+        var parameters = new global::Svg.Model.SvgParameters(
+            null,
+            null,
+            null,
+            new global::Svg.SvgDocumentLoadOptions
+            {
+                ProcessingMode = global::Svg.SvgProcessingMode.SecureStatic,
+                ExternalResources = global::Svg.SvgExternalResourcePolicy.Disabled,
+                PreserveUnknownElements = false,
+            });
+        static double Term(string source)
+        {
+            SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.PatternMicroseconds;
+        }
+        double baseline = Term(Svg(Head + "<g fill='url(#pat)'><rect width='5' height='5' fill='red'/></g>"));
+        var failures = new List<string>();
+        foreach (string value in values)
+        {
+            string attribute = value.Replace("'", "&apos;", StringComparison.Ordinal);
+            string[] paths = value.Contains('\'', StringComparison.Ordinal)
+                ? [$"<g fill='url(#pat)'><rect width='5' height='5' fill='{attribute}'/></g>"]
+                :
+                [
+                    $"<g fill='url(#pat)'><rect width='5' height='5' fill='{attribute}'/></g>",
+                    $"<g fill='url(#pat)'><rect width='5' height='5' style='fill:{value}'/></g>",
+                    $"<style>.s{{fill:{value}}}</style><g fill='url(#pat)'><rect class='s' width='5' height='5'/></g>",
+                ];
+            foreach (string body in paths)
+            {
+                string source = Svg(Head + body);
+                bool guardKeeps = Term(source) > baseline;
+                global::Svg.SvgDocument document = global::Svg.Model.Services.SvgService.FromSvg(source, parameters)!;
+                global::Svg.SvgPaintServer? fill = document.Descendants().OfType<global::Svg.SvgRectangle>().Last().Fill;
+                bool decoderKeeps = fill?.ToString() == "url(#pat)";
+                if (decoderKeeps && !guardKeeps)
+                {
+                    failures.Add($"[{value}] in {body}");
+                }
+            }
+        }
+        Assert.True(failures.Count == 0, "the guard clears what the decoder keeps:\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>A 20-pixel document whose pattern tile is one colour,
+    /// #13579b, no fill spelling here can give, around
+    /// <paramref name="body"/>, with three custom properties on the root:
+    /// <c>--b</c> a word, <c>--e</c> nothing, <c>--k</c>
+    /// <c>inherit</c>.</summary>
+    private static string Tile(string body) =>
+        $"<svg {Ns} width='20' height='20'><style>svg{{--b:bogus;--e:;--k:inherit}}</style>"
+        + "<defs><pattern id='p' width='10' height='10' patternUnits='userSpaceOnUse'>"
+        + "<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs>"
+        + body + "</svg>";
+
+    /// <summary>Whether Svg.Skia, given the app's secure parse, paints
+    /// #13579b at (<paramref name="x"/>, <paramref name="y"/>) of a 20-pixel
+    /// document: the pattern's tile of a <see cref="Tile"/> document, or a
+    /// marker's square.</summary>
+    private static bool DecoderPaintsTile(string source, int x = 5, int y = 5)
+    {
+        var parameters = new global::Svg.Model.SvgParameters(
+            null,
+            null,
+            null,
+            new global::Svg.SvgDocumentLoadOptions
+            {
+                ProcessingMode = global::Svg.SvgProcessingMode.SecureStatic,
+                ExternalResources = global::Svg.SvgExternalResourcePolicy.Disabled,
+                PreserveUnknownElements = false,
+            });
+        global::Svg.SvgDocument document = global::Svg.Model.Services.SvgService.FromSvg(source, parameters)!;
+        using var svg = new global::Svg.Skia.SKSvg();
+        svg.Settings.EnableJavaScript = false;
+        Assert.NotNull(svg.FromSvgDocument(document));
+        using var bitmap = new SkiaSharp.SKBitmap(
+            new SkiaSharp.SKImageInfo(20, 20, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
+        using (var canvas = new SkiaSharp.SKCanvas(bitmap))
+        {
+            canvas.Clear(SkiaSharp.SKColors.Transparent);
+            canvas.DrawPicture(svg.Picture);
+        }
+        SkiaSharp.SKColor pixel = bitmap.GetPixel(x, y);
+        return Math.Abs(pixel.Red - 0x13) < 6 && Math.Abs(pixel.Green - 0x57) < 6 && Math.Abs(pixel.Blue - 0x9b) < 6;
+    }
+
+    /// <summary>A 20-pixel document with a marker whose square is #13579b,
+    /// placed at (10, 10) if <paramref name="body"/>'s polyline marks its
+    /// middle vertex.</summary>
+    private static string MarkerTile(string body) =>
+        $"<svg {Ns} width='20' height='20'><defs><marker id='m' markerWidth='8' markerHeight='8' refX='3' refY='3' markerUnits='userSpaceOnUse'>"
+        + "<rect width='6' height='6' fill='#13579b'/></marker></defs>" + body + "</svg>";
+
+    private const string Line20 = " points='2,2 10,10 18,18' fill='none' stroke='none'";
+
+    public static TheoryData<string> ReferenceThroughVarCases() => [.. ReferenceThroughVar.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor 3, stage 11): the decoder
+    /// substitutes a <c>var()</c> as text, so a reference it builds paints
+    /// (<c>url(var(--f))</c> with <c>--f:#p</c>, or <c>var(--u)rl(#p)</c>
+    /// with <c>--u:u</c>), in the fill attribute and the style attribute,
+    /// and a marker the same way; in a rule it does not. A reference whose
+    /// argument holds <c>var()</c>, and a value of several pieces, may name
+    /// a pattern or any marker. Each row rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ReferenceThroughVarCases))]
+    public void AReferenceBuiltThroughVarCountsAsAPossiblePattern(string name)
+    {
+        (string source, bool marker, bool painted, bool counted) = ReferenceThroughVar[name];
+        Assert.Equal(painted, marker ? DecoderPaintsTile(source, 10, 10) : DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double term = marker ? estimate.MarkerMicroseconds : estimate.PatternMicroseconds;
+        Assert.True(counted == term > 0, $"{name}: the term is {term:F1} us");
+    }
+
+    internal static readonly Dictionary<string, (string Source, bool Marker, bool Painted, bool Counted)> ReferenceThroughVar = new()
+    {
+        ["url(var(--f)) in the style attribute"] = (Tile($"<rect{Rect20} style='--f:#p;fill:url(var(--f))'/>"), false, true, true),
+        ["var(--u)rl(#p) in the style attribute"] = (Tile($"<rect{Rect20} style='--u:u;fill:var(--u)rl(#p)'/>"), false, true, true),
+        ["url(var(--f)) in the fill attribute"] = (Tile($"<g style='--f:#p'><rect{Rect20} fill='url(var(--f))'/></g>"), false, true, true),
+        ["var(--u)rl(#p) in the fill attribute"] = (Tile($"<g style='--u:u'><rect{Rect20} fill='var(--u)rl(#p)'/></g>"), false, true, true),
+        ["url(var(--f)) in a fallback"] = (Tile($"<rect{Rect20} style='--f:#p;fill:var(--none, url(var(--f)))'/>"), false, true, true),
+        ["url(var(--f)) in a definition the fill reads"] = (Tile($"<rect{Rect20} style='--f:#p;--g:url(var(--f));fill:var(--g)'/>"), false, true, true),
+        // A var() written with text before its comma still fails to its
+        // fallback, the pattern, in the style attribute and the fill
+        // attribute; one with a reference beside its name paints nothing,
+        // which the guard counts as it may give anything.
+        ["var(--none x, url(#p)) in the style attribute"] = (Tile($"<rect{Rect20} style='fill:var(--none x, url(#p))'/>"), false, true, true),
+        ["var(--none x, url(#p)) in the fill attribute"] = (Tile($"<rect{Rect20} fill='var(--none x, url(#p))'/>"), false, true, true),
+        ["var(--a url(#p)) in the style attribute"] = (Tile($"<rect{Rect20} style='--a:x;fill:var(--a url(#p))'/>"), false, false, true),
+        // A rule reads url( as one token before any var() is substituted.
+        ["url(var(--f)) in a rule"] = (Tile($"<style>rect{{--f:#p;fill:url(var(--f))}}</style><rect{Rect20}/>"), false, false, true),
+        ["a marker at url(var(--f)) in the style attribute"] = (
+            MarkerTile($"<polyline{Line20} style='--f:#m;marker-mid:url(var(--f))'/>"),
+            true,
+            true,
+            true),
+        ["a marker at var(--u)rl(#m) in the style attribute"] = (
+            MarkerTile($"<polyline{Line20} style='--u:u;marker-mid:var(--u)rl(#m)'/>"),
+            true,
+            true,
+            true),
+        ["a marker at url(var(--f)) in its attribute"] = (
+            MarkerTile($"<g style='--f:#m'><polyline{Line20} marker-mid='url(var(--f))'/></g>"),
+            true,
+            true,
+            true),
+        ["a marker read through --g:url(var(--f))"] = (
+            MarkerTile($"<g style='--f:#m;--g:url(var(--f))'><polyline{Line20} marker-mid='var(--g)'/></g>"),
+            true,
+            true,
+            true),
+        ["a marker read through --g:var(--u)rl(#m)"] = (
+            MarkerTile($"<g style='--u:u;--g:var(--u)rl(#m)'><polyline{Line20} marker-mid='var(--g)'/></g>"),
+            true,
+            true,
+            true),
+    };
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 2, stage 11): a lookup walks
+    /// the scope's links and spends a step on each. 500 rects under 200
+    /// nested groups that each define <c>--x</c> fill with <c>--x</c> and
+    /// stroke with <c>--x</c>, found at the first link, or with
+    /// <c>--y</c>, which no link holds: the second spends at least a step
+    /// for each of the 199 more links each stroke's lookup reads. The
+    /// groups' values alternate between a colour and a word, so no group's
+    /// scope is its parent's (stage 12).
+    /// </summary>
+    [Fact]
+    public void ALookupSpendsAStepForEachScopeItReads()
+    {
+        static string Chain(string read)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g fill='url(#pat)'>");
+            s.Append(Repeat("<g style='--x:red'><g style='--x:foo'>", 100));
+            s.Append(Repeat($"<rect width='7' height='7' fill='var(--x)' stroke='var({read})'/>", 500));
+            s.Append(Repeat("</g>", 200));
+            return s.Append("</g></svg>").ToString();
+        }
+        SvgPreviewGuard.Check(Chain("--x"), 8 * 1024 * 1024, out SvgDecodeEstimate near);
+        SvgPreviewGuard.Check(Chain("--y"), 8 * 1024 * 1024, out SvgDecodeEstimate far);
+        Assert.True(
+            far.Steps - near.Steps >= 500L * 199,
+            $"reading past 199 more links took {far.Steps - near.Steps} more steps");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor B, stage 12): a group whose
+    /// values its parent's scope already holds reads that scope and makes
+    /// no link. 500 rects under 200 nested groups that each define
+    /// <c>--x:red</c> read <c>--y</c>, which no group defines, through one
+    /// link, not 200: the strokes' lookups spend fewer than 10 steps more
+    /// each than reading <c>--x</c>.
+    /// </summary>
+    [Fact]
+    public void AScopeItsParentAlreadyMatchesMakesNoLink()
+    {
+        static string Chain(string read)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g fill='url(#pat)'>");
+            s.Append(Repeat("<g style='--x:red'>", 200));
+            s.Append(Repeat($"<rect width='7' height='7' fill='var(--x)' stroke='var({read})'/>", 500));
+            s.Append(Repeat("</g>", 200));
+            return s.Append("</g></svg>").ToString();
+        }
+        SvgPreviewGuard.Check(Chain("--x"), 8 * 1024 * 1024, out SvgDecodeEstimate near);
+        SvgPreviewGuard.Check(Chain("--y"), 8 * 1024 * 1024, out SvgDecodeEstimate far);
+        Assert.True(
+            far.Steps - near.Steps < 500L * 10,
+            $"reading --y took {far.Steps - near.Steps} more steps");
+    }
+
+    public static TheoryData<string> DroppedDeclarationCases() => [.. DroppedDeclaration.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1, stage 11): in the style
+    /// attribute or a rule, the decoder drops a declaration whose value it
+    /// cannot read (nothing, a word, a broken colour) and applies the next
+    /// one, so a pattern it displaced is painted. The judge's inputs and
+    /// the sweep's controls, each rendered by Svg.Skia here: the guard
+    /// counts the pattern where the decoder paints it, and also where the
+    /// decoder reads a colour form the guard does not (<c>hsl()</c>),
+    /// which the guard takes as dropped.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(DroppedDeclarationCases))]
+    public void ADeclarationTheDecoderDropsLeavesTheNextOneToApply(string name)
+    {
+        (string body, bool painted, bool counted) = DroppedDeclaration[name];
+        string source = Tile(body);
+        Assert.Equal(painted, DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            counted == estimate.PatternMicroseconds > 0,
+            $"{name}: the decoder {(painted ? "paints" : "does not paint")} the pattern; the term is {estimate.PatternMicroseconds:F1} us");
+    }
+
+    private const string Rect20 = " width='20' height='20'";
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> DroppedDeclaration = new()
+    {
+        // The judge's inputs: the dropped declaration leaves the pattern.
+        ["a word in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:bogus'/>", true, true),
+        ["nothing in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:'/>", true, true),
+        ["the pattern then a word in one style attribute"] = ($"<rect{Rect20} style='fill:url(#p);fill:x'/>", true, true),
+        ["the pattern then a word, both !important"] = ($"<rect{Rect20} style='fill:url(#p) !important;fill:x !important'/>", true, true),
+        ["a class rule's pattern then a word"] = ($"<style>.a{{fill:url(#p)}} .a{{fill:bogus}}</style><rect class='a'{Rect20}/>", true, true),
+        ["a type rule's pattern then a word"] = ($"<style>rect{{fill:url(#p)}} rect{{fill:bogus}}</style><rect{Rect20}/>", true, true),
+        ["a word rule over the pattern attribute"] = ($"<style>.a{{fill:bogus}}</style><rect class='a'{Rect20} fill='url(#p)'/>", true, true),
+        ["a word !important rule over the pattern in the style attribute"] = (
+            $"<style>.a{{fill:x !important}}</style><rect class='a'{Rect20} style='fill:url(#p)'/>",
+            true, true),
+        // The sweep's other dropped spellings.
+        ["rgb() of two numbers over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:rgb(1,2)'/>", true, true),
+        ["five hex digits over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#ff000'/>", true, true),
+        ["a reference and a word over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) bogus'/>", true, true),
+        // A rule definition with an unclosed url( is dropped too.
+        ["a rule's --c pattern, then --c:url( in a later rule"] = (
+            $"<style>.a{{--c:url(#p)}} .a{{--c:url(}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
+            true, true),
+        // What the decoder applies: a colour it reads, a CSS-wide keyword,
+        // anything through var(), a context paint. Since stage 13 the guard
+        // counts the pattern under each of them but a colour it is sure of
+        // (blue), as the lead's ruling has it; hsl() is a colour the guard
+        // does not read.
+        ["hsl() over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:hsl(120,100%,25%)'/>", false, true),
+        ["blue over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue'/>", false, false),
+        ["unset over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:unset'/>", false, true),
+        ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false, true),
+        ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false, true),
+        ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false, true),
+        // A context paint is applied, never dropped: in a used element it
+        // takes the use's pattern over the navy below it.
+        ["context-fill over navy in an element a pattern use draws"] = (
+            $"<defs><rect id='r'{Rect20} fill='#000080' style='fill:context-fill'/></defs><use href='#r' fill='url(#p)'/>",
+            true,
+            true),
+        // Under a pattern group, a dropped word leaves the rect's own blue;
+        // var(--none) keeps the group's pattern.
+        ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false, false),
+        ["nothing over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:'/></g>", false, false),
+        ["var(--none) over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:var(--none)'/></g>", true, true),
+        // Stage 12 (the delta merge judge's major A): a reference whose
+        // fallback is inherit is kept, never dropped, and keeps the
+        // group's pattern, written any way: in the style attribute or a
+        // rule, INHERIT, no space, a trailing space, after a colour.
+        ["url(#missing) inherit in the style attribute over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) inherit'/></g>",
+            true,
+            true),
+        ["url(#missing) inherit from a rule over navy under a pattern group"] = (
+            $"<style>.s{{fill:url(#missing) inherit}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["url(#missing) INHERIT over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) INHERIT'/></g>",
+            true,
+            true),
+        ["url(#missing)inherit over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing)inherit'/></g>",
+            true,
+            true),
+        ["url(#missing) inherit and a space over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) inherit '/></g>",
+            true,
+            true),
+        ["navy then url(#missing) inherit in one style attribute under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:url(#missing) inherit'/></g>",
+            true,
+            true),
+        // The other keywords after a reference are dropped (the judge's
+        // measure), so the rect's navy applies.
+        ["url(#missing) unset over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:url(#missing) unset'/></g>",
+            false,
+            false),
+        // Stage 13 (the delta merge judge's E1): the decoder reads URL( and
+        // Url( as a reference, so their inherit fallback keeps the group's
+        // pattern, in the style attribute, a rule, after navy, and
+        // !important.
+        ["URL(#missing) inherit over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:URL(#missing) inherit'/></g>",
+            true,
+            true),
+        ["Url(#missing) inherit from a rule over navy under a pattern group"] = (
+            $"<style>.s{{fill:Url(#missing) inherit}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["navy then URL(#missing) inherit in one style attribute under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:URL(#missing) inherit'/></g>",
+            true,
+            true),
+        ["URL(#missing) inherit !important over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:URL(#missing) inherit !important'/></g>",
+            true,
+            true),
+        // Stage 13 (the delta merge judge's E2): the decoder drops every
+        // escaped paint in the style attribute, so the pattern attribute
+        // below it applies.
+        ["b\\6cue in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:b\\6cue'/>", true, true),
+        ["\\72\\65\\64 in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:\\72\\65\\64'/>",
+            true,
+            true),
+        ["n\\6fne in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:n\\6fne'/>", true, true),
+        ["#00\\66 in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:#00\\66'/>", true, true),
+        ["\\75rl(#missing) in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:\\75rl(#missing)'/>",
+            true,
+            true),
+        ["inh\\65rit in the style attribute over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:inh\\65rit'/>", true, true),
+        ["url(#missing) inh\\65rit in the style attribute over the pattern attribute"] = (
+            $"<rect{Rect20} fill='url(#p)' style='fill:url(#missing) inh\\65rit'/>",
+            true,
+            true),
+        // In a rule the decoder resolves the escape and draws blue; the
+        // guard does not take escaped text as a paint it is sure of, so it
+        // counts the pattern below.
+        ["b\\6cue from a rule over the pattern attribute"] = (
+            $"<style>.s{{fill:b\\6cue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // Stage 14 (the delta merge judge's G3): an escaped custom property
+        // gives no blue to a fill that reads it. In the style attribute the
+        // decoder drops the definition; in a rule it keeps the escaped
+        // text, which is no paint; and a var() whose name is escaped finds
+        // nothing. Each keeps the group's pattern.
+        ["--a:b\\6cue in the style attribute, read over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:b\\6cue;fill:var(--a)'/></g>",
+            true,
+            true),
+        ["--a:b\\6cue from a rule, read over navy under a pattern group"] = (
+            $"<style>.s{{--a:b\\6cue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        ["an escaped name defines --a in the style attribute, read over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--\\61:blue;fill:var(--a)'/></g>",
+            true,
+            true),
+        ["--a:b\\6cue in the style attribute over a rule's --a:blue, read over navy under a pattern group"] = (
+            $"<style>.s{{--a:blue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080' style='--a:b\\6cue'/></g>",
+            true,
+            true),
+        ["var(--\\61) in the style attribute over navy under a pattern group"] = (
+            $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:blue;fill:var(--\\61)'/></g>",
+            true,
+            true),
+    };
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1, stage 11): the guard drops
+    /// what the decoder drops, closed by a differential sweep. Each of 34
+    /// fill spellings (the dropped ones, readable forms the guard does not
+    /// read, through var(), the CSS-wide keywords and readable controls;
+    /// 38 since stage 12)
+    /// stands against a pattern at every other tier and place: the
+    /// attribute, earlier in the same style attribute, a rule of lower
+    /// specificity, an earlier rule of the same, !important on both sides,
+    /// and a pattern group around it; and 12 definitions stand against an
+    /// earlier pattern definition. Svg.Skia renders each 20-pixel
+    /// document; wherever it paints the pattern, the guard counts it or
+    /// refuses the document. The guard may count more, never less. Stage 12
+    /// (the delta merge judge's major A) adds a reference followed by a
+    /// value, written three ways (after a missing reference, with and
+    /// without a space, and after a present gradient), at the same places
+    /// and three through var(): 24 values that stand for the judge's 459,
+    /// one or more from each class of what the decoder and the guard do
+    /// with them across the judge's eight templates (the calibration
+    /// record's stage 12 section says how they were chosen). Stage 14 adds
+    /// the judge's 15 templates (<see cref="JudgeTemplates"/>) for every
+    /// value at every place.
+    /// </summary>
+    [Fact]
+    public void NoDeclarationTheDecoderDropsHidesAPatternFromTheGuard()
+    {
+        string[] spellings =
+        [
+            "", "bogus", "hsl(120,100%,25%)", "hsl(0,100%,50%)", "rgb(1,2)", "rgb(1 2 3)", "#ff000", "Grey", "ThreeDFace",
+            "url(#missing) bogus", "url(var(--f))", "url(var(--b))", "var(--none)", "var(--none,bogus)", "var(--none,)",
+            "var(--none,inherit)", "var(--b)", "var(--e)", "var(--r)", "var(--k)", "inherit", "INHERIT", "unset", "initial",
+            "revert", "blue", "none", "currentColor", "url(#missing)", "url(#missing) blue", "context-fill", "transparent",
+            "#00f", "rgb(1,2,3)", "url(#missing", "rgb(var(--q),2,3)", "url(#p) foo", "url(#p) red",
+        ];
+        string[] fallbacks =
+        [
+            "red", "none", "inherit", "INHERIT", "inherit ", "unset", "initial", "revert", "revert-layer", "context-fill",
+            "currentColor", "transparent", "#00f", "#ff000", "hsl(240,100%,50%)", "ThreeDFace", "foo", "", "url(#missing",
+            "url(#p) red", "url(#p) foo", "rgb(var(--q),2,3)", "var(--b)", "var(--k)",
+        ];
+        const string P = "url(#p)";
+        const string Gradient =
+            "<defs><linearGradient id='g'><stop offset='0' stop-color='#336600'/><stop offset='1' stop-color='#336600'/></linearGradient></defs>";
+        var bodies = new List<string>();
+        void AddPlaces(string d, string defs)
+        {
+            string imp = d.Length == 0 ? "!important" : d + " !important";
+            bodies.AddRange(
+            new[]
+            {
+                $"<rect{Rect20} fill='{P}' style='fill:{d}'/>",
+                $"<rect{Rect20} style='fill:{P};fill:{d}'/>",
+                $"<style>rect{{fill:{P}}} .a{{fill:{d}}}</style><rect class='a'{Rect20}/>",
+                $"<style>.a{{fill:{P}}} .a{{fill:{d}}}</style><rect class='a'{Rect20}/>",
+                $"<rect{Rect20} style='fill:{P} !important;fill:{imp}'/>",
+                $"<style>.a{{fill:{P} !important}} .a{{fill:{imp}}}</style><rect class='a'{Rect20}/>",
+                $"<style>.a{{fill:{P}}}</style><rect class='a'{Rect20} style='fill:{d}'/>",
+                $"<style>.a{{fill:{imp}}}</style><rect class='a'{Rect20} style='fill:{P}'/>",
+                $"<style>.a{{fill:{d}}}</style><rect class='a'{Rect20} fill='{P}'/>",
+                $"<style>.a{{fill:{imp}}}</style><rect class='a'{Rect20} fill='{P}'/>",
+                $"<style>.a{{fill:{P} !important}}</style><rect class='a'{Rect20} style='fill:{imp}'/>",
+                $"<g fill='{P}'><rect{Rect20} fill='blue' style='fill:{d}'/></g>",
+                $"<style>.a{{fill:{d}}}</style><g fill='{P}'><rect class='a'{Rect20}/></g>",
+                $"<g fill='{P}'><rect{Rect20} fill='{d}'/></g>",
+                $"<g fill='{P}'><rect{Rect20} style='fill:{d}'/></g>",
+            }.Select(body => defs + body));
+            bodies.AddRange(JudgeTemplates(d).Select(body => defs + body));
+        }
+        foreach (string d in spellings)
+        {
+            AddPlaces(d, "");
+        }
+        List<string> generated = GeneratedSpellings();
+        foreach (string d in generated.Concat(CaseSpellings))
+        {
+            AddPlaces(d, "");
+        }
+        AddPlaces("url(#g)", Gradient);
+        AddPlaces("URL(#g)", Gradient);
+        foreach (string v in fallbacks)
+        {
+            foreach ((string d, string defs) in new[] { ($"url(#missing) {v}", ""), ($"url(#missing){v}", ""), ($"url(#g) {v}", Gradient) })
+            {
+                AddPlaces(d, defs);
+                bodies.AddRange(
+                [
+                    $"{defs}<rect{Rect20} fill='{P}' style='--a:{d};fill:var(--a)'/>",
+                    $"{defs}<g fill='{P}'><rect{Rect20} fill='#000080' style='--a:{d};fill:var(--a)'/></g>",
+                    $"{defs}<style>.s{{--a:{d};fill:var(--a)}}</style><rect class='s'{Rect20} fill='{P}'/>",
+                ]);
+            }
+        }
+        string[] definitions = ["", "bogus", "url(", ")", "x}", "!important", "url(#q", "inherit", "initial", "unset", "blue", "var(--none)"];
+        foreach (string x in definitions)
+        {
+            bodies.AddRange(
+            [
+                $"<rect{Rect20} style='--c:{P};--c:{x};fill:var(--c)'/>",
+                $"<style>.a{{--c:{P}}} .a{{--c:{x}}}</style><rect class='a'{Rect20} fill='var(--c)'/>",
+                $"<style>.a{{--c:{P}}}</style><rect class='a'{Rect20} style='--c:{x}' fill='var(--c)'/>",
+                $"<g style='--c:{P}'><rect{Rect20} style='--c:{x}' fill='var(--c)'/></g>",
+            ]);
+        }
+        var hidden = new List<string>();
+        foreach (string body in bodies)
+        {
+            string source = Tile(body);
+            SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            bool admitted = verdict is SvgRefusal.None or SvgRefusal.DecodeCost;
+            if (admitted && estimate.PatternMicroseconds == 0 && DecoderPaintsTile(source))
+            {
+                hidden.Add(body);
+            }
+        }
+        Assert.Equal(GeneratedSpellingCount, generated.Count);
+        Assert.Equal(((38 + GeneratedSpellingCount + 10 + 2) * 30) + (24 * 3 * 33) + (12 * 4), bodies.Count);
+        Assert.True(hidden.Count == 0, $"{hidden.Count} of {bodies.Count} hide the pattern:\n" + string.Join("\n", hidden));
+    }
+
+    private const int GeneratedSpellingCount = 53;
+
+    /// <summary>
+    /// #1610 (stage 14): the delta merge judge's 15 templates for a fill
+    /// value <paramref name="d"/>: over the pattern attribute in the style
+    /// attribute and a rule, after a pattern rule, over navy under a
+    /// pattern group in the style attribute and a rule, through a custom
+    /// property three ways, in the fill attribute under a pattern group,
+    /// after navy in one style attribute and in an earlier rule,
+    /// <c>!important</c> over navy, and after another value in one rule (a
+    /// pattern, then blue) and in one style attribute.
+    /// </summary>
+    private static string[] JudgeTemplates(string d) =>
+    [
+        $"<rect{Rect20} fill='url(#p)' style='fill:{d}'/>",
+        $"<style>.s{{fill:{d}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<style>.p{{fill:url(#p)}} .s{{fill:{d}}}</style><rect class='p s'{Rect20}/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:{d}'/></g>",
+        $"<style>.s{{fill:{d}}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+        $"<rect{Rect20} fill='url(#p)' style='--a:{d};fill:var(--a)'/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='--a:{d};fill:var(--a)'/></g>",
+        $"<style>.s{{--a:{d};fill:var(--a)}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='{d}'/></g>",
+        $"<g fill='url(#p)'><rect{Rect20} style='fill:#000080;fill:{d}'/></g>",
+        $"<style>.s{{fill:#000080}} .s{{fill:{d}}}</style><g fill='url(#p)'><rect class='s'{Rect20}/></g>",
+        $"<g fill='url(#p)'><rect{Rect20} fill='#000080' style='fill:{d} !important'/></g>",
+        $"<style>.s{{fill:url(#p);fill:{d}}}</style><rect class='s'{Rect20}/>",
+        $"<style>.s{{fill:blue;fill:{d}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+        $"<rect{Rect20} fill='url(#p)' style='fill:blue;fill:{d}'/>",
+    ];
+
+    /// <summary>
+    /// #1610 (stage 13, the lead's ruling): spellings of paints the guard
+    /// reads, written so the guard cannot be sure the decoder reads them
+    /// so: each of eleven values with one letter escaped (its first, a
+    /// middle one and its last), every letter escaped, and a comment after
+    /// its first character.
+    /// </summary>
+    internal static List<string> GeneratedSpellings()
+    {
+        string[] readable =
+        [
+            "blue", "red", "none", "currentColor", "transparent", "#00f", "rgb(0,0,255)", "url(#missing)", "inherit",
+            "url(#missing) inherit", "url(#missing) blue",
+        ];
+        var spellings = new List<string>();
+        foreach (string value in readable)
+        {
+            int[] letters = [.. Enumerable.Range(0, value.Length).Where(i => char.IsAsciiLetter(value[i]))];
+            foreach (int at in new[] { letters[0], letters[letters.Length / 2], letters[^1] }.Distinct())
+            {
+                spellings.Add(value[..at] + $"\\{(int)value[at]:x} " + value[(at + 1)..]);
+            }
+            spellings.Add(string.Concat(value.Select(c => char.IsAsciiLetter(c) ? $"\\{(int)c:x} " : c.ToString())));
+            spellings.Add(value[..1] + "/**/" + value[1..]);
+        }
+        return spellings;
+    }
+
+    /// <summary>Stage 13 (the delta merge judge's E1): a reference and the
+    /// colour words the guard reads, in other cases. The decoder reads
+    /// <c>URL(</c> and <c>Url(</c> as a reference.</summary>
+    private static readonly string[] CaseSpellings =
+    [
+        "BLUE", "Blue", "NONE", "CURRENTCOLOR", "URL(#missing)", "URL(#missing) inherit", "Url(#missing) inherit",
+        "uRl(#missing) inherit", "URL(#missing) blue", "INHERIT",
+    ];
+
+    /// <summary>
+    /// #1610 (stage 13, the lead's ruling): in the style attribute or a
+    /// rule, a winning fill clears the pattern of a declaration below it
+    /// only when the guard is sure the decoder reads it as a paint of its
+    /// own: a colour form the guard parses, <c>none</c>,
+    /// <c>currentColor</c>, or a reference that resolves, written plainly.
+    /// Anything else (an escape, a comment, a word, a fallback after a
+    /// reference, a <c>var()</c>, a reference in another case to nothing)
+    /// leaves the pattern below counted. Each generated spelling stands in
+    /// the style attribute over the pattern attribute and in a later rule
+    /// over an earlier pattern rule.
+    /// </summary>
+    [Fact]
+    public void AWinnerTheGuardIsNotSureOfLeavesThePatternBelowCounted()
+    {
+        const string Gradient =
+            "<defs><linearGradient id='g'><stop offset='0' stop-color='#336600'/><stop offset='1' stop-color='#336600'/></linearGradient></defs>";
+        string[] sure =
+        [
+            "blue", "BLUE", "Blue", "none", "NONE", "currentColor", "CURRENTCOLOR", "transparent", "#00f", "rgb(0,0,255)",
+            "url(#g)", "URL(#g)",
+        ];
+        var unsure = new List<string>(GeneratedSpellings().Concat(CaseSpellings).Where(spelling => !sure.Contains(spelling)))
+        {
+            "bogus", "inherit", "unset", "url(#missing)", "url(#missing) blue", "url(#g) blue", "url(#g) inherit", "var(--b)",
+            "var(--none, blue)", "hsl(240,100%,50%)", "",
+        };
+        double Term(string body)
+        {
+            SvgPreviewGuard.Check(Tile(Gradient + body), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.PatternMicroseconds;
+        }
+        var wrong = new List<string>();
+        foreach ((string spelling, bool clears) in sure.Select(s => (s, true)).Concat(unsure.Select(s => (s, false))))
+        {
+            foreach (string body in new[]
+            {
+                $"<rect{Rect20} fill='url(#p)' style='fill:{spelling}'/>",
+                $"<style>.p{{fill:url(#p)}} .s{{fill:{spelling}}}</style><rect class='p s'{Rect20}/>",
+            })
+            {
+                if ((Term(body) == 0) != clears)
+                {
+                    wrong.Add($"[{spelling}] {(clears ? "kept" : "cleared")} the pattern in {body}");
+                }
+            }
+        }
+        Assert.True(wrong.Count == 0, string.Join("\n", wrong));
+    }
+
+    /// <summary>
+    /// #1610 (stage 13, the delta merge judge's E1 and E2): 6,000 rects
+    /// written over by a paint the guard is not sure of keep the pattern
+    /// and are refused: <c>URL(#x) inherit</c> over navy under a pattern
+    /// group (10.5 s to decode, the judge's measurement), and
+    /// <c>b\6cue</c> in the style attribute over the pattern attribute
+    /// (11.1 s).
+    /// </summary>
+    [Theory]
+    [InlineData(" fill='url(#pat)'", " fill='#000080' style='fill:URL(#x) inherit'")]
+    [InlineData("", " fill='url(#pat)' style='fill:b\\6cue'")]
+    public void SixThousandRectsWrittenOverByAPaintTheGuardIsNotSureOfAreRefused(string group, string rect)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><g{group}>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{rect}/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 1): 6,000 rects that each write
+    /// the pattern in the fill attribute and a word in the style attribute,
+    /// which the decoder drops, are refused for their cost, as the same
+    /// rects without the word are.
+    /// </summary>
+    [Fact]
+    public void SixThousandRectsWhoseStyleWordTheDecoderDropsAreRefused()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='url(#pat)' style='fill:x'/>");
+        }
+        string source = s.Append("</svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major A, stage 12): 6,000 navy rects
+    /// under a group whose fill is the pattern, each written over by a
+    /// reference whose fallback is inherit, in the style attribute (11.0 s
+    /// to decode, the judge's measurement) or a rule (7.5 s), keep the
+    /// pattern and are refused for their cost.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SixThousandRectsWhoseReferenceFallsBackToInheritAreRefused(bool styleAttribute)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        if (!styleAttribute)
+        {
+            s.Append("<style>.s{fill:url(#x) inherit}</style>");
+        }
+        s.Append("<g fill='url(#pat)'>");
+        string own = styleAttribute ? " style='fill:url(#x) inherit'" : " class='s'";
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='#000080'{own}/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    public static TheoryData<string> SameRuleDeclarationCases() => [.. SameRuleDeclaration.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G1, stage 14): ExCSS keeps one
+    /// declaration of a property in a rule, the last, though a later one
+    /// never replaces an <c>!important</c> one, and the decoder drops a last
+    /// value it cannot read, so the earlier declaration in the same rule is
+    /// gone and the tier below applies. Two rules and the style attribute
+    /// keep both, so the earlier one applies there. A later name not
+    /// written in lower case replaces the earlier one only where the
+    /// decoder reads its value (measured), so where the guard cannot be
+    /// sure of that it counts both. Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(SameRuleDeclarationCases))]
+    public void OneRuleKeepsOnlyTheLastDeclarationOfAProperty(string name) =>
+        AssertPatternCountedAsPainted(name, SameRuleDeclaration[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> SameRuleDeclaration = new()
+    {
+        // The judge's rows: one rule, blue then a value the decoder drops.
+        ["one rule: blue, then a word"] = ($"<style>.s{{fill:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then nothing"] = ($"<style>.s{{fill:blue;fill:}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then rgb(1,2)"] = ($"<style>.s{{fill:blue;fill:rgb(1,2)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then #ff000"] = ($"<style>.s{{fill:blue;fill:#ff000}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then url(#nope) x"] = (
+            $"<style>.s{{fill:blue;fill:url(#nope) x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then calc(1)"] = ($"<style>.s{{fill:blue;fill:calc(1)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then url(#missing) unset"] = (
+            $"<style>.s{{fill:blue;fill:url(#missing) unset}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then a word, in a selector list"] = (
+            $"<style>.s, .t{{fill:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue, then a word, a stroke"] = (
+            $"<style>.s{{stroke:blue;stroke:x}}</style><rect class='s'{Rect20} fill='none' stroke-width='40' stroke='url(#p)'/>",
+            true,
+            true),
+        // !important: a later one replaces any; a later plain one never
+        // replaces an !important one.
+        ["one rule: blue, then a word !important"] = (
+            $"<style>.s{{fill:blue;fill:x !important}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue !important, then a word !important"] = (
+            $"<style>.s{{fill:blue !important;fill:x !important}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["one rule: blue !important, then a word"] = (
+            $"<style>.s{{fill:blue !important;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
+        // The other tiers keep both declarations.
+        ["two rules: blue, then a word"] = ($"<style>.s{{fill:blue}} .s{{fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["the style attribute: blue, then a word"] = ($"<rect{Rect20} fill='url(#p)' style='fill:blue;fill:x'/>", false, false),
+        // The reverse: the pattern is gone and nothing below paints.
+        ["one rule: the pattern, then a word"] = ($"<style>.s{{fill:url(#p);fill:x}}</style><rect class='s'{Rect20}/>", false, false),
+        // A name in another case.
+        ["one rule: FILL blue, then a word"] = ($"<style>.s{{FILL:blue;fill:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["one rule: blue, then FILL red"] = ($"<style>.s{{fill:blue;FILL:red}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["one rule: blue, then FILL as a word"] = ($"<style>.s{{fill:blue;FILL:x}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, true),
+        ["one rule: the pattern, then FILL as a word"] = ($"<style>.s{{fill:url(#p);FILL:x}}</style><rect class='s'{Rect20}/>", true, true),
+    };
+
+    public static TheoryData<string> IgnoredByTheDecoderCases() => [.. IgnoredByTheDecoder.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): a rule-tier winner can
+    /// be sure only where the guard recognises that the decoder applies its
+    /// rule: at the top level or in <c>@media</c> all, screen or none,
+    /// closed, with a selector list the guard parses, from a style element
+    /// in the SVG namespace whose type is none or text/css, matched by
+    /// class tokens split at ASCII whitespace and by attributes the
+    /// decoder reads. Anything else may apply or not. The decoder reads
+    /// <c>class</c> with no namespace only; <c>id</c>, <c>type</c>,
+    /// <c>fill</c> and <c>stroke</c> with no namespace or in the SVG,
+    /// XLink or XML namespace, and a namespaced fill or stroke only where
+    /// none without one applies; and every style attribute, in document
+    /// order. A style element the decoder does not apply joins nothing to
+    /// its stylesheet. Rules apply in document order, those inside
+    /// <c>@media</c> among them. Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(IgnoredByTheDecoderCases))]
+    public void ARuleOrAttributeTheDecoderIgnoresHidesNoPattern(string name) =>
+        AssertPatternCountedAsPainted(name, IgnoredByTheDecoder[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> IgnoredByTheDecoder = new()
+    {
+        // @media the decoder does not apply, and the three it does.
+        ["@media print"] = ($"<style>@media print{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media not all"] = ($"<style>@media not all{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media (max-width:1px)"] = ($"<style>@media (max-width:1px){{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media speech"] = ($"<style>@media speech{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media all and (color)"] = ($"<style>@media all and (color){{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media print inside @media all"] = (
+            $"<style>@media all{{@media print{{.s{{fill:blue}}}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["@media all inside @media print"] = (
+            $"<style>@media print{{@media all{{.s{{fill:blue}}}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["@media all, left open"] = ($"<style>@media all{{.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media all"] = ($"<style>@media all{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["@media SCREEN"] = ($"<style>@media SCREEN{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a bare @media"] = ($"<style>@media{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["@mediaall, no @media"] = ($"<style>@mediaall{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media only screen, which the guard does not read"] = (
+            $"<style>@media only screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // Rules after an @media block come after its rules.
+        ["@media all's blue, then a later pattern rule"] = (
+            $"<style>@media all{{.s{{fill:blue}}}}.t{{fill:url(#p)}}</style><rect class='s t'{Rect20}/>",
+            true,
+            true),
+        ["a pattern rule, then @media all's blue"] = (
+            $"<style>.t{{fill:url(#p)}}@media all{{.s{{fill:blue}}}}</style><rect class='s t'{Rect20}/>",
+            false,
+            false),
+        // Selector lists the decoder drops whole.
+        ["a list with an empty selector"] = ($"<style>.s,{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a bare #"] = ($"<style>.s,#{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a trailing combinator"] = ($"<style>.s,b>{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with an unknown pseudo-class"] = ($"<style>.s,rect:foo{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with an unknown pseudo-element"] = ($"<style>.s,rect::foo{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with :FIRST-CHILD"] = ($"<style>.s,rect:FIRST-CHILD{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with :is()"] = ($"<style>.s,rect:is(.x){{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with a name that starts with a digit"] = ($"<style>.s,1a{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a list with two combinators in a row"] = ($"<style>.s,g+~rect{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class --a"] = ($"<style>.--a{{fill:blue}}</style><rect class='--a'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class -1"] = ($"<style>.-1{{fill:blue}}</style><rect class='-1'{Rect20} fill='url(#p)'/>", true, true),
+        ["the id -a"] = ($"<style>#-a{{fill:blue}}</style><rect id='-a'{Rect20} fill='url(#p)'/>", true, true),
+        ["the class -a"] = ($"<style>.-a{{fill:blue}}</style><rect class='-a'{Rect20} fill='url(#p)'/>", false, false),
+        ["a list with a descendant selector"] = ($"<style>.s, g rect{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a list with :hover, which the guard does not read"] = (
+            $"<style>.s,rect:hover{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // A block left open.
+        ["the last rule left open"] = ($"<style>.s{{fill:blue</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the last rule left open after a rule"] = ($"<style>.t{{fill:red}} .s{{fill:blue</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["the last rule left open by a string"] = ($"<style>.s{{fill:blue;x:'a}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a closed rule before an open one"] = ($"<style>.s{{fill:blue}}.t{{</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        // Style elements the decoder does not apply, and their text.
+        ["type=''"] = ($"<style type=''>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["type='text/xsl'"] = ($"<style type='text/xsl'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["xml:type='text/xsl'"] = ($"<style xml:type='text/xsl'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a style element in another namespace"] = ($"<style xmlns='urn:x'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["STYLE"] = ($"<STYLE>.s{{fill:blue}}</STYLE><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a text/xsl style left open, then a pattern rule"] = (
+            $"<style type='text/xsl'>.t{{fill:red</style><style>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
+        ["type='TEXT/CSS'"] = ($"<style type='TEXT/CSS'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["o:type='text/xsl', which the decoder does not read, on a pattern rule"] = (
+            $"<style xmlns:o='urn:x' o:type='text/xsl'>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
+        ["type='text/css; charset=utf-8' on a pattern rule"] = (
+            $"<style type='text/css; charset=utf-8'>.s{{fill:url(#p)}}</style><rect class='s'{Rect20}/>",
+            true,
+            true),
+        ["type='text/css; charset=utf-8', which the guard does not read"] = (
+            $"<style type='text/css; charset=utf-8'>.s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        // Class tokens split at ASCII whitespace only.
+        ["a class after a no-break space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#160;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after an em space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#x2003;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after an ideographic space"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#x3000;s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a class after a tab"] = ($"<style>.s{{fill:blue}}</style><rect class='x&#9;s'{Rect20} fill='url(#p)'/>", false, false),
+        // Namespaced attributes.
+        ["o:class"] = ($"<style>.s{{fill:blue}}</style><rect xmlns:o='urn:x' o:class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["class in the SVG namespace"] = (
+            $"<style>.s{{fill:blue}}</style><rect xmlns:v='http://www.w3.org/2000/svg' v:class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["o:id"] = ($"<style>#s{{fill:blue}}</style><rect xmlns:o='urn:x' o:id='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["xml:id names the pattern"] = (
+            "<defs><pattern xml:id='q' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs><rect{Rect20} fill='url(#q)'/>",
+            true,
+            true),
+        ["o:id after the pattern's id"] = (
+            "<defs><pattern id='q' xmlns:o='urn:x' o:id='z' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<polygon points='0,0 10,0 10,10 0,10' style='fill:#13579b'/></pattern></defs><rect{Rect20} fill='url(#q)'/>",
+            true,
+            true),
+        ["o:fill under a pattern group"] = ($"<g fill='url(#p)'><rect xmlns:o='urn:x' o:fill='blue'{Rect20}/></g>", true, true),
+        ["an XHTML fill under a pattern group"] = (
+            $"<g fill='url(#p)'><rect xmlns:h='http://www.w3.org/1999/xhtml' h:fill='blue'{Rect20}/></g>",
+            true,
+            true),
+        ["xml:fill blue, then the pattern attribute"] = ($"<rect xml:fill='blue' fill='url(#p)'{Rect20}/>", true, true),
+        ["xml:fill blue, then xlink:fill the pattern"] = ($"<rect xml:fill='blue' xlink:fill='url(#p)'{Rect20}/>", true, true),
+        ["xml:fill the pattern under a blue fill attribute that is a word"] = (
+            $"<g fill='blue'><rect xml:fill='url(#p)' fill='x'{Rect20}/></g>",
+            true,
+            true),
+        ["xlink:fill the pattern"] = ($"<rect xlink:fill='url(#p)'{Rect20}/>", true, true),
+        ["the pattern attribute, then xml:fill blue"] = ($"<rect fill='url(#p)' xml:fill='blue'{Rect20}/>", true, true),
+        ["o:fill the pattern"] = ($"<rect xmlns:o='urn:x' o:fill='url(#p)'{Rect20}/>", false, false),
+        // Every style attribute applies, in document order.
+        ["the pattern in the style attribute, then o:style with a stroke"] = (
+            $"<rect xmlns:o='urn:x' style='fill:url(#p)' o:style='stroke:red'{Rect20}/>",
+            true,
+            true),
+        ["the pattern in the style attribute, then o:style blue"] = (
+            $"<rect xmlns:o='urn:x' style='fill:url(#p)' o:style='fill:blue'{Rect20}/>",
+            false,
+            false),
+    };
+
+    public static TheoryData<string> CommentedStylesheetCases() => [.. CommentedStylesheet.Keys];
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G4, stage 14): a comment in a
+    /// stylesheet leaves its rules as sure as they are without it, as
+    /// ExCSS removes it, except one inside a declaration's text, where the
+    /// decoder may read something else (measured: inside a function's
+    /// arguments the value is dropped, inside a property's name the
+    /// declaration is), and an escape counts only in its own declaration.
+    /// Each row is rendered by Svg.Skia here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(CommentedStylesheetCases))]
+    public void AStylesheetCommentLeavesOtherDeclarationsSure(string name) =>
+        AssertPatternCountedAsPainted(name, CommentedStylesheet[name]);
+
+    internal static readonly Dictionary<string, (string Body, bool Painted, bool Counted)> CommentedStylesheet = new()
+    {
+        ["a comment before the rule"] = ($"<style>/* land regions */ .s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the selector"] = ($"<style>.s/* x */{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the value"] = ($"<style>.s{{fill:blue /* x */}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment before the property"] = ($"<style>.s{{/**/fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment after the last rule"] = ($"<style>.s{{fill:blue}}/* .s{{fill:url(#p)}} */</style><rect class='s'{Rect20}/>", false, false),
+        ["an escape in another rule"] = ($"<style>.s{{fill:blue}} .t{{fill:r\\65 d}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment inside rgb()"] = ($"<style>.s{{fill:rgb(0,/**/0,255)}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a comment inside the property's name"] = ($"<style>.s{{fi/**/ll:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["a comment inside the value"] = ($"<style>.s{{fill:b/**/lue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, true),
+        ["a comment inside url()"] = ($"<style>.s{{fill:u/**/rl(#p)}}</style><rect class='s'{Rect20}/>", true, true),
+        // An escaped dot is part of a name, not a class (measured), so a
+        // selector with an escape is not one the guard is sure of.
+        ["an escaped dot in the selector"] = ($"<style>\\2e s{{fill:blue}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        // Where the escapes and comments change how the guard splits the
+        // stylesheet, it is sure of no rule: here an escaped @media keyword
+        // and an escaped custom property after it.
+        ["an escaped @media keyword, then an escaped custom property"] = (
+            $"<style>@\\6d edia print{{.t{{fill:red}}}} .s{{--a:b\\6cue;fill:var(--a)}}</style><g fill='url(#p)'><rect class='s'{Rect20} fill='#000080'/></g>",
+            true,
+            true),
+        // Stage 14b (Codex's round 12): an @media header with a comment or
+        // an escape between the keyword and its block. The decoder drops
+        // the block for a comment that touches the media type's end and
+        // for an escape (measured), and applies it for the others; the
+        // guard is sure of none of them, so it counts the pattern below.
+        // A comment before the keyword or inside the block sits between
+        // rules.
+        ["@media screen/* desktop */"] = (
+            $"<style>@media screen/* desktop */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            true,
+            true),
+        ["@media all/* x */"] = ($"<style>@media all/* x */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media scr\\65 en"] = ($"<style>@media scr\\65 en{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", true, true),
+        ["@media screen /* desktop */, which the guard does not read"] = (
+            $"<style>@media screen /* desktop */ {{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media /* x */ screen, which the guard does not read"] = (
+            $"<style>@media /* x */ screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media/* x */screen, which the guard does not read"] = (
+            $"<style>@media/* x */screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["@media/* x */, which the guard does not read"] = (
+            $"<style>@media/* x */{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            true),
+        ["a comment before @media screen"] = ($"<style>/* x */@media screen{{.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>", false, false),
+        ["a comment at the start of @media screen's block"] = (
+            $"<style>@media screen{{/* x */.s{{fill:blue}}}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
+        ["a comment at the end of @media screen's block"] = (
+            $"<style>@media screen{{.s{{fill:blue}}/* x */}}</style><rect class='s'{Rect20} fill='url(#p)'/>",
+            false,
+            false),
+    };
+
+    /// <summary>Renders <paramref name="row"/>'s body in a
+    /// <see cref="Tile"/> document and checks that the decoder paints the
+    /// pattern as the row says, and that the guard counts it as the row
+    /// says.</summary>
+    private static void AssertPatternCountedAsPainted(string name, (string Body, bool Painted, bool Counted) row)
+    {
+        string source = Tile(row.Body);
+        Assert.Equal(row.Painted, DecoderPaintsTile(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            row.Counted == estimate.PatternMicroseconds > 0,
+            $"{name}: the decoder {(row.Painted ? "paints" : "does not paint")} the pattern; the term is {estimate.PatternMicroseconds:F1} us");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G1 and G2, stage 14): 6,000 rects
+    /// whose rule the decoder never applies keep the pattern and are
+    /// refused: one rule's blue replaced by a word the decoder drops over
+    /// the pattern attribute (6.8 s to decode here), and blue in
+    /// <c>@media print</c> over a pattern rule (7.1 s). Stage 14b (Codex's
+    /// round 12): blue in <c>@media screen/* desktop */</c> over the
+    /// pattern attribute (9.3 s here; 11.35 s in Codex's run).
+    /// </summary>
+    [Theory]
+    [InlineData(".a{fill:blue;fill:x}", " fill='url(#pat)'")]
+    [InlineData(".a{fill:url(#pat)} @media print { .a{fill:blue} }", "")]
+    [InlineData("@media screen/* desktop */{.a{fill:blue}}", " fill='url(#pat)'")]
+    public void SixThousandRectsWhoseBlueRuleTheDecoderNeverAppliesAreRefused(string stylesheet, string fill)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs><style>{stylesheet}</style>");
+        for (int i = 0; i < 6_000; i++)
+        {
+            s.Append($"<rect class='a' x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7'{fill}/>");
+        }
+        string source = s.Append("</svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.True(
+            estimate.PatternMicroseconds / 1000 > SvgPreviewGuard.MaxEstimatedDecodeMilliseconds,
+            $"the pattern term is {estimate.PatternMicroseconds / 1000:F1} ms");
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): class tokens split at
+    /// ASCII whitespace only, as the decoder's do, in the estimate as in
+    /// the paint cascade. 3,000 paths whose class is <c>x</c>, a no-break
+    /// space and <c>s</c> take nothing from a rule <c>.s</c> that places a
+    /// marker and a clip path, so the estimate is the one with
+    /// <c>class='x'</c>.
+    /// </summary>
+    [Fact]
+    public void AClassAfterANoBreakSpaceTakesNoRuleInTheEstimate()
+    {
+        static double Estimate(string classList)
+        {
+            var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>");
+            s.Append("<marker id='m' markerWidth='4' markerHeight='4'><path d='M0 0 L4 4'/></marker>");
+            s.Append("<clipPath id='c'><circle r='5'/></clipPath></defs>");
+            s.Append("<style>.s{marker-start:url(#m);clip-path:url(#c)}</style>");
+            for (int i = 0; i < 3_000; i++)
+            {
+                s.Append($"<path class='{classList}' d='M{i % 100} {i / 100} l1 1 l1 0'/>");
+            }
+            SvgPreviewGuard.Check(s.Append("</svg>").ToString(), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+            return estimate.Milliseconds;
+        }
+        double alone = Estimate("x");
+        Assert.True(Estimate("x s") > alone + 100, "the rule's marker and clip path count for class='x s'");
+        Assert.Equal(alone, Estimate("x&#160;s"));
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): Measure's rule keys
+    /// split class tokens at ASCII whitespace too. A pattern whose rect a
+    /// rule <c>.s</c> fills with that pattern is a reference cycle where
+    /// the rect's class is <c>x s</c>, and none where it is <c>x</c>, a
+    /// no-break space and <c>s</c>, which the decoder does not match
+    /// (it draws the document in 173 ms).
+    /// </summary>
+    [Theory]
+    [InlineData("x s", true)]
+    [InlineData("x&#160;s", false)]
+    public void AClassAfterANoBreakSpaceClosesNoCycleThroughARule(string classList, bool cycle)
+    {
+        string source = $"<svg {Ns} width='20' height='20'><defs>"
+            + "<pattern id='c' width='10' height='10' patternUnits='userSpaceOnUse'>"
+            + $"<rect class='{classList}' width='5' height='5'/></pattern></defs>"
+            + "<style>.s{fill:url(#c)}</style><rect width='20' height='20' fill='url(#c)'/></svg>";
+        Assert.Equal(cycle ? SvgRefusal.ReferenceCycle : SvgRefusal.None, SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out _));
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G4, stage 14): the judge's map, a
+    /// hatch pattern on a group of 3,200 paths whose class rule fills them
+    /// a colour under a comment, is admitted with no pattern term, as it
+    /// is without the comment (the decoder draws it in 266 ms). Stage 13
+    /// refused it at an estimated 3,492 ms.
+    /// </summary>
+    [Fact]
+    public void AMapWhoseRuleHasACommentBeforeItIsAdmitted()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='600' height='600'>");
+        s.Append("<defs><pattern id='hatch' width='8' height='8' patternUnits='userSpaceOnUse'>");
+        s.Append("<path d='M0 8L8 0' stroke='#999'/></pattern></defs>");
+        s.Append("<style>/* land regions */ .r{fill:#ccddee}</style><g fill='url(#hatch)' stroke='#333'>");
+        for (int i = 0; i < 3_200; i++)
+        {
+            s.Append($"<path class='r' d='M{i % 60 * 10} {i / 60 * 10} h9 v9 h-9z'/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.Equal(0, estimate.PatternMicroseconds);
+        Assert.Equal(SvgRefusal.None, verdict);
+    }
+
+    /// <summary>The delta merge judge's major 2 document: a pattern, then
+    /// a group that defines <paramref name="properties"/> custom properties
+    /// and whose fill reads every one, holding
+    /// <paramref name="children"/> groups that each define the
+    /// first.</summary>
+    private static string ScopeDocument(int properties, int children)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='20' height='20'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><g style='");
+        for (int i = 0; i < properties; i++)
+        {
+            s.Append("--a").Append(i).Append(":1;");
+        }
+        s.Append("' fill='");
+        for (int i = 0; i < properties; i++)
+        {
+            s.Append("var(--a").Append(i).Append(')');
+        }
+        s.Append("'>").Append(Repeat("<g style='--a0:1'/>", children));
+        return s.Append("</g></svg>").ToString();
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's major 2, stage 11): custom properties
+    /// in scope cost the guard a bounded allocation. The judge's document,
+    /// 30,000 properties read by one fill and 2,100 children that each
+    /// define one (738 KB), made the guard allocate 1,761 MiB on 7ae94ac1,
+    /// each child copying its parent's whole scope. A scope now holds only
+    /// its element's own definitions and a link to its parent's, and past
+    /// a cap on the definitions in scope the check is refused as spent. The
+    /// check allocated 51.9 MiB here in stage 11, about 70 bytes per byte
+    /// read, within the 13 to 145 bytes per byte it allocates on the
+    /// calibration's large documents; 68.8 MiB in stage 12, which resolved
+    /// the root's 30,000 definitions before it read the cap; and 52.1 MiB
+    /// since stage 13, which reads the cap before it builds anything for
+    /// them (the delta merge judge's nit F). The bound, 64 MiB, lies between
+    /// the last two.
+    /// </summary>
+    [Fact]
+    public void CustomPropertiesInScopeAllocateABoundedAmount()
+    {
+        string source = ScopeDocument(30_000, 2_100);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+        Assert.True(estimate.StepsSpent, "refused for its steps");
+        Assert.True(allocated < 64L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's nit F, stage 13): 200,000 properties
+    /// one fill reads (5.0 MB) are refused at the cap before the guard
+    /// builds anything for them. The check allocates 364.9 MiB, most of it
+    /// the read of 200,000 declarations, where building them first took
+    /// 453.3 MiB (478 MiB on 1f31be9a, the judge's measure); the bound,
+    /// 400 MiB, lies between.
+    /// </summary>
+    [Fact]
+    public void TwoHundredThousandPropertiesAreRefusedBeforeTheyAreBuilt()
+    {
+        string source = ScopeDocument(200_000, 2_100);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(SvgRefusal.DecodeCost, verdict);
+        Assert.True(estimate.StepsSpent, "refused for its steps");
+        Assert.True(allocated < 400L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>A pattern beside <paramref name="rects"/> rects that fill
+    /// with <c>var(--c)</c>, which <paramref name="rule"/> defines.</summary>
+    private static string RuleScopeDocument(string rule, int rects)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><style>").Append(rule).Append("</style>");
+        for (int i = 0; i < rects; i++)
+        {
+            s.Append($"<rect x='{i % 100 * 8}' y='{i / 100 % 100 * 8}' width='7' height='7' fill='var(--c)'/>");
+        }
+        return s.Append("</svg>").ToString();
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor B, stage 12): a rule that
+    /// defines a custom property for every rect, or for the root as a
+    /// selector the guard cannot match exactly, gives 20,500 rects the
+    /// value their parent's scope or a sibling's already holds, so they
+    /// share that scope and add nothing against the cap. 7ae94ac1 admitted
+    /// both documents and the decoder draws them in 0.66 and 0.60 s; the
+    /// cap had refused them as spent. A universal rule gives each rect the
+    /// value its root's scope holds, so each reads that scope (1.0 s to
+    /// decode). Each is admitted within the judge's allocation
+    /// bound.
+    /// </summary>
+    [Theory]
+    [InlineData("rect{--c:#336699}")]
+    [InlineData(":root{--c:#336699}")]
+    [InlineData("*{--c:#336699}")]
+    public void ARuleThatGivesEveryRectTheSamePropertyIsAdmitted(string rule)
+    {
+        string source = RuleScopeDocument(rule, 20_500);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(estimate.StepsSpent, "the check spent its steps");
+        Assert.Equal(SvgRefusal.None, verdict);
+        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's minor C, stage 12): under the cap,
+    /// scopes that copied their parent's would still explode. 10,000
+    /// properties one fill reads and 9,000 children that each define
+    /// another as a colour hold 19,000 definitions, within the cap; the
+    /// linked scopes admit the document (the decoder draws it in 240 ms)
+    /// within the judge's allocation bound, where copying reached the step
+    /// budget near 6,400 children and 1,746 MiB.
+    /// </summary>
+    [Fact]
+    public void CustomPropertiesUnderTheCapAllocateABoundedAmount()
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'><defs>{Swatch}</defs>");
+        s.Append("<rect width='20' height='20' fill='url(#pat)'/><g style='");
+        for (int i = 0; i < 10_000; i++)
+        {
+            s.Append("--a").Append(i).Append(":1;");
+        }
+        s.Append("' fill='");
+        for (int i = 0; i < 10_000; i++)
+        {
+            s.Append("var(--a").Append(i).Append(')');
+        }
+        s.Append("'>");
+        for (int i = 0; i < 9_000; i++)
+        {
+            s.Append("<g style='--a").Append(i).Append(":red'/>");
+        }
+        string source = s.Append("</g></svg>").ToString();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        SvgRefusal verdict = SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(estimate.StepsSpent, "the check spent its steps");
+        Assert.Equal(SvgRefusal.None, verdict);
+        Assert.True(allocated < 96L * 1024 * 1024, $"the check allocated {allocated / 1048576.0:F1} MiB");
+    }
+
+    /// <summary>A 1,000-rect marker the group's marker-mid sets, over a
+    /// 3,000-vertex polyline that writes <paramref name="line"/>: the
+    /// documents stage 10 decoded.</summary>
+    private static string MarkedLine(string group, string line)
+    {
+        var s = new StringBuilder($"<svg {Ns} width='800' height='800'>");
+        s.Append("<defs><marker id='m' markerWidth='40' markerHeight='40' refX='0' refY='0' markerUnits='userSpaceOnUse'>");
+        for (int i = 0; i < 1_000; i++)
+        {
+            s.Append($"<rect x='{i % 40}' y='{i / 40 % 40}' width='1' height='1' fill='red'/>");
+        }
+        s.Append($"</marker></defs><g{group}><polyline fill='none' stroke='black'{line} points='");
+        for (int i = 0; i < 3_000; i++)
+        {
+            s.Append(i % 400).Append(',').Append(i / 400 % 400).Append(' ');
+        }
+        return s.Append("'/></g></svg>").ToString();
+    }
+
+    private const string MarkerMid = " marker-mid='url(#m)'";
+
+    public static TheoryData<string> MarkerValueCases() => [.. MarkerValue.Keys];
+
+    /// <summary>
+    /// #1610 (stage 10, the audit after Codex's round 7): a marker value
+    /// keeps the parent's marker where the decoder keeps it, and the marker
+    /// term counts it: <c>inherit</c>, <c>unset</c>, nothing, a reference
+    /// with a word after it, and a <c>var()</c> that can give one of those.
+    /// A <c>var()</c> that cannot (no value, <c>none</c>, a word) places
+    /// only what it reaches. Each row was decoded once in stage 10.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MarkerValueCases))]
+    public void AMarkerValueKeepsTheParentsMarkerWhereTheDecoderDoes(string name)
+    {
+        (Func<string> build, string expected) = MarkerValue[name];
+        SvgRefusal verdict = SvgPreviewGuard.Check(build(), 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double marker = estimate.MarkerMicroseconds / 1000;
+        if (expected == "counted")
+        {
+            Assert.True(marker > 1_000, $"{name}: the marker term is {marker:F1} ms");
+        }
+        else
+        {
+            Assert.True(marker == 0, $"{name}: the marker term is {marker:F1} ms");
+            Assert.Equal(SvgRefusal.None, verdict);
+        }
+    }
+
+    internal static readonly Dictionary<string, (Func<string> Build, string Expected)> MarkerValue = new()
+    {
+        // The line keeps the group's marker: written nowhere 8,663 ms,
+        // inherit 9,460 ms, unset 9,150 ms, an empty attribute 9,418 ms or
+        // style declaration 9,138 ms.
+        ["the line sets no marker-mid"] = (() => MarkedLine(MarkerMid, ""), "counted"),
+        ["inherit"] = (() => MarkedLine(MarkerMid, " marker-mid='inherit'"), "counted"),
+        ["unset"] = (() => MarkedLine(MarkerMid, " marker-mid='unset'"), "counted"),
+        ["an empty attribute"] = (() => MarkedLine(MarkerMid, " marker-mid=''"), "counted"),
+        ["an empty style declaration"] = (() => MarkedLine(MarkerMid, " style='marker-mid:'"), "counted"),
+        // So does a fallback that gives inherit (9,406 ms) and a reference
+        // with a word after it (9,105 ms), which the guard cleared.
+        ["var(--missing, inherit)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing, inherit)'"), "counted"),
+        ["url(#missing) none"] = (() => MarkedLine(MarkerMid, " marker-mid='url(#missing) none'"), "counted"),
+        // And through a property that holds either: 8,892 and 10,073 ms.
+        ["var(--c) with --c:var(--missing, inherit) on the group"] = (
+            () => MarkedLine(MarkerMid + " style='--c:var(--missing, inherit)'", " marker-mid='var(--c)'"),
+            "counted"),
+        ["var(--c) with --c:url(#missing) none on the group"] = (
+            () => MarkedLine(MarkerMid + " style='--c:url(#missing) none'", " marker-mid='var(--c)'"),
+            "counted"),
+        // What clears it: none 50 ms, NONE 96 ms, None 22 ms, a missing
+        // reference 52 ms; a var() with no value 34 ms, a none fallback
+        // 23 ms, a word fallback 24 ms, a property that holds none 25 ms or
+        // a word 26 ms.
+        ["none"] = (() => MarkedLine(MarkerMid, " marker-mid='none'"), "cleared"),
+        ["NONE"] = (() => MarkedLine(MarkerMid, " marker-mid='NONE'"), "cleared"),
+        ["None"] = (() => MarkedLine(MarkerMid, " marker-mid='None'"), "cleared"),
+        ["url(#missing)"] = (() => MarkedLine(MarkerMid, " marker-mid='url(#missing)'"), "cleared"),
+        ["var(--missing)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing)'"), "cleared"),
+        ["var(--missing, none)"] = (() => MarkedLine(MarkerMid, " marker-mid='var(--missing, none)'"), "cleared"),
+        ["marker-mid:var(--missing, foo) in the style attribute"] = (
+            () => MarkedLine(MarkerMid, " style='marker-mid:var(--missing, foo)'"),
+            "cleared"),
+        ["var(--c) with --c:none on the group"] = (() => MarkedLine(MarkerMid + " style='--c:none'", " marker-mid='var(--c)'"), "cleared"),
+        ["var(--c) with --c:foo on the group"] = (() => MarkedLine(MarkerMid + " style='--c:foo'", " marker-mid='var(--c)'"), "cleared"),
+        // A word clears it in the decoder (40 ms); the guard takes a value
+        // it does not read to keep the parent's marker, which only counts
+        // more.
+        ["foo"] = (() => MarkedLine(MarkerMid, " marker-mid='foo'"), "counted"),
+    };
+
+    /// <summary>#1610 (stage 9, the lead's ruling): 3,000 rects drawn in
+    /// <c>currentColor</c> under a group whose fill is the pattern decode in
+    /// 46 to 81 ms, the decoder drawing the colour, so they are admitted
+    /// with no pattern term.</summary>
+    [Fact]
+    public void RectsDrawnInCurrentColorUnderAPatternGroupAreAdmitted()
+    {
+        string source = PaintedGroup("", PatternFill, " fill='currentColor'");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        Assert.Equal(0, estimate.PatternMicroseconds);
+    }
+
+    /// <summary>#1610 (Codex's round 5, stage 8): under a group whose fill is
+    /// the pattern, the rects that set a colour clear it and the rest keep
+    /// it, so the term counts the keepers alone: half of 3,000 here, each
+    /// across the document's 3,014 elements (1.54 s; 1.63 s to
+    /// decode).</summary>
+    [Fact]
+    public void AGroupsPatternCountsOnlyTheShapesThatKeepIt()
+    {
+        string source = PaintedGroup("", PatternFill, i => i % 2 == 0 ? " fill='red'" : "");
+        SvgPreviewGuard.Check(source, 8 * 1024 * 1024, out SvgDecodeEstimate estimate);
+        double expected = SvgDecodeRates.PatternPaintElement * 1_500 * 3_014;
+        Assert.True(
+            Math.Abs(estimate.PatternMicroseconds - expected) < 1,
+            $"the pattern term is {estimate.PatternMicroseconds:F0} us; 1,500 keepers give {expected:F0} us");
+        Assert.Equal(nameof(SvgRefusal.None), Check(source));
+    }
+
+    /// <summary>
+    /// #1610 (CB-29): core's renders of the dialects whose edges carry
+    /// markers, the only cost a rendered diagram has, sized to render in
+    /// under a second each so core's 5-second budget never cuts them, are
+    /// estimated at under a thirtieth of the decode limit. The marker term
+    /// grows with the edges, so the largest diagram core renders (a
+    /// sequence of 1,093 messages, 76 ms in the committed calibration)
+    /// stays near a tenth of it.
+    /// </summary>
+    [Fact]
+    public void RealDiagramsStayFarBelowTheLimit()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "svg-guard-real-diagrams");
+        string[] sources = [SequenceSource(300), ClassSource(150), StateSource(150)];
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "d.md"),
+            string.Concat(sources.Select(source => "```mermaid\n" + source + "```\n\n")));
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        DiagramBlock[] blocks = session.GetDiagramBlocks("d.md");
+        Assert.Equal(3, blocks.Length);
+        foreach (DiagramBlock block in blocks)
+        {
+            Assert.True(block.RenderStatus is DiagramRenderStatus.Ok, $"not rendered: {block.RenderStatus}");
+            string svg = Encoding.UTF8.GetString(block.Svg!);
+            Assert.Equal(nameof(SvgRefusal.None), Check(svg));
+            double estimate = EstimateOf(svg).Milliseconds;
+            Assert.True(
+                estimate < SvgPreviewGuard.MaxEstimatedDecodeMilliseconds / 30.0,
+                $"{block.Source.Split('\n')[0]}: estimated at {estimate:F1} ms");
+        }
+    }
+
+    private static string SequenceSource(int messages)
+    {
+        var source = new StringBuilder("sequenceDiagram\n");
+        for (int participant = 0; participant < 6; participant++)
+        {
+            source.Append($"  participant P{participant}\n");
+        }
+        for (int i = 0; i < messages; i++)
+        {
+            source.Append($"  P{i % 6}->>P{(i + 1 + (i / 6)) % 6}: message {i}\n");
+            if (i % 7 == 6)
+            {
+                source.Append($"  P{(i + 2) % 6}-->>P{i % 6}: reply {i}\n");
+            }
+        }
+        return source.ToString();
+    }
+
+    private static string ClassSource(int classes)
+    {
+        var source = new StringBuilder("classDiagram\n");
+        for (int i = 0; i < classes; i++)
+        {
+            source.Append($"  class C{i} {{\n    +int field{i}\n    +String name\n    +method{i}() bool\n  }}\n");
+            if (i > 0)
+            {
+                source.Append(i % 3 == 0 ? $"  C{i / 2} <|-- C{i}\n" : $"  C{i - 1} --> C{i} : uses\n");
+            }
+        }
+        return source.ToString();
+    }
+
+    private static string StateSource(int states)
+    {
+        var source = new StringBuilder("stateDiagram-v2\n  [*] --> S0\n");
+        for (int i = 0; i < states; i++)
+        {
+            source.Append($"  S{i} --> S{i + 1} : event{i}\n");
+            if (i % 4 == 3)
+            {
+                source.Append($"  S{i} --> S{i - 2} : back{i}\n");
+            }
+        }
+        source.Append($"  S{states} --> [*]\n");
+        return source.ToString();
     }
 
     public static TheoryData<string> RefusalCases() => [.. Refusals.Keys];
@@ -99,8 +2826,48 @@ public sealed class SvgPreviewGuardTests
         Assert.Equal(expected.ToString(), Check(build()));
     }
 
+    /// <summary>A pattern of 40 rects that fills 10,000 rects, each set as
+    /// <paramref name="fill"/>, under a stylesheet of
+    /// <paramref name="stylesheet"/>; drawn through
+    /// <c>fill='url(#pat)'</c> it renders 420,000 elements.</summary>
+    private static string PatternFills(string stylesheet, string fill, string open = "", string close = "") =>
+        Svg((stylesheet.Length == 0 ? "" : "<style>" + stylesheet + "</style>")
+            + "<defs><pattern id='pat' width='4' height='4' patternUnits='userSpaceOnUse'>"
+            + Repeat("<rect width='1' height='1'/>", 40) + "</pattern></defs>"
+            + open + Repeat($"<rect width='4' height='4'{fill}/>", 10_000) + close);
+
     internal static readonly Dictionary<string, (Func<string> Build, SvgRefusal Expected)> Refusals = new()
     {
+        // Codex's review (stage 4): an element reaches every url() a var()
+        // in its paint can resolve to, through each custom property it
+        // names, so a pattern drawn through one counts as drawn through
+        // url(): one per filled element.
+        ["a pattern drawn through a custom property in an attribute"] = (
+            () => PatternFills("svg{--p:url(#pat)}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property in a style attribute"] = (
+            () => PatternFills("svg{--p:url(#pat)}", " style='fill:var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property in a stylesheet rule"] = (
+            () => PatternFills("svg{--p:url(#pat)} .u{fill:var(--p)}", " class='u'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a chain of two custom properties"] = (
+            () => PatternFills("svg{--q:url(#pat);--p:var(--q)}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a declared property's own var() fallback"] = (
+            () => PatternFills("svg{--p:var(--undefined, url(#pat))}", " fill='var(--p)'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a custom property a group's style attribute defines"] = (
+            () => PatternFills("", " fill='var(--p)'", "<g style='--p:url(#pat)'>", "</g>"),
+            SvgRefusal.RenderedElements),
+        // Pins: a fallback in the element's own value or in the rule's own
+        // declaration is a url() the guard already reads.
+        ["a pattern drawn through a var() fallback in an attribute"] = (
+            () => PatternFills("", " fill='var(--undefined, url(#pat))'"),
+            SvgRefusal.RenderedElements),
+        ["a pattern drawn through a var() fallback in a stylesheet rule"] = (
+            () => PatternFills(".u{fill:var(--undefined, url(#pat))}", " class='u'"),
+            SvgRefusal.RenderedElements),
         ["url references in an attribute"] = (
             () => Svg($"<rect width='16' height='16' fill='{Repeat("url(#a)", SvgPreviewGuard.MaxUrlReferencesPerValue + 1)}'/>"),
             SvgRefusal.UrlReferences),
