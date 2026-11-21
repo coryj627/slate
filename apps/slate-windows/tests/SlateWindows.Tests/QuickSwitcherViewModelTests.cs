@@ -64,6 +64,37 @@ public sealed class QuickSwitcherViewModelTests
         Assert.Equal(2, indexed.TotalResults);
     }
 
+    /// <summary>#1705 (plan 47 CB-32): a name whose capital sigma lowers to
+    /// the final form in one spelling and to the medial form in another is
+    /// found whichever sigma the reader typed, through core's one fold.</summary>
+    [Fact]
+    public void AFinalSigmaNameIsFoundWhicheverSigmaWasTyped()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "quick-open-final-sigma");
+        File.WriteAllText(Path.Combine(fixture.Root, "ΚΟΣΜΟΣ.md"), "kosmos\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "other\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+
+        using var switcher = new QuickSwitcherViewModel(
+            session,
+            fixture.Root,
+            _ => { },
+            Path.Combine(fixture.Root, "device-state"),
+            debounceRanking: false);
+        switcher.Open();
+        foreach (string typed in new[] { "κοσμος", "Κοσμος", "κοσμοσ" })
+        {
+            switcher.Query = typed;
+            Assert.True(
+                switcher.Results.Any(row => row.Path == "ΚΟΣΜΟΣ.md"),
+                $"'{typed}' did not find ΚΟΣΜΟΣ.md: {string.Join(", ", switcher.Results.Select(row => row.Path))}");
+        }
+    }
+
     /// <summary>A keystroke that supersedes a rank still running in core
     /// cancels that rank's core token, so the stale query stops inside core
     /// rather than running to its end.</summary>
