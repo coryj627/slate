@@ -1617,6 +1617,12 @@ public sealed class SvgPreviewGuardTests
         ["var(--none) over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--none)'/>", false, true),
         ["var(--b), a word, over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:var(--b)'/>", false, true),
         ["context-fill over the pattern attribute"] = ($"<rect{Rect20} fill='url(#p)' style='fill:context-fill'/>", false, true),
+        // A context paint is applied, never dropped: in a used element it
+        // takes the use's pattern over the navy below it.
+        ["context-fill over navy in an element a pattern use draws"] = (
+            $"<defs><rect id='r'{Rect20} fill='#000080' style='fill:context-fill'/></defs><use href='#r' fill='url(#p)'/>",
+            true,
+            true),
         // Under a pattern group, a dropped word leaves the rect's own blue;
         // var(--none) keeps the group's pattern.
         ["a word over blue under a pattern group"] = ($"<g fill='url(#p)'><rect{Rect20} fill='blue' style='fill:bogus'/></g>", false, false),
