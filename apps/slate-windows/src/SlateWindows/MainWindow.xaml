@@ -672,10 +672,10 @@
                     <MenuItem Header="Zoom _In"
                               AutomationProperties.AutomationId="EditorZoomInMenuItem"
                               Command="{Binding Workspace.EditorPreferences.ZoomInCommand}" />
-                    <MenuItem Header="Zoom _Out"
+                    <MenuItem Header="Zoom Ou_t"
                               AutomationProperties.AutomationId="EditorZoomOutMenuItem"
                               Command="{Binding Workspace.EditorPreferences.ZoomOutCommand}" />
-                    <MenuItem Header="_Actual Size"
+                    <MenuItem Header="Actual Si_ze"
                               AutomationProperties.AutomationId="EditorActualSizeMenuItem"
                               Command="{Binding Workspace.EditorPreferences.ActualSizeCommand}" />
                 </MenuItem>
