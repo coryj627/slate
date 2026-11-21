@@ -1,0 +1,3389 @@
+# CB-17a NVDA session, 2026-11-21: speech excerpt
+# NVDA 2026.3.1 Speaking lines (command objects dropped), merged by time with the driver's markers ([L1] to [L4]: the launch).
+# A Speaking line is what NVDA logged, not proof it was heard to the end (CB-14).
+# B5's three folder-picker paths were typed as one string each; NVDA's character and word echo of them (549 lines) is left out.
+
+13:07:06.943  [L1] === launch L1 : exe C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe ; vault <session folder>\vaults\cb17a-L1 ; root <session folder>\roots\cb17a-L1 ; prep none
+13:07:07.919  [L1] Slate pid 73464 (C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe); launcher pid 104816
+13:07:08.953  NVDA  'cb17a-L1 — Slate', 'window'
+13:07:08.959  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:07:08.965  NVDA  'level 1', 'board.canvas, file', 'not selected', '1 of 110'
+13:07:08.965  NVDA  'Editor pane 1 of 1, Empty pane.'
+13:09:46.645  [L1] setup (exploration, launch 1 before its steps): where is a.md in the Files tree
+13:09:46.670  NVDA  'end'
+13:09:46.672  [L1] KEY End (the last row)
+13:09:46.750  NVDA  'Selected: Templates, folder'
+13:09:46.765  NVDA  'Templates, folder', 'collapsed', '110 of 110', 'level 1'
+13:09:49.488  NVDA  'home'
+13:09:49.489  [L1] KEY Home (the first row)
+13:09:49.750  NVDA  'Selected: board.canvas'
+13:09:49.778  NVDA  'board.canvas, file', '1 of 110', 'level 1'
+13:10:10.904  [L1] setup: the exploration opened board.canvas (Home selected it); Ctrl+W closes its tab so the empty pane is back
+13:10:10.932  NVDA  'ctrl+w'
+13:10:10.935  [L1] KEY Ctrl+W (close the board tab)
+13:10:10.988  NVDA  'Closed board.'
+13:11:00.483  [L1] === L1 / step A1 ===
+13:11:01.542  [L1] ===== STEP A1 : launcher when IsModalSheetOpen=True: Enter on New Note from Template…
+13:11:01.608  NVDA  'f6'
+13:11:01.610  [L1] KEY F6 (to the empty pane's launcher, press 1)
+13:11:01.637  NVDA  'Editor workspace'
+13:11:01.637  NVDA  'Editor pane. Empty.'
+13:11:02.776  NVDA  'f6'
+13:11:02.777  [L1] KEY F6 (to the empty pane's launcher, press 2)
+13:11:02.805  NVDA  'Select a note to see its outline.'
+13:11:02.805  NVDA  'Outline panel.'
+13:11:03.906  NVDA  'f6'
+13:11:03.906  [L1] KEY F6 (to the empty pane's launcher, press 3)
+13:11:03.938  NVDA  'Right pane panels', 'list'
+13:11:03.949  NVDA  'Outline', '1 of 5'
+13:11:03.949  NVDA  'Right pane panels.'
+13:11:05.045  NVDA  'f6'
+13:11:05.046  [L1] KEY F6 (to the empty pane's launcher, press 4)
+13:11:05.072  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:11:05.073  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:11:06.194  NVDA  'f6'
+13:11:06.195  [L1] KEY F6 (to the empty pane's launcher, press 5)
+13:11:06.224  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:11:06.225  NVDA  'Menu bar.'
+13:11:07.334  NVDA  'f6'
+13:11:07.335  [L1] KEY F6 (to the empty pane's launcher, press 6)
+13:11:07.375  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:11:07.386  NVDA  'board.canvas, file', '1 of 110', 'level 1'
+13:11:07.386  NVDA  'Files.'
+13:11:08.483  NVDA  'f6'
+13:11:08.484  [L1] KEY F6 (to the empty pane's launcher, press 7)
+13:11:08.509  NVDA  'Editor workspace'
+13:11:08.509  NVDA  'Editor pane. Empty.'
+13:11:17.825  [L1] === L1 / step A1 ===
+13:11:18.872  [L1] ===== STEP A1 : launcher when IsModalSheetOpen=True: Enter on New Note from Template…
+13:11:18.946  NVDA  'tab'
+13:11:18.949  [L1] KEY Tab (into the empty pane's launcher)
+13:11:18.977  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:11:19.912  NVDA  'tab'
+13:11:19.913  [L1] KEY Tab (to EmptyPaneNewFromTemplate, press 1)
+13:11:19.930  NVDA  'New Note from Template…', 'button', 'Ctrl+Shift+', 'N'
+13:11:20.844  [L1]   TRIGGER at 13:11:20.843
+13:11:20.847  NVDA  'enter'
+13:11:20.848  [L1] KEY Enter (New Note from Template…)
+13:11:20.909  NVDA  'Template picker opened. 1 template available.'
+13:11:20.911  NVDA  'unavailable'
+13:11:20.975  NVDA  'Templates', 'list'
+13:11:20.984  NVDA  'Meeting. # Meeting.', 'Activate to use this template for a new note.', '1 of 1'
+13:12:23.545  [L1] cleanup after A1: Escape closes the template picker
+13:12:23.569  NVDA  'escape'
+13:12:23.572  [L1] KEY Escape (close the picker)
+13:12:25.909  [L1] === L1 / step A1 ===
+13:12:27.004  [L1] ===== STEP A1 : launcher when IsModalSheetOpen=True: Enter on New Note from Template…
+13:12:27.067  NVDA  'f6'
+13:12:27.070  [L1] KEY F6 (to the editor workspace, press 1)
+13:12:27.098  NVDA  'Editor workspace'
+13:12:27.099  NVDA  'Editor pane. Empty.'
+13:12:28.256  NVDA  'tab'
+13:12:28.256  [L1] KEY Tab (into the empty pane's launcher)
+13:12:28.283  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:12:29.209  NVDA  'tab'
+13:12:29.209  [L1] KEY Tab (to EmptyPaneNewFromTemplate, press 1)
+13:12:29.226  NVDA  'New Note from Template…', 'button', 'Ctrl+Shift+', 'N'
+13:12:30.148  [L1]   TRIGGER at 13:12:30.146
+13:12:30.150  NVDA  'enter'
+13:12:30.151  [L1] KEY Enter (New Note from Template…)
+13:12:30.189  NVDA  'Template picker opened. 1 template available.'
+13:12:30.192  NVDA  'unavailable'
+13:12:30.264  NVDA  'Templates', 'list'
+13:12:30.274  NVDA  'Meeting. # Meeting.', 'Activate to use this template for a new note.', '1 of 1'
+13:12:49.015  [L1] cleanup after A1 (run 2): Escape closes the template picker
+13:12:49.038  NVDA  'escape'
+13:12:49.041  [L1] KEY Escape (close the picker)
+13:12:51.187  [L1] === L1 / step A2 ===
+13:12:52.251  [L1] ===== STEP A2 : launcher when IsModalSheetOpen=True: NVDA activate (NVDA+Enter, laptop layout) on New Note from Template…
+13:12:52.315  NVDA  'f6'
+13:12:52.317  [L1] KEY F6 (to the editor workspace, press 1)
+13:12:52.345  NVDA  'Editor workspace'
+13:12:52.345  NVDA  'Editor pane. Empty.'
+13:12:53.489  NVDA  'tab'
+13:12:53.490  [L1] KEY Tab (into the empty pane's launcher)
+13:12:53.518  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:12:54.443  NVDA  'tab'
+13:12:54.443  [L1] KEY Tab (to EmptyPaneNewFromTemplate, press 1)
+13:12:54.461  NVDA  'New Note from Template…', 'button', 'Ctrl+Shift+', 'N'
+13:12:55.383  [L1]   TRIGGER at 13:12:55.382
+13:12:55.387  NVDA  'NVDA+enter'
+13:12:55.387  [L1] KEY NVDA+Enter (Insert+Enter: activate the navigator object)
+13:12:55.395  NVDA  'invoke'
+13:12:55.426  NVDA  'Template picker opened. 1 template available.'
+13:12:55.446  NVDA  'unavailable'
+13:12:55.505  NVDA  'Templates', 'list'
+13:12:55.515  NVDA  'Meeting. # Meeting.', 'Activate to use this template for a new note.', '1 of 1'
+13:13:05.323  [L1] cleanup after A2: Escape closes the template picker
+13:13:05.347  NVDA  'escape'
+13:13:05.351  [L1] KEY Escape (close the picker)
+13:13:07.472  [L1] === L1 / step A3 ===
+13:13:08.537  [L1] ===== STEP A3 : launcher when IsModalSheetOpen=True: Ctrl+, with the keys on Quick Open…
+13:13:08.600  NVDA  'f6'
+13:13:08.603  [L1] KEY F6 (to the editor workspace, press 1)
+13:13:08.629  NVDA  'Editor workspace'
+13:13:08.629  NVDA  'Editor pane. Empty.'
+13:13:09.792  NVDA  'tab'
+13:13:09.793  [L1] KEY Tab (into the empty pane's launcher)
+13:13:09.821  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:13:10.729  [L1]   TRIGGER at 13:13:10.727
+13:13:10.733  NVDA  'ctrl+,'
+13:13:10.735  [L1] KEY Ctrl+, (Settings)
+13:13:10.785  NVDA  'Settings'
+13:13:10.787  NVDA  'unavailable'
+13:13:10.856  NVDA  'Settings categories', 'list'
+13:13:10.864  NVDA  'Appearance', '1 of 1'
+13:13:20.982  [L1] cleanup after A3: Escape closes Settings
+13:13:21.006  NVDA  'escape'
+13:13:21.009  [L1] KEY Escape (close Settings)
+13:13:21.080  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:13:23.292  [L1] === L1 / step A4 ===
+13:13:24.340  [L1] ===== STEP A4 : MainMenu when SettingsSheet=True: F10 to the Slate menu, Ctrl+,
+13:13:24.394  NVDA  'f10'
+13:13:24.396  [L1] KEY F10 (menu bar)
+13:13:24.556  NVDA  'File', 'collapsed', 'F', '1 of 6'
+13:13:44.967  [L1] === L1 / step A4 ===
+13:13:46.023  [L1] ===== STEP A4 : MainMenu when SettingsSheet=True: F10 to the Slate menu, Ctrl+,
+13:13:46.072  [L1]   NOTE the keys before the chord: name='File' type=ControlType.MenuItem aid='FileMenu' enabled=True (F10 opens the Slate menu with the keys on its first row)
+13:13:46.076  [L1]   TRIGGER at 13:13:46.074
+13:13:46.090  NVDA  'ctrl+,'
+13:13:46.092  [L1] KEY Ctrl+, (Settings)
+13:13:46.189  NVDA  'Settings'
+13:13:46.244  NVDA  'Settings categories', 'list'
+13:13:46.255  NVDA  'Appearance', '1 of 1'
+13:14:00.300  [L1] cleanup after A4: Escape closes Settings
+13:14:00.324  NVDA  'escape'
+13:14:00.327  [L1] KEY Escape (close Settings)
+13:14:00.406  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:14:00.418  NVDA  'board.canvas, file', '1 of 110', 'level 1'
+13:14:00.419  NVDA  'Editor pane 1 of 1, Empty pane.'
+13:14:02.622  [L1] === L1 / step A5 ===
+13:14:03.693  [L1] ===== STEP A5 : MainMenu when Workspace.TemplatePickerSheet=True: Alt, Down into the Slate menu's first row, Ctrl+Shift+N
+13:14:03.748  [L1] KEY Alt (menu bar)
+13:14:03.773  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:14:05.130  NVDA  'down arrow'
+13:14:05.130  [L1] KEY Down (open the Slate menu: its first row)
+13:14:05.166  NVDA  'expanded'
+13:14:05.231  NVDA  'File', 'collapsed', 'F', '1 of 6'
+13:14:07.097  [L1]   TRIGGER at 13:14:07.095
+13:14:07.105  NVDA  'ctrl+shift+n'
+13:14:07.107  [L1] KEY Ctrl+Shift+N (New Note from Template…)
+13:14:07.190  NVDA  'Template picker opened. 1 template available.'
+13:14:07.238  NVDA  'Templates', 'list'
+13:14:07.246  NVDA  'Meeting. # Meeting.', 'Activate to use this template for a new note.', '1 of 1'
+13:14:23.458  [L1] cleanup after A5: Escape closes the template picker
+13:14:23.481  NVDA  'escape'
+13:14:23.484  [L1] KEY Escape (close the picker)
+13:14:23.546  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:14:23.556  NVDA  'board.canvas, file', '1 of 110', 'level 1'
+13:14:25.649  [L1] === L1 / step A6 ===
+13:14:26.738  [L1] ===== STEP A6 : menu row (Call 2): Slate menu, File, Settings…, Enter
+13:14:26.790  NVDA  'f10'
+13:14:26.792  [L1] KEY F10 (menu bar: opens the Slate menu on File)
+13:14:26.893  NVDA  'File', 'collapsed', 'F', '1 of 6'
+13:14:28.805  NVDA  'right arrow'
+13:14:28.806  [L1] KEY Right (open File)
+13:14:28.916  NVDA  'expanded'
+13:14:29.009  NVDA  'Open Vault…', 'O', '  Ctrl+Shift+', 'O', '1 of 8'
+13:14:30.757  NVDA  'down arrow'
+13:14:30.759  [L1] KEY Down (to Settings…, press 1)
+13:14:30.778  NVDA  'Quick Open…', 'Q', '  Ctrl+', 'O', '2 of 8'
+13:14:31.484  NVDA  'down arrow'
+13:14:31.485  [L1] KEY Down (to Settings…, press 2)
+13:14:31.504  NVDA  'New Note from Template…', 'T', '  Ctrl+Shift+', 'N', '3 of 8'
+13:14:32.223  NVDA  'down arrow'
+13:14:32.224  [L1] KEY Down (to Settings…, press 3)
+13:14:32.242  NVDA  'New Canvas', 'C', '4 of 8'
+13:14:32.956  NVDA  'down arrow'
+13:14:32.957  [L1] KEY Down (to Settings…, press 4)
+13:14:32.974  NVDA  'Close Vault', 'C', '5 of 8'
+13:14:33.689  NVDA  'down arrow'
+13:14:33.690  [L1] KEY Down (to Settings…, press 5)
+13:14:33.707  NVDA  'Files Sidebar', 'collapsed', 'S', '6 of 8'
+13:14:34.419  NVDA  'down arrow'
+13:14:34.419  [L1] KEY Down (to Settings…, press 6)
+13:14:34.439  NVDA  'Settings…', 'E', '  Ctrl+comma', '7 of 8'
+13:14:35.169  [L1]   TRIGGER at 13:14:35.167
+13:14:35.171  NVDA  'enter'
+13:14:35.172  [L1] KEY Enter (Settings…)
+13:14:35.279  NVDA  'Settings'
+13:14:35.334  NVDA  'Settings categories', 'list'
+13:14:35.346  NVDA  'Appearance', '1 of 1'
+13:14:47.501  [L1] cleanup after A6: Escape closes Settings; then a.md opened by Quick Open (setup for A7)
+13:14:47.526  NVDA  'escape'
+13:14:47.528  [L1] KEY Escape (close Settings)
+13:14:47.595  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:14:47.606  NVDA  'board.canvas, file', '1 of 110', 'level 1'
+13:14:49.176  NVDA  'ctrl+o'
+13:14:49.177  [L1] KEY Ctrl+O (Quick Open)
+13:14:49.432  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:14:49.438  NVDA  '308 recent files'
+13:14:49.681  NVDA  'a'
+13:14:49.766  NVDA  'a'
+13:14:49.767  NVDA  'dot'
+13:14:49.784  NVDA  '5 files matching "a"'
+13:14:49.846  NVDA  'm'
+13:14:49.855  NVDA  '3 files matching "a."'
+13:14:49.904  NVDA  'd'
+13:14:49.922  NVDA  '2 files matching "a.m"'
+13:14:49.968  [L1] KEY typed 'a.md' (Unicode key presses, 60 ms apart)
+13:14:49.987  NVDA  '2 files matching "a.md"'
+13:14:58.466  NVDA  'enter'
+13:14:58.470  [L1] KEY Enter (open a.md)
+13:14:58.915  NVDA  ' a, tab 1 of 1.'
+13:14:58.958  NVDA  'Outline, 1 heading.'
+13:14:58.958  NVDA  'Citations, 2 citations.'
+13:14:59.021  NVDA  'Workspace tabs', 'tab control'
+13:14:59.046  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:14:59.074  NVDA  'a.md editor', 'document', '---'
+13:15:02.561  [L1] === L1 / step A7 ===
+13:15:03.641  [L1] ===== STEP A7 : menu row (Call 2): a note open; Slate menu, Editor, Bulk Rename Properties…, Enter
+13:15:03.695  NVDA  'f10'
+13:15:03.697  [L1] KEY F10 (menu bar: opens the Slate menu on File)
+13:15:03.799  NVDA  'File', 'collapsed', 'F', '1 of 6'
+13:15:05.705  NVDA  'down arrow'
+13:15:05.706  [L1] KEY Down (to Editor, press 1)
+13:15:05.723  NVDA  'Workspace', 'collapsed', 'W', '2 of 6'
+13:15:06.441  NVDA  'down arrow'
+13:15:06.441  [L1] KEY Down (to Editor, press 2)
+13:15:06.459  NVDA  'Base', 'collapsed', 'B', '3 of 6'
+13:15:07.174  NVDA  'down arrow'
+13:15:07.174  [L1] KEY Down (to Editor, press 3)
+13:15:07.193  NVDA  'Editor', 'collapsed', 'E', '4 of 6'
+13:15:07.911  NVDA  'right arrow'
+13:15:07.913  [L1] KEY Right (open Editor)
+13:15:08.072  NVDA  'expanded'
+13:15:08.217  NVDA  'Find…', 'F', '  Ctrl+', 'F', '1 of 16'
+13:15:09.859  NVDA  'down arrow'
+13:15:09.860  [L1] KEY Down (to Bulk Rename Properties…, press 1)
+13:15:09.883  NVDA  'Activate at Cursor', 'A', '  Ctrl+Enter', '2 of 16'
+13:15:10.795  NVDA  'down arrow'
+13:15:10.795  [L1] KEY Down (to Bulk Rename Properties…, press 2)
+13:15:10.814  NVDA  'Preview Embed', 'E', '  Ctrl+', 'E', '3 of 16'
+13:15:11.527  NVDA  'down arrow'
+13:15:11.527  [L1] KEY Down (to Bulk Rename Properties…, press 3)
+13:15:11.544  NVDA  'Toggle Reading Mode', 'R', '  Ctrl+Shift+', 'E', '4 of 16'
+13:15:12.246  NVDA  'down arrow'
+13:15:12.246  [L1] KEY Down (to Bulk Rename Properties…, press 4)
+13:15:12.266  NVDA  'Add Property…', 'P', '5 of 16'
+13:15:12.980  NVDA  'down arrow'
+13:15:12.980  [L1] KEY Down (to Bulk Rename Properties…, press 5)
+13:15:13.000  NVDA  'Bulk Rename Properties…', 'O', '  Ctrl+Shift+', 'R', '6 of 16'
+13:15:13.714  [L1]   TRIGGER at 13:15:13.712
+13:15:13.716  NVDA  'enter'
+13:15:13.717  [L1] KEY Enter (Bulk Rename Properties…)
+13:15:13.895  NVDA  'Bulk rename property'
+13:15:13.958  NVDA  'Old property key', 'edit', 'title'
+13:15:13.968  NVDA  'Old property key', 'edit', 'title'
+13:16:33.836  [L1] cleanup after A7: Escape closes Bulk Rename
+13:16:33.860  NVDA  'escape'
+13:16:33.862  [L1] KEY Escape (close Bulk Rename)
+13:16:33.985  NVDA  'Workspace tabs', 'tab control'
+13:16:33.994  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:16:34.004  NVDA  'a.md editor', 'document', '---'
+13:16:41.399  [L1] === L1 / step C3 ===
+13:16:42.451  [L1] ===== STEP C3 : CitationSummaryWalkButton: a.md, Ctrl+Shift+J, Walk through, Space
+13:16:42.513  NVDA  'ctrl+shift+j'
+13:16:42.516  [L1] KEY Ctrl+Shift+J (Citation Summary)
+13:16:42.580  NVDA  'Citation summary. 2 citations referencing 2 unique sources.'
+13:16:42.625  NVDA  'Walk through citations', 'button', 'Closes this sheet and starts a walk-through.'
+13:16:44.128  [L1]   TRIGGER at 13:16:44.126
+13:16:44.132  [L1] KEY Space (Walk through)
+13:16:44.218  NVDA  'Workspace tabs', 'tab control'
+13:16:44.228  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:16:44.236  NVDA  'a.md editor', 'document', '---'
+13:16:44.237  NVDA  'Walk through citations. Switch to the Citations sidebar tab and arrow through the list.'
+13:16:53.323  [L1] === L1 / step D2 ===
+13:16:54.367  [L1] ===== STEP D2 : FindInNoteClose: Ctrl+F in a.md, Tab to Close, Space
+13:16:54.426  NVDA  'ctrl+f'
+13:16:54.430  [L1] KEY Ctrl+F (Find…)
+13:16:54.544  NVDA  'Find in note', 'edit', 'Enter or Control G: next match. Shift Enter or Control Shift G: previous match. Control G and Control Shift G also work from the note. Escape closes the find bar.', 'blank'
+13:16:55.769  NVDA  'tab'
+13:16:55.769  [L1] KEY Tab (to Close, press 1)
+13:16:55.797  NVDA  'Previous match', 'button', 'P'
+13:16:56.737  NVDA  'tab'
+13:16:56.738  [L1] KEY Tab (to Close, press 2)
+13:16:56.756  NVDA  'Next match', 'button', 'N'
+13:16:57.695  NVDA  'tab'
+13:16:57.696  [L1] KEY Tab (to Close, press 3)
+13:16:57.713  NVDA  'Match case', 'check box', 'not checked', 'C'
+13:16:58.634  NVDA  'tab'
+13:16:58.634  [L1] KEY Tab (to Close, press 4)
+13:16:58.651  NVDA  'Whole word', 'check box', 'not checked', 'W'
+13:16:59.568  NVDA  'tab'
+13:16:59.568  [L1] KEY Tab (to Close, press 5)
+13:16:59.598  NVDA  'Replace with', 'edit', 'blank'
+13:17:00.911  NVDA  'tab'
+13:17:00.912  [L1] KEY Tab (to Close, press 6)
+13:17:00.936  NVDA  'Replace', 'button', 'R'
+13:17:01.851  NVDA  'tab'
+13:17:01.851  [L1] KEY Tab (to Close, press 7)
+13:17:01.871  NVDA  'Replace all', 'button', 'A'
+13:17:02.795  NVDA  'tab'
+13:17:02.796  [L1] KEY Tab (to Close, press 8)
+13:17:02.812  NVDA  'Close find', 'button'
+13:17:03.732  [L1]   TRIGGER at 13:17:03.731
+13:17:03.735  [L1] KEY Space (Close)
+13:17:03.790  NVDA  'a.md editor', 'document', '---'
+13:17:14.440  [L1] === L1 / step D3 ===
+13:17:15.514  [L1] ===== STEP D3 : EditorPopoverClose: the caret on a.md's embed, Ctrl+E, Close, Space
+13:17:15.575  NVDA  'ctrl+end'
+13:17:15.577  [L1] KEY Ctrl+End
+13:17:15.610  NVDA  'The end of note A.'
+13:17:16.536  NVDA  'up arrow'
+13:17:16.536  [L1] KEY Up
+13:17:16.550  NVDA  'blank'
+13:17:17.474  [L1] KEY Up
+13:17:17.475  NVDA  'up arrow'
+13:17:17.495  NVDA  'link', '![[n001]]'
+13:17:18.410  [L1] KEY Up (the embed line)
+13:17:18.411  NVDA  'up arrow'
+13:17:18.422  NVDA  'blank'
+13:17:19.755  NVDA  'ctrl+e'
+13:17:19.756  [L1] KEY Ctrl+E (Preview Embed)
+13:17:19.765  NVDA  'No embed at cursor.'
+13:17:29.566  [L1] === L1 / step D3 ===
+13:17:30.646  [L1] ===== STEP D3 : EditorPopoverClose: the caret on a.md's embed, Ctrl+E, Close, Space
+13:17:30.706  NVDA  'ctrl+end'
+13:17:30.709  [L1] KEY Ctrl+End
+13:17:30.740  NVDA  'The end of note A.'
+13:17:31.657  NVDA  'up arrow'
+13:17:31.657  [L1] KEY Up
+13:17:31.670  NVDA  'blank'
+13:17:33.458  NVDA  'up arrow'
+13:17:33.458  [L1] KEY Up (the embed line)
+13:17:33.476  NVDA  'link', '![[n001]]'
+13:17:34.800  NVDA  'ctrl+e'
+13:17:34.801  [L1] KEY Ctrl+E (Preview Embed)
+13:17:34.920  NVDA  'Close', 'button'
+13:17:34.921  NVDA  'Embed preview for n001. Embedded note: n001.md.'
+13:17:36.374  [L1]   TRIGGER at 13:17:36.373
+13:17:36.378  [L1] KEY Space (Close)
+13:17:36.432  NVDA  'a.md editor', 'document', 'link', '![[n001]]'
+13:17:45.926  [L1] === L1 / step D4 ===
+13:17:46.974  [L1] ===== STEP D4 : EditorPopoverOpenSource: the same popover, Open source, Space
+13:17:47.036  NVDA  'ctrl+e'
+13:17:47.039  [L1] KEY Ctrl+E (Preview Embed)
+13:17:47.131  NVDA  'Close', 'button'
+13:17:47.131  NVDA  'Embed preview for n001. Embedded note: n001.md.'
+13:17:48.643  NVDA  'tab'
+13:17:48.644  [L1] KEY Tab (to Open source, press 1)
+13:17:48.661  NVDA  'Open source', 'button'
+13:17:49.587  [L1]   TRIGGER at 13:17:49.586
+13:17:49.590  [L1] KEY Space (Open source)
+13:17:49.656  NVDA  'wikilink n001.md.'
+13:17:49.675  NVDA  'Outline, 1 heading.'
+13:17:49.695  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:17:58.894  [L1] === L1 / step D1 ===
+13:17:59.949  [L1] ===== STEP D1 : QuickSwitcherClose: Ctrl+O, Tab to Close, Space
+13:18:00.006  NVDA  'ctrl+o'
+13:18:00.009  [L1] KEY Ctrl+O (Quick Open)
+13:18:07.087  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:18:07.091  NVDA  '308 recent files'
+13:18:08.256  NVDA  'tab'
+13:18:08.256  [L1] KEY Tab (to Close, press 1)
+13:18:08.278  NVDA  'Close Quick Open', 'button'
+13:18:09.221  [L1]   TRIGGER at 13:18:09.219
+13:18:09.224  [L1] KEY Space (Close)
+13:18:09.431  NVDA  'Workspace tabs', 'tab control'
+13:18:09.456  NVDA  'n001', 'tab', 'selected', '1 of 1'
+13:18:09.474  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:18:20.155  [L1] === L1 / step B1 ===
+13:18:21.210  [L1] ===== STEP B1 : SidebarExpandLoaded: Files toolbar, Expand loaded folders, Space
+13:18:21.545  NVDA  'Selected: bulk, folder'
+13:18:21.567  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:18:21.582  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:18:23.362  NVDA  'collapsed'
+13:18:24.174  [L1]   NOTE setup: bulk/ expanded and collapsed again by UIA ExpandCollapse, so its 200 children are loaded
+13:18:24.220  NVDA  'shift+tab'
+13:18:24.222  [L1] KEY Shift+Tab (to Expand loaded folders, press 1)
+13:18:24.252  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:18:25.186  NVDA  'shift+tab'
+13:18:25.187  [L1] KEY Shift+Tab (to Expand loaded folders, press 2)
+13:18:25.204  NVDA  'File actions', 'grouping', 'collapsed'
+13:18:26.146  NVDA  'shift+tab'
+13:18:26.147  [L1] KEY Shift+Tab (to Expand loaded folders, press 3)
+13:18:26.164  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:18:27.078  NVDA  'shift+tab'
+13:18:27.079  [L1] KEY Shift+Tab (to Expand loaded folders, press 4)
+13:18:27.111  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:18:28.014  NVDA  'shift+tab'
+13:18:28.015  [L1] KEY Shift+Tab (to Expand loaded folders, press 5)
+13:18:28.040  NVDA  'Refresh files', 'button'
+13:18:28.960  NVDA  'shift+tab'
+13:18:28.961  [L1] KEY Shift+Tab (to Expand loaded folders, press 6)
+13:18:28.978  NVDA  'Expand loaded folders', 'button'
+13:18:29.894  [L1]   TRIGGER at 13:18:29.893
+13:18:29.897  [L1] KEY Space (Expand loaded folders)
+13:18:42.540  [L1] === L1 / step B4 ===
+13:18:43.606  [L1] ===== STEP B4 : Import…: File actions, Import…, Space; Escape the picker
+13:18:43.679  NVDA  'f6'
+13:18:43.681  [L1] KEY F6 (to the Files tree, press 1)
+13:18:43.715  NVDA  'Workspace tabs', 'tab control'
+13:18:43.725  NVDA  'n001', 'tab', 'selected', '1 of 1'
+13:18:43.726  NVDA  'Tab bar.  n001, tab 1 of 1.'
+13:18:44.840  NVDA  'f6'
+13:18:44.841  [L1] KEY F6 (to the Files tree, press 2)
+13:18:44.866  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:18:44.869  NVDA  'Editor pane 1 of 1, n001.'
+13:18:45.985  NVDA  'f6'
+13:18:45.987  [L1] KEY F6 (to the Files tree, press 3)
+13:18:46.019  NVDA  'Outline', 'list'
+13:18:46.025  NVDA  'Level 1 heading: n001', 'not selected', '1 of 1'
+13:18:46.025  NVDA  'Outline panel.'
+13:18:47.152  NVDA  'f6'
+13:18:47.153  [L1] KEY F6 (to the Files tree, press 4)
+13:18:47.185  NVDA  'Right pane panels', 'list'
+13:18:47.194  NVDA  'Outline', '1 of 5'
+13:18:47.195  NVDA  'Right pane panels.'
+13:18:48.288  NVDA  'f6'
+13:18:48.289  [L1] KEY F6 (to the Files tree, press 5)
+13:18:48.313  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:18:48.313  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:18:49.419  NVDA  'f6'
+13:18:49.420  [L1] KEY F6 (to the Files tree, press 6)
+13:18:49.450  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:18:49.451  NVDA  'Menu bar.'
+13:18:50.588  NVDA  'f6'
+13:18:50.589  [L1] KEY F6 (to the Files tree, press 7)
+13:18:50.634  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:18:50.644  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:18:50.644  NVDA  'Files.'
+13:18:50.658  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:18:51.866  NVDA  'File actions', 'grouping', 'expanded'
+13:18:52.184  [L1]   NOTE setup: the File actions expander opened by UIA Expand
+13:18:52.196  NVDA  'tab'
+13:18:52.197  [L1] KEY Tab (to Import…, press 1)
+13:18:53.131  NVDA  'tab'
+13:18:53.132  [L1] KEY Tab (to Import…, press 2)
+13:18:53.180  NVDA  'File or folder name', 'edit', 'bulk'
+13:18:54.083  NVDA  'tab'
+13:18:54.083  [L1] KEY Tab (to Import…, press 3)
+13:18:54.126  NVDA  'New note', 'button'
+13:18:55.015  NVDA  'tab'
+13:18:55.016  [L1] KEY Tab (to Import…, press 4)
+13:18:55.033  NVDA  'New folder', 'button'
+13:18:55.952  NVDA  'tab'
+13:18:55.954  [L1] KEY Tab (to Import…, press 5)
+13:18:55.973  NVDA  'Rename', 'button'
+13:18:56.890  NVDA  'tab'
+13:18:56.891  [L1] KEY Tab (to Import…, press 6)
+13:18:56.907  NVDA  'Delete', 'button'
+13:18:57.840  NVDA  'tab'
+13:18:57.840  [L1] KEY Tab (to Import…, press 7)
+13:18:57.858  NVDA  'Duplicate', 'button'
+13:18:58.761  NVDA  'tab'
+13:18:58.762  [L1] KEY Tab (to Import…, press 8)
+13:18:58.779  NVDA  'Move to…', 'button'
+13:18:59.715  NVDA  'tab'
+13:18:59.716  [L1] KEY Tab (to Import…, press 9)
+13:18:59.736  NVDA  'Copy path', 'button'
+13:19:00.850  NVDA  'tab'
+13:19:00.851  [L1] KEY Tab (to Import…, press 10)
+13:19:00.871  NVDA  'Reveal in File Explorer', 'button'
+13:19:01.785  NVDA  'tab'
+13:19:01.786  [L1] KEY Tab (to Import…, press 11)
+13:19:01.806  NVDA  'Folder note', 'button'
+13:19:02.719  NVDA  'tab'
+13:19:02.720  [L1] KEY Tab (to Import…, press 12)
+13:19:02.741  NVDA  'Add shortcut', 'button'
+13:19:03.653  NVDA  'tab'
+13:19:03.654  [L1] KEY Tab (to Import…, press 13)
+13:19:03.674  NVDA  'Import…', 'button'
+13:19:04.591  [L1]   TRIGGER at 13:19:04.590
+13:19:04.594  [L1] KEY Space (Import…)
+13:19:04.665  NVDA  'Import Files and Folders', 'dialog', 'Choose Yes to import files, No to import folders, or Cancel to stop.'
+13:19:04.667  NVDA  'Cancel', 'button'
+13:19:07.043  [L1]   NOTE after Space: foreground 'Import Files and Folders' (#32770); focus name='Cancel' type=ControlType.Pane aid='2' enabled=True
+13:19:07.045  NVDA  'escape'
+13:19:07.047  [L1] KEY Escape (cancel the Import Files and Folders box)
+13:19:50.472  [L1] === L1 / step C10 ===
+13:19:51.520  [L1] ===== STEP C10 : _depth: Connections leaf, the keys on its depth control, the note's tab closed (Ctrl+W)
+13:19:51.576  NVDA  'ctrl+o'
+13:19:51.579  [L1] KEY Ctrl+O (Quick Open)
+13:20:22.262  [L1] OBSERVATION after B4: the keys rest on the bare window; Ctrl+O at 13:19:51.576 drew only 'ctrl+o' and no Quick Open. Recovery: F6
+13:20:22.286  NVDA  'f6'
+13:20:22.289  [L1] KEY F6 (recover a region)
+13:20:24.400  [L1] === L1 / step C10 ===
+13:20:25.459  [L1] ===== STEP C10 : _depth: Connections leaf, the keys on its depth control, the note's tab closed (Ctrl+W)
+13:20:25.516  NVDA  'ctrl+o'
+13:20:25.519  [L1] KEY Ctrl+O (Quick Open)
+13:20:43.996  [L1] OBSERVATION: F6 at 13:20:22.289 also did nothing (keys on the HWND). Recovery by keys: Alt, then Escape
+13:20:44.023  [L1] KEY Alt (menu bar?)
+13:20:44.052  NVDA  'n001 — cb17a-L1 — Slate', 'window'
+13:20:44.059  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:20:45.637  NVDA  'escape'
+13:20:45.638  [L1] KEY Escape
+13:20:45.677  NVDA  'File actions', 'grouping', 'expanded'
+13:20:45.682  NVDA  'Import…', 'button'
+13:20:53.752  [L1] === L1 / step C10 ===
+13:20:54.804  [L1] ===== STEP C10 : _depth: Connections leaf, the keys on its depth control, the note's tab closed (Ctrl+W)
+13:20:54.858  NVDA  'ctrl+o'
+13:20:54.861  [L1] KEY Ctrl+O (Quick Open)
+13:20:55.120  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:20:55.123  NVDA  '308 recent files'
+13:20:55.347  NVDA  'a'
+13:20:55.442  NVDA  'a'
+13:20:55.442  NVDA  'dot'
+13:20:55.455  NVDA  '5 files matching "a"'
+13:20:55.508  NVDA  'm'
+13:20:55.516  NVDA  '3 files matching "a."'
+13:20:55.574  NVDA  'd'
+13:20:55.584  NVDA  '2 files matching "a.m"'
+13:20:55.625  [L1] KEY typed 'a.md' (Unicode key presses, 60 ms apart)
+13:20:55.655  NVDA  '2 files matching "a.md"'
+13:20:57.358  NVDA  'enter'
+13:20:57.358  [L1] KEY Enter (a)
+13:20:57.657  NVDA  'Outline, 1 heading.'
+13:20:57.720  NVDA  'Citations, 2 citations.'
+13:20:57.795  NVDA  'Workspace tabs', 'tab control'
+13:20:57.825  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:20:57.845  NVDA  'a.md editor', 'document', '---'
+13:20:59.250  NVDA  'ctrl+shift+p'
+13:20:59.253  [L1] KEY Ctrl+Shift+P (command palette)
+13:21:00.767  [L1] KEY typed 'show connections' (Unicode key presses, 60 ms apart)
+13:21:00.860  NVDA  'Search commands', 'edit', 'Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.', 'show connections'
+13:21:00.864  NVDA  's'
+13:21:00.865  NVDA  'h'
+13:21:00.865  NVDA  'o'
+13:21:00.865  NVDA  'w'
+13:21:00.867  NVDA  'show'
+13:21:00.867  NVDA  'space'
+13:21:00.867  NVDA  'c'
+13:21:00.867  NVDA  'o'
+13:21:00.868  NVDA  'n'
+13:21:00.868  NVDA  'n'
+13:21:00.868  NVDA  'e'
+13:21:00.868  NVDA  'c'
+13:21:00.868  NVDA  't'
+13:21:00.869  NVDA  'i'
+13:21:00.869  NVDA  'o'
+13:21:00.869  NVDA  'n'
+13:21:00.869  NVDA  's'
+13:21:00.885  NVDA  'Selected: Canvas: Show Outline. Unavailable: This command is not available right now.'
+13:21:01.249  NVDA  '3 commands matching "show connections"'
+13:21:02.861  NVDA  'down arrow'
+13:21:02.861  [L1] KEY Down (palette)
+13:21:02.982  NVDA  'show connections'
+13:21:03.002  NVDA  'Selected: Show Connections'
+13:21:03.479  [L1] KEY Enter (Show Connections)
+13:21:03.480  NVDA  'enter'
+13:21:03.710  NVDA  'Connections panel.'
+13:21:03.730  NVDA  'Loading connections.'
+13:21:03.798  NVDA  'Connections', 'tree view'
+13:21:03.808  NVDA  'Linked from, 0 notes', 'not selected', 'expanded', '1 of 2', 'level 1'
+13:21:03.809  NVDA  'a: 0 links in, 0 links out. Showing 2 notes within 1 links.'
+13:21:05.737  NVDA  'shift+tab'
+13:21:05.738  [L1] KEY Shift+Tab (to the depth control, press 1)
+13:21:05.765  NVDA  'Local graph depth', 'combo box', 'Links', 'collapsed', 'How many links away from this note to include.'
+13:21:06.696  [L1]   TRIGGER at 13:21:06.696
+13:21:06.700  NVDA  'ctrl+w'
+13:21:06.701  [L1] KEY Ctrl+W (close the note's tab)
+13:21:06.797  NVDA  'Closed a.'
+13:21:06.801  NVDA  'unavailable'
+13:21:06.820  NVDA  'Right pane panels', 'list'
+13:21:06.832  NVDA  'Connections', '4 of 5'
+13:21:17.679  [L1] === L1 / step C11 ===
+13:21:19.350  [L1] ===== STEP C11 : inspector section: a graph tab, the keys in an inspector section, the graph tab closed (Ctrl+W)
+13:21:19.407  NVDA  'ctrl+shift+p'
+13:21:19.411  [L1] KEY Ctrl+Shift+P (command palette)
+13:21:20.574  [L1] KEY typed 'open graph' (Unicode key presses, 60 ms apart)
+13:21:21.187  NVDA  'o'
+13:21:21.187  NVDA  'p'
+13:21:21.188  NVDA  'e'
+13:21:21.188  NVDA  'n'
+13:21:21.189  NVDA  'space'
+13:21:21.189  NVDA  'g'
+13:21:21.189  NVDA  'r'
+13:21:21.206  NVDA  'a'
+13:21:21.206  NVDA  'p'
+13:21:21.206  NVDA  'h'
+13:21:21.415  NVDA  'Search commands', 'edit', 'Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.', 'open graph'
+13:21:21.466  NVDA  '5 commands matching "open graph"'
+13:21:22.640  NVDA  'down arrow'
+13:21:22.640  [L1] KEY Down (palette)
+13:21:22.818  NVDA  'open graph'
+13:21:22.833  NVDA  'Selected: Graph: Unresolved Links'
+13:21:23.223  [L1] KEY Down (palette)
+13:21:23.224  NVDA  'down arrow'
+13:21:23.357  NVDA  'open graph'
+13:21:23.376  NVDA  'Selected: Open Graph'
+13:21:23.791  NVDA  'enter'
+13:21:23.791  [L1] KEY Enter (Open Graph)
+13:21:24.667  NVDA  ' Graph, tab 1 of 1.'
+13:21:24.667  NVDA  'Graph.'
+13:21:24.682  NVDA  '305 notes, 1 links. 305 orphans, 0 unresolved targets.'
+13:21:24.786  NVDA  'Workspace tabs', 'tab control'
+13:21:24.818  NVDA  'Graph', 'tab', 'selected', '1 of 1'
+13:21:24.836  NVDA  'Graph, data grid', 'data grid'
+13:21:24.850  NVDA  'a, 0 links in, 0 links out', 'data item', '1 of 305'
+13:21:24.919  NVDA  'Note: a', 'selected', 'a', 'row 1', 'Note', 'column 1'
+13:21:29.016  NVDA  'f6'
+13:21:29.017  [L1] KEY F6 (to the right pane rail, press 1)
+13:21:29.049  NVDA  'Select a note to see its connections.', 'grouping'
+13:21:29.049  NVDA  'Connections panel.'
+13:21:30.210  NVDA  'f6'
+13:21:30.210  [L1] KEY F6 (to the right pane rail, press 2)
+13:21:30.241  NVDA  'Right pane panels', 'list'
+13:21:30.250  NVDA  'Connections', '4 of 5'
+13:21:30.251  NVDA  'Right pane panels.'
+13:21:31.378  NVDA  'down arrow'
+13:21:31.378  [L1] KEY Down (to Graph inspector, press 1)
+13:21:31.541  NVDA  'Graph inspector', '5 of 5'
+13:21:32.134  NVDA  'enter'
+13:21:32.134  [L1] KEY Enter (show the Graph inspector leaf)
+13:21:34.444  NVDA  'tab'
+13:21:34.445  [L1] KEY Tab (to the inspector's name filter, press 1)
+13:21:34.465  NVDA  'More panels', 'button'
+13:21:35.378  NVDA  'tab'
+13:21:35.379  [L1] KEY Tab (to the inspector's name filter, press 2)
+13:21:35.404  NVDA  'New note', 'button'
+13:21:36.312  NVDA  'tab'
+13:21:36.312  [L1] KEY Tab (to the inspector's name filter, press 3)
+13:21:36.329  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:21:37.260  NVDA  'tab'
+13:21:37.260  [L1] KEY Tab (to the inspector's name filter, press 4)
+13:21:37.279  NVDA  'Collapse all', 'button'
+13:21:39.038  NVDA  'tab'
+13:21:39.038  [L1] KEY Tab (to the inspector's name filter, press 5)
+13:21:39.112  NVDA  'Expand loaded folders', 'button'
+13:21:39.967  NVDA  'tab'
+13:21:39.967  [L1] KEY Tab (to the inspector's name filter, press 6)
+13:21:40.048  NVDA  'Refresh files', 'button'
+13:21:40.903  NVDA  'tab'
+13:21:40.903  [L1] KEY Tab (to the inspector's name filter, press 7)
+13:21:41.008  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:21:41.882  NVDA  'tab'
+13:21:41.883  [L1] KEY Tab (to the inspector's name filter, press 8)
+13:21:41.916  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:21:42.811  NVDA  'tab'
+13:21:42.812  [L1] KEY Tab (to the inspector's name filter, press 9)
+13:21:42.828  NVDA  'File actions', 'grouping', 'expanded'
+13:21:43.774  NVDA  'tab'
+13:21:43.775  [L1] KEY Tab (to the inspector's name filter, press 10)
+13:21:43.817  NVDA  'File or folder name', 'edit', 'bulk'
+13:21:44.713  NVDA  'tab'
+13:21:44.714  [L1] KEY Tab (to the inspector's name filter, press 11)
+13:21:44.750  NVDA  'New note', 'button'
+13:21:45.644  NVDA  'tab'
+13:21:45.644  [L1] KEY Tab (to the inspector's name filter, press 12)
+13:21:45.661  NVDA  'New folder', 'button'
+13:21:46.582  NVDA  'tab'
+13:21:46.582  [L1] KEY Tab (to the inspector's name filter, press 13)
+13:21:46.600  NVDA  'Rename', 'button'
+13:21:47.514  NVDA  'tab'
+13:21:47.514  [L1] KEY Tab (to the inspector's name filter, press 14)
+13:21:47.531  NVDA  'Delete', 'button'
+13:21:48.451  NVDA  'shift+tab'
+13:21:48.452  [L1] KEY Shift+Tab (to the inspector's name filter, press 1)
+13:21:48.469  NVDA  'Rename', 'button'
+13:21:49.400  NVDA  'shift+tab'
+13:21:49.401  [L1] KEY Shift+Tab (to the inspector's name filter, press 2)
+13:21:49.418  NVDA  'New folder', 'button'
+13:21:50.341  NVDA  'shift+tab'
+13:21:50.342  [L1] KEY Shift+Tab (to the inspector's name filter, press 3)
+13:21:50.360  NVDA  'New note', 'button'
+13:21:51.273  NVDA  'shift+tab'
+13:21:51.274  [L1] KEY Shift+Tab (to the inspector's name filter, press 4)
+13:21:51.318  NVDA  'File or folder name', 'edit', 'bulk'
+13:21:52.205  NVDA  'shift+tab'
+13:21:52.207  [L1] KEY Shift+Tab (to the inspector's name filter, press 5)
+13:21:52.246  NVDA  'File actions', 'grouping', 'expanded'
+13:21:53.151  NVDA  'shift+tab'
+13:21:53.152  [L1] KEY Shift+Tab (to the inspector's name filter, press 6)
+13:21:53.171  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:21:54.285  NVDA  'shift+tab'
+13:21:54.286  [L1] KEY Shift+Tab (to the inspector's name filter, press 7)
+13:21:54.317  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:21:55.217  NVDA  'shift+tab'
+13:21:55.218  [L1] KEY Shift+Tab (to the inspector's name filter, press 8)
+13:21:55.244  NVDA  'Refresh files', 'button'
+13:21:56.152  NVDA  'shift+tab'
+13:21:56.153  [L1] KEY Shift+Tab (to the inspector's name filter, press 9)
+13:21:56.170  NVDA  'Expand loaded folders', 'button'
+13:21:57.089  NVDA  'shift+tab'
+13:21:57.090  [L1] KEY Shift+Tab (to the inspector's name filter, press 10)
+13:21:57.106  NVDA  'Collapse all', 'button'
+13:21:58.024  NVDA  'shift+tab'
+13:21:58.024  [L1] KEY Shift+Tab (to the inspector's name filter, press 11)
+13:21:58.041  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:21:58.960  NVDA  'shift+tab'
+13:21:58.961  [L1] KEY Shift+Tab (to the inspector's name filter, press 12)
+13:21:58.977  NVDA  'New note', 'button'
+13:22:00.906  NVDA  'shift+tab'
+13:22:00.907  [L1] KEY Shift+Tab (to the inspector's name filter, press 13)
+13:22:00.938  NVDA  'More panels', 'button'
+13:22:01.840  NVDA  'shift+tab'
+13:22:01.841  [L1] KEY Shift+Tab (to the inspector's name filter, press 14)
+13:22:01.865  NVDA  'Right pane panels', 'list'
+13:22:01.876  NVDA  'Graph inspector', '5 of 5'
+13:22:16.977  [L1] === L1 / step C11 ===
+13:22:18.041  [L1] ===== STEP C11 : inspector section: a graph tab, the keys in an inspector section, the graph tab closed (Ctrl+W)
+13:22:18.086  [L1]   NOTE the graph tab was already open (attempt 1 opened it)
+13:22:18.444  NVDA  'enter'
+13:22:18.446  [L1] KEY Enter (show the Graph inspector leaf)
+13:22:20.580  NVDA  'shift+f6'
+13:22:20.581  [L1] KEY Shift+F6 (back a region: the right pane's content)
+13:22:20.621  NVDA  'Graph inspector', 'grouping'
+13:22:20.625  NVDA  'Filters', 'grouping'
+13:22:20.634  NVDA  'Filter graph by note name', 'edit', 'blank'
+13:22:20.635  NVDA  'Graph inspector panel.'
+13:22:22.154  [L1]   TRIGGER at 13:22:22.153
+13:22:22.159  NVDA  'ctrl+w'
+13:22:22.161  [L1] KEY Ctrl+W (close the graph tab)
+13:22:22.268  NVDA  'Closed Graph.'
+13:22:22.271  NVDA  'unavailable'
+13:22:22.303  NVDA  'Right pane panels', 'list'
+13:22:22.319  NVDA  'Graph inspector', '5 of 5'
+13:22:32.512  [L1] === L1 / step C8 ===
+13:22:33.560  [L1] ===== STEP C8 : _quickFilter: Queries.base open, the keys in its quick filter, the file edited on disk
+13:22:33.617  NVDA  'ctrl+o'
+13:22:33.620  [L1] KEY Ctrl+O (Quick Open)
+13:22:33.887  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:22:33.891  NVDA  '308 recent files'
+13:22:34.098  NVDA  PitchCommand(offset=30), 'Q', PitchCommand()
+13:22:34.165  NVDA  'u'
+13:22:34.165  NVDA  '1 file matching "Q"'
+13:22:34.226  NVDA  'e'
+13:22:34.290  NVDA  'r'
+13:22:34.309  NVDA  '1 file matching "Que"'
+13:22:34.349  NVDA  'i'
+13:22:34.412  NVDA  'e'
+13:22:34.475  NVDA  's'
+13:22:34.526  [L1] KEY typed 'Queries' (Unicode key presses, 60 ms apart)
+13:22:34.548  NVDA  '1 file matching "Queries"'
+13:22:36.248  [L1] KEY Enter (Queries.base)
+13:22:36.249  NVDA  'enter'
+13:22:36.629  NVDA  ' Queries, tab 1 of 1.'
+13:22:36.882  NVDA  'Workspace tabs', 'tab control'
+13:22:36.909  NVDA  'Queries', 'tab', 'selected', '1 of 1'
+13:22:36.920  NVDA  '310 notes.', 'data grid'
+13:22:36.929  NVDA  'Queries.base', 'data item', '1 of 310'
+13:22:36.979  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata', 'Queries.base', 'row 1', 'file.name', 'column 1'
+13:22:38.833  NVDA  'shift+tab'
+13:22:38.834  [L1] KEY Shift+Tab (to the quick filter, press 1)
+13:22:38.865  NVDA  'Quick filter — temporary, does not change the base', 'edit', 'blank'
+13:22:39.792  [L1]   TRIGGER at 13:22:39.791
+13:22:39.796  [L1] DISK Queries.base: a comment line appended
+13:22:41.129  NVDA  '310 notes.', 'data grid'
+13:22:41.139  NVDA  'Queries.base', 'data item', '1 of 310'
+13:22:41.168  NVDA  'file.name# touched by the session at 13:22:39.793: Error: unsupported expression: invalid property identifier "file.name# touched by the session at 13:22:39.793": unexpected character \'#\' at byte 9..10', 'selected', 'read-only: file metadata'
+13:22:41.173  NVDA  'Files refreshed. 1 new or changed, 0 removed.'
+13:22:59.072  [L1] setup before C9: Queries.base written back to its fixture text with a final newline (C8's appended line had joined the last line, a fixture slip of this session)
+13:23:00.353  NVDA  'Queries.base', 'data item', '1 of 310'
+13:23:00.404  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata'
+13:23:11.251  [L1] === L1 / step C9 ===
+13:23:12.313  [L1] ===== STEP C9 : _viewPicker: the same base, the keys on its view picker, the file edited on disk
+13:23:12.386  NVDA  'shift+tab'
+13:23:12.389  [L1] KEY Shift+Tab (to the view picker, press 1)
+13:23:12.419  NVDA  'Quick filter — temporary, does not change the base', 'edit', 'blank'
+13:23:13.338  NVDA  'shift+tab'
+13:23:13.340  [L1] KEY Shift+Tab (to the view picker, press 2)
+13:23:13.365  NVDA  'Refresh', 'button', 'Reload the base and re-run its current view.'
+13:23:14.283  NVDA  'shift+tab'
+13:23:14.284  [L1] KEY Shift+Tab (to the view picker, press 3)
+13:23:14.311  NVDA  'Summary: 310 notes.'
+13:23:15.220  NVDA  'shift+tab'
+13:23:15.221  [L1] KEY Shift+Tab (to the view picker, press 4)
+13:23:15.242  NVDA  'Close Queries', 'button'
+13:23:16.168  NVDA  'shift+tab'
+13:23:16.169  [L1] KEY Shift+Tab (to the view picker, press 5)
+13:23:16.196  NVDA  'Queries', 'tab', 'selected', '1 of 1'
+13:23:17.103  NVDA  'shift+tab'
+13:23:17.104  [L1] KEY Shift+Tab (to the view picker, press 6)
+13:23:17.121  NVDA  'Workspace tabs', 'tab control'
+13:23:18.049  NVDA  'shift+tab'
+13:23:18.050  [L1] KEY Shift+Tab (to the view picker, press 7)
+13:23:18.980  NVDA  'shift+tab'
+13:23:18.982  [L1] KEY Shift+Tab (to the view picker, press 8)
+13:23:19.010  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:23:19.023  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:23:19.920  NVDA  'shift+tab'
+13:23:19.922  [L1] KEY Shift+Tab (to the view picker, press 9)
+13:23:19.950  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:23:20.878  NVDA  'shift+tab'
+13:23:20.880  [L1] KEY Shift+Tab (to the view picker, press 10)
+13:23:20.901  NVDA  'File actions', 'grouping', 'expanded'
+13:23:20.905  NVDA  'Import…', 'button'
+13:23:21.839  NVDA  'tab'
+13:23:21.840  [L1] KEY Tab (to the view picker, press 1)
+13:23:21.859  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:23:22.772  NVDA  'tab'
+13:23:22.772  [L1] KEY Tab (to the view picker, press 2)
+13:23:22.797  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:23:22.808  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:23:23.707  NVDA  'tab'
+13:23:23.708  [L1] KEY Tab (to the view picker, press 3)
+13:23:24.655  NVDA  'tab'
+13:23:24.656  [L1] KEY Tab (to the view picker, press 4)
+13:23:24.686  NVDA  'Workspace tabs', 'tab control'
+13:23:25.591  NVDA  'tab'
+13:23:25.591  [L1] KEY Tab (to the view picker, press 5)
+13:23:25.619  NVDA  'Queries', 'tab', 'selected', '1 of 1'
+13:23:26.522  NVDA  'tab'
+13:23:26.522  [L1] KEY Tab (to the view picker, press 6)
+13:23:26.544  NVDA  'Close Queries', 'button'
+13:23:27.454  NVDA  'tab'
+13:23:27.455  [L1] KEY Tab (to the view picker, press 7)
+13:23:27.487  NVDA  'Summary: 310 notes.'
+13:23:28.394  NVDA  'tab'
+13:23:28.394  [L1] KEY Tab (to the view picker, press 8)
+13:23:28.415  NVDA  'Refresh', 'button', 'Reload the base and re-run its current view.'
+13:23:29.342  NVDA  'tab'
+13:23:29.342  [L1] KEY Tab (to the view picker, press 9)
+13:23:29.374  NVDA  'Quick filter — temporary, does not change the base', 'edit', 'blank'
+13:23:30.278  NVDA  'tab'
+13:23:30.279  [L1] KEY Tab (to the view picker, press 10)
+13:23:30.308  NVDA  'file.name: Queries.base'
+13:23:30.326  NVDA  '310 notes.', 'data grid'
+13:23:30.330  NVDA  'Queries.base', 'data item', '1 of 310'
+13:23:30.355  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata'
+13:23:31.216  NVDA  'tab'
+13:23:31.216  [L1] KEY Tab (to the view picker, press 11)
+13:23:31.236  NVDA  'Meeting.md. file.name: Meeting.md'
+13:23:31.251  NVDA  'Meeting.md', 'data item', '2 of 310'
+13:23:31.276  NVDA  'file.name: Meeting.md', 'selected', 'read-only: file metadata', 'Meeting.md', 'row 2'
+13:23:32.149  NVDA  'tab'
+13:23:32.149  [L1] KEY Tab (to the view picker, press 12)
+13:23:32.168  NVDA  'a.md. file.name: a.md'
+13:23:32.183  NVDA  'a.md', 'data item', '3 of 310'
+13:23:32.207  NVDA  'file.name: a.md', 'selected', 'read-only: file metadata', 'a.md', 'row 3'
+13:23:33.288  NVDA  'tab'
+13:23:33.289  [L1] KEY Tab (to the view picker, press 13)
+13:23:33.307  NVDA  'board.canvas. file.name: board.canvas'
+13:23:33.322  NVDA  'board.canvas', 'data item', '4 of 310'
+13:23:33.347  NVDA  'file.name: board.canvas', 'selected', 'read-only: file metadata', 'board.canvas', 'row 4'
+13:23:34.226  NVDA  'tab'
+13:23:34.226  [L1] KEY Tab (to the view picker, press 14)
+13:23:34.245  NVDA  'b000.md. file.name: b000.md'
+13:23:34.259  NVDA  'b000.md', 'data item', '5 of 310'
+13:23:34.283  NVDA  'file.name: b000.md', 'selected', 'read-only: file metadata', 'b000.md', 'row 5'
+13:23:48.255  [L1] setup before C9 (attempt 2): the view picker shows only with two views or more; Queries.base rewritten with a second view
+13:23:49.542  NVDA  'b000.md', 'data item', '5 of 310'
+13:23:49.595  NVDA  'file.name: b000.md', 'selected', 'read-only: file metadata'
+13:23:49.610  NVDA  'Files refreshed. 1 new or changed, 0 removed.'
+13:23:58.760  [L1] === L1 / step C9 ===
+13:23:59.818  [L1] ===== STEP C9 : _viewPicker: the same base, the keys on its view picker, the file edited on disk
+13:23:59.889  NVDA  'shift+tab'
+13:23:59.893  [L1] KEY Shift+Tab (to the view picker, press 1)
+13:23:59.907  NVDA  'board.canvas. file.name: board.canvas'
+13:23:59.927  NVDA  'board.canvas', 'data item', '4 of 310'
+13:23:59.951  NVDA  'file.name: board.canvas', 'selected', 'read-only: file metadata', 'board.canvas', 'row 4'
+13:24:01.093  NVDA  'shift+tab'
+13:24:01.095  [L1] KEY Shift+Tab (to the view picker, press 2)
+13:24:01.111  NVDA  'a.md. file.name: a.md'
+13:24:01.129  NVDA  'a.md', 'data item', '3 of 310'
+13:24:01.154  NVDA  'file.name: a.md', 'selected', 'read-only: file metadata', 'a.md', 'row 3'
+13:24:02.060  NVDA  'shift+tab'
+13:24:02.061  [L1] KEY Shift+Tab (to the view picker, press 3)
+13:24:02.083  NVDA  'Meeting.md. file.name: Meeting.md'
+13:24:02.098  NVDA  'Meeting.md', 'data item', '2 of 310'
+13:24:02.123  NVDA  'file.name: Meeting.md', 'selected', 'read-only: file metadata', 'Meeting.md', 'row 2'
+13:24:03.027  NVDA  'shift+tab'
+13:24:03.028  [L1] KEY Shift+Tab (to the view picker, press 4)
+13:24:03.047  NVDA  'Queries.base. file.name: Queries.base'
+13:24:03.062  NVDA  'Queries.base', 'data item', '1 of 310'
+13:24:03.087  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata', 'Queries.base', 'row 1'
+13:24:03.962  NVDA  'shift+tab'
+13:24:03.963  [L1] KEY Shift+Tab (to the view picker, press 5)
+13:24:03.993  NVDA  'Quick filter — temporary, does not change the base', 'edit', 'blank'
+13:24:04.898  NVDA  'shift+tab'
+13:24:04.899  [L1] KEY Shift+Tab (to the view picker, press 6)
+13:24:04.925  NVDA  'Base view', 'combo box', 'All notes', 'collapsed'
+13:24:05.836  [L1]   TRIGGER at 13:24:05.834
+13:24:05.840  [L1] DISK Queries.base: a comment line appended
+13:24:07.140  NVDA  '310 notes.', 'data grid'
+13:24:07.153  NVDA  'Queries.base', 'data item', '1 of 310'
+13:24:07.178  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata'
+13:24:18.211  [L1] === L1 / step C8 ===
+13:24:19.294  [L1] ===== STEP C8 : _quickFilter: Queries.base open, the keys in its quick filter, the file edited on disk
+13:24:19.338  [L1]   NOTE run 2: Queries.base already open; the edit this time is a whole comment line
+13:24:19.471  NVDA  'shift+tab'
+13:24:19.474  [L1] KEY Shift+Tab (to the quick filter, press 1)
+13:24:19.504  NVDA  'Quick filter — temporary, does not change the base', 'edit', 'blank'
+13:24:20.434  [L1]   TRIGGER at 13:24:20.433
+13:24:20.438  [L1] DISK Queries.base: a comment line appended
+13:24:21.484  NVDA  'unavailable'
+13:24:21.730  NVDA  '310 notes.', 'data grid'
+13:24:21.739  NVDA  'Queries.base', 'data item', '1 of 310'
+13:24:21.766  NVDA  'file.name: Queries.base', 'selected', 'read-only: file metadata'
+13:24:31.581  [L1] === L1 / step D5 ===
+13:24:32.652  [L1] ===== STEP D5 : MoveToCancelButton: Move to… on a.md, Tab to Cancel, Space
+13:24:32.835  NVDA  'f6'
+13:24:32.837  [L1] KEY F6 (to the Files tree, press 1)
+13:24:32.873  NVDA  'Right pane panels', 'list'
+13:24:32.883  NVDA  'Graph inspector', '5 of 5'
+13:24:32.884  NVDA  'Right pane panels.'
+13:24:34.002  NVDA  'f6'
+13:24:34.004  [L1] KEY F6 (to the Files tree, press 2)
+13:24:34.029  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:24:34.029  NVDA  'Status bar. Files refreshed. 1 new or changed, 0 removed.'
+13:24:35.160  NVDA  'f6'
+13:24:35.161  [L1] KEY F6 (to the Files tree, press 3)
+13:24:35.191  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:24:35.192  NVDA  'Menu bar.'
+13:24:36.298  NVDA  'f6'
+13:24:36.299  [L1] KEY F6 (to the Files tree, press 4)
+13:24:36.338  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:24:36.350  NVDA  'bulk, folder', 'expanded', '2 of 110', 'level 1'
+13:24:36.351  NVDA  'Files.'
+13:24:53.612  [L1] === L1 / step D5 ===
+13:24:54.665  [L1] ===== STEP D5 : MoveToCancelButton: Move to… on a.md, Tab to Cancel, Space
+13:24:58.652  [L1]   NOTE UIA SetFocus on the Files tree row Note A (a.md) (a landing, not a gesture under test)
+13:24:58.909  NVDA  'Selected: Note A'
+13:24:58.944  NVDA  'Note A, file', '106 of 110', 'level 1'
+13:24:58.945  NVDA  'Citations, 2 citations.'
+13:25:02.100  NVDA  'tab'
+13:25:02.102  [L1] KEY Tab (to File actions' Move to…, press 1)
+13:25:03.057  NVDA  'tab'
+13:25:03.059  [L1] KEY Tab (to File actions' Move to…, press 2)
+13:25:03.088  NVDA  'Workspace tabs', 'tab control'
+13:25:03.993  NVDA  'tab'
+13:25:03.993  [L1] KEY Tab (to File actions' Move to…, press 3)
+13:25:04.020  NVDA  'a', 'tab', 'selected', '2 of 2'
+13:25:04.927  NVDA  'tab'
+13:25:04.928  [L1] KEY Tab (to File actions' Move to…, press 4)
+13:25:04.949  NVDA  'Close a', 'button'
+13:25:05.862  NVDA  'tab'
+13:25:05.863  [L1] KEY Tab (to File actions' Move to…, press 5)
+13:25:05.881  NVDA  'Source', 'radio button', 'checked'
+13:25:06.798  NVDA  'tab'
+13:25:06.799  [L1] KEY Tab (to File actions' Move to…, press 6)
+13:25:06.817  NVDA  'More note actions', 'button'
+13:25:07.732  NVDA  'tab'
+13:25:07.732  [L1] KEY Tab (to File actions' Move to…, press 7)
+13:25:07.754  NVDA  'Properties, 3 properties', 'grouping', 'expanded'
+13:25:08.664  NVDA  'tab'
+13:25:08.665  [L1] KEY Tab (to File actions' Move to…, press 8)
+13:25:08.685  NVDA  'Properties, 3 properties', 'toggle button', 'pressed'
+13:25:08.689  NVDA  'Rename property across the vault', 'button'
+13:25:09.604  NVDA  'tab'
+13:25:09.604  [L1] KEY Tab (to File actions' Move to…, press 9)
+13:25:09.624  NVDA  'Add property', 'button', 'Add a property to this note.'
+13:25:10.538  NVDA  'tab'
+13:25:10.539  [L1] KEY Tab (to File actions' Move to…, press 10)
+13:25:10.596  NVDA  'Properties, 3 properties', 'grouping'
+13:25:10.607  NVDA  'Property title, text, editable', 'edit', 'Note A'
+13:25:11.478  NVDA  'tab'
+13:25:11.478  [L1] KEY Tab (to File actions' Move to…, press 11)
+13:25:11.517  NVDA  'Delete property title', 'button'
+13:25:12.428  NVDA  'tab'
+13:25:12.429  [L1] KEY Tab (to File actions' Move to…, press 12)
+13:25:12.485  NVDA  'Property status, text, editable', 'edit', 'draft'
+13:25:13.362  NVDA  'tab'
+13:25:13.363  [L1] KEY Tab (to File actions' Move to…, press 13)
+13:25:13.403  NVDA  'Delete property status', 'button'
+13:25:14.295  NVDA  'tab'
+13:25:14.295  [L1] KEY Tab (to File actions' Move to…, press 14)
+13:25:14.358  NVDA  'Property tags, tag 1 of 2', 'edit', 'alpha'
+13:25:15.233  NVDA  'tab'
+13:25:15.233  [L1] KEY Tab (to File actions' Move to…, press 15)
+13:25:15.277  NVDA  'Remove tag 1 from tags', 'button'
+13:25:16.186  NVDA  'tab'
+13:25:16.186  [L1] KEY Tab (to File actions' Move to…, press 16)
+13:25:16.241  NVDA  'Property tags, tag 2 of 2', 'edit', 'beta'
+13:25:17.132  NVDA  'tab'
+13:25:17.132  [L1] KEY Tab (to File actions' Move to…, press 17)
+13:25:17.173  NVDA  'Remove tag 2 from tags', 'button'
+13:25:18.073  NVDA  'tab'
+13:25:18.073  [L1] KEY Tab (to File actions' Move to…, press 18)
+13:25:18.094  NVDA  'Add tag to tags', 'button'
+13:25:18.997  NVDA  'tab'
+13:25:18.997  [L1] KEY Tab (to File actions' Move to…, press 19)
+13:25:19.019  NVDA  'Delete property tags', 'button'
+13:25:19.934  NVDA  'tab'
+13:25:19.935  [L1] KEY Tab (to File actions' Move to…, press 20)
+13:25:19.977  NVDA  'a.md editor', 'document', '---'
+13:25:33.664  [L1] === L1 / step D5 ===
+13:25:34.716  [L1] ===== STEP D5 : MoveToCancelButton: Move to… on a.md, Tab to Cancel, Space
+13:25:34.905  NVDA  'f6'
+13:25:34.907  [L1] KEY F6 (to the Files tree, press 1)
+13:25:34.944  NVDA  'Right pane panels', 'list'
+13:25:34.955  NVDA  'Graph inspector', '5 of 5'
+13:25:34.956  NVDA  'Right pane panels.'
+13:25:36.069  NVDA  'f6'
+13:25:36.070  [L1] KEY F6 (to the Files tree, press 2)
+13:25:36.094  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:25:36.095  NVDA  'Status bar. Files refreshed. 1 new or changed, 0 removed.'
+13:25:37.229  NVDA  'f6'
+13:25:37.229  [L1] KEY F6 (to the Files tree, press 3)
+13:25:37.259  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:25:37.260  NVDA  'Menu bar.'
+13:25:38.369  NVDA  'f6'
+13:25:38.369  [L1] KEY F6 (to the Files tree, press 4)
+13:25:38.412  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:25:38.422  NVDA  'Note A, file', '106 of 110', 'level 1'
+13:25:38.422  NVDA  'Files.'
+13:25:39.524  [L1]   NOTE the keys in the Files tree: name='Note A, file' type=ControlType.TreeItem aid='' enabled=True
+13:25:39.968  NVDA  'tab'
+13:25:39.968  [L1] KEY Tab (to File actions' Move to…, press 1)
+13:25:40.908  NVDA  'tab'
+13:25:40.909  [L1] KEY Tab (to File actions' Move to…, press 2)
+13:25:40.943  NVDA  'Workspace tabs', 'tab control'
+13:25:41.841  NVDA  'tab'
+13:25:41.842  [L1] KEY Tab (to File actions' Move to…, press 3)
+13:25:41.871  NVDA  'a', 'tab', 'selected', '2 of 2'
+13:25:42.808  NVDA  'tab'
+13:25:42.809  [L1] KEY Tab (to File actions' Move to…, press 4)
+13:25:42.832  NVDA  'Close a', 'button'
+13:25:43.744  NVDA  'tab'
+13:25:43.745  [L1] KEY Tab (to File actions' Move to…, press 5)
+13:25:43.762  NVDA  'Source', 'radio button', 'checked'
+13:25:44.679  NVDA  'tab'
+13:25:44.679  [L1] KEY Tab (to File actions' Move to…, press 6)
+13:25:44.699  NVDA  'More note actions', 'button'
+13:25:45.615  NVDA  'tab'
+13:25:45.616  [L1] KEY Tab (to File actions' Move to…, press 7)
+13:25:45.638  NVDA  'Properties, 3 properties', 'grouping', 'expanded'
+13:25:46.549  NVDA  'tab'
+13:25:46.550  [L1] KEY Tab (to File actions' Move to…, press 8)
+13:25:46.572  NVDA  'Properties, 3 properties', 'toggle button', 'pressed'
+13:25:46.576  NVDA  'Rename property across the vault', 'button'
+13:25:47.485  NVDA  'tab'
+13:25:47.486  [L1] KEY Tab (to File actions' Move to…, press 9)
+13:25:47.505  NVDA  'Add property', 'button', 'Add a property to this note.'
+13:25:48.433  NVDA  'tab'
+13:25:48.434  [L1] KEY Tab (to File actions' Move to…, press 10)
+13:25:48.484  NVDA  'Properties, 3 properties', 'grouping'
+13:25:48.495  NVDA  'Property title, text, editable', 'edit', 'Note A'
+13:25:49.359  NVDA  'tab'
+13:25:49.360  [L1] KEY Tab (to File actions' Move to…, press 11)
+13:25:49.401  NVDA  'Delete property title', 'button'
+13:25:50.294  NVDA  'tab'
+13:25:50.294  [L1] KEY Tab (to File actions' Move to…, press 12)
+13:25:50.345  NVDA  'Property status, text, editable', 'edit', 'draft'
+13:25:51.230  NVDA  'tab'
+13:25:51.230  [L1] KEY Tab (to File actions' Move to…, press 13)
+13:25:51.280  NVDA  'Delete property status', 'button'
+13:25:52.166  NVDA  'tab'
+13:25:52.166  [L1] KEY Tab (to File actions' Move to…, press 14)
+13:25:52.227  NVDA  'Property tags, tag 1 of 2', 'edit', 'alpha'
+13:25:53.102  NVDA  'tab'
+13:25:53.102  [L1] KEY Tab (to File actions' Move to…, press 15)
+13:25:53.145  NVDA  'Remove tag 1 from tags', 'button'
+13:25:54.036  NVDA  'tab'
+13:25:54.036  [L1] KEY Tab (to File actions' Move to…, press 16)
+13:25:54.087  NVDA  'Property tags, tag 2 of 2', 'edit', 'beta'
+13:25:55.598  [L1] KEY Tab (to File actions' Move to…, press 17)
+13:25:55.600  NVDA  'tab'
+13:25:55.644  NVDA  'Remove tag 2 from tags', 'button'
+13:25:57.151  NVDA  'tab'
+13:25:57.152  [L1] KEY Tab (to File actions' Move to…, press 18)
+13:25:57.171  NVDA  'Add tag to tags', 'button'
+13:25:58.707  NVDA  'tab'
+13:25:58.708  [L1] KEY Tab (to File actions' Move to…, press 19)
+13:25:58.728  NVDA  'Delete property tags', 'button'
+13:25:59.641  NVDA  'tab'
+13:25:59.642  [L1] KEY Tab (to File actions' Move to…, press 20)
+13:25:59.677  NVDA  'a.md editor', 'document', '---'
+13:26:20.050  [L1] === L1 / step D5 ===
+13:26:21.100  [L1] ===== STEP D5 : MoveToCancelButton: Move to… on a.md, Tab to Cancel, Space
+13:26:21.288  NVDA  'f6'
+13:26:21.291  [L1] KEY F6 (to the Files tree, press 1)
+13:26:21.329  NVDA  'Right pane panels', 'list'
+13:26:21.340  NVDA  'Graph inspector', '5 of 5'
+13:26:21.340  NVDA  'Right pane panels.'
+13:26:22.461  NVDA  'f6'
+13:26:22.462  [L1] KEY F6 (to the Files tree, press 2)
+13:26:22.488  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:26:22.489  NVDA  'Status bar. Files refreshed. 1 new or changed, 0 removed.'
+13:26:23.594  NVDA  'f6'
+13:26:23.595  [L1] KEY F6 (to the Files tree, press 3)
+13:26:23.626  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:26:23.626  NVDA  'Menu bar.'
+13:26:24.735  NVDA  'f6'
+13:26:24.736  [L1] KEY F6 (to the Files tree, press 4)
+13:26:24.776  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:26:24.786  NVDA  'Note A, file', '106 of 110', 'level 1'
+13:26:24.787  NVDA  'Files.'
+13:26:25.878  [L1]   NOTE the keys in the Files tree: name='Note A, file' type=ControlType.TreeItem aid='' enabled=True
+13:26:26.345  NVDA  'shift+tab'
+13:26:26.346  [L1] KEY Shift+Tab (back to the SidebarFileActions header, press 1)
+13:26:26.372  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:26:27.294  NVDA  'shift+tab'
+13:26:27.296  [L1] KEY Shift+Tab (back to the SidebarFileActions header, press 2)
+13:26:27.317  NVDA  'File actions', 'grouping', 'expanded'
+13:26:27.321  NVDA  'Import…', 'button'
+13:26:28.258  NVDA  'shift+tab'
+13:26:28.259  [L1] KEY Shift+Tab (back to the SidebarFileActions header, press 3)
+13:26:28.278  NVDA  'Add shortcut', 'button'
+13:26:29.184  NVDA  'shift+tab'
+13:26:29.185  [L1] KEY Shift+Tab (back to the SidebarFileActions header, press 4)
+13:26:29.203  NVDA  'Unpin', 'button'
+13:26:30.119  NVDA  'shift+tab'
+13:26:30.120  [L1] KEY Shift+Tab (back to the SidebarFileActions header, press 5)
+13:26:30.138  NVDA  'Pin', 'button'
+13:26:43.737  [L1] === L1 / step D5 ===
+13:26:44.808  [L1] ===== STEP D5 : MoveToCancelButton: Move to… on a.md, Tab to Cancel, Space
+13:26:45.439  NVDA  'shift+tab'
+13:26:45.443  [L1] KEY Shift+Tab (back to Move to…, press 1)
+13:26:45.460  NVDA  'Split', 'button'
+13:26:46.402  NVDA  'shift+tab'
+13:26:46.403  [L1] KEY Shift+Tab (back to Move to…, press 2)
+13:26:46.421  NVDA  'New tab', 'button'
+13:26:47.330  NVDA  'shift+tab'
+13:26:47.331  [L1] KEY Shift+Tab (back to Move to…, press 3)
+13:26:47.350  NVDA  'Open', 'button'
+13:26:48.266  NVDA  'shift+tab'
+13:26:48.267  [L1] KEY Shift+Tab (back to Move to…, press 4)
+13:26:48.290  NVDA  'Copy link', 'button'
+13:26:49.201  NVDA  'shift+tab'
+13:26:49.203  [L1] KEY Shift+Tab (back to Move to…, press 5)
+13:26:49.225  NVDA  'Reveal in File Explorer', 'button'
+13:26:50.137  NVDA  'shift+tab'
+13:26:50.139  [L1] KEY Shift+Tab (back to Move to…, press 6)
+13:26:50.161  NVDA  'Copy path', 'button'
+13:26:51.089  NVDA  'shift+tab'
+13:26:51.090  [L1] KEY Shift+Tab (back to Move to…, press 7)
+13:26:51.112  NVDA  'Move to…', 'button'
+13:26:52.024  [L1] KEY Space (Move to…)
+13:26:52.208  NVDA  'Move a.md: loading destination folders. Escape to cancel.'
+13:26:52.244  NVDA  'Destination folders loaded.'
+13:26:52.308  NVDA  'Filter folders', 'edit', 'Type to filter destination folders, or type a new folder name.', 'blank'
+13:26:53.600  NVDA  'tab'
+13:26:53.601  [L1] KEY Tab (to Cancel, press 1)
+13:26:53.627  NVDA  'Cancel', 'button', 'Closes the folder picker without moving anything.'
+13:26:54.532  [L1]   TRIGGER at 13:26:54.530
+13:26:54.535  [L1] KEY Space (Cancel)
+13:26:54.646  NVDA  'File actions', 'grouping', 'expanded'
+13:26:54.653  NVDA  'Move to…', 'button'
+13:27:04.280  [L1] === L1 / step D6 ===
+13:27:05.364  [L1] ===== STEP D6 : CanvasInspectionClose: the recovered canvas, its text card, Canvas: Edit Card Text…, Close, Space
+13:27:05.419  NVDA  'ctrl+o'
+13:27:05.422  [L1] KEY Ctrl+O (Quick Open)
+13:27:05.900  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:27:05.906  NVDA  '308 recent files'
+13:27:06.083  NVDA  'r'
+13:27:06.164  NVDA  'e'
+13:27:06.174  NVDA  '6 files matching "r"'
+13:27:06.232  NVDA  'c'
+13:27:06.245  NVDA  '5 files matching "re"'
+13:27:06.282  NVDA  'o'
+13:27:06.356  NVDA  'v'
+13:27:06.371  NVDA  '1 file matching "reco"'
+13:27:06.411  NVDA  'e'
+13:27:06.480  NVDA  'r'
+13:27:06.488  NVDA  '1 file matching "recove"'
+13:27:06.540  NVDA  'e'
+13:27:06.611  NVDA  'd'
+13:27:06.630  NVDA  '1 file matching "recovere"'
+13:27:06.649  [L1] KEY typed 'recovered' (Unicode key presses, 60 ms apart)
+13:27:06.674  NVDA  '1 file matching "recovered"'
+13:27:08.528  NVDA  'enter'
+13:27:08.528  [L1] KEY Enter (recovered.canvas)
+13:27:08.831  NVDA  'Canvas opened read-only. 1 card available to inspect. Repair the file and retry to edit.'
+13:27:08.933  NVDA  'Workspace tabs', 'tab control'
+13:27:08.952  NVDA  'recovered', 'tab', 'selected', '2 of 2'
+13:27:08.963  NVDA  'Canvas outline', 'tree view'
+13:27:08.986  NVDA  'Text card "Readable original text"', 'Opens the card text.', '1 of 1', 'level 1'
+13:27:11.198  [L1]   NOTE the canvas opened; the keys on name='Text card "Readable original text"' type=ControlType.TreeItem aid='' enabled=True
+13:27:11.208  NVDA  'ctrl+shift+p'
+13:27:11.211  [L1] KEY Ctrl+Shift+P (command palette)
+13:27:12.709  [L1] KEY typed 'edit card text' (Unicode key presses, 60 ms apart)
+13:27:13.023  NVDA  'e'
+13:27:13.024  NVDA  'd'
+13:27:13.024  NVDA  'i'
+13:27:13.024  NVDA  't'
+13:27:13.025  NVDA  'space'
+13:27:13.025  NVDA  'c'
+13:27:13.025  NVDA  'a'
+13:27:13.026  NVDA  'r'
+13:27:13.026  NVDA  'd'
+13:27:13.060  NVDA  'space'
+13:27:13.060  NVDA  't'
+13:27:13.061  NVDA  'e'
+13:27:13.061  NVDA  'x'
+13:27:13.125  NVDA  'Search commands', 'edit', 'Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.', 'edit card text'
+13:27:13.127  NVDA  't'
+13:27:13.179  NVDA  'Selected: Canvas: Edit Card Text…'
+13:27:13.189  NVDA  '1 command matching "edit card text"'
+13:27:14.621  NVDA  'enter'
+13:27:14.621  [L1] KEY Enter (Canvas: Edit Card Text…)
+13:27:15.186  NVDA  'Card text, read-only. Escape closes and returns to the canvas.', 'edit', 'read only', 'Select and copy text. Escape closes without changing the file.', 'Readable original text'
+13:27:17.423  NVDA  'tab'
+13:27:17.424  [L1] KEY Tab (to Close, press 1)
+13:27:17.467  NVDA  'Close card text', 'button'
+13:27:18.390  [L1]   TRIGGER at 13:27:18.389
+13:27:18.394  [L1] KEY Space (Close)
+13:27:18.597  NVDA  'Workspace tabs', 'tab control'
+13:27:18.610  NVDA  'recovered', 'tab', 'selected', '2 of 2'
+13:27:18.617  NVDA  'Canvas outline', 'tree view'
+13:27:18.633  NVDA  'Text card "Readable original text"', 'Opens the card text.', '1 of 1', 'level 1'
+13:27:40.138  NVDA  'Settings'
+13:27:40.227  NVDA  'Settings', 'window'
+13:27:40.230  NVDA  'Back', 'button'
+13:27:40.266  [L1] closed: Slate running=False; launcher running=False; recorder running=False
+13:28:54.851  [L2] === launch L2 : exe C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe ; vault <session folder>\vaults\cb17a-L2 ; root <session folder>\roots\cb17a-L2 ; prep none
+13:28:55.825  [L2] Slate pid 95556 (C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe); launcher pid 31112
+13:28:56.843  [L2] VAULT OPEN; the Files tree shows: name='n000.md, file' type=ControlType.TreeItem aid='' enabled=True
+13:28:56.847  NVDA  'cb17a-L2 — Slate', 'window'
+13:28:56.854  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:28:56.859  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:28:56.860  NVDA  'Editor pane 1 of 1, Empty pane.'
+13:29:08.161  [L2] === L2 / step B2 ===
+13:29:09.227  [L2] ===== STEP B2 : Delete: n001.md selected, File actions, Delete, Space
+13:29:09.292  NVDA  'home'
+13:29:09.294  [L2] KEY Home (the first row)
+13:29:10.906  NVDA  'down arrow'
+13:29:10.907  [L2] KEY Down (to n001.md*, press 1)
+13:29:10.946  NVDA  'Selected: bulk, folder'
+13:29:10.960  NVDA  'bulk, folder', 'collapsed', '2 of 110', 'level 1'
+13:29:11.650  NVDA  'down arrow'
+13:29:11.651  [L2] KEY Down (to n001.md*, press 2)
+13:29:11.908  NVDA  'Selected: folder-with-note, folder'
+13:29:11.934  NVDA  'folder-with-note, folder, has folder note', 'collapsed', '3 of 110', 'level 1'
+13:29:11.935  NVDA  'Outline, 1 heading.'
+13:29:12.426  NVDA  'down arrow'
+13:29:12.427  [L2] KEY Down (to n001.md*, press 3)
+13:29:12.452  NVDA  'Selected: folder-without-note, folder'
+13:29:12.466  NVDA  'folder-without-note, folder', 'collapsed', '4 of 110', 'level 1'
+13:29:13.163  NVDA  'down arrow'
+13:29:13.163  [L2] KEY Down (to n001.md*, press 4)
+13:29:13.233  NVDA  'Selected: library.bib'
+13:29:13.246  NVDA  'library.bib, file', '5 of 110', 'level 1'
+13:29:13.900  NVDA  'down arrow'
+13:29:13.900  [L2] KEY Down (to n001.md*, press 5)
+13:29:13.958  NVDA  'Selected: n000.md'
+13:29:13.973  NVDA  'n000.md, file', '6 of 110', 'level 1'
+13:29:13.973  NVDA  'Outline, 1 heading.'
+13:29:14.635  NVDA  'down arrow'
+13:29:14.636  [L2] KEY Down (to n001.md*, press 6)
+13:29:14.689  NVDA  'Selected: n001.md'
+13:29:14.703  NVDA  'n001.md, file', '7 of 110', 'level 1'
+13:29:14.704  NVDA  'Outline, 1 heading.'
+13:29:15.487  NVDA  'File actions', 'grouping', 'expanded'
+13:29:15.853  NVDA  'shift+tab'
+13:29:15.853  [L2] KEY Shift+Tab (back to Delete, press 1)
+13:29:15.876  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:29:16.785  NVDA  'shift+tab'
+13:29:16.786  [L2] KEY Shift+Tab (back to Delete, press 2)
+13:29:16.831  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:29:17.720  NVDA  'shift+tab'
+13:29:17.722  [L2] KEY Shift+Tab (back to Delete, press 3)
+13:29:17.749  NVDA  'Refresh files', 'button'
+13:29:18.662  NVDA  'shift+tab'
+13:29:18.664  [L2] KEY Shift+Tab (back to Delete, press 4)
+13:29:18.679  NVDA  'Expand loaded folders', 'button'
+13:29:19.602  NVDA  'shift+tab'
+13:29:19.604  [L2] KEY Shift+Tab (back to Delete, press 5)
+13:29:19.620  NVDA  'Collapse all', 'button'
+13:29:20.558  NVDA  'shift+tab'
+13:29:20.559  [L2] KEY Shift+Tab (back to Delete, press 6)
+13:29:20.576  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:29:21.525  NVDA  'shift+tab'
+13:29:21.526  [L2] KEY Shift+Tab (back to Delete, press 7)
+13:29:21.543  NVDA  'New note', 'button'
+13:29:22.463  NVDA  'shift+tab'
+13:29:22.464  [L2] KEY Shift+Tab (back to Delete, press 8)
+13:29:22.488  NVDA  'More panels', 'button'
+13:29:23.404  NVDA  'shift+tab'
+13:29:23.405  [L2] KEY Shift+Tab (back to Delete, press 9)
+13:29:23.430  NVDA  'Right pane panels', 'list'
+13:29:23.440  NVDA  'Outline', '1 of 5'
+13:29:24.349  NVDA  'shift+tab'
+13:29:24.350  [L2] KEY Shift+Tab (back to Delete, press 10)
+13:29:24.374  NVDA  'Outline', 'list'
+13:29:24.378  NVDA  'Level 1 heading: n001', 'not selected', '1 of 1'
+13:29:25.286  NVDA  'shift+tab'
+13:29:25.287  [L2] KEY Shift+Tab (back to Delete, press 11)
+13:29:25.330  NVDA  'Workspace tabs', 'tab control'
+13:29:25.340  NVDA  'n001', 'tab', 'selected', '1 of 1'
+13:29:25.359  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:29:54.060  [L2] === L2 / step B2 ===
+13:29:55.105  [L2] ===== STEP B2 : Delete: n001.md selected, File actions, Delete, Space
+13:29:55.183  NVDA  'f6'
+13:29:55.186  [L2] KEY F6 (to the Files tree, press 1)
+13:29:55.219  NVDA  'Outline', 'list'
+13:29:55.223  NVDA  'Level 1 heading: n001', 'not selected', '1 of 1'
+13:29:55.224  NVDA  'Outline panel.'
+13:29:56.355  NVDA  'f6'
+13:29:56.356  [L2] KEY F6 (to the Files tree, press 2)
+13:29:56.386  NVDA  'Right pane panels', 'list'
+13:29:56.396  NVDA  'Outline', '1 of 5'
+13:29:56.396  NVDA  'Right pane panels.'
+13:29:57.489  NVDA  'f6'
+13:29:57.490  [L2] KEY F6 (to the Files tree, press 3)
+13:29:57.514  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:29:57.515  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:29:58.624  NVDA  'f6'
+13:29:58.625  [L2] KEY F6 (to the Files tree, press 4)
+13:29:58.655  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:29:58.656  NVDA  'Menu bar.'
+13:29:59.764  NVDA  'f6'
+13:29:59.765  [L2] KEY F6 (to the Files tree, press 5)
+13:29:59.803  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:29:59.813  NVDA  'n001.md, file', '7 of 110', 'level 1'
+13:29:59.814  NVDA  'Files.'
+13:30:01.605  NVDA  'tab'
+13:30:01.605  [L2] KEY Tab (forward to Delete, press 1)
+13:30:02.525  NVDA  'tab'
+13:30:02.526  [L2] KEY Tab (forward to Delete, press 2)
+13:30:02.558  NVDA  'Workspace tabs', 'tab control'
+13:30:03.449  NVDA  'tab'
+13:30:03.450  [L2] KEY Tab (forward to Delete, press 3)
+13:30:03.476  NVDA  'n001', 'tab', 'selected', '1 of 1'
+13:30:04.586  NVDA  'tab'
+13:30:04.587  [L2] KEY Tab (forward to Delete, press 4)
+13:30:04.606  NVDA  'Close n001', 'button'
+13:30:05.527  NVDA  'tab'
+13:30:05.527  [L2] KEY Tab (forward to Delete, press 5)
+13:30:05.543  NVDA  'Source', 'radio button', 'checked'
+13:30:06.467  NVDA  'tab'
+13:30:06.470  [L2] KEY Tab (forward to Delete, press 6)
+13:30:06.494  NVDA  'More note actions', 'button'
+13:30:08.443  NVDA  'tab'
+13:30:08.444  [L2] KEY Tab (forward to Delete, press 7)
+13:30:08.473  NVDA  'Properties, 0 properties', 'grouping', 'expanded'
+13:30:10.214  NVDA  'tab'
+13:30:10.215  [L2] KEY Tab (forward to Delete, press 8)
+13:30:10.240  NVDA  'Properties, 0 properties', 'toggle button', 'pressed'
+13:30:10.245  NVDA  'Rename property across the vault', 'button'
+13:30:11.151  NVDA  'tab'
+13:30:11.151  [L2] KEY Tab (forward to Delete, press 9)
+13:30:11.168  NVDA  'Add property', 'button', 'Add a property to this note.'
+13:30:12.088  NVDA  'tab'
+13:30:12.089  [L2] KEY Tab (forward to Delete, press 10)
+13:30:12.121  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:30:13.463  NVDA  'f6'
+13:30:13.464  [L2] KEY F6 (to the Files tree, press 1)
+13:30:13.495  NVDA  'Outline', 'list'
+13:30:13.499  NVDA  'Level 1 heading: n001', 'not selected', '1 of 1'
+13:30:13.500  NVDA  'Outline panel.'
+13:30:14.605  NVDA  'f6'
+13:30:14.605  [L2] KEY F6 (to the Files tree, press 2)
+13:30:14.635  NVDA  'Right pane panels', 'list'
+13:30:14.646  NVDA  'Outline', '1 of 5'
+13:30:14.647  NVDA  'Right pane panels.'
+13:30:15.747  NVDA  'f6'
+13:30:15.748  [L2] KEY F6 (to the Files tree, press 3)
+13:30:15.773  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:30:15.774  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:30:16.884  NVDA  'f6'
+13:30:16.884  [L2] KEY F6 (to the Files tree, press 4)
+13:30:16.912  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:30:16.913  NVDA  'Menu bar.'
+13:30:18.024  NVDA  'f6'
+13:30:18.024  [L2] KEY F6 (to the Files tree, press 5)
+13:30:18.065  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:30:18.075  NVDA  'n001.md, file', '7 of 110', 'level 1'
+13:30:18.076  NVDA  'Files.'
+13:30:19.164  NVDA  'shift+tab'
+13:30:19.165  [L2] KEY Shift+Tab (back to Delete, press 1)
+13:30:19.193  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:30:20.095  NVDA  'shift+tab'
+13:30:20.096  [L2] KEY Shift+Tab (back to Delete, press 2)
+13:30:20.119  NVDA  'File actions', 'grouping', 'expanded'
+13:30:20.122  NVDA  'Import…', 'button'
+13:30:21.033  NVDA  'shift+tab'
+13:30:21.035  [L2] KEY Shift+Tab (back to Delete, press 3)
+13:30:21.050  NVDA  'Add shortcut', 'button'
+13:30:21.968  NVDA  'shift+tab'
+13:30:21.970  [L2] KEY Shift+Tab (back to Delete, press 4)
+13:30:21.987  NVDA  'Unpin', 'button'
+13:30:22.909  NVDA  'shift+tab'
+13:30:22.910  [L2] KEY Shift+Tab (back to Delete, press 5)
+13:30:22.927  NVDA  'Pin', 'button'
+13:30:23.840  NVDA  'shift+tab'
+13:30:23.842  [L2] KEY Shift+Tab (back to Delete, press 6)
+13:30:23.858  NVDA  'Split', 'button'
+13:30:24.780  NVDA  'shift+tab'
+13:30:24.781  [L2] KEY Shift+Tab (back to Delete, press 7)
+13:30:24.798  NVDA  'New tab', 'button'
+13:30:25.716  NVDA  'shift+tab'
+13:30:25.717  [L2] KEY Shift+Tab (back to Delete, press 8)
+13:30:25.733  NVDA  'Open', 'button'
+13:30:26.670  NVDA  'shift+tab'
+13:30:26.671  [L2] KEY Shift+Tab (back to Delete, press 9)
+13:30:26.691  NVDA  'Copy link', 'button'
+13:30:27.612  NVDA  'shift+tab'
+13:30:27.613  [L2] KEY Shift+Tab (back to Delete, press 10)
+13:30:27.633  NVDA  'Reveal in File Explorer', 'button'
+13:30:28.574  NVDA  'shift+tab'
+13:30:28.574  [L2] KEY Shift+Tab (back to Delete, press 11)
+13:30:28.595  NVDA  'Copy path', 'button'
+13:30:29.528  NVDA  'shift+tab'
+13:30:29.530  [L2] KEY Shift+Tab (back to Delete, press 12)
+13:30:29.551  NVDA  'Move to…', 'button'
+13:30:30.451  NVDA  'shift+tab'
+13:30:30.452  [L2] KEY Shift+Tab (back to Delete, press 13)
+13:30:30.469  NVDA  'Duplicate', 'button'
+13:30:31.387  NVDA  'shift+tab'
+13:30:31.388  [L2] KEY Shift+Tab (back to Delete, press 14)
+13:30:31.409  NVDA  'Delete', 'button'
+13:30:32.320  [L2]   TRIGGER at 13:30:32.318
+13:30:32.323  [L2] KEY Space (Delete)
+13:30:32.378  NVDA  'Preparing to move items to the Recycle Bin…'
+13:30:32.380  NVDA  'unavailable'
+13:30:32.381  NVDA  'Moving items to the Recycle Bin…'
+13:30:32.386  NVDA  'File actions', 'grouping', 'expanded'
+13:30:32.534  NVDA  'n001.md is missing from disk. Open editor content was preserved.'
+13:30:32.535  NVDA  'Moved n001.md to the Recycle Bin.'
+13:30:47.040  [L2] === L2 / step B3 ===
+13:30:49.516  [L2] ===== STEP B3 : Move checked to Recycle Bin: n002.md and n003.md checked, Batch actions, Space
+13:30:49.598  NVDA  'f6'
+13:30:49.600  [L2] KEY F6 (to the Files tree, press 1)
+13:30:49.634  NVDA  'Workspace tabs', 'tab control'
+13:30:49.644  NVDA  'n001, missing from disk', 'tab', 'selected', '1 of 1'
+13:30:49.645  NVDA  'Tab bar.  n001, missing from disk, tab 1 of 1.'
+13:30:51.396  NVDA  'f6'
+13:30:51.397  [L2] KEY F6 (to the Files tree, press 2)
+13:30:51.428  NVDA  'n001.md editor', 'document', 'heading level 1', '# n001'
+13:30:51.429  NVDA  'Editor pane 1 of 1, n001, missing from disk.'
+13:30:52.541  NVDA  'f6'
+13:30:52.541  [L2] KEY F6 (to the Files tree, press 3)
+13:30:52.570  NVDA  'This note has no headings.'
+13:30:52.570  NVDA  'Outline panel.'
+13:30:53.675  NVDA  'f6'
+13:30:53.676  [L2] KEY F6 (to the Files tree, press 4)
+13:30:53.706  NVDA  'Right pane panels', 'list'
+13:30:53.717  NVDA  'Outline', '1 of 5'
+13:30:53.717  NVDA  'Right pane panels.'
+13:30:54.814  NVDA  'f6'
+13:30:54.814  [L2] KEY F6 (to the Files tree, press 5)
+13:30:54.840  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:30:54.841  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:30:55.979  NVDA  'f6'
+13:30:55.980  [L2] KEY F6 (to the Files tree, press 6)
+13:30:56.010  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:30:56.010  NVDA  'Menu bar.'
+13:30:57.140  NVDA  'f6'
+13:30:57.140  [L2] KEY F6 (to the Files tree, press 7)
+13:30:57.180  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:30:57.185  NVDA  'board.canvas, file', 'not selected', '1 of 109', 'level 1'
+13:30:57.185  NVDA  'Files.'
+13:30:58.281  NVDA  'home'
+13:30:58.282  [L2] KEY Home (the first row)
+13:30:59.213  NVDA  'down arrow'
+13:30:59.214  [L2] KEY Down (to n002.md*, press 1)
+13:30:59.254  NVDA  'Selected: bulk, folder'
+13:30:59.274  NVDA  'bulk, folder', 'collapsed', '2 of 109', 'level 1'
+13:30:59.933  NVDA  'down arrow'
+13:30:59.934  [L2] KEY Down (to n002.md*, press 2)
+13:31:00.003  NVDA  'Selected: folder-with-note, folder'
+13:31:00.026  NVDA  'folder-with-note, folder, has folder note', 'collapsed', '3 of 109', 'level 1'
+13:31:00.027  NVDA  'Outline, 1 heading.'
+13:31:00.886  NVDA  'down arrow'
+13:31:00.887  [L2] KEY Down (to n002.md*, press 3)
+13:31:00.922  NVDA  'Selected: folder-without-note, folder'
+13:31:00.940  NVDA  'folder-without-note, folder', 'collapsed', '4 of 109', 'level 1'
+13:31:01.605  NVDA  'down arrow'
+13:31:01.605  [L2] KEY Down (to n002.md*, press 4)
+13:31:01.675  NVDA  'Selected: library.bib'
+13:31:01.693  NVDA  'library.bib, file', '5 of 109', 'level 1'
+13:31:02.340  NVDA  'down arrow'
+13:31:02.341  [L2] KEY Down (to n002.md*, press 5)
+13:31:02.399  NVDA  'Selected: n000.md'
+13:31:02.416  NVDA  'n000.md, file', '6 of 109', 'level 1'
+13:31:02.416  NVDA  'Outline, 1 heading.'
+13:31:03.059  NVDA  'down arrow'
+13:31:03.060  [L2] KEY Down (to n002.md*, press 6)
+13:31:03.113  NVDA  'Selected: n002.md'
+13:31:03.131  NVDA  'n002.md, file', '7 of 109', 'level 1'
+13:31:03.131  NVDA  'Outline, 1 heading.'
+13:31:03.808  [L2] KEY Space (check n002.md)
+13:31:03.830  NVDA  '1 item selected'
+13:31:04.939  NVDA  'down arrow'
+13:31:04.940  [L2] KEY Down (n003.md)
+13:31:04.997  NVDA  'Selected: n003.md'
+13:31:05.012  NVDA  'n003.md, file', '8 of 109', 'level 1'
+13:31:05.013  NVDA  'Outline, 1 heading.'
+13:31:06.080  [L2] KEY Space (check n003.md)
+13:31:06.098  NVDA  '2 items selected'
+13:31:07.322  NVDA  'Batch actions', 'grouping', 'expanded'
+13:31:07.684  NVDA  'shift+tab'
+13:31:07.685  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 1)
+13:31:07.719  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:31:08.620  NVDA  'shift+tab'
+13:31:08.621  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 2)
+13:31:08.647  NVDA  'Refresh files', 'button'
+13:31:09.559  NVDA  'shift+tab'
+13:31:09.560  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 3)
+13:31:09.579  NVDA  'Expand loaded folders', 'button'
+13:31:10.495  NVDA  'shift+tab'
+13:31:10.496  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 4)
+13:31:10.512  NVDA  'Collapse all', 'button'
+13:31:11.428  NVDA  'shift+tab'
+13:31:11.430  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 5)
+13:31:11.446  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:31:12.367  NVDA  'shift+tab'
+13:31:12.368  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 6)
+13:31:12.386  NVDA  'New note', 'button'
+13:31:13.300  NVDA  'shift+tab'
+13:31:13.301  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 7)
+13:31:13.326  NVDA  'More panels', 'button'
+13:31:14.234  NVDA  'shift+tab'
+13:31:14.235  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 8)
+13:31:14.260  NVDA  'Right pane panels', 'list'
+13:31:14.271  NVDA  'Outline', '1 of 5'
+13:31:15.170  NVDA  'shift+tab'
+13:31:15.171  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 9)
+13:31:15.195  NVDA  'Outline', 'list'
+13:31:15.199  NVDA  'Level 1 heading: n003', 'not selected', '1 of 1'
+13:31:16.118  NVDA  'shift+tab'
+13:31:16.119  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 10)
+13:31:16.158  NVDA  'Workspace tabs', 'tab control'
+13:31:16.168  NVDA  'n003', 'tab', 'selected', '1 of 1'
+13:31:16.178  NVDA  'n003.md editor', 'document', 'heading level 1', '# n003'
+13:31:17.071  NVDA  'f6'
+13:31:17.072  [L2] KEY F6 (to the Files tree, press 1)
+13:31:17.104  NVDA  'Outline', 'list'
+13:31:17.109  NVDA  'Level 1 heading: n003', 'not selected', '1 of 1'
+13:31:17.109  NVDA  'Outline panel.'
+13:31:19.040  NVDA  'f6'
+13:31:19.040  [L2] KEY F6 (to the Files tree, press 2)
+13:31:19.073  NVDA  'Right pane panels', 'list'
+13:31:19.083  NVDA  'Outline', '1 of 5'
+13:31:19.083  NVDA  'Right pane panels.'
+13:31:20.171  NVDA  'f6'
+13:31:20.172  [L2] KEY F6 (to the Files tree, press 3)
+13:31:20.197  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:31:20.198  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:31:21.537  NVDA  'f6'
+13:31:21.537  [L2] KEY F6 (to the Files tree, press 4)
+13:31:21.565  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:31:21.566  NVDA  'Menu bar.'
+13:31:22.673  NVDA  'f6'
+13:31:22.674  [L2] KEY F6 (to the Files tree, press 5)
+13:31:22.719  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:31:22.729  NVDA  'n003.md, file', '8 of 109', 'level 1'
+13:31:22.730  NVDA  'Files.'
+13:31:23.811  NVDA  'tab'
+13:31:23.812  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 1)
+13:31:24.757  NVDA  'tab'
+13:31:24.757  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 2)
+13:31:24.786  NVDA  'Workspace tabs', 'tab control'
+13:31:25.690  NVDA  'tab'
+13:31:25.690  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 3)
+13:31:25.717  NVDA  'n003', 'tab', 'selected', '1 of 1'
+13:31:26.628  NVDA  'tab'
+13:31:26.629  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 4)
+13:31:26.649  NVDA  'Close n003', 'button'
+13:31:27.581  NVDA  'tab'
+13:31:27.581  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 5)
+13:31:27.598  NVDA  'Source', 'radio button', 'checked'
+13:31:28.516  NVDA  'tab'
+13:31:28.517  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 6)
+13:31:28.534  NVDA  'More note actions', 'button'
+13:31:29.451  NVDA  'tab'
+13:31:29.451  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 7)
+13:31:29.473  NVDA  'Properties, 0 properties', 'grouping', 'expanded'
+13:31:30.371  NVDA  'tab'
+13:31:30.371  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 8)
+13:31:30.394  NVDA  'Properties, 0 properties', 'toggle button', 'pressed'
+13:31:30.398  NVDA  'Rename property across the vault', 'button'
+13:31:31.310  NVDA  'tab'
+13:31:31.310  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 9)
+13:31:31.330  NVDA  'Add property', 'button', 'Add a property to this note.'
+13:31:32.234  NVDA  'tab'
+13:31:32.235  [L2] KEY Tab (forward to Move checked to Recycle Bin, press 10)
+13:31:32.266  NVDA  'n003.md editor', 'document', 'heading level 1', '# n003'
+13:32:20.403  [L2] === L2 / step B3 ===
+13:32:23.494  [L2] ===== STEP B3 : Move checked to Recycle Bin: n002.md and n003.md checked, Batch actions, Space
+13:32:23.580  NVDA  'f6'
+13:32:23.582  [L2] KEY F6 (to the Files tree, press 1)
+13:32:23.614  NVDA  'Outline', 'list'
+13:32:23.618  NVDA  'Level 1 heading: n003', 'not selected', '1 of 1'
+13:32:23.618  NVDA  'Outline panel.'
+13:32:24.743  NVDA  'f6'
+13:32:24.744  [L2] KEY F6 (to the Files tree, press 2)
+13:32:24.775  NVDA  'Right pane panels', 'list'
+13:32:24.785  NVDA  'Outline', '1 of 5'
+13:32:24.785  NVDA  'Right pane panels.'
+13:32:26.707  NVDA  'f6'
+13:32:26.708  [L2] KEY F6 (to the Files tree, press 3)
+13:32:26.732  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:32:26.733  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:32:28.063  NVDA  'f6'
+13:32:28.063  [L2] KEY F6 (to the Files tree, press 4)
+13:32:28.090  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:32:28.091  NVDA  'Menu bar.'
+13:32:29.609  NVDA  'f6'
+13:32:29.610  [L2] KEY F6 (to the Files tree, press 5)
+13:32:29.648  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:32:29.658  NVDA  'n003.md, file', '8 of 109', 'level 1'
+13:32:29.658  NVDA  'Files.'
+13:32:30.984  NVDA  'home'
+13:32:30.985  [L2] KEY Home (the first row)
+13:32:31.115  NVDA  'Selected: board.canvas'
+13:32:31.141  NVDA  'board.canvas, file', '1 of 109', 'level 1'
+13:32:32.125  NVDA  'down arrow'
+13:32:32.126  [L2] KEY Down (to n002.md*, press 1)
+13:32:32.164  NVDA  'Selected: bulk, folder'
+13:32:32.183  NVDA  'bulk, folder', 'collapsed', '2 of 109', 'level 1'
+13:32:32.859  NVDA  'down arrow'
+13:32:32.860  [L2] KEY Down (to n002.md*, press 2)
+13:32:32.942  NVDA  'Selected: folder-with-note, folder'
+13:32:32.966  NVDA  'folder-with-note, folder, has folder note', 'collapsed', '3 of 109', 'level 1'
+13:32:32.966  NVDA  'Outline, 1 heading.'
+13:32:33.590  NVDA  'down arrow'
+13:32:33.591  [L2] KEY Down (to n002.md*, press 3)
+13:32:33.627  NVDA  'Selected: folder-without-note, folder'
+13:32:33.644  NVDA  'folder-without-note, folder', 'collapsed', '4 of 109', 'level 1'
+13:32:36.992  NVDA  'down arrow'
+13:32:36.992  [L2] KEY Down (to n002.md*, press 4)
+13:32:37.065  NVDA  'Selected: library.bib'
+13:32:37.080  NVDA  'library.bib, file', '5 of 109', 'level 1'
+13:32:37.721  NVDA  'down arrow'
+13:32:37.722  [L2] KEY Down (to n002.md*, press 5)
+13:32:37.782  NVDA  'Selected: n000.md'
+13:32:37.797  NVDA  'n000.md, file', '6 of 109', 'level 1'
+13:32:37.797  NVDA  'Outline, 1 heading.'
+13:32:38.455  NVDA  'down arrow'
+13:32:38.456  [L2] KEY Down (to n002.md*, press 6)
+13:32:38.511  NVDA  'Selected: n002.md'
+13:32:38.525  NVDA  'n002.md, file', '7 of 109', 'level 1'
+13:32:38.526  NVDA  'Outline, 1 heading.'
+13:32:39.295  NVDA  'down arrow'
+13:32:39.296  [L2] KEY Down (n003.md)
+13:32:39.345  NVDA  'Selected: n003.md'
+13:32:39.365  NVDA  'n003.md, file', '8 of 109', 'level 1'
+13:32:39.366  NVDA  'Outline, 1 heading.'
+13:32:40.714  [L2]   NOTE checks by UIA: n002.md True, n003.md True
+13:32:41.191  NVDA  'shift+tab'
+13:32:41.192  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:32:41.219  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:32:42.140  NVDA  'shift+tab'
+13:32:42.142  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 1)
+13:32:42.162  NVDA  'File actions', 'grouping', 'expanded'
+13:32:42.166  NVDA  'Import…', 'button'
+13:32:43.089  NVDA  'shift+tab'
+13:32:43.091  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 2)
+13:32:43.107  NVDA  'Add shortcut', 'button'
+13:32:44.041  NVDA  'shift+tab'
+13:32:44.043  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 3)
+13:32:44.060  NVDA  'Unpin', 'button'
+13:32:44.970  NVDA  'shift+tab'
+13:32:44.972  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 4)
+13:32:44.988  NVDA  'Pin', 'button'
+13:32:45.907  NVDA  'shift+tab'
+13:32:45.908  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 5)
+13:32:45.927  NVDA  'Split', 'button'
+13:32:46.840  NVDA  'shift+tab'
+13:32:46.841  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 6)
+13:32:46.857  NVDA  'New tab', 'button'
+13:32:47.791  NVDA  'shift+tab'
+13:32:47.792  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 7)
+13:32:47.809  NVDA  'Open', 'button'
+13:32:48.745  NVDA  'shift+tab'
+13:32:48.747  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 8)
+13:32:48.769  NVDA  'Copy link', 'button'
+13:32:49.672  NVDA  'shift+tab'
+13:32:49.674  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 9)
+13:32:49.695  NVDA  'Reveal in File Explorer', 'button'
+13:32:50.613  NVDA  'shift+tab'
+13:32:50.614  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 10)
+13:32:50.636  NVDA  'Copy path', 'button'
+13:32:51.549  NVDA  'shift+tab'
+13:32:51.550  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 11)
+13:32:51.570  NVDA  'Move to…', 'button'
+13:32:52.485  NVDA  'shift+tab'
+13:32:52.486  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 12)
+13:32:52.503  NVDA  'Duplicate', 'button'
+13:32:53.442  NVDA  'shift+tab'
+13:32:53.443  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 13)
+13:32:53.464  NVDA  'Delete', 'button'
+13:32:54.372  NVDA  'shift+tab'
+13:32:54.373  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 14)
+13:32:54.389  NVDA  'Rename', 'button'
+13:32:55.328  NVDA  'shift+tab'
+13:32:55.329  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 15)
+13:32:55.350  NVDA  'New folder', 'button'
+13:32:56.265  NVDA  'shift+tab'
+13:32:56.267  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 16)
+13:32:56.286  NVDA  'New note', 'button'
+13:32:57.202  NVDA  'shift+tab'
+13:32:57.203  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 17)
+13:32:57.247  NVDA  'File or folder name', 'edit', 'n003.md'
+13:32:58.137  NVDA  'shift+tab'
+13:32:58.138  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 18)
+13:32:58.167  NVDA  'File actions', 'grouping', 'expanded'
+13:32:59.073  NVDA  'shift+tab'
+13:32:59.074  [L2] KEY Shift+Tab (back to Move checked to Recycle Bin, press 19)
+13:32:59.098  NVDA  'Batch actions', 'grouping', 'expanded'
+13:32:59.102  NVDA  'Move checked to Recycle Bin', 'button'
+13:33:00.008  [L2]   TRIGGER at 13:33:00.007
+13:33:00.011  [L2] KEY Space (Move checked to Recycle Bin)
+13:33:00.066  NVDA  'Preparing to move items to the Recycle Bin…'
+13:33:00.070  NVDA  'unavailable'
+13:33:00.070  NVDA  'Moving items to the Recycle Bin…'
+13:33:00.084  NVDA  'Batch actions', 'grouping', 'expanded'
+13:33:00.188  NVDA  'Moved 2 items to the Recycle Bin.'
+13:33:00.206  NVDA  'n003.md is missing from disk. Open editor content was preserved.'
+13:33:12.622  [L2] === L2 / step B6 ===
+13:33:13.694  [L2] ===== STEP B6 : CancelTrash: Delete bulk/, confirm, the status bar's Cancel, Space
+13:33:13.769  NVDA  'f6'
+13:33:13.772  [L2] KEY F6 (to the Files tree, press 1)
+13:33:13.805  NVDA  'Workspace tabs', 'tab control'
+13:33:13.815  NVDA  'n003, missing from disk', 'tab', 'selected', '1 of 1'
+13:33:13.815  NVDA  'Tab bar.  n003, missing from disk, tab 1 of 1.'
+13:33:14.930  NVDA  'f6'
+13:33:14.931  [L2] KEY F6 (to the Files tree, press 2)
+13:33:14.964  NVDA  'n003.md editor', 'document', 'heading level 1', '# n003'
+13:33:14.966  NVDA  'Editor pane 1 of 1, n003, missing from disk.'
+13:33:16.078  NVDA  'f6'
+13:33:16.079  [L2] KEY F6 (to the Files tree, press 3)
+13:33:16.107  NVDA  'This note has no headings.'
+13:33:16.107  NVDA  'Outline panel.'
+13:33:17.234  NVDA  'f6'
+13:33:17.235  [L2] KEY F6 (to the Files tree, press 4)
+13:33:17.266  NVDA  'Right pane panels', 'list'
+13:33:17.275  NVDA  'Outline', '1 of 5'
+13:33:17.276  NVDA  'Right pane panels.'
+13:33:18.388  NVDA  'f6'
+13:33:18.389  [L2] KEY F6 (to the Files tree, press 5)
+13:33:18.413  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:33:18.414  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:33:19.552  NVDA  'f6'
+13:33:19.553  [L2] KEY F6 (to the Files tree, press 6)
+13:33:19.582  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:33:19.583  NVDA  'Menu bar.'
+13:33:20.717  NVDA  'f6'
+13:33:20.717  [L2] KEY F6 (to the Files tree, press 7)
+13:33:20.758  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:33:20.763  NVDA  'board.canvas, file', 'not selected', '1 of 107', 'level 1'
+13:33:20.763  NVDA  'Files.'
+13:33:21.864  NVDA  'home'
+13:33:21.864  [L2] KEY Home (the first row)
+13:33:22.790  NVDA  'down arrow'
+13:33:22.790  [L2] KEY Down (to bulk, folder*, press 1)
+13:33:22.829  NVDA  'Selected: bulk, folder'
+13:33:22.849  NVDA  'bulk, folder', 'collapsed', '2 of 107', 'level 1'
+13:33:24.040  NVDA  'shift+tab'
+13:33:24.041  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:33:24.068  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:33:24.989  NVDA  'shift+tab'
+13:33:24.990  [L2] KEY Shift+Tab (back to Delete, press 1)
+13:33:25.011  NVDA  'File actions', 'grouping', 'expanded'
+13:33:25.015  NVDA  'Import…', 'button'
+13:33:25.922  NVDA  'shift+tab'
+13:33:25.923  [L2] KEY Shift+Tab (back to Delete, press 2)
+13:33:25.941  NVDA  'Add shortcut', 'button'
+13:33:26.859  NVDA  'shift+tab'
+13:33:26.860  [L2] KEY Shift+Tab (back to Delete, press 3)
+13:33:26.882  NVDA  'Folder note', 'button'
+13:33:27.805  NVDA  'shift+tab'
+13:33:27.807  [L2] KEY Shift+Tab (back to Delete, press 4)
+13:33:27.831  NVDA  'Reveal in File Explorer', 'button'
+13:33:28.740  NVDA  'shift+tab'
+13:33:28.742  [L2] KEY Shift+Tab (back to Delete, press 5)
+13:33:28.762  NVDA  'Copy path', 'button'
+13:33:29.675  NVDA  'shift+tab'
+13:33:29.676  [L2] KEY Shift+Tab (back to Delete, press 6)
+13:33:29.696  NVDA  'Move to…', 'button'
+13:33:30.609  NVDA  'shift+tab'
+13:33:30.610  [L2] KEY Shift+Tab (back to Delete, press 7)
+13:33:30.627  NVDA  'Duplicate', 'button'
+13:33:31.546  NVDA  'shift+tab'
+13:33:31.546  [L2] KEY Shift+Tab (back to Delete, press 8)
+13:33:31.566  NVDA  'Delete', 'button'
+13:33:32.480  [L2] KEY Space (Delete bulk/)
+13:33:32.579  NVDA  'Preparing to move items to the Recycle Bin…'
+13:33:32.639  NVDA  'Move “bulk” to the Recycle Bin?', 'dialog', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action."
+13:33:32.646  NVDA  'Cancel', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action.", '\x1b'
+13:33:33.364  NVDA  'shift+f6'
+13:33:33.365  [L2] KEY Shift+F6 (toward the status bar, press 1)
+13:33:33.740  NVDA  'shift+f6'
+13:33:33.742  [L2] KEY Shift+F6 (toward the status bar, press 2)
+13:33:34.112  NVDA  'shift+f6'
+13:33:34.114  [L2] KEY Shift+F6 (toward the status bar, press 3)
+13:33:34.488  NVDA  'shift+f6'
+13:33:34.489  [L2] KEY Shift+F6 (toward the status bar, press 4)
+13:33:34.706  NVDA  'tab'
+13:33:34.707  [L2] KEY Tab (to Cancel, press 1)
+13:33:34.724  NVDA  'Move to the Recycle Bin', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action."
+13:33:34.922  NVDA  'tab'
+13:33:34.923  [L2] KEY Tab (to Cancel, press 2)
+13:33:34.940  NVDA  'Cancel', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action.", '\x1b'
+13:33:35.140  NVDA  'tab'
+13:33:35.141  [L2] KEY Tab (to Cancel, press 3)
+13:33:35.158  NVDA  'Move to the Recycle Bin', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action."
+13:33:35.360  NVDA  'tab'
+13:33:35.361  [L2] KEY Tab (to Cancel, press 4)
+13:33:35.378  NVDA  'Cancel', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action.", '\x1b'
+13:33:35.752  [L2]   NOTE the trip from Y to Cancel took 2381 ms; the keys on name='Cancel' type=ControlType.Button aid='' enabled=True; CancelTrash <none>
+13:33:35.754  [L2]   NOTE NOT REACHED: the keys never reached Cancel while the trash ran
+13:33:35.757  [L2]   TRIGGER at 13:33:35.756
+13:34:05.714  [L2] === L2 / step B6 ===
+13:34:06.764  [L2] ===== STEP B6 : CancelTrash: Delete bulk/, confirm, the status bar's Cancel, Space
+13:34:06.807  [L2]   NOTE attempt 2: the confirmation from attempt 1 (Space on Delete at 13:33:32.480) was still open; its keys had moved inside it only
+13:34:06.827  NVDA  'tab'
+13:34:06.830  [L2] KEY Tab (to Move to the Recycle Bin, press 1)
+13:34:06.847  NVDA  'Move to the Recycle Bin', 'button', "Move “bulk” and its 200 items to the Recycle Bin. Slate can't undo this action."
+13:34:07.092  [L2] KEY Space (Move to the Recycle Bin)
+13:34:07.181  NVDA  'File actions', 'grouping', 'expanded'
+13:34:07.182  NVDA  'Moving items to the Recycle Bin…'
+13:34:08.079  NVDA  'Moved bulk to the Recycle Bin.'
+13:34:08.674  NVDA  'shift+f6'
+13:34:08.676  [L2] KEY Shift+F6 (toward the status bar, press 1)
+13:34:08.709  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:34:08.709  NVDA  'Menu bar.'
+13:34:08.943  NVDA  'shift+f6'
+13:34:08.945  [L2] KEY Shift+F6 (toward the status bar, press 2)
+13:34:08.972  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:34:08.973  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:34:09.211  NVDA  'tab'
+13:34:09.212  [L2] KEY Tab (to Cancel, press 1)
+13:34:09.244  NVDA  'New note', 'button'
+13:34:09.636  [L2]   NOTE the trip from the confirm to Cancel took 2380 ms; the keys on name='New note' type=ControlType.Button aid='SidebarNewNote' enabled=True; CancelTrash <none>
+13:34:09.639  [L2]   NOTE NOT REACHED: the keys never reached Cancel while the trash ran
+13:34:09.643  [L2]   TRIGGER at 13:34:09.642
+13:34:28.064  [L2] === L2 / step B8 ===
+13:34:29.122  [L2] ===== STEP B8 : Folder note: folder-without-note selected, Space on Folder note
+13:34:29.197  NVDA  'f6'
+13:34:29.200  [L2] KEY F6 (to the Files tree, press 1)
+13:34:29.244  NVDA  'Workspace tabs', 'tab control'
+13:34:29.254  NVDA  'n003, missing from disk', 'tab', 'selected', '1 of 1'
+13:34:29.255  NVDA  'Tab bar.  n003, missing from disk, tab 1 of 1.'
+13:34:30.361  NVDA  'f6'
+13:34:30.361  [L2] KEY F6 (to the Files tree, press 2)
+13:34:30.388  NVDA  'n003.md editor', 'document', 'heading level 1', '# n003'
+13:34:30.389  NVDA  'Editor pane 1 of 1, n003, missing from disk.'
+13:34:31.508  NVDA  'f6'
+13:34:31.508  [L2] KEY F6 (to the Files tree, press 3)
+13:34:31.535  NVDA  'This note has no headings.'
+13:34:31.535  NVDA  'Outline panel.'
+13:34:32.644  NVDA  'f6'
+13:34:32.644  [L2] KEY F6 (to the Files tree, press 4)
+13:34:32.674  NVDA  'Right pane panels', 'list'
+13:34:32.685  NVDA  'Outline', '1 of 5'
+13:34:32.685  NVDA  'Right pane panels.'
+13:34:33.788  NVDA  'f6'
+13:34:33.788  [L2] KEY F6 (to the Files tree, press 5)
+13:34:33.812  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:34:33.812  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:34:34.921  NVDA  'f6'
+13:34:34.922  [L2] KEY F6 (to the Files tree, press 6)
+13:34:34.950  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:34:34.950  NVDA  'Menu bar.'
+13:34:36.094  NVDA  'f6'
+13:34:36.094  [L2] KEY F6 (to the Files tree, press 7)
+13:34:36.133  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:34:36.138  NVDA  'board.canvas, file', 'not selected', '1 of 106', 'level 1'
+13:34:36.138  NVDA  'Files.'
+13:34:37.250  NVDA  'home'
+13:34:37.251  [L2] KEY Home (the first row)
+13:34:38.192  NVDA  'down arrow'
+13:34:38.193  [L2] KEY Down (to folder-without-note, folder*, press 1)
+13:34:38.270  NVDA  'Selected: folder-with-note, folder'
+13:34:38.295  NVDA  'folder-with-note, folder, has folder note', 'collapsed', '2 of 106', 'level 1'
+13:34:38.296  NVDA  'Outline, 1 heading.'
+13:34:38.932  NVDA  'down arrow'
+13:34:38.933  [L2] KEY Down (to folder-without-note, folder*, press 2)
+13:34:38.970  NVDA  'Selected: folder-without-note, folder'
+13:34:38.983  NVDA  'folder-without-note, folder', 'collapsed', '3 of 106', 'level 1'
+13:34:40.279  NVDA  'shift+tab'
+13:34:40.281  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:34:40.308  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:34:41.263  NVDA  'shift+tab'
+13:34:41.264  [L2] KEY Shift+Tab (back to Folder note, press 1)
+13:34:41.286  NVDA  'File actions', 'grouping', 'expanded'
+13:34:41.289  NVDA  'Import…', 'button'
+13:34:42.230  NVDA  'shift+tab'
+13:34:42.231  [L2] KEY Shift+Tab (back to Folder note, press 2)
+13:34:42.248  NVDA  'Add shortcut', 'button'
+13:34:43.165  NVDA  'shift+tab'
+13:34:43.166  [L2] KEY Shift+Tab (back to Folder note, press 3)
+13:34:43.187  NVDA  'Folder note', 'button'
+13:34:44.112  [L2]   TRIGGER at 13:34:44.110
+13:34:44.115  [L2] KEY Space (Folder note)
+13:34:44.250  NVDA  'Created folder note folder-without-note/folder-without-note.md.'
+13:34:44.251  NVDA  'Outline, 1 heading.'
+13:34:44.253  NVDA  'unavailable'
+13:34:44.275  NVDA  'Workspace tabs', 'tab control'
+13:34:44.284  NVDA  'folder-without-note', 'tab', 'selected', '1 of 1'
+13:34:44.294  NVDA  'folder-without-note.md editor', 'document', 'heading level 1', '# folder-without-note'
+13:34:59.799  [L2] === L2 / step B9 ===
+13:35:01.469  [L2] ===== STEP B9 : Delete folder note: folder-with-note selected, Space, confirm
+13:35:01.545  NVDA  'f6'
+13:35:01.547  [L2] KEY F6 (to the Files tree, press 1)
+13:35:01.576  NVDA  'Outline', 'list'
+13:35:01.581  NVDA  'Level 1 heading: folder-without-note', 'not selected', '1 of 1'
+13:35:01.581  NVDA  'Outline panel.'
+13:35:02.732  NVDA  'f6'
+13:35:02.733  [L2] KEY F6 (to the Files tree, press 2)
+13:35:02.767  NVDA  'Right pane panels', 'list'
+13:35:02.777  NVDA  'Outline', '1 of 5'
+13:35:02.777  NVDA  'Right pane panels.'
+13:35:03.879  NVDA  'f6'
+13:35:03.879  [L2] KEY F6 (to the Files tree, press 3)
+13:35:03.902  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:35:03.903  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:35:05.028  NVDA  'f6'
+13:35:05.028  [L2] KEY F6 (to the Files tree, press 4)
+13:35:05.058  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:35:05.058  NVDA  'Menu bar.'
+13:35:06.168  NVDA  'f6'
+13:35:06.169  [L2] KEY F6 (to the Files tree, press 5)
+13:35:06.209  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:35:06.219  NVDA  'folder-without-note, folder, has folder note', 'collapsed', '3 of 106', 'level 1'
+13:35:06.219  NVDA  'Files.'
+13:35:07.341  NVDA  'home'
+13:35:07.341  [L2] KEY Home (the first row)
+13:35:07.408  NVDA  'Selected: board.canvas'
+13:35:07.431  NVDA  'board.canvas, file', '1 of 106', 'level 1'
+13:35:08.273  NVDA  'down arrow'
+13:35:08.273  [L2] KEY Down (to folder-with-note, folder*, press 1)
+13:35:08.349  NVDA  'Selected: folder-with-note, folder'
+13:35:08.368  NVDA  'folder-with-note, folder, has folder note', 'collapsed', '2 of 106', 'level 1'
+13:35:08.368  NVDA  'Outline, 1 heading.'
+13:35:09.492  NVDA  'shift+tab'
+13:35:09.493  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:35:09.522  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:35:10.442  NVDA  'shift+tab'
+13:35:10.444  [L2] KEY Shift+Tab (back to Delete folder note, press 1)
+13:35:10.464  NVDA  'File actions', 'grouping', 'expanded'
+13:35:10.468  NVDA  'Import…', 'button'
+13:35:11.375  NVDA  'shift+tab'
+13:35:11.377  [L2] KEY Shift+Tab (back to Delete folder note, press 2)
+13:35:11.394  NVDA  'Add shortcut', 'button'
+13:35:12.319  NVDA  'shift+tab'
+13:35:12.320  [L2] KEY Shift+Tab (back to Delete folder note, press 3)
+13:35:12.337  NVDA  'Split', 'button'
+13:35:13.251  NVDA  'shift+tab'
+13:35:13.252  [L2] KEY Shift+Tab (back to Delete folder note, press 4)
+13:35:13.270  NVDA  'New tab', 'button'
+13:35:14.184  NVDA  'shift+tab'
+13:35:14.186  [L2] KEY Shift+Tab (back to Delete folder note, press 5)
+13:35:14.202  NVDA  'Open', 'button'
+13:35:15.136  NVDA  'shift+tab'
+13:35:15.137  [L2] KEY Shift+Tab (back to Delete folder note, press 6)
+13:35:15.156  NVDA  'Delete folder note', 'button'
+13:35:16.068  [L2]   TRIGGER at 13:35:16.067
+13:35:16.071  [L2] KEY Space (Delete folder note)
+13:35:16.129  NVDA  'Confirm File Operation', 'dialog', 'Delete the folder note for folder-with-note?'
+13:35:16.131  NVDA  'No', 'button', 'Alt+', 'n'
+13:35:18.723  [L2] KEY Y (Yes: delete the folder note)
+13:35:18.778  NVDA  'y'
+13:35:18.925  NVDA  'Deleted the folder-with-note folder note.'
+13:35:18.941  NVDA  'folder-with-note.md is missing from disk. Open editor content was preserved.'
+13:35:19.030  NVDA  'folder-with-note — cb17a-L2 — Slate', 'window'
+13:35:19.050  NVDA  'File actions', 'grouping', 'expanded'
+13:35:20.272  [L2]   NOTE the confirmation box was answered Y
+13:35:32.088  [L2] === L2 / step B10 ===
+13:35:33.783  [L2] ===== STEP B10 : Remove shortcut: Add shortcut on a.md, Shortcuts, select it, Remove shortcut, Space
+13:35:33.855  NVDA  'f6'
+13:35:33.858  [L2] KEY F6 (to the Files tree, press 1)
+13:35:33.891  NVDA  'Workspace tabs', 'tab control'
+13:35:33.900  NVDA  'folder-with-note, missing from disk', 'tab', 'selected', '2 of 2'
+13:35:33.901  NVDA  'Tab bar.  folder-with-note, missing from disk, tab 2 of 2.'
+13:35:35.041  NVDA  'f6'
+13:35:35.041  [L2] KEY F6 (to the Files tree, press 2)
+13:35:35.073  NVDA  'folder-with-note.md editor', 'document', 'heading level 1', '# folder-with-note'
+13:35:35.074  NVDA  'Editor pane 1 of 1, folder-with-note, missing from disk.'
+13:35:36.182  NVDA  'f6'
+13:35:36.183  [L2] KEY F6 (to the Files tree, press 3)
+13:35:36.211  NVDA  'This note has no headings.'
+13:35:36.211  NVDA  'Outline panel.'
+13:35:37.319  NVDA  'f6'
+13:35:37.320  [L2] KEY F6 (to the Files tree, press 4)
+13:35:37.350  NVDA  'Right pane panels', 'list'
+13:35:37.360  NVDA  'Outline', '1 of 5'
+13:35:37.360  NVDA  'Right pane panels.'
+13:35:38.454  NVDA  'f6'
+13:35:38.455  [L2] KEY F6 (to the Files tree, press 5)
+13:35:38.480  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:35:38.480  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:35:39.633  NVDA  'f6'
+13:35:39.634  [L2] KEY F6 (to the Files tree, press 6)
+13:35:39.663  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:35:39.663  NVDA  'Menu bar.'
+13:35:40.773  NVDA  'f6'
+13:35:40.773  [L2] KEY F6 (to the Files tree, press 7)
+13:35:40.812  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:35:40.822  NVDA  'folder-with-note, folder', 'collapsed', '2 of 106', 'level 1'
+13:35:40.822  NVDA  'Files.'
+13:35:41.917  NVDA  'end'
+13:35:41.918  [L2] KEY End (the last row)
+13:35:42.020  NVDA  'Selected: Templates, folder'
+13:35:42.042  NVDA  'Templates, folder', 'collapsed', '106 of 106', 'level 1'
+13:35:42.845  NVDA  'up arrow'
+13:35:42.846  [L2] KEY Up (to Note A, file*, press 1)
+13:35:42.910  NVDA  'Selected: slate.json'
+13:35:42.936  NVDA  'slate.json, file', '105 of 106', 'level 1'
+13:35:43.590  NVDA  'up arrow'
+13:35:43.591  [L2] KEY Up (to Note A, file*, press 2)
+13:35:43.656  NVDA  'Selected: recovered.canvas'
+13:35:43.672  NVDA  'recovered.canvas, file', '104 of 106', 'level 1'
+13:35:43.672  NVDA  'Canvas opened read-only. 1 card available to inspect. Repair the file and retry to edit.'
+13:35:44.308  NVDA  'up arrow'
+13:35:44.309  [L2] KEY Up (to Note A, file*, press 3)
+13:35:44.597  NVDA  'Selected: Queries.base'
+13:35:44.620  NVDA  'Queries.base, file', '103 of 106', 'level 1'
+13:35:45.058  NVDA  'up arrow'
+13:35:45.058  [L2] KEY Up (to Note A, file*, press 4)
+13:35:45.205  NVDA  'Selected: Note A'
+13:35:45.243  NVDA  'Note A, file', '102 of 106', 'level 1'
+13:35:45.244  NVDA  'Outline, 1 heading.'
+13:35:45.250  NVDA  'Citations, 2 citations.'
+13:35:46.288  NVDA  'shift+tab'
+13:35:46.290  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:35:46.317  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:35:47.237  NVDA  'shift+tab'
+13:35:47.238  [L2] KEY Shift+Tab (back to Add shortcut, press 1)
+13:35:47.259  NVDA  'File actions', 'grouping', 'expanded'
+13:35:47.263  NVDA  'Import…', 'button'
+13:35:48.201  NVDA  'shift+tab'
+13:35:48.203  [L2] KEY Shift+Tab (back to Add shortcut, press 2)
+13:35:48.222  NVDA  'Add shortcut', 'button'
+13:35:49.148  [L2] KEY Space (Add shortcut)
+13:35:49.172  NVDA  'Added a.md, file shortcut to shortcuts.'
+13:35:50.786  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:35:51.170  NVDA  'tab'
+13:35:51.171  [L2] KEY Tab (to the shortcuts list, press 1)
+13:35:52.110  NVDA  'tab'
+13:35:52.112  [L2] KEY Tab (to the shortcuts list, press 2)
+13:35:52.138  NVDA  'File shortcuts', 'list'
+13:35:52.142  NVDA  'a.md, file shortcut', 'not selected', '1 of 1'
+13:35:53.162  [L2] KEY Space (select the shortcut)
+13:35:53.178  NVDA  'selected'
+13:35:54.398  NVDA  'tab'
+13:35:54.399  [L2] KEY Tab (to Remove shortcut, press 1)
+13:35:54.419  NVDA  'Remove shortcut', 'button'
+13:35:55.323  [L2]   TRIGGER at 13:35:55.322
+13:35:55.327  [L2] KEY Space (Remove shortcut)
+13:35:55.376  NVDA  'Removed a.md, file shortcut from shortcuts.'
+13:35:55.378  NVDA  'unavailable'
+13:35:55.382  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:36:04.571  [L2] === L2 / step B12 ===
+13:36:05.632  [L2] ===== STEP B12 : Rename: n005.md selected, name n005b, Rename, Space
+13:36:05.707  NVDA  'f6'
+13:36:05.709  [L2] KEY F6 (to the Files tree, press 1)
+13:36:05.744  NVDA  'Workspace tabs', 'tab control'
+13:36:05.755  NVDA  'a', 'tab', 'selected', '2 of 2'
+13:36:05.755  NVDA  'Tab bar.  a, tab 2 of 2.'
+13:36:06.872  NVDA  'f6'
+13:36:06.873  [L2] KEY F6 (to the Files tree, press 2)
+13:36:06.906  NVDA  'a.md editor', 'document', '---'
+13:36:06.909  NVDA  'Editor pane 1 of 1, a.'
+13:36:08.021  NVDA  'f6'
+13:36:08.022  [L2] KEY F6 (to the Files tree, press 3)
+13:36:08.053  NVDA  'Outline', 'list'
+13:36:08.057  NVDA  'Level 1 heading: Note A', 'not selected', '1 of 1'
+13:36:08.057  NVDA  'Outline panel.'
+13:36:09.162  NVDA  'f6'
+13:36:09.163  [L2] KEY F6 (to the Files tree, press 4)
+13:36:09.194  NVDA  'Right pane panels', 'list'
+13:36:09.204  NVDA  'Outline', '1 of 5'
+13:36:09.204  NVDA  'Right pane panels.'
+13:36:10.302  NVDA  'f6'
+13:36:10.303  [L2] KEY F6 (to the Files tree, press 5)
+13:36:10.329  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:36:10.330  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:36:11.472  NVDA  'f6'
+13:36:11.474  [L2] KEY F6 (to the Files tree, press 6)
+13:36:11.502  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:36:11.503  NVDA  'Menu bar.'
+13:36:12.618  NVDA  'f6'
+13:36:12.618  [L2] KEY F6 (to the Files tree, press 7)
+13:36:12.663  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:36:12.673  NVDA  'Note A, file', '102 of 106', 'level 1'
+13:36:12.674  NVDA  'Files.'
+13:36:13.760  NVDA  'home'
+13:36:13.761  [L2] KEY Home (the first row)
+13:36:13.906  NVDA  'Selected: board.canvas'
+13:36:13.927  NVDA  'board.canvas, file', '1 of 106', 'level 1'
+13:36:14.685  NVDA  'down arrow'
+13:36:14.685  [L2] KEY Down (to n005.md*, press 1)
+13:36:14.726  NVDA  'Selected: folder-with-note, folder'
+13:36:14.754  NVDA  'folder-with-note, folder', 'collapsed', '2 of 106', 'level 1'
+13:36:15.431  NVDA  'down arrow'
+13:36:15.431  [L2] KEY Down (to n005.md*, press 2)
+13:36:15.547  NVDA  'Selected: folder-without-note, folder'
+13:36:15.591  NVDA  'folder-without-note, folder, has folder note', 'collapsed', '3 of 106', 'level 1'
+13:36:15.591  NVDA  'Outline, 1 heading.'
+13:36:16.168  NVDA  'down arrow'
+13:36:16.168  [L2] KEY Down (to n005.md*, press 3)
+13:36:16.258  NVDA  'Selected: library.bib'
+13:36:16.291  NVDA  'library.bib, file', '4 of 106', 'level 1'
+13:36:16.898  NVDA  'down arrow'
+13:36:16.898  [L2] KEY Down (to n005.md*, press 4)
+13:36:16.959  NVDA  'Selected: n000.md'
+13:36:16.974  NVDA  'n000.md, file', '5 of 106', 'level 1'
+13:36:16.974  NVDA  'Outline, 1 heading.'
+13:36:17.635  NVDA  'down arrow'
+13:36:17.636  [L2] KEY Down (to n005.md*, press 5)
+13:36:17.692  NVDA  'Selected: n004.md'
+13:36:17.708  NVDA  'n004.md, file', '6 of 106', 'level 1'
+13:36:17.709  NVDA  'Outline, 1 heading.'
+13:36:18.368  NVDA  'down arrow'
+13:36:18.369  [L2] KEY Down (to n005.md*, press 6)
+13:36:18.424  NVDA  'Selected: n005.md'
+13:36:18.438  NVDA  'n005.md, file', '7 of 106', 'level 1'
+13:36:18.439  NVDA  'Outline, 1 heading.'
+13:36:19.574  NVDA  'shift+tab'
+13:36:19.575  [L2] KEY Shift+Tab (back to the name field, press 1)
+13:36:19.601  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:36:20.521  NVDA  'shift+tab'
+13:36:20.522  [L2] KEY Shift+Tab (back to the name field, press 2)
+13:36:20.543  NVDA  'File actions', 'grouping', 'expanded'
+13:36:20.547  NVDA  'Import…', 'button'
+13:36:21.460  NVDA  'shift+tab'
+13:36:21.461  [L2] KEY Shift+Tab (back to the name field, press 3)
+13:36:21.482  NVDA  'Add shortcut', 'button'
+13:36:22.395  NVDA  'shift+tab'
+13:36:22.396  [L2] KEY Shift+Tab (back to the name field, press 4)
+13:36:22.417  NVDA  'Unpin', 'button'
+13:36:23.330  NVDA  'shift+tab'
+13:36:23.331  [L2] KEY Shift+Tab (back to the name field, press 5)
+13:36:23.350  NVDA  'Pin', 'button'
+13:36:24.263  NVDA  'shift+tab'
+13:36:24.264  [L2] KEY Shift+Tab (back to the name field, press 6)
+13:36:24.303  NVDA  'Split', 'button'
+13:36:25.201  NVDA  'shift+tab'
+13:36:25.202  [L2] KEY Shift+Tab (back to the name field, press 7)
+13:36:25.220  NVDA  'New tab', 'button'
+13:36:26.153  NVDA  'shift+tab'
+13:36:26.154  [L2] KEY Shift+Tab (back to the name field, press 8)
+13:36:26.172  NVDA  'Open', 'button'
+13:36:27.109  NVDA  'shift+tab'
+13:36:27.109  [L2] KEY Shift+Tab (back to the name field, press 9)
+13:36:27.131  NVDA  'Copy link', 'button'
+13:36:28.057  NVDA  'shift+tab'
+13:36:28.058  [L2] KEY Shift+Tab (back to the name field, press 10)
+13:36:28.081  NVDA  'Reveal in File Explorer', 'button'
+13:36:28.980  NVDA  'shift+tab'
+13:36:28.982  [L2] KEY Shift+Tab (back to the name field, press 11)
+13:36:29.003  NVDA  'Copy path', 'button'
+13:36:29.931  NVDA  'shift+tab'
+13:36:29.932  [L2] KEY Shift+Tab (back to the name field, press 12)
+13:36:29.954  NVDA  'Move to…', 'button'
+13:36:30.865  NVDA  'shift+tab'
+13:36:30.867  [L2] KEY Shift+Tab (back to the name field, press 13)
+13:36:30.884  NVDA  'Duplicate', 'button'
+13:36:31.797  NVDA  'shift+tab'
+13:36:31.799  [L2] KEY Shift+Tab (back to the name field, press 14)
+13:36:31.819  NVDA  'Delete', 'button'
+13:36:32.754  NVDA  'shift+tab'
+13:36:32.755  [L2] KEY Shift+Tab (back to the name field, press 15)
+13:36:32.772  NVDA  'Rename', 'button'
+13:36:33.701  NVDA  'shift+tab'
+13:36:33.702  [L2] KEY Shift+Tab (back to the name field, press 16)
+13:36:33.725  NVDA  'New folder', 'button'
+13:36:34.640  NVDA  'shift+tab'
+13:36:34.642  [L2] KEY Shift+Tab (back to the name field, press 17)
+13:36:34.660  NVDA  'New note', 'button'
+13:36:35.576  NVDA  'shift+tab'
+13:36:35.576  [L2] KEY Shift+Tab (back to the name field, press 18)
+13:36:35.621  NVDA  'File or folder name', 'edit', 'n005.md'
+13:36:36.530  NVDA  'ctrl+a'
+13:36:36.531  [L2] KEY Ctrl+A
+13:36:36.547  NVDA  'n'
+13:36:36.629  NVDA  '0'
+13:36:36.693  NVDA  '0'
+13:36:36.756  NVDA  '5'
+13:36:36.816  NVDA  'b'
+13:36:36.874  [L2] KEY typed 'n005b' (Unicode key presses, 60 ms apart)
+13:36:36.882  NVDA  'tab'
+13:36:36.882  [L2] KEY Tab (to Rename, press 1)
+13:36:36.916  NVDA  'New note', 'button'
+13:36:37.817  NVDA  'tab'
+13:36:37.818  [L2] KEY Tab (to Rename, press 2)
+13:36:37.837  NVDA  'New folder', 'button'
+13:36:38.750  NVDA  'tab'
+13:36:38.751  [L2] KEY Tab (to Rename, press 3)
+13:36:38.771  NVDA  'Rename', 'button'
+13:36:39.700  [L2]   TRIGGER at 13:36:39.699
+13:36:39.703  [L2] KEY Space (Rename)
+13:36:39.828  NVDA  'Renamed n005.md to n005b.'
+13:36:56.758  [L2] === L2 / step B13 ===
+13:36:57.831  [L2] ===== STEP B13 : File actions Move to…: n006.md selected, Move to…, folder-without-note, confirm
+13:36:57.907  NVDA  'f6'
+13:36:57.909  [L2] KEY F6 (to the Files tree, press 1)
+13:36:57.942  NVDA  'Workspace tabs', 'tab control'
+13:36:57.952  NVDA  'n005b', 'tab', 'selected', '2 of 2'
+13:36:57.952  NVDA  'Tab bar.  n005b, tab 2 of 2.'
+13:36:59.094  NVDA  'f6'
+13:36:59.095  [L2] KEY F6 (to the Files tree, press 2)
+13:36:59.123  NVDA  'n005b editor', 'document', 'heading level 1', '# n005'
+13:36:59.123  NVDA  'Editor pane 1 of 1, n005b.'
+13:37:00.261  NVDA  'f6'
+13:37:00.261  [L2] KEY F6 (to the Files tree, press 3)
+13:37:00.288  NVDA  'This note has no headings.'
+13:37:00.288  NVDA  'Outline panel.'
+13:37:01.397  NVDA  'f6'
+13:37:01.398  [L2] KEY F6 (to the Files tree, press 4)
+13:37:01.428  NVDA  'Right pane panels', 'list'
+13:37:01.438  NVDA  'Outline', '1 of 5'
+13:37:01.438  NVDA  'Right pane panels.'
+13:37:02.540  NVDA  'f6'
+13:37:02.541  [L2] KEY F6 (to the Files tree, press 5)
+13:37:02.566  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:37:02.567  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:37:03.673  NVDA  'f6'
+13:37:03.701  [L2] KEY F6 (to the Files tree, press 6)
+13:37:03.706  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:37:03.706  NVDA  'Menu bar.'
+13:37:04.830  NVDA  'f6'
+13:37:04.830  [L2] KEY F6 (to the Files tree, press 7)
+13:37:04.869  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:37:04.880  NVDA  'n005b, file', '7 of 106', 'level 1'
+13:37:04.880  NVDA  'Files.'
+13:37:05.972  NVDA  'home'
+13:37:05.973  [L2] KEY Home (the first row)
+13:37:06.033  NVDA  'Selected: board.canvas'
+13:37:06.047  NVDA  'board.canvas, file', '1 of 106', 'level 1'
+13:37:06.902  NVDA  'down arrow'
+13:37:06.903  [L2] KEY Down (to n006.md*, press 1)
+13:37:06.942  NVDA  'Selected: folder-with-note, folder'
+13:37:06.975  NVDA  'folder-with-note, folder', 'collapsed', '2 of 106', 'level 1'
+13:37:07.635  NVDA  'down arrow'
+13:37:07.635  [L2] KEY Down (to n006.md*, press 2)
+13:37:07.758  NVDA  'Selected: folder-without-note, folder'
+13:37:07.789  NVDA  'folder-without-note, folder, has folder note', 'collapsed', '3 of 106', 'level 1'
+13:37:07.790  NVDA  'Outline, 1 heading.'
+13:37:08.366  NVDA  'down arrow'
+13:37:08.367  [L2] KEY Down (to n006.md*, press 3)
+13:37:08.458  NVDA  'Selected: library.bib'
+13:37:08.481  NVDA  'library.bib, file', '4 of 106', 'level 1'
+13:37:09.102  NVDA  'down arrow'
+13:37:09.103  [L2] KEY Down (to n006.md*, press 4)
+13:37:09.161  NVDA  'Selected: n000.md'
+13:37:09.180  NVDA  'n000.md, file', '5 of 106', 'level 1'
+13:37:09.180  NVDA  'Outline, 1 heading.'
+13:37:09.835  NVDA  'down arrow'
+13:37:09.836  [L2] KEY Down (to n006.md*, press 5)
+13:37:09.891  NVDA  'Selected: n004.md'
+13:37:09.905  NVDA  'n004.md, file', '6 of 106', 'level 1'
+13:37:09.906  NVDA  'Outline, 1 heading.'
+13:37:10.571  NVDA  'down arrow'
+13:37:10.572  [L2] KEY Down (to n006.md*, press 6)
+13:37:10.657  NVDA  'Selected: n005b'
+13:37:10.670  NVDA  'n005b, file', '7 of 106', 'level 1'
+13:37:11.303  NVDA  'down arrow'
+13:37:11.304  [L2] KEY Down (to n006.md*, press 7)
+13:37:11.362  NVDA  'Selected: n006.md'
+13:37:11.380  NVDA  'n006.md, file', '8 of 106', 'level 1'
+13:37:11.381  NVDA  'Outline, 1 heading.'
+13:37:12.522  NVDA  'shift+tab'
+13:37:12.523  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:37:12.549  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:37:13.471  NVDA  'shift+tab'
+13:37:13.472  [L2] KEY Shift+Tab (back to Move to…, press 1)
+13:37:13.492  NVDA  'File actions', 'grouping', 'expanded'
+13:37:13.496  NVDA  'Import…', 'button'
+13:37:14.415  NVDA  'shift+tab'
+13:37:14.416  [L2] KEY Shift+Tab (back to Move to…, press 2)
+13:37:14.433  NVDA  'Add shortcut', 'button'
+13:37:15.352  NVDA  'shift+tab'
+13:37:15.353  [L2] KEY Shift+Tab (back to Move to…, press 3)
+13:37:15.370  NVDA  'Unpin', 'button'
+13:37:16.286  NVDA  'shift+tab'
+13:37:16.287  [L2] KEY Shift+Tab (back to Move to…, press 4)
+13:37:16.303  NVDA  'Pin', 'button'
+13:37:17.221  NVDA  'shift+tab'
+13:37:17.222  [L2] KEY Shift+Tab (back to Move to…, press 5)
+13:37:17.239  NVDA  'Split', 'button'
+13:37:18.153  NVDA  'shift+tab'
+13:37:18.154  [L2] KEY Shift+Tab (back to Move to…, press 6)
+13:37:18.170  NVDA  'New tab', 'button'
+13:37:19.074  NVDA  'shift+tab'
+13:37:19.076  [L2] KEY Shift+Tab (back to Move to…, press 7)
+13:37:19.093  NVDA  'Open', 'button'
+13:37:20.026  NVDA  'shift+tab'
+13:37:20.027  [L2] KEY Shift+Tab (back to Move to…, press 8)
+13:37:20.049  NVDA  'Copy link', 'button'
+13:37:20.962  NVDA  'shift+tab'
+13:37:20.964  [L2] KEY Shift+Tab (back to Move to…, press 9)
+13:37:20.984  NVDA  'Reveal in File Explorer', 'button'
+13:37:21.895  NVDA  'shift+tab'
+13:37:21.896  [L2] KEY Shift+Tab (back to Move to…, press 10)
+13:37:21.916  NVDA  'Copy path', 'button'
+13:37:22.832  NVDA  'shift+tab'
+13:37:22.833  [L2] KEY Shift+Tab (back to Move to…, press 11)
+13:37:22.853  NVDA  'Move to…', 'button'
+13:37:23.763  [L2] KEY Space (Move to…)
+13:37:23.907  NVDA  'Move n006.md: loading destination folders. Escape to cancel.'
+13:37:23.936  NVDA  'Destination folders loaded.'
+13:37:23.996  NVDA  'Filter folders', 'edit', 'Type to filter destination folders, or type a new folder name.', 'blank'
+13:37:25.389  NVDA  'f'
+13:37:25.447  NVDA  '2 destinations.'
+13:37:25.467  NVDA  'o'
+13:37:25.514  NVDA  '2 destinations.'
+13:37:25.531  NVDA  'l'
+13:37:25.595  NVDA  '2 destinations.'
+13:37:25.603  NVDA  'd'
+13:37:25.661  NVDA  '2 destinations.'
+13:37:25.672  NVDA  'e'
+13:37:25.731  NVDA  '2 destinations.'
+13:37:25.738  NVDA  'r'
+13:37:25.786  NVDA  '2 destinations.'
+13:37:25.797  NVDA  'folder'
+13:37:25.797  NVDA  'dash'
+13:37:25.836  NVDA  '2 destinations.'
+13:37:25.857  NVDA  'w'
+13:37:25.918  NVDA  '2 destinations.'
+13:37:25.931  NVDA  'i'
+13:37:25.993  NVDA  '2 destinations.'
+13:37:26.001  NVDA  't'
+13:37:26.057  NVDA  '2 destinations.'
+13:37:26.066  NVDA  'h'
+13:37:26.107  NVDA  '2 destinations.'
+13:37:26.130  NVDA  'o'
+13:37:26.164  NVDA  '1 destination.'
+13:37:26.178  NVDA  'u'
+13:37:26.187  NVDA  '1 destination.'
+13:37:26.231  NVDA  't'
+13:37:26.258  NVDA  '1 destination.'
+13:37:26.273  [L2] KEY typed 'folder-without' (Unicode key presses, 60 ms apart)
+13:37:27.082  [L2] KEY Down (the first matching folder)
+13:37:27.083  NVDA  'down arrow'
+13:37:27.201  NVDA  'folder-without'
+13:37:27.221  NVDA  'Selected: New Folder “folder-without”'
+13:37:28.853  [L2]   TRIGGER at 13:37:28.852
+13:37:28.856  NVDA  'enter'
+13:37:28.856  [L2] KEY Enter (move here)
+13:37:29.060  NVDA  'Moved n006.md to folder-without.'
+13:37:29.060  NVDA  'Outline, 1 heading.'
+13:37:29.143  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:37:29.149  NVDA  'board.canvas, file', 'not selected', '1 of 106', 'level 1'
+13:37:44.099  [L2] === L2 / step B14 ===
+13:37:45.146  [L2] ===== STEP B14 : batch Move to…: n007.md checked, Batch actions, Move to…, folder-without-note, confirm
+13:37:45.211  NVDA  'home'
+13:37:45.213  [L2] KEY Home (the first row)
+13:37:46.205  NVDA  'down arrow'
+13:37:46.206  [L2] KEY Down (to n007.md*, press 1)
+13:37:46.250  NVDA  'Selected: folder-with-note, folder'
+13:37:46.279  NVDA  'folder-with-note, folder', 'collapsed', '2 of 106', 'level 1'
+13:37:46.975  NVDA  'down arrow'
+13:37:46.975  [L2] KEY Down (to n007.md*, press 2)
+13:37:47.002  NVDA  'Selected: folder-without, folder'
+13:37:47.016  NVDA  'folder-without, folder', 'collapsed', '3 of 106', 'level 1'
+13:37:47.712  NVDA  'down arrow'
+13:37:47.712  [L2] KEY Down (to n007.md*, press 3)
+13:37:47.836  NVDA  'Selected: folder-without-note, folder'
+13:37:47.855  NVDA  'folder-without-note, folder, has folder note', 'collapsed', '4 of 106', 'level 1'
+13:37:47.856  NVDA  'Outline, 1 heading.'
+13:37:48.445  NVDA  'down arrow'
+13:37:48.445  [L2] KEY Down (to n007.md*, press 4)
+13:37:48.538  NVDA  'Selected: library.bib'
+13:37:48.562  NVDA  'library.bib, file', '5 of 106', 'level 1'
+13:37:49.177  NVDA  'down arrow'
+13:37:49.179  [L2] KEY Down (to n007.md*, press 5)
+13:37:49.239  NVDA  'Selected: n000.md'
+13:37:49.256  NVDA  'n000.md, file', '6 of 106', 'level 1'
+13:37:49.257  NVDA  'Outline, 1 heading.'
+13:37:49.913  NVDA  'down arrow'
+13:37:49.914  [L2] KEY Down (to n007.md*, press 6)
+13:37:49.971  NVDA  'Selected: n004.md'
+13:37:49.986  NVDA  'n004.md, file', '7 of 106', 'level 1'
+13:37:49.986  NVDA  'Outline, 1 heading.'
+13:37:50.640  NVDA  'down arrow'
+13:37:50.641  [L2] KEY Down (to n007.md*, press 7)
+13:37:50.695  NVDA  'Selected: n005b'
+13:37:50.710  NVDA  'n005b, file', '8 of 106', 'level 1'
+13:37:51.373  NVDA  'down arrow'
+13:37:51.374  [L2] KEY Down (to n007.md*, press 8)
+13:37:51.453  NVDA  'Selected: n007.md'
+13:37:51.469  NVDA  'n007.md, file', '9 of 106', 'level 1'
+13:37:51.470  NVDA  'Outline, 1 heading.'
+13:37:52.216  [L2] KEY Space (check n007.md)
+13:37:52.236  NVDA  '1 item selected'
+13:37:53.443  [L2]   NOTE check by UIA: n007.md True
+13:37:53.924  NVDA  'shift+tab'
+13:37:53.925  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:37:53.952  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:37:54.875  NVDA  'shift+tab'
+13:37:54.876  [L2] KEY Shift+Tab (back to Move to…, press 1)
+13:37:54.897  NVDA  'File actions', 'grouping', 'expanded'
+13:37:54.901  NVDA  'Import…', 'button'
+13:37:55.840  NVDA  'shift+tab'
+13:37:55.841  [L2] KEY Shift+Tab (back to Move to…, press 2)
+13:37:55.858  NVDA  'Add shortcut', 'button'
+13:37:56.777  NVDA  'shift+tab'
+13:37:56.778  [L2] KEY Shift+Tab (back to Move to…, press 3)
+13:37:56.796  NVDA  'Unpin', 'button'
+13:37:57.726  NVDA  'shift+tab'
+13:37:57.727  [L2] KEY Shift+Tab (back to Move to…, press 4)
+13:37:57.746  NVDA  'Pin', 'button'
+13:37:58.663  NVDA  'shift+tab'
+13:37:58.664  [L2] KEY Shift+Tab (back to Move to…, press 5)
+13:37:58.683  NVDA  'Split', 'button'
+13:37:59.599  NVDA  'shift+tab'
+13:37:59.600  [L2] KEY Shift+Tab (back to Move to…, press 6)
+13:37:59.617  NVDA  'New tab', 'button'
+13:38:00.948  NVDA  'shift+tab'
+13:38:00.950  [L2] KEY Shift+Tab (back to Move to…, press 7)
+13:38:00.967  NVDA  'Open', 'button'
+13:38:01.882  NVDA  'shift+tab'
+13:38:01.883  [L2] KEY Shift+Tab (back to Move to…, press 8)
+13:38:01.904  NVDA  'Copy link', 'button'
+13:38:02.813  NVDA  'shift+tab'
+13:38:02.814  [L2] KEY Shift+Tab (back to Move to…, press 9)
+13:38:02.836  NVDA  'Reveal in File Explorer', 'button'
+13:38:03.747  NVDA  'shift+tab'
+13:38:03.748  [L2] KEY Shift+Tab (back to Move to…, press 10)
+13:38:03.769  NVDA  'Copy path', 'button'
+13:38:04.680  NVDA  'shift+tab'
+13:38:04.681  [L2] KEY Shift+Tab (back to Move to…, press 11)
+13:38:04.703  NVDA  'Move to…', 'button'
+13:38:05.616  NVDA  'shift+tab'
+13:38:05.617  [L2] KEY Shift+Tab (back to Move to…, press 12)
+13:38:05.635  NVDA  'Duplicate', 'button'
+13:38:06.548  NVDA  'shift+tab'
+13:38:06.550  [L2] KEY Shift+Tab (back to Move to…, press 13)
+13:38:06.571  NVDA  'Delete', 'button'
+13:38:07.507  NVDA  'shift+tab'
+13:38:07.508  [L2] KEY Shift+Tab (back to Move to…, press 14)
+13:38:07.525  NVDA  'Rename', 'button'
+13:38:08.440  NVDA  'shift+tab'
+13:38:08.441  [L2] KEY Shift+Tab (back to Move to…, press 15)
+13:38:08.463  NVDA  'New folder', 'button'
+13:38:09.375  NVDA  'shift+tab'
+13:38:09.376  [L2] KEY Shift+Tab (back to Move to…, press 16)
+13:38:09.393  NVDA  'New note', 'button'
+13:38:10.325  NVDA  'shift+tab'
+13:38:10.326  [L2] KEY Shift+Tab (back to Move to…, press 17)
+13:38:10.375  NVDA  'File or folder name', 'edit', 'n007.md'
+13:38:11.263  NVDA  'shift+tab'
+13:38:11.264  [L2] KEY Shift+Tab (back to Move to…, press 18)
+13:38:11.301  NVDA  'File actions', 'grouping', 'expanded'
+13:38:12.213  NVDA  'shift+tab'
+13:38:12.214  [L2] KEY Shift+Tab (back to Move to…, press 19)
+13:38:12.237  NVDA  'Batch actions', 'grouping', 'expanded'
+13:38:12.241  NVDA  'Move checked to Recycle Bin', 'button'
+13:38:13.153  NVDA  'shift+tab'
+13:38:13.154  [L2] KEY Shift+Tab (back to Move to…, press 20)
+13:38:13.177  NVDA  'Move to…', 'button'
+13:38:14.102  [L2] KEY Space (Move to…)
+13:38:14.222  NVDA  'Move n007.md: loading destination folders. Escape to cancel.'
+13:38:14.249  NVDA  'Destination folders loaded.'
+13:38:14.313  NVDA  'Filter folders', 'edit', 'Type to filter destination folders, or type a new folder name.', 'blank'
+13:38:15.692  NVDA  'f'
+13:38:15.764  NVDA  '3 destinations.'
+13:38:15.766  NVDA  'o'
+13:38:15.836  NVDA  '3 destinations.'
+13:38:15.849  NVDA  'l'
+13:38:15.905  NVDA  '3 destinations.'
+13:38:15.963  NVDA  'd'
+13:38:15.998  NVDA  'e'
+13:38:15.998  NVDA  '3 destinations.'
+13:38:16.039  NVDA  'r'
+13:38:16.081  NVDA  '3 destinations.'
+13:38:16.121  NVDA  'folder'
+13:38:16.122  NVDA  'dash'
+13:38:16.155  NVDA  '3 destinations.'
+13:38:16.191  NVDA  'w'
+13:38:16.191  NVDA  '3 destinations.'
+13:38:16.221  NVDA  '3 destinations.'
+13:38:16.270  NVDA  'i'
+13:38:16.285  NVDA  '3 destinations.'
+13:38:16.310  NVDA  't'
+13:38:16.334  NVDA  '3 destinations.'
+13:38:16.336  NVDA  'h'
+13:38:16.385  NVDA  '3 destinations.'
+13:38:16.401  NVDA  'o'
+13:38:16.462  NVDA  '2 destinations.'
+13:38:16.470  NVDA  'u'
+13:38:16.488  NVDA  '2 destinations.'
+13:38:16.530  NVDA  't'
+13:38:16.552  NVDA  '2 destinations.'
+13:38:16.596  NVDA  'without'
+13:38:16.596  NVDA  'dash'
+13:38:16.605  NVDA  '1 destination.'
+13:38:16.652  NVDA  'n'
+13:38:16.680  NVDA  '1 destination.'
+13:38:16.714  NVDA  'o'
+13:38:16.730  NVDA  '1 destination.'
+13:38:16.764  NVDA  't'
+13:38:16.796  NVDA  '1 destination.'
+13:38:16.825  NVDA  'e'
+13:38:16.860  NVDA  '1 destination.'
+13:38:16.864  [L2] KEY typed 'folder-without-note' (Unicode key presses, 60 ms apart)
+13:38:17.678  NVDA  'down arrow'
+13:38:17.678  [L2] KEY Down (the first matching folder)
+13:38:17.795  NVDA  'folder-without-note'
+13:38:19.420  [L2]   TRIGGER at 13:38:19.419
+13:38:19.423  NVDA  'enter'
+13:38:19.423  [L2] KEY Enter (move here)
+13:38:19.621  NVDA  'Moved n007.md to folder-without-note.'
+13:38:19.626  NVDA  'Outline, 1 heading.'
+13:38:19.717  NVDA  'Batch actions', 'grouping', 'expanded'
+13:38:19.728  NVDA  'Move to…', 'button'
+13:38:35.501  [L2] === L2 / step B13r2 ===
+13:38:36.548  [L2] ===== STEP B13 : run 2: File actions Move to…: n008.md selected, Move to…, folder-without-note, confirm
+13:38:36.623  NVDA  'f6'
+13:38:36.626  [L2] KEY F6 (to the Files tree, press 1)
+13:38:36.660  NVDA  'Workspace tabs', 'tab control'
+13:38:36.670  NVDA  'n007', 'tab', 'selected', '2 of 2'
+13:38:36.670  NVDA  'Tab bar.  n007, tab 2 of 2.'
+13:38:37.837  NVDA  'f6'
+13:38:37.838  [L2] KEY F6 (to the Files tree, press 2)
+13:38:37.865  NVDA  'n007.md editor', 'document', 'heading level 1', '# n007'
+13:38:37.868  NVDA  'Editor pane 1 of 1, n007.'
+13:38:39.028  NVDA  'f6'
+13:38:39.029  [L2] KEY F6 (to the Files tree, press 3)
+13:38:39.062  NVDA  'Outline', 'list'
+13:38:39.066  NVDA  'Level 1 heading: n007', 'not selected', '1 of 1'
+13:38:39.066  NVDA  'Outline panel.'
+13:38:40.168  NVDA  'f6'
+13:38:40.169  [L2] KEY F6 (to the Files tree, press 4)
+13:38:40.200  NVDA  'Right pane panels', 'list'
+13:38:40.210  NVDA  'Outline', '1 of 5'
+13:38:40.211  NVDA  'Right pane panels.'
+13:38:41.311  NVDA  'f6'
+13:38:41.312  [L2] KEY F6 (to the Files tree, press 5)
+13:38:41.337  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:38:41.337  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:38:42.504  NVDA  'f6'
+13:38:42.505  [L2] KEY F6 (to the Files tree, press 6)
+13:38:42.533  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:38:42.534  NVDA  'Menu bar.'
+13:38:43.661  NVDA  'f6'
+13:38:43.662  [L2] KEY F6 (to the Files tree, press 7)
+13:38:43.701  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:38:43.706  NVDA  'board.canvas, file', 'not selected', '1 of 105', 'level 1'
+13:38:43.707  NVDA  'Files.'
+13:38:44.806  NVDA  'home'
+13:38:44.807  [L2] KEY Home (the first row)
+13:38:45.732  NVDA  'down arrow'
+13:38:45.733  [L2] KEY Down (to n008.md*, press 1)
+13:38:45.779  NVDA  'Selected: folder-with-note, folder'
+13:38:45.803  NVDA  'folder-with-note, folder', 'collapsed', '2 of 105', 'level 1'
+13:38:46.449  NVDA  'down arrow'
+13:38:46.450  [L2] KEY Down (to n008.md*, press 2)
+13:38:46.472  NVDA  'Selected: folder-without, folder'
+13:38:46.489  NVDA  'folder-without, folder', 'collapsed', '3 of 105', 'level 1'
+13:38:47.198  NVDA  'down arrow'
+13:38:47.199  [L2] KEY Down (to n008.md*, press 3)
+13:38:47.300  NVDA  'Selected: folder-without-note, folder'
+13:38:47.329  NVDA  'folder-without-note, folder, has folder note', 'collapsed', '4 of 105', 'level 1'
+13:38:47.329  NVDA  'Outline, 1 heading.'
+13:38:47.918  NVDA  'down arrow'
+13:38:47.918  [L2] KEY Down (to n008.md*, press 4)
+13:38:48.003  NVDA  'Selected: library.bib'
+13:38:48.027  NVDA  'library.bib, file', '5 of 105', 'level 1'
+13:38:48.637  NVDA  'down arrow'
+13:38:48.639  [L2] KEY Down (to n008.md*, press 5)
+13:38:48.694  NVDA  'Selected: n000.md'
+13:38:48.715  NVDA  'n000.md, file', '6 of 105', 'level 1'
+13:38:48.715  NVDA  'Outline, 1 heading.'
+13:38:49.386  NVDA  'down arrow'
+13:38:49.387  [L2] KEY Down (to n008.md*, press 6)
+13:38:49.440  NVDA  'Selected: n004.md'
+13:38:49.457  NVDA  'n004.md, file', '7 of 105', 'level 1'
+13:38:49.458  NVDA  'Outline, 1 heading.'
+13:38:50.118  NVDA  'down arrow'
+13:38:50.119  [L2] KEY Down (to n008.md*, press 7)
+13:38:50.182  NVDA  'Selected: n005b'
+13:38:50.196  NVDA  'n005b, file', '8 of 105', 'level 1'
+13:38:50.849  NVDA  'down arrow'
+13:38:50.849  [L2] KEY Down (to n008.md*, press 8)
+13:38:50.908  NVDA  'Selected: n008.md'
+13:38:50.926  NVDA  'n008.md, file', '9 of 105', 'level 1'
+13:38:50.927  NVDA  'Outline, 1 heading.'
+13:38:52.070  NVDA  'shift+tab'
+13:38:52.072  [L2] KEY Shift+Tab (back toward the action expanders, press 1)
+13:38:52.101  NVDA  'Shortcuts', 'grouping', 'expanded'
+13:38:53.022  NVDA  'shift+tab'
+13:38:53.023  [L2] KEY Shift+Tab (back to Move to…, press 1)
+13:38:53.044  NVDA  'File actions', 'grouping', 'expanded'
+13:38:53.048  NVDA  'Import…', 'button'
+13:38:53.956  NVDA  'shift+tab'
+13:38:53.957  [L2] KEY Shift+Tab (back to Move to…, press 2)
+13:38:53.975  NVDA  'Add shortcut', 'button'
+13:38:54.901  NVDA  'shift+tab'
+13:38:54.903  [L2] KEY Shift+Tab (back to Move to…, press 3)
+13:38:54.920  NVDA  'Unpin', 'button'
+13:38:55.838  NVDA  'shift+tab'
+13:38:55.839  [L2] KEY Shift+Tab (back to Move to…, press 4)
+13:38:55.858  NVDA  'Pin', 'button'
+13:38:56.775  NVDA  'shift+tab'
+13:38:56.777  [L2] KEY Shift+Tab (back to Move to…, press 5)
+13:38:56.795  NVDA  'Split', 'button'
+13:38:57.711  NVDA  'shift+tab'
+13:38:57.712  [L2] KEY Shift+Tab (back to Move to…, press 6)
+13:38:57.730  NVDA  'New tab', 'button'
+13:38:58.647  NVDA  'shift+tab'
+13:38:58.648  [L2] KEY Shift+Tab (back to Move to…, press 7)
+13:38:58.665  NVDA  'Open', 'button'
+13:38:59.584  NVDA  'shift+tab'
+13:38:59.585  [L2] KEY Shift+Tab (back to Move to…, press 8)
+13:38:59.607  NVDA  'Copy link', 'button'
+13:39:01.141  NVDA  'shift+tab'
+13:39:01.142  [L2] KEY Shift+Tab (back to Move to…, press 9)
+13:39:01.164  NVDA  'Reveal in File Explorer', 'button'
+13:39:02.074  NVDA  'shift+tab'
+13:39:02.076  [L2] KEY Shift+Tab (back to Move to…, press 10)
+13:39:02.097  NVDA  'Copy path', 'button'
+13:39:03.026  NVDA  'shift+tab'
+13:39:03.027  [L2] KEY Shift+Tab (back to Move to…, press 11)
+13:39:03.047  NVDA  'Move to…', 'button'
+13:39:03.976  [L2] KEY Space (Move to…)
+13:39:04.111  NVDA  'Move n007.md: loading destination folders. Escape to cancel.'
+13:39:04.164  NVDA  'Destination folders loaded.'
+13:39:04.246  NVDA  'Filter folders', 'edit', 'Type to filter destination folders, or type a new folder name.', 'blank'
+13:39:05.547  NVDA  'f'
+13:39:05.607  NVDA  '3 destinations.'
+13:39:05.636  NVDA  'o'
+13:39:05.731  NVDA  '3 destinations.'
+13:39:05.794  NVDA  'l'
+13:39:05.819  NVDA  'd'
+13:39:05.820  NVDA  '3 destinations.'
+13:39:05.849  NVDA  'e'
+13:39:05.885  NVDA  '3 destinations.'
+13:39:05.914  NVDA  'r'
+13:39:05.926  NVDA  '3 destinations.'
+13:39:05.988  NVDA  'folder'
+13:39:05.988  NVDA  'dash'
+13:39:06.003  NVDA  '3 destinations.'
+13:39:06.034  NVDA  'w'
+13:39:06.041  NVDA  '3 destinations.'
+13:39:06.110  NVDA  'i'
+13:39:06.111  NVDA  '3 destinations.'
+13:39:06.141  NVDA  't'
+13:39:06.142  NVDA  '3 destinations.'
+13:39:06.202  NVDA  '3 destinations.'
+13:39:06.229  NVDA  'h'
+13:39:06.250  NVDA  '3 destinations.'
+13:39:06.260  NVDA  'o'
+13:39:06.299  NVDA  '2 destinations.'
+13:39:06.311  NVDA  'u'
+13:39:06.377  NVDA  '2 destinations.'
+13:39:06.384  NVDA  't'
+13:39:06.435  NVDA  '2 destinations.'
+13:39:06.460  NVDA  'without'
+13:39:06.460  NVDA  'dash'
+13:39:06.470  NVDA  '1 destination.'
+13:39:06.507  NVDA  'n'
+13:39:06.518  NVDA  '1 destination.'
+13:39:06.573  NVDA  'o'
+13:39:06.628  NVDA  '1 destination.'
+13:39:06.635  NVDA  't'
+13:39:06.679  NVDA  '1 destination.'
+13:39:06.688  NVDA  'e'
+13:39:06.709  NVDA  '1 destination.'
+13:39:06.719  [L2] KEY typed 'folder-without-note' (Unicode key presses, 60 ms apart)
+13:39:07.533  [L2] KEY Down (the first matching folder)
+13:39:07.534  NVDA  'down arrow'
+13:39:07.650  NVDA  'folder-without-note'
+13:39:09.527  [L2]   TRIGGER at 13:39:09.526
+13:39:09.530  NVDA  'enter'
+13:39:09.530  [L2] KEY Enter (move here)
+13:39:09.686  NVDA  'Moved n007.md to vault root.'
+13:39:09.779  NVDA  'File actions', 'grouping', 'expanded'
+13:39:09.784  NVDA  'Move to…', 'button'
+13:39:38.577  NVDA  'Settings'
+13:39:38.611  NVDA  'Settings', 'window'
+13:39:38.615  NVDA  'Back', 'button'
+13:39:38.701  [L2] closed: Slate running=False; launcher running=False; recorder running=False
+13:39:45.966  [L3] === launch L3 : exe C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe ; vault <session folder>\vaults\cb17a-L3 ; root <session folder>\roots\cb17a-L3 ; prep sidebar-malformed
+13:39:46.927  [L3] Slate pid 93252 (C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe); launcher pid 93472
+13:39:47.942  [L3] VAULT OPEN; the Files tree shows: name='n000.md, file' type=ControlType.TreeItem aid='' enabled=True
+13:39:47.961  NVDA  'cb17a-L3 — Slate', 'window'
+13:39:47.967  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:39:47.973  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:39:47.973  NVDA  'Editor pane 1 of 1, Empty pane.'
+13:39:52.606  [L3] === L3 / step B7 ===
+13:39:53.664  [L3] ===== STEP B7 : SidebarSettingsRetry: .slate/sidebar.json malformed at launch, repaired on disk, Tab to Retry, Space
+13:39:53.777  [L3]   NOTE .slate/sidebar.json repaired on disk: {"version":1}
+13:39:53.816  NVDA  'shift+tab'
+13:39:53.818  [L3] KEY Shift+Tab (back to Retry, press 1)
+13:39:53.844  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:39:54.785  NVDA  'shift+tab'
+13:39:54.786  [L3] KEY Shift+Tab (back to Retry, press 2)
+13:39:54.804  NVDA  'File actions', 'grouping', 'collapsed'
+13:39:55.732  NVDA  'shift+tab'
+13:39:55.733  [L3] KEY Shift+Tab (back to Retry, press 3)
+13:39:55.750  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:39:56.683  NVDA  'shift+tab'
+13:39:56.685  [L3] KEY Shift+Tab (back to Retry, press 4)
+13:39:56.734  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:39:58.652  NVDA  'shift+tab'
+13:39:58.653  [L3] KEY Shift+Tab (back to Retry, press 5)
+13:39:58.678  NVDA  'Retry sidebar settings', 'button', 'Reads .slate/sidebar.json again after you repair it.'
+13:39:59.618  [L3]   TRIGGER at 13:39:59.617
+13:39:59.621  [L3] KEY Space (Retry)
+13:39:59.767  NVDA  'Sidebar settings reloaded.'
+13:39:59.796  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:39:59.803  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:40:09.464  [L3] === L3 / step B5 ===
+13:40:10.512  [L3] ===== STEP B5 : Cancel import: Import… with cb17a-import (2,000 files, outside the vault), Tab to Cancel import, Space
+13:40:10.705  NVDA  'File actions', 'grouping', 'expanded'
+13:40:11.074  NVDA  'shift+tab'
+13:40:11.076  [L3] KEY Shift+Tab (back to Import…, press 1)
+13:40:11.091  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:40:12.049  NVDA  'shift+tab'
+13:40:12.051  [L3] KEY Shift+Tab (back to Import…, press 2)
+13:40:12.085  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:40:12.984  NVDA  'shift+tab'
+13:40:12.986  [L3] KEY Shift+Tab (back to Import…, press 3)
+13:40:13.009  NVDA  'Refresh files', 'button'
+13:40:13.933  NVDA  'shift+tab'
+13:40:13.934  [L3] KEY Shift+Tab (back to Import…, press 4)
+13:40:13.950  NVDA  'Expand loaded folders', 'button'
+13:40:14.866  NVDA  'shift+tab'
+13:40:14.867  [L3] KEY Shift+Tab (back to Import…, press 5)
+13:40:14.884  NVDA  'Collapse all', 'button'
+13:40:15.823  NVDA  'shift+tab'
+13:40:15.823  [L3] KEY Shift+Tab (back to Import…, press 6)
+13:40:15.841  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:40:16.751  NVDA  'shift+tab'
+13:40:16.752  [L3] KEY Shift+Tab (back to Import…, press 7)
+13:40:16.769  NVDA  'New note', 'button'
+13:40:18.715  NVDA  'shift+tab'
+13:40:18.716  [L3] KEY Shift+Tab (back to Import…, press 8)
+13:40:18.744  NVDA  'More panels', 'button'
+13:40:19.653  NVDA  'shift+tab'
+13:40:19.654  [L3] KEY Shift+Tab (back to Import…, press 9)
+13:40:19.679  NVDA  'Right pane panels', 'list'
+13:40:19.690  NVDA  'Outline', '1 of 5'
+13:40:20.590  NVDA  'shift+tab'
+13:40:20.591  [L3] KEY Shift+Tab (back to Import…, press 10)
+13:40:20.610  NVDA  'Select a note to see its outline.'
+13:40:21.542  NVDA  'shift+tab'
+13:40:21.543  [L3] KEY Shift+Tab (back to Import…, press 11)
+13:40:21.576  NVDA  'Search Vault…', 'button', 'Ctrl+Shift+', 'F'
+13:40:22.482  NVDA  'shift+tab'
+13:40:22.483  [L3] KEY Shift+Tab (back to Import…, press 12)
+13:40:22.500  NVDA  'New Note from Template…', 'button', 'Ctrl+Shift+', 'N'
+13:40:23.432  NVDA  'shift+tab'
+13:40:23.433  [L3] KEY Shift+Tab (back to Import…, press 13)
+13:40:23.450  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:40:24.368  NVDA  'shift+tab'
+13:40:24.369  [L3] KEY Shift+Tab (back to Import…, press 14)
+13:40:24.398  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:40:24.403  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:40:25.305  NVDA  'shift+tab'
+13:40:25.306  [L3] KEY Shift+Tab (back to Import…, press 15)
+13:40:25.334  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:40:26.238  NVDA  'shift+tab'
+13:40:26.239  [L3] KEY Shift+Tab (back to Import…, press 16)
+13:40:26.261  NVDA  'File actions', 'grouping', 'expanded'
+13:40:26.265  NVDA  'Import…', 'button'
+13:40:27.173  [L3] KEY Space (Import…)
+13:40:27.237  NVDA  'Import Files and Folders', 'dialog', 'Choose Yes to import files, No to import folders, or Cancel to stop.'
+13:40:27.240  NVDA  'Cancel', 'button'
+13:40:28.528  [L3] KEY N (No: import folders)
+13:40:28.552  NVDA  'n'
+13:40:29.828  NVDA  'Import folders', 'dialog'
+13:40:29.832  NVDA  'Folder:', 'edit', 'blank'
+13:40:41.925  [L3] KEY typed <the import source folder's full path> (Unicode key presses, 60 ms apart)
+13:40:41.928  NVDA  'enter'
+13:40:41.928  [L3] KEY Enter (the typed folder)
+13:40:42.094  NVDA  'cb17a-import selected'
+13:40:43.902  NVDA  'alt+s'
+13:40:43.903  [L3] KEY Alt+S (Select Folder)
+13:40:46.278  [L3]   NOTE after the picker closed the keys were on name='cb17a-import' type=ControlType.Pane aid='1152' enabled=True, not in File actions
+13:40:46.283  NVDA  'tab'
+13:40:46.283  [L3] KEY Tab (to Cancel import, press 1)
+13:40:46.299  NVDA  'Select Folder', 'button'
+13:40:46.491  NVDA  'tab'
+13:40:46.492  [L3] KEY Tab (to Cancel import, press 2)
+13:40:46.503  NVDA  'Cancel', 'button'
+13:40:46.710  NVDA  'tab'
+13:40:46.710  [L3] KEY Tab (to Cancel import, press 3)
+13:40:46.758  NVDA  'Navigation buttons', 'tool bar'
+13:40:46.759  NVDA  'Back to demo-vault (Alt + Left Arrow)', 'button'
+13:40:46.928  [L3]   NOTE the trip from the picker to Cancel import took 1083 ms; keys on name='Navigation buttons' type=ControlType.Pane aid='' enabled=True
+13:40:46.930  [L3]   NOTE NOT REACHED: the keys never reached Cancel import while the import ran
+13:40:46.934  [L3]   TRIGGER at 13:40:46.933
+13:41:14.718  [L3] B5 attempt 1 cleanup: the folder picker never closed (Alt+S did nothing; the three Tabs moved inside the picker). Escape cancels it
+13:41:14.743  NVDA  'escape'
+13:41:14.745  [L3] KEY Escape (cancel the folder picker)
+13:41:15.041  NVDA  'cb17a-L3 — Slate', 'window'
+13:41:27.337  [L3] === L3 / step B5 ===
+13:41:28.441  [L3] ===== STEP B5 : attempt 2: Cancel import: Import… with cb17a-import (2,000 files, outside the vault), Tab to Cancel import, Space
+13:41:28.963  NVDA  'f6'
+13:41:28.966  [L3] KEY F6 (to the Files tree, press 1)
+13:41:29.004  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:41:29.004  NVDA  'Menu bar.'
+13:41:30.127  NVDA  'f6'
+13:41:30.128  [L3] KEY F6 (to the Files tree, press 2)
+13:41:30.171  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:41:30.176  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:41:30.176  NVDA  'Files.'
+13:41:31.299  NVDA  'shift+tab'
+13:41:31.300  [L3] KEY Shift+Tab (back toward the action expanders, press 1)
+13:41:31.326  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:41:32.292  NVDA  'shift+tab'
+13:41:32.293  [L3] KEY Shift+Tab (back to Import…, press 1)
+13:41:32.315  NVDA  'File actions', 'grouping', 'expanded'
+13:41:32.319  NVDA  'Import…', 'button'
+13:41:33.251  [L3] KEY Space (Import…)
+13:41:33.326  NVDA  'Import Files and Folders', 'dialog', 'Choose Yes to import files, No to import folders, or Cancel to stop.'
+13:41:33.329  NVDA  'Cancel', 'button'
+13:41:34.593  [L3] KEY N (No: import folders)
+13:41:34.763  NVDA  'n'
+13:41:35.562  NVDA  'Import folders', 'dialog'
+13:41:35.567  NVDA  'Folder:', 'edit', 'blank'
+13:41:47.689  [L3] KEY typed <the import source folder's full path> (Unicode key presses, 60 ms apart)
+13:41:47.691  NVDA  'enter'
+13:41:47.691  [L3] KEY Enter (the typed folder)
+13:41:47.857  NVDA  'cb17a-import selected'
+13:41:48.903  NVDA  'enter'
+13:41:48.903  [L3] KEY Enter (again: Select Folder, the default button)
+13:41:49.152  NVDA  'cb17a-L3 — Slate', 'window'
+13:41:49.695  [L3]   NOTE after the picker closed the keys were on name='cb17a-L3 — Slate' type=ControlType.Window aid='Slate.MainWindow' enabled=True, not in File actions
+13:41:49.700  NVDA  'tab'
+13:41:49.700  [L3] KEY Tab (to Cancel import, press 1)
+13:41:49.739  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:41:49.913  NVDA  'tab'
+13:41:49.914  [L3] KEY Tab (to Cancel import, press 2)
+13:41:49.934  NVDA  'Collapse all', 'button'
+13:41:50.133  NVDA  'tab'
+13:41:50.134  [L3] KEY Tab (to Cancel import, press 3)
+13:41:50.152  NVDA  'Expand loaded folders', 'button'
+13:41:50.350  [L3]   NOTE the trip from the picker to Cancel import took 1026 ms; keys on name='Expand loaded folders' type=ControlType.Button aid='SidebarExpandLoaded' enabled=True
+13:41:50.353  [L3]   NOTE NOT REACHED: the keys never reached Cancel import while the import ran
+13:41:50.356  [L3]   TRIGGER at 13:41:50.355
+13:41:59.348  NVDA  'Copied 2,000 files and 1 folder to the vault root.'
+13:42:06.619  [L3] ===== STEP B5 : attempt 2 continued: the import still running, Tab on to Cancel import, Space
+13:42:06.695  NVDA  'tab'
+13:42:06.697  [L3] KEY Tab (to Cancel import, press 1)
+13:42:06.783  NVDA  'Refresh files', 'button'
+13:42:06.832  NVDA  'tab'
+13:42:06.833  [L3] KEY Tab (to Cancel import, press 2)
+13:42:06.943  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:42:06.972  NVDA  'tab'
+13:42:06.973  [L3] KEY Tab (to Cancel import, press 3)
+13:42:07.007  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:42:07.113  NVDA  'tab'
+13:42:07.114  [L3] KEY Tab (to Cancel import, press 4)
+13:42:07.136  NVDA  'File actions', 'grouping', 'expanded'
+13:42:07.253  NVDA  'tab'
+13:42:07.253  [L3] KEY Tab (to Cancel import, press 5)
+13:42:07.283  NVDA  'File or folder name', 'edit', 'blank'
+13:42:07.391  NVDA  'tab'
+13:42:07.392  [L3] KEY Tab (to Cancel import, press 6)
+13:42:07.414  NVDA  'New note', 'button'
+13:42:07.532  NVDA  'tab'
+13:42:07.532  [L3] KEY Tab (to Cancel import, press 7)
+13:42:07.551  NVDA  'New folder', 'button'
+13:42:07.672  NVDA  'tab'
+13:42:07.673  [L3] KEY Tab (to Cancel import, press 8)
+13:42:07.696  NVDA  'Import…', 'button'
+13:42:07.813  NVDA  'tab'
+13:42:07.813  [L3] KEY Tab (to Cancel import, press 9)
+13:42:07.835  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:42:07.956  NVDA  'tab'
+13:42:07.956  [L3] KEY Tab (to Cancel import, press 10)
+13:42:07.984  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:42:07.990  NVDA  'board.canvas, file', 'not selected', '1 of 111', 'level 1'
+13:42:08.095  NVDA  'tab'
+13:42:08.096  [L3] KEY Tab (to Cancel import, press 11)
+13:42:08.130  NVDA  'Quick Open…', 'button', 'Ctrl+', 'O'
+13:42:08.221  NVDA  'tab'
+13:42:08.221  [L3] KEY Tab (to Cancel import, press 12)
+13:42:08.240  NVDA  'New Note from Template…', 'button', 'Ctrl+Shift+', 'N'
+13:42:08.347  NVDA  'tab'
+13:42:08.348  [L3] KEY Tab (to Cancel import, press 13)
+13:42:08.368  NVDA  'Search Vault…', 'button', 'Ctrl+Shift+', 'F'
+13:42:08.472  NVDA  'tab'
+13:42:08.472  [L3] KEY Tab (to Cancel import, press 14)
+13:42:08.501  NVDA  'Select a note to see its outline.'
+13:42:08.597  NVDA  'tab'
+13:42:08.597  [L3] KEY Tab (to Cancel import, press 15)
+13:42:08.647  NVDA  'Right pane panels', 'list'
+13:42:08.657  NVDA  'Outline', '1 of 5'
+13:42:08.722  NVDA  'tab'
+13:42:08.723  [L3] KEY Tab (to Cancel import, press 16)
+13:42:08.744  NVDA  'More panels', 'button'
+13:42:08.862  NVDA  'tab'
+13:42:08.863  [L3] KEY Tab (to Cancel import, press 17)
+13:42:08.890  NVDA  'New note', 'button'
+13:42:09.001  NVDA  'tab'
+13:42:09.002  [L3] KEY Tab (to Cancel import, press 18)
+13:42:09.021  NVDA  'Sort and group, Name (A to Z)', 'button'
+13:42:09.142  NVDA  'tab'
+13:42:09.143  [L3] KEY Tab (to Cancel import, press 19)
+13:42:09.161  NVDA  'Collapse all', 'button'
+13:42:09.282  NVDA  'tab'
+13:42:09.283  [L3] KEY Tab (to Cancel import, press 20)
+13:42:09.301  NVDA  'Expand loaded folders', 'button'
+13:42:09.423  NVDA  'tab'
+13:42:09.424  [L3] KEY Tab (to Cancel import, press 21)
+13:42:09.442  NVDA  'Refresh files', 'button'
+13:42:09.562  NVDA  'tab'
+13:42:09.563  [L3] KEY Tab (to Cancel import, press 22)
+13:42:09.598  NVDA  'Filter files', 'edit', 'Filter by words, #tag, path:, ext:, has:task, or @date. Escape or the Clear filter button clears the filter.', 'blank'
+13:42:09.703  NVDA  'tab'
+13:42:09.704  [L3] KEY Tab (to Cancel import, press 23)
+13:42:09.737  NVDA  'Batch actions', 'grouping', 'collapsed'
+13:42:09.843  NVDA  'tab'
+13:42:09.843  [L3] KEY Tab (to Cancel import, press 24)
+13:42:09.863  NVDA  'File actions', 'grouping', 'expanded'
+13:42:09.984  NVDA  'tab'
+13:42:09.985  [L3] KEY Tab (to Cancel import, press 25)
+13:42:10.016  NVDA  'File or folder name', 'edit', 'blank'
+13:42:10.124  NVDA  'tab'
+13:42:10.124  [L3] KEY Tab (to Cancel import, press 26)
+13:42:10.154  NVDA  'New note', 'button'
+13:42:10.264  NVDA  'tab'
+13:42:10.265  [L3] KEY Tab (to Cancel import, press 27)
+13:42:10.284  NVDA  'New folder', 'button'
+13:42:10.408  NVDA  'tab'
+13:42:10.409  [L3] KEY Tab (to Cancel import, press 28)
+13:42:10.430  NVDA  'Import…', 'button'
+13:42:10.547  NVDA  'tab'
+13:42:10.548  [L3] KEY Tab (to Cancel import, press 29)
+13:42:10.570  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:42:10.688  NVDA  'tab'
+13:42:10.689  [L3] KEY Tab (to Cancel import, press 30)
+13:42:10.714  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:42:10.720  NVDA  'board.canvas, file', 'not selected', '1 of 111', 'level 1'
+13:42:10.845  [L3]   NOTE keys on name='board.canvas, file' type=ControlType.TreeItem aid='' enabled=True; imported so far 2000
+13:42:10.849  [L3]   NOTE NOT REACHED
+13:42:28.794  [L3] === L3 / step B5 ===
+13:42:29.836  [L3] ===== STEP B5 : attempt 3: Cancel import: Import… with cb17a-import (2,000 files, outside the vault), Tab to Cancel import, Space
+13:42:30.386  NVDA  'shift+tab'
+13:42:30.389  [L3] KEY Shift+Tab (back toward the action expanders, press 1)
+13:42:30.414  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:42:31.387  NVDA  'shift+tab'
+13:42:31.388  [L3] KEY Shift+Tab (back to Import…, press 1)
+13:42:31.410  NVDA  'File actions', 'grouping', 'expanded'
+13:42:31.413  NVDA  'Import…', 'button'
+13:42:32.342  [L3] KEY Space (Import…)
+13:42:32.420  NVDA  'Import Files and Folders', 'dialog', 'Choose Yes to import files, No to import folders, or Cancel to stop.'
+13:42:32.423  NVDA  'Cancel', 'button'
+13:42:33.704  [L3] KEY N (No: import folders)
+13:42:33.726  NVDA  'n'
+13:42:34.713  NVDA  'Import folders', 'dialog'
+13:42:34.718  NVDA  'Folder:', 'edit', 'blank'
+13:42:47.114  [L3] KEY typed <the import source folder's full path> (Unicode key presses, 60 ms apart)
+13:42:47.117  NVDA  'enter'
+13:42:47.117  [L3] KEY Enter (the typed folder)
+13:42:47.279  NVDA  'cb17a-import selected'
+13:42:48.333  NVDA  'enter'
+13:42:48.333  [L3] KEY Enter (again: Select Folder, the default button)
+13:42:48.570  NVDA  'cb17a-L3 — Slate', 'window'
+13:42:49.128  [L3]   NOTE after the picker closed the keys were on name='cb17a-L3 — Slate' type=ControlType.Window aid='Slate.MainWindow' enabled=True, not in File actions
+13:42:49.134  NVDA  'f6'
+13:42:49.134  [L3] KEY F6 (to the Files tree, press 1)
+13:42:49.167  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:42:49.167  NVDA  'Menu bar.'
+13:42:49.456  NVDA  'f6'
+13:42:49.456  [L3] KEY F6 (to the Files tree, press 2)
+13:42:49.501  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:42:49.505  NVDA  'board.canvas, file', 'not selected', '1 of 111', 'level 1'
+13:42:49.506  NVDA  'Files.'
+13:42:49.782  NVDA  'shift+tab'
+13:42:49.784  [L3] KEY Shift+Tab (to Cancel import, press 1)
+13:42:49.813  NVDA  'Shortcuts', 'grouping', 'collapsed'
+13:42:50.044  NVDA  'shift+tab'
+13:42:50.045  [L3] KEY Shift+Tab (to Cancel import, press 2)
+13:42:50.068  NVDA  'File actions', 'grouping', 'expanded'
+13:42:50.072  NVDA  'Cancel import', 'button'
+13:42:50.310  [L3]   NOTE the trip from the picker to Cancel import took 1569 ms; keys on name='Cancel import' type=ControlType.Button aid='' enabled=True
+13:42:50.315  [L3]   TRIGGER at 13:42:50.314
+13:42:50.319  [L3] KEY Space (Cancel import)
+13:42:50.348  NVDA  'unavailable'
+13:42:50.366  NVDA  'File actions', 'grouping', 'expanded'
+13:43:12.724  NVDA  'Settings'
+13:43:12.757  NVDA  'Settings', 'window'
+13:43:12.761  NVDA  'Back', 'button'
+13:43:13.668  [L3] closed: Slate running=False; launcher running=False; recorder running=False
+13:44:17.647  [L4] === launch L4 : exe C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe ; vault <session folder>\vaults\cb17a-L4 ; root <session folder>\roots\cb17a-L4 ; prep seed-queries
+13:44:18.942  [L4] Slate pid 51972 (C:\dev\slate\.claude\worktrees\plan-47-cb17a\apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe); launcher pid 99432
+13:44:19.991  [L4] VAULT OPEN; the Files tree shows: name='n000.md, file' type=ControlType.TreeItem aid='' enabled=True
+13:44:20.003  NVDA  'cb17a-L4 — Slate', 'window'
+13:44:20.010  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:44:20.017  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:44:20.017  NVDA  'Editor pane 1 of 1, Empty pane.'
+13:44:24.685  [L4] === L4 / step C7 ===
+13:44:25.726  [L4] ===== STEP C7 : property Save: a.md's properties, status changed, Tab to Save, Space
+13:44:25.782  NVDA  'ctrl+o'
+13:44:25.785  [L4] KEY Ctrl+O (Quick Open)
+13:44:26.004  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:44:26.006  NVDA  '308 recent files'
+13:44:26.264  NVDA  'a'
+13:44:26.341  NVDA  'a'
+13:44:26.342  NVDA  'dot'
+13:44:26.350  NVDA  '5 files matching "a"'
+13:44:26.405  NVDA  'm'
+13:44:26.425  NVDA  '3 files matching "a."'
+13:44:26.475  NVDA  'd'
+13:44:26.486  NVDA  '2 files matching "a.m"'
+13:44:26.545  [L4] KEY typed 'a.md' (Unicode key presses, 60 ms apart)
+13:44:26.550  NVDA  '2 files matching "a.md"'
+13:44:28.181  NVDA  'enter'
+13:44:28.181  [L4] KEY Enter (a)
+13:44:28.585  NVDA  ' a, tab 1 of 1.'
+13:44:28.585  NVDA  'Outline, 1 heading.'
+13:44:28.593  NVDA  'Citations, 2 citations.'
+13:44:28.668  NVDA  'Workspace tabs', 'tab control'
+13:44:28.693  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:44:28.717  NVDA  'a.md editor', 'document', '---'
+13:44:30.587  NVDA  'shift+f6'
+13:44:30.588  [L4] KEY Shift+F6 (the tab bar)
+13:44:30.632  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:44:30.632  NVDA  'Tab bar.  a, tab 1 of 1.'
+13:44:31.986  NVDA  'tab'
+13:44:31.986  [L4] KEY Tab (to the status value, press 1)
+13:44:32.006  NVDA  'Close a', 'button'
+13:44:32.932  NVDA  'tab'
+13:44:32.932  [L4] KEY Tab (to the status value, press 2)
+13:44:32.949  NVDA  'Source', 'radio button', 'checked'
+13:44:33.880  NVDA  'tab'
+13:44:33.881  [L4] KEY Tab (to the status value, press 3)
+13:44:33.899  NVDA  'More note actions', 'button'
+13:44:34.819  NVDA  'tab'
+13:44:34.819  [L4] KEY Tab (to the status value, press 4)
+13:44:34.841  NVDA  'Properties, 3 properties', 'grouping', 'expanded'
+13:44:35.760  NVDA  'tab'
+13:44:35.760  [L4] KEY Tab (to the status value, press 5)
+13:44:35.781  NVDA  'Properties, 3 properties', 'toggle button', 'pressed'
+13:44:35.785  NVDA  'Rename property across the vault', 'button'
+13:44:36.684  NVDA  'tab'
+13:44:36.685  [L4] KEY Tab (to the status value, press 6)
+13:44:36.703  NVDA  'Add property', 'button', 'Add a property to this note.'
+13:44:37.622  NVDA  'tab'
+13:44:37.623  [L4] KEY Tab (to the status value, press 7)
+13:44:37.666  NVDA  'Properties, 3 properties', 'grouping'
+13:44:37.675  NVDA  'Property title, text, editable', 'edit', 'Note A'
+13:44:38.545  NVDA  'tab'
+13:44:38.545  [L4] KEY Tab (to the status value, press 8)
+13:44:38.574  NVDA  'Delete property title', 'button'
+13:44:39.508  NVDA  'tab'
+13:44:39.509  [L4] KEY Tab (to the status value, press 9)
+13:44:39.556  NVDA  'Property status, text, editable', 'edit', 'draft'
+13:44:40.450  NVDA  'ctrl+a'
+13:44:40.451  [L4] KEY Ctrl+A (select the value)
+13:44:40.479  NVDA  'd'
+13:44:40.534  NVDA  'o'
+13:44:40.596  NVDA  'n'
+13:44:40.659  NVDA  'e'
+13:44:40.713  [L4] KEY typed 'done' (Unicode key presses, 60 ms apart)
+13:44:41.733  NVDA  'tab'
+13:44:41.734  [L4] KEY Tab (to Save, press 1)
+13:44:41.767  NVDA  'Save changes to status', 'button'
+13:44:42.676  [L4]   TRIGGER at 13:44:42.675
+13:44:42.679  [L4] KEY Space (Save)
+13:44:42.779  NVDA  'unavailable'
+13:44:42.812  NVDA  'Property status updated.'
+13:44:42.851  NVDA  'Property status, text, editable', 'edit', 'done'
+13:44:53.264  [L4] === L4 / step C1 ===
+13:44:54.346  [L4] ===== STEP C1 : BulkRenamePreviewButton: Ctrl+Shift+R from a.md's editor, status -> state, Preview, Space
+13:44:54.402  NVDA  'ctrl+o'
+13:44:54.404  [L4] KEY Ctrl+O (Quick Open)
+13:44:54.619  NVDA  'Search files', 'edit', 'Up and Down move selection. Enter opens. Control Enter opens a new tab. Control Alt Enter opens a right split. Control Alt Shift Enter opens a down split. Escape closes Quick Open.', 'blank'
+13:44:54.622  NVDA  '308 recent files'
+13:44:54.867  NVDA  'a'
+13:44:54.962  NVDA  'a'
+13:44:54.962  NVDA  'dot'
+13:44:54.973  NVDA  '5 files matching "a"'
+13:44:55.018  NVDA  'm'
+13:44:55.075  NVDA  'd'
+13:44:55.084  NVDA  '2 files matching "a.m"'
+13:44:55.118  [L4] KEY typed 'a.md' (Unicode key presses, 60 ms apart)
+13:44:55.144  NVDA  '2 files matching "a.md"'
+13:44:56.820  NVDA  'enter'
+13:44:56.820  [L4] KEY Enter (a)
+13:44:57.070  NVDA  'Workspace tabs', 'tab control'
+13:44:57.093  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:44:57.114  NVDA  'a.md editor', 'document', '---'
+13:44:58.375  NVDA  'ctrl+shift+r'
+13:44:58.377  [L4] KEY Ctrl+Shift+R (Bulk Rename Properties)
+13:44:58.458  NVDA  'Bulk rename property'
+13:44:58.553  NVDA  'Old property key', 'edit', 'title'
+13:44:59.864  NVDA  'ctrl+a'
+13:44:59.865  [L4] KEY Ctrl+A (Old key)
+13:44:59.881  NVDA  's'
+13:44:59.956  NVDA  't'
+13:45:00.020  NVDA  'a'
+13:45:00.082  NVDA  't'
+13:45:00.144  NVDA  'u'
+13:45:00.220  NVDA  's'
+13:45:00.264  [L4] KEY typed 'status' (Unicode key presses, 60 ms apart)
+13:45:00.287  NVDA  'tab'
+13:45:00.288  [L4] KEY Tab (to New key, press 1)
+13:45:00.317  NVDA  'Old key type', 'combo box', 'Any key type', 'collapsed'
+13:45:01.258  NVDA  'tab'
+13:45:01.258  [L4] KEY Tab (to New key, press 2)
+13:45:01.288  NVDA  'New property key', 'edit', 'blank'
+13:45:02.191  NVDA  'ctrl+a'
+13:45:02.193  [L4] KEY Ctrl+A (New key)
+13:45:02.209  NVDA  's'
+13:45:02.272  NVDA  't'
+13:45:02.330  NVDA  'a'
+13:45:02.392  NVDA  't'
+13:45:02.455  NVDA  'e'
+13:45:02.507  [L4] KEY typed 'state' (Unicode key presses, 60 ms apart)
+13:45:02.513  NVDA  'tab'
+13:45:02.514  [L4] KEY Tab (to Preview, press 1)
+13:45:02.540  NVDA  'Preview', 'button'
+13:45:03.437  [L4]   TRIGGER at 13:45:03.436
+13:45:03.440  [L4] KEY Space (Preview)
+13:45:03.562  NVDA  'Workspace tabs', 'tab control'
+13:45:03.571  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:45:03.581  NVDA  'a.md editor', 'document', '---'
+13:45:03.584  NVDA  '201 files will be renamed, 0 skipped, 0 errors.'
+13:45:14.678  [L4] === L4 / step C2 ===
+13:45:15.743  [L4] ===== STEP C2 : BulkRenameApplyButton: after C1, Shift+Tab to Apply, Space
+13:45:15.947  [L4]   NOTE UIA SetFocus on Old key (the keys had left the sheet after Preview) (a landing, not a gesture under test)
+13:45:16.046  NVDA  'Old property key', 'edit', 'status'
+13:45:16.488  NVDA  'shift+tab'
+13:45:16.492  [L4] KEY Shift+Tab (back to Apply, press 1)
+13:45:16.526  NVDA  'Summary: 201 files will be renamed, 0 skipped, 0 errors.'
+13:45:17.447  NVDA  'shift+tab'
+13:45:17.448  [L4] KEY Shift+Tab (back to Apply, press 2)
+13:45:17.471  NVDA  'Close', 'button'
+13:45:18.373  NVDA  'shift+tab'
+13:45:18.375  [L4] KEY Shift+Tab (back to Apply, press 3)
+13:45:18.392  NVDA  'Apply', 'button', 'Apply the previewed property rename across the vault.'
+13:45:19.323  [L4]   TRIGGER at 13:45:19.322
+13:45:19.326  [L4] KEY Space (Apply)
+13:45:19.422  NVDA  'Workspace tabs', 'tab control'
+13:45:19.434  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:45:19.448  NVDA  'a.md editor', 'document', '---'
+13:45:22.564  NVDA  '201 renamed, 0 skipped, 0 failed.'
+13:45:36.089  [L4] === L4 / step C1tree ===
+13:45:37.156  [L4] ===== STEP C1 : run 2 (from the Files tree): Ctrl+Shift+R, state -> status, Preview, Space
+13:45:37.529  [L4]   NOTE UIA SetFocus on Old key (to close the sheet the keys had left) (a landing, not a gesture under test)
+13:45:37.617  NVDA  'Old property key', 'edit', 'status'
+13:45:38.059  NVDA  'escape'
+13:45:38.061  [L4] KEY Escape (close the sheet first)
+13:45:38.184  NVDA  'Workspace tabs', 'tab control'
+13:45:38.194  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:45:38.206  NVDA  'a.md editor', 'document', '---'
+13:45:39.642  NVDA  'f6'
+13:45:39.642  [L4] KEY F6 (to the Files tree, press 1)
+13:45:39.675  NVDA  'Outline', 'list'
+13:45:39.679  NVDA  'Level 1 heading: Note A', 'not selected', '1 of 1'
+13:45:39.680  NVDA  'Outline panel.'
+13:45:40.790  NVDA  'f6'
+13:45:40.791  [L4] KEY F6 (to the Files tree, press 2)
+13:45:40.824  NVDA  'Right pane panels', 'list'
+13:45:40.835  NVDA  'Outline', '1 of 5'
+13:45:40.835  NVDA  'Right pane panels.'
+13:45:41.927  NVDA  'f6'
+13:45:41.928  [L4] KEY F6 (to the Files tree, press 3)
+13:45:41.952  NVDA  'Status bar', 'status bar', 'F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back.'
+13:45:41.953  NVDA  'Status bar. Scan finished: 310 files, 310 new or changed.'
+13:45:43.075  NVDA  'f6'
+13:45:43.076  [L4] KEY F6 (to the Files tree, press 4)
+13:45:43.105  NVDA  'Slate menu', 'collapsed', 'Alt+', 'F', '1 of 1'
+13:45:43.106  NVDA  'Menu bar.'
+13:45:44.213  NVDA  'f6'
+13:45:44.213  [L4] KEY F6 (to the Files tree, press 5)
+13:45:44.252  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:45:44.256  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:45:44.257  NVDA  'Files.'
+13:45:45.356  NVDA  'ctrl+shift+r'
+13:45:45.358  [L4] KEY Ctrl+Shift+R (Bulk Rename Properties, from the Files tree)
+13:45:45.397  NVDA  'Bulk rename property'
+13:45:45.519  NVDA  'Old property key', 'edit', 'title'
+13:45:46.818  NVDA  'ctrl+a'
+13:45:46.820  [L4] KEY Ctrl+A (Old key)
+13:45:46.837  NVDA  's'
+13:45:46.911  NVDA  't'
+13:45:46.972  NVDA  'a'
+13:45:47.037  NVDA  't'
+13:45:47.097  NVDA  'e'
+13:45:47.158  [L4] KEY typed 'state' (Unicode key presses, 60 ms apart)
+13:45:47.174  NVDA  'tab'
+13:45:47.175  [L4] KEY Tab (to New key, press 1)
+13:45:47.208  NVDA  'Old key type', 'combo box', 'Any key type', 'collapsed'
+13:45:48.119  NVDA  'tab'
+13:45:48.120  [L4] KEY Tab (to New key, press 2)
+13:45:48.150  NVDA  'New property key', 'edit', 'blank'
+13:45:49.069  NVDA  'ctrl+a'
+13:45:49.071  [L4] KEY Ctrl+A (New key)
+13:45:49.086  NVDA  's'
+13:45:49.144  NVDA  't'
+13:45:49.206  NVDA  'a'
+13:45:49.269  NVDA  't'
+13:45:49.331  NVDA  'u'
+13:45:49.393  NVDA  's'
+13:45:49.447  [L4] KEY typed 'status' (Unicode key presses, 60 ms apart)
+13:45:49.453  NVDA  'tab'
+13:45:49.454  [L4] KEY Tab (to Preview, press 1)
+13:45:49.477  NVDA  'Preview', 'button'
+13:45:50.395  [L4]   TRIGGER at 13:45:50.395
+13:45:50.399  [L4] KEY Space (Preview)
+13:45:50.497  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:45:50.504  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:45:50.504  NVDA  '201 files will be renamed, 0 skipped, 0 errors.'
+13:46:10.715  [L4] === L4 / step C2tree ===
+13:46:11.777  [L4] ===== STEP C2 : run 2 (opened from the Files tree): Shift+Tab to Apply, Space
+13:46:11.981  [L4]   NOTE UIA SetFocus on Old key (the keys had left the sheet after Preview) (a landing, not a gesture under test)
+13:46:12.064  NVDA  'Old property key', 'edit', 'state'
+13:46:12.521  NVDA  'shift+tab'
+13:46:12.524  [L4] KEY Shift+Tab (back to Apply, press 1)
+13:46:12.558  NVDA  'Summary: 201 files will be renamed, 0 skipped, 0 errors.'
+13:46:14.520  NVDA  'shift+tab'
+13:46:14.521  [L4] KEY Shift+Tab (back to Apply, press 2)
+13:46:14.542  NVDA  'Close', 'button'
+13:46:15.666  NVDA  'shift+tab'
+13:46:15.667  [L4] KEY Shift+Tab (back to Apply, press 3)
+13:46:15.684  NVDA  'Apply', 'button', 'Apply the previewed property rename across the vault.'
+13:46:16.603  [L4]   TRIGGER at 13:46:16.602
+13:46:16.606  [L4] KEY Space (Apply)
+13:46:16.669  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:46:16.675  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:46:19.176  NVDA  '201 renamed, 0 skipped, 0 failed.'
+13:46:39.809  [L4] === L4 / step Q ===
+13:46:40.897  [L4] ===== STEP Qsetup : setup: show the Queries leaf
+13:46:41.254  [L4]   NOTE UIA SetFocus on Old key (to close the sheet the keys had left) (a landing, not a gesture under test)
+13:46:41.341  NVDA  'Old property key', 'edit', 'state'
+13:46:41.783  NVDA  'escape'
+13:46:41.785  [L4] KEY Escape (close the sheet)
+13:46:41.897  NVDA  'Files', 'tree view', 'Up and Down move through files and folders, and a selected note is shown. Enter opens it and moves focus into it. Control Enter opens it in a new tab. Space checks or unchecks it for batch actions.'
+13:46:41.903  NVDA  'board.canvas, file', 'not selected', '1 of 110', 'level 1'
+13:46:43.185  NVDA  'f6'
+13:46:43.185  [L4] KEY F6 (to the right pane rail, press 1)
+13:46:43.222  NVDA  'Workspace tabs', 'tab control'
+13:46:43.232  NVDA  'a', 'tab', 'selected', '1 of 1'
+13:46:43.232  NVDA  'Tab bar.  a, tab 1 of 1.'
+13:46:44.358  NVDA  'f6'
+13:46:44.358  [L4] KEY F6 (to the right pane rail, press 2)
+13:46:44.391  NVDA  'a.md editor', 'document', '---'
+13:46:44.393  NVDA  'Editor pane 1 of 1, a.'
+13:46:45.513  NVDA  'f6'
+13:46:45.513  [L4] KEY F6 (to the right pane rail, press 3)
+13:46:45.548  NVDA  'Outline', 'list'
+13:46:45.555  NVDA  'Level 1 heading: Note A', 'not selected', '1 of 1'
+13:46:45.555  NVDA  'Outline panel.'
+13:46:46.658  NVDA  'f6'
+13:46:46.659  [L4] KEY F6 (to the right pane rail, press 4)
+13:46:46.690  NVDA  'Right pane panels', 'list'
+13:46:46.700  NVDA  'Outline', '1 of 5'
+13:46:46.701  NVDA  'Right pane panels.'
+13:46:47.949  NVDA  'tab'
+13:46:47.949  [L4] KEY Tab (to More panels, press 1)
+13:46:47.969  NVDA  'More panels', 'button'
+13:46:48.882  NVDA  'enter'
+13:46:48.882  [L4] KEY Enter (More panels)
+13:46:49.163  NVDA  'Embeds', 'not checked', '1 of 12'
+13:46:52.286  NVDA  'down arrow'
+13:46:52.286  [L4] KEY Down (More panels, press 1)
+13:46:52.304  NVDA  'Math', 'not checked', '2 of 12'
+13:46:53.224  NVDA  'down arrow'
+13:46:53.224  [L4] KEY Down (More panels, press 2)
+13:46:53.242  NVDA  'Code', 'not checked', '3 of 12'
+13:46:54.158  NVDA  'down arrow'
+13:46:54.159  [L4] KEY Down (More panels, press 3)
+13:46:54.176  NVDA  'Diagrams', 'not checked', '4 of 12'
+13:46:55.107  NVDA  'down arrow'
+13:46:55.108  [L4] KEY Down (More panels, press 4)
+13:46:55.125  NVDA  'Tasks', 'not checked', '5 of 12'
+13:46:56.029  NVDA  'down arrow'
+13:46:56.030  [L4] KEY Down (More panels, press 5)
+13:46:56.048  NVDA  'Tasks Review', 'not checked', '6 of 12'
+13:46:56.963  NVDA  'down arrow'
+13:46:56.964  [L4] KEY Down (More panels, press 6)
+13:46:56.981  NVDA  'History', 'not checked', '7 of 12'
+13:46:57.916  NVDA  'down arrow'
+13:46:57.916  [L4] KEY Down (More panels, press 7)
+13:46:57.933  NVDA  'Citations', 'not checked', '8 of 12'
+13:46:59.288  NVDA  'down arrow'
+13:46:59.288  [L4] KEY Down (More panels, press 8)
+13:46:59.306  NVDA  'Bibliography', 'not checked', '9 of 12'
+13:47:00.232  NVDA  'down arrow'
+13:47:00.233  [L4] KEY Down (More panels, press 9)
+13:47:00.252  NVDA  'Queries', 'not checked', '10 of 12'
+13:47:01.182  NVDA  'enter'
+13:47:01.182  [L4] KEY Enter (Queries)
+13:47:01.292  NVDA  'checked'
+13:47:01.318  NVDA  'More panels, Queries open', 'button'
+13:47:13.356  [L4] === L4 / step C4 ===
+13:47:14.412  [L4] ===== STEP C4 : WrapPanel(QueriesRun): the saved query selected, Delete…, Space, confirm
+13:47:14.477  NVDA  'shift+f6'
+13:47:14.480  [L4] KEY Shift+F6 (the right pane's content)
+13:47:14.498  NVDA  'New dashboard', 'button'
+13:47:14.498  NVDA  'Queries panel.'
+13:47:16.872  NVDA  'tab'
+13:47:16.873  [L4] KEY Tab (to the saved queries list, press 1)
+13:47:16.944  NVDA  'Refresh queries', 'button'
+13:47:17.821  NVDA  'tab'
+13:47:17.822  [L4] KEY Tab (to the saved queries list, press 2)
+13:47:17.856  NVDA  'Saved queries', 'list'
+13:47:17.861  NVDA  'Probe query', 'not selected', '1 of 1'
+13:47:18.895  [L4] KEY Space (select the query)
+13:47:18.916  NVDA  'selected'
+13:47:20.276  [L4]   NOTE selected: Probe query
+13:47:20.288  NVDA  'tab'
+13:47:20.289  [L4] KEY Tab (to Delete…, press 1)
+13:47:20.308  NVDA  'Run saved query', 'button'
+13:47:21.236  NVDA  'tab'
+13:47:21.237  [L4] KEY Tab (to Delete…, press 2)
+13:47:21.256  NVDA  'Pin or unpin saved query', 'button'
+13:47:22.198  NVDA  'tab'
+13:47:22.198  [L4] KEY Tab (to Delete…, press 3)
+13:47:22.216  NVDA  'Edit saved query in builder', 'button'
+13:47:23.149  NVDA  'tab'
+13:47:23.149  [L4] KEY Tab (to Delete…, press 4)
+13:47:23.166  NVDA  'Rename saved query', 'button'
+13:47:24.081  NVDA  'tab'
+13:47:24.081  [L4] KEY Tab (to Delete…, press 5)
+13:47:24.099  NVDA  'Export saved query as base file', 'button'
+13:47:25.017  NVDA  'tab'
+13:47:25.018  [L4] KEY Tab (to Delete…, press 6)
+13:47:25.035  NVDA  'Dock saved query', 'button'
+13:47:26.372  NVDA  'tab'
+13:47:26.372  [L4] KEY Tab (to Delete…, press 7)
+13:47:26.392  NVDA  'Delete saved query', 'button'
+13:47:27.523  [L4]   TRIGGER at 13:47:27.522
+13:47:27.526  [L4] KEY Space (Delete…)
+13:47:27.584  NVDA  'Slate', 'dialog', 'Delete saved query “Probe query”?'
+13:47:27.587  NVDA  'Yes', 'button', 'Alt+', 'y'
+13:47:30.172  [L4] KEY Y (Yes: delete the saved query)
+13:47:30.199  NVDA  'y'
+13:47:30.284  NVDA  'Deleted saved query.'
+13:47:30.348  NVDA  'a — cb17a-L4 — Slate', 'window'
+13:47:30.355  NVDA  'New dashboard', 'button'
+13:47:32.554  [L4]   NOTE the confirmation was answered
+13:47:42.751  [L4] === L4 / step C5 ===
+13:47:43.813  [L4] ===== STEP C5 : WrapPanel(QueriesOpenDashboard): the dashboard selected, Delete…, Space, confirm
+13:47:43.889  NVDA  'tab'
+13:47:43.891  [L4] KEY Tab (to the dashboards list, press 1)
+13:47:43.965  NVDA  'Refresh queries', 'button'
+13:47:44.856  NVDA  'tab'
+13:47:44.857  [L4] KEY Tab (to the dashboards list, press 2)
+13:47:44.889  NVDA  'Base files', 'list'
+13:47:44.894  NVDA  'Queries.base', 'not selected', '1 of 1'
+13:47:45.787  NVDA  'tab'
+13:47:45.787  [L4] KEY Tab (to the dashboards list, press 3)
+13:47:45.812  NVDA  'Dashboards', 'list'
+13:47:45.817  NVDA  'Probe dashboard', 'not selected', '1 of 1'
+13:47:46.866  [L4] KEY Space (select the dashboard)
+13:47:46.883  NVDA  'selected'
+13:47:48.285  [L4]   NOTE selected: Probe dashboard
+13:47:48.298  NVDA  'tab'
+13:47:48.300  [L4] KEY Tab (to Delete…, press 1)
+13:47:48.327  NVDA  'Open dashboard', 'button'
+13:47:49.244  NVDA  'tab'
+13:47:49.245  [L4] KEY Tab (to Delete…, press 2)
+13:47:49.262  NVDA  'Edit dashboard', 'button'
+13:47:50.799  NVDA  'tab'
+13:47:50.799  [L4] KEY Tab (to Delete…, press 3)
+13:47:50.816  NVDA  'Dock dashboard', 'button'
+13:47:51.733  NVDA  'tab'
+13:47:51.733  [L4] KEY Tab (to Delete…, press 4)
+13:47:51.755  NVDA  'Delete dashboard', 'button'
+13:47:52.681  [L4]   TRIGGER at 13:47:52.680
+13:47:52.684  [L4] KEY Space (Delete…)
+13:47:52.737  NVDA  'Slate', 'dialog', 'Delete dashboard “Probe dashboard”?'
+13:47:52.739  NVDA  'Yes', 'button', 'Alt+', 'y'
+13:47:55.353  [L4] KEY Y (Yes: delete the dashboard)
+13:47:55.368  NVDA  'y'
+13:47:55.453  NVDA  'Deleted dashboard.'
+13:47:55.495  NVDA  'a — cb17a-L4 — Slate', 'window'
+13:47:55.503  NVDA  'New dashboard', 'button'
+13:47:58.122  [L4]   NOTE the confirmation was answered
+13:48:11.684  [L4] === L4 / step C6 ===
+13:48:12.753  [L4] ===== STEP C6 : WrapPanel(QueriesOpenBaseFile): Queries.base selected, renamed on disk with the keys on Open
+13:48:12.826  NVDA  'tab'
+13:48:12.829  [L4] KEY Tab (to the base files list, press 1)
+13:48:12.913  NVDA  'Refresh queries', 'button'
+13:48:13.796  NVDA  'tab'
+13:48:13.796  [L4] KEY Tab (to the base files list, press 2)
+13:48:13.827  NVDA  'Base files', 'list'
+13:48:13.832  NVDA  'Queries.base', 'not selected', '1 of 1'
+13:48:14.883  [L4] KEY Space (select Queries.base)
+13:48:14.899  NVDA  'selected'
+13:48:16.288  [L4]   NOTE selected: Queries.base
+13:48:16.301  NVDA  'tab'
+13:48:16.302  [L4] KEY Tab (to Open, press 1)
+13:48:16.323  NVDA  'Open base file', 'button'
+13:48:17.233  [L4]   TRIGGER at 13:48:17.232
+13:48:17.237  [L4] DISK Queries.base renamed to Queries-renamed.base
+13:48:18.362  NVDA  'Files refreshed. 1 new or changed, 1 removed.'
+13:48:34.856  [L4] ===== STEP C6after : C6 aftermath: Space on the stale Open (the list still shows Queries.base, renamed on disk 11 s ago)
+13:48:34.914  [L4] KEY Space (Open base file)
+13:48:35.047  NVDA  'Workspace tabs', 'tab control'
+13:48:35.058  NVDA  'Queries', 'tab', 'selected', '1 of 1'
+13:48:35.066  NVDA  'Retry', 'button', 'Attempts to reopen the Base at its current path.'
+13:48:54.118  NVDA  'Settings'
+13:48:54.148  NVDA  'Settings', 'window'
+13:48:54.152  NVDA  'Back', 'button'
+13:48:54.244  [L4] closed: Slate running=False; launcher running=False; recorder running=False
