@@ -616,16 +616,22 @@ unsafe extern "C" fn count_finished_statement(
         let vm_steps = status(rusqlite::ffi::SQLITE_STMTSTATUS_VM_STEP);
         let counter = &*context.cast::<Mutex<StatementCounter>>();
         let mut counter = counter.lock().expect("statement counter mutex");
-        // An object's run counter only grows. A statement at this address
-        // with this SQL that was not seen before, or whose run counter has
-        // not grown, is a statement object built since: its counters start
-        // from zero. (A first run does not always read 1: a statement that
-        // fires a trigger counts the trigger's program too.)
+        // An object's counters only grow, and a re-prepare carries them
+        // over. A statement at this address with this SQL that was not seen
+        // before, or whose run counter has not grown, or whose VM steps
+        // have gone down, is a statement object built since: its counters
+        // start from zero. (A first run does not always read 1: a statement
+        // that fires a trigger counts the trigger's program too. So a new
+        // object at an old one's address can still pass for the old one,
+        // when its first run reads more runs and more steps than the old
+        // one's last: the count of objects built is a floor.)
         let key = (stmt as usize, sql.clone());
         let built = counter
             .last
             .get(&key)
-            .is_none_or(|&(last_runs, _, _)| runs <= last_runs);
+            .is_none_or(|&(last_runs, _, last_vm_steps)| {
+                runs <= last_runs || vm_steps < last_vm_steps
+            });
         let (last_reprepares, last_vm_steps) = if built {
             (0, 0)
         } else {

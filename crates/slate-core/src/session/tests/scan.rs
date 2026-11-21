@@ -1652,7 +1652,7 @@ fn a_rescan_of_changed_and_unchanged_notes_keeps_its_statements() {
     // rescan that indexes changed notes beside unchanged ones takes
     // seventeen statements from the cache. rusqlite's default cache holds
     // sixteen, so at each boundary between a changed note and an unchanged
-    // one it dropped fourteen of them and built them again, four of them
+    // one it dropped fifteen of them and built them again, four of them
     // with an equality on `files.path` and two of them #1918's own. Core's
     // connections hold 32.
     const NOTES: usize = 40;

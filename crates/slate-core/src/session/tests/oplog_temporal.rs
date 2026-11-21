@@ -1068,8 +1068,77 @@ fn the_row_eval_probes_agree_with_the_reference() {
     temporal_census(|filter| format!(r#"{filter} || file.name == "no such note""#));
 }
 
-/// The census behind both facts above. `position` places each generated
-/// operator call in the filter.
+/// #1917: each of the row evaluator's six probes, asked about two notes of
+/// which exactly one satisfies it. The generated census holds the windows
+/// and the event classes, but at its default scale it draws no probe in
+/// which a deletion matches on one note and not on another, so a
+/// deleted-content probe that had lost its `f.path = ?1` passed it. Here a
+/// probe that answers for any note, or reads another note's events, lists
+/// the wrong notes.
+#[test]
+fn each_row_eval_probe_answers_for_its_own_note() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("quiet.md", b"never saved through slate\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // `busy.md` has, inside the window, a content change that deleted a
+    // line (the save before it warms the sample), and a property change.
+    let saved = session
+        .save_text("busy.md", "keep\nDELETEME line\n", None)
+        .unwrap();
+    session
+        .save_text("busy.md", "keep\n", Some(&saved.new_content_hash))
+        .unwrap();
+    session
+        .set_property(
+            "busy.md",
+            "status",
+            crate::frontmatter::PropertyValue::Text("done".into()),
+            None,
+        )
+        .unwrap();
+    // Both notes were last modified 60 days ago, so `untouched_for` reads
+    // the log for both. `busy.md` was created an hour ago, `quiet.md` 60
+    // days ago.
+    {
+        let conn = session.conn.lock().unwrap();
+        let now = now_ms();
+        conn.execute(
+            "UPDATE files SET mtime_ms = ?1, birthtime_ms = ?1",
+            rusqlite::params![now - 60 * DAY_MS],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = ?1 WHERE path = 'busy.md'",
+            rusqlite::params![now - HOUR_MS],
+        )
+        .unwrap();
+    }
+
+    for (operator, the_one_note) in [
+        (r#"oplog.has_change_since("7d")"#, "busy.md"),
+        (r#"oplog.has_property_change("status", "7d")"#, "busy.md"),
+        (
+            r#"oplog.deleted_content_matches("deleteme", "7d")"#,
+            "busy.md",
+        ),
+        (
+            r#"oplog.deleted_content_matches_regex("DELETE.E", "7d")"#,
+            "busy.md",
+        ),
+        (r#"oplog.created_since("7d")"#, "busy.md"),
+        (r#"oplog.untouched_for("7d")"#, "quiet.md"),
+    ] {
+        let filter = format!(r#"{operator} || file.name == "no such note""#);
+        let (paths, error) = filter_paths(&session, &filter);
+        assert_eq!(error, None, "{filter}");
+        assert_eq!(paths, vec![the_one_note], "{filter}");
+    }
+}
+
+/// The census behind the two generated facts above. `position` places each
+/// generated operator call in the filter.
 fn temporal_census(position: fn(&str) -> String) {
     // Random edit HISTORIES with scripted timestamps, built at the
     // oplog layer (`append_entry` with constructed entries) and fed

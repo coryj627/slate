@@ -587,7 +587,8 @@ fn no_statement_is_re_prepared_per_binding_on_any_driven_path() {
     }
     assert!(
         wrong.is_empty(),
-        "{} statements compiled per binding:\n  {}",
+        "{} readings of a statement compiled per binding (a statement is listed once for each \
+         flow that ran it):\n  {}",
         wrong.len(),
         wrong.join("\n  ")
     );
