@@ -400,7 +400,7 @@ public sealed class EditorSurfaceCommandTests
         Assert.False(popover.IsVisible, "the popover is still drawn over the reading view");
         Assert.True(landed, $"the keys are on {Describe(Keyboard.FocusedElement)}, not on the reading surface");
         Assert.False(
-            CommandPaletteTests.TheKeysAreIn(editor), $"the keys are in the collapsed editor: {Describe(Keyboard.FocusedElement)}");
+            KeysFirstRecorder.TheKeysAreIn(editor), $"the keys are in the collapsed editor: {Describe(Keyboard.FocusedElement)}");
         Assert.Empty(host.Announced.Select(Render));
     });
 
