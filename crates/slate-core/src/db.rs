@@ -243,6 +243,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "links: folded target indexes so a create heals only the rows that could name it (#1426)",
         sql: include_str!("../migrations/041_links_target_fold_index.sql"),
     },
+    Migration {
+        description: "fold: the tree key folds the final sigma; rebuild its seven indexes (#1705)",
+        sql: include_str!("../migrations/042_tree_key_folds_final_sigma.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -329,12 +333,14 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
 
 /// Register the SQL helpers shared by every Slate-owned connection.
 ///
-/// Directory paging must apply the exact Rust NFC/full-Unicode-lowercase key
-/// before SQL LIMIT/OFFSET. Keeping the function here makes file-backed,
-/// in-memory, and background-worker connections agree instead of teaching SQL
-/// a weaker ASCII-only approximation. Migration 033 persists this function in
-/// expression indexes; changing its Unicode/casefold semantics requires an
-/// explicit schema migration that rebuilds those indexes.
+/// Directory paging must apply the exact Rust tree key ([`tree_sort_key`]:
+/// NFC, full-Unicode lowercase, the final sigma folded) before SQL
+/// LIMIT/OFFSET. Keeping the function here makes file-backed, in-memory, and
+/// background-worker connections agree instead of teaching SQL a weaker
+/// ASCII-only approximation. Migrations 033, 037, 039 and 041 persist this
+/// function in expression indexes; changing its Unicode/casefold semantics
+/// requires an explicit schema migration that rebuilds those indexes, as 042
+/// did for the final sigma (#1705).
 ///
 /// Plan 43 PR 21a (#1293): migration 040's change-feed triggers call
 /// `slate_feed_writer()` and `slate_feed_origin()`, so every Slate connection
@@ -437,9 +443,13 @@ pub(crate) fn effective_name_key(
     tree_sort_key(&effective)
 }
 
+/// NFC, then [`crate::name_fold::fold_case`]: full-Unicode lowercase with
+/// the final sigma folded to sigma (#1705, plan 47 CB-32). Stored in seven
+/// expression indexes (migrations 033, 037, 039, 041, all rebuilt by 042),
+/// so any change to its answers ships a migration that rebuilds them.
 pub(crate) fn tree_sort_key(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    name.nfc().collect::<String>().to_lowercase()
+    crate::name_fold::fold_case(&name.nfc().collect::<String>())
 }
 
 fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError> {
@@ -896,6 +906,164 @@ mod tests {
             )
             .expect("Slate connections expose the deterministic tree sort key");
         assert_eq!(key, "étude.md");
+        // #1705 (CB-32): the registered function folds the final sigma as
+        // the Rust key does.
+        for name in ["ΚΟΣΜΟΣ.md", "κοσμος", "Κοσμος"] {
+            let key: String = conn
+                .query_row("SELECT slate_tree_sort_key(?1)", [name], |row| row.get(0))
+                .unwrap();
+            assert_eq!(key, tree_sort_key(name), "{name:?}");
+            assert!(key.starts_with("κοσμοσ"), "{name:?} folds to {key:?}");
+        }
+    }
+
+    /// The indexes whose SQL calls a registered `slate_` function, less the
+    /// ones migration 042 rebuilds: an index a later fold change would
+    /// leave stale.
+    fn indexes_over_a_slate_function_042_does_not_rebuild(conn: &Connection) -> Vec<String> {
+        let rebuilt: Vec<&str> = include_str!("../migrations/042_tree_key_folds_final_sigma.sql")
+            .lines()
+            .filter_map(|line| line.strip_prefix("CREATE INDEX "))
+            .map(|rest| rest.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(rebuilt.len(), 7, "{rebuilt:?}");
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' \
+                 AND sql LIKE '%slate\\_%(%' ESCAPE '\\' ORDER BY name",
+            )
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|name| !rebuilt.contains(&name.as_str()))
+            .collect()
+    }
+
+    /// #1705 (CB-32): every index over a registered function is one migration
+    /// 042 rebuilds, so the next change to the fold knows the whole list.
+    #[test]
+    fn every_index_over_a_slate_function_is_rebuilt_by_the_last_fold_migration() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        assert_eq!(
+            indexes_over_a_slate_function_042_does_not_rebuild(&conn),
+            Vec::<String>::new()
+        );
+
+        // The guard bites: a later index over the fold is reported.
+        let mut later = fresh_db();
+        migrate_with_later_migration_for_tests(
+            &mut later,
+            "CREATE INDEX idx_scratch_fold ON dirs(slate_tree_sort_key(name));",
+        )
+        .expect("a later migration");
+        assert_eq!(
+            indexes_over_a_slate_function_042_does_not_rebuild(&later),
+            vec!["idx_scratch_fold".to_string()]
+        );
+    }
+
+    /// #1705 (CB-32): the tree key gives one key for every sigma spelling,
+    /// and leaves every other name as NFC plus full-Unicode lowercase.
+    #[test]
+    fn the_tree_key_folds_both_sigmas_to_one() {
+        let key = tree_sort_key("ΚΟΣΜΟΣ");
+        for spelling in ["κοσμος", "Κοσμος", "κοσμοσ"] {
+            assert_eq!(tree_sort_key(spelling), key, "{spelling:?}");
+        }
+        assert_eq!(tree_sort_key("ΚΟΣΜΟΣ.md"), tree_sort_key("κοσμος.md"));
+        assert_eq!(tree_sort_key("Alpha.md"), "alpha.md");
+        assert_eq!(tree_sort_key("E\u{0301}TUDE"), "étude");
+        assert_eq!(tree_sort_key("日本語.md"), "日本語.md");
+    }
+
+    /// #1705 (CB-32): a cache an older build left at version 41, its seven
+    /// indexes over the fold written by the old fold, is rebuilt by
+    /// migration 042: integrity holds, and each index finds its row by the
+    /// new key. Without the rebuild SQLite reports nothing and the lookups
+    /// silently miss.
+    #[test]
+    fn migration_042_rebuilds_every_index_over_the_tree_key() {
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 41).expect("migrate to 41");
+        conn.create_scalar_function(
+            "slate_tree_sort_key",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |context| {
+                use unicode_normalization::UnicodeNormalization;
+                let name = context.get::<Option<String>>(0)?;
+                Ok(name.map(|name| name.nfc().collect::<String>().to_lowercase()))
+            },
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO files (path, name, extension, size_bytes, mtime_ms, content_hash, \
+                 parser_version, indexed_at_ms, is_markdown) \
+                 VALUES ('Φιλοσοφία/Λόγος.md', 'Λόγος.md', 'md', 1, 1, 'h', 1, 1, 1);
+             INSERT INTO files (path, name, extension, size_bytes, mtime_ms, content_hash, \
+                 parser_version, indexed_at_ms, is_markdown) \
+                 VALUES ('src.md', 'src.md', 'md', 1, 1, 'h', 1, 1, 1);
+             INSERT INTO dirs (path, parent_path, name) VALUES ('Λόγος', '', 'Λόγος');
+             INSERT INTO links (source_file_id, ordinal, target_raw, kind, is_embed, \
+                 is_external, snippet, span_start, span_end) \
+                 SELECT id, 0, 'notes/Λόγος', 'wikilink', 0, 0, '', 0, 1 FROM files WHERE path = 'src.md';
+             INSERT INTO links (source_file_id, ordinal, target_raw, kind, is_embed, \
+                 is_external, snippet, span_start, span_end) \
+                 SELECT id, 1, 'Κόσμος', 'wikilink', 0, 0, '', 0, 1 FROM files WHERE path = 'src.md';",
+        )
+        .expect("rows under the old fold");
+        assert_eq!(migrate(&mut conn).expect("migrate"), 42);
+
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        for (sql, key, index) in [
+            (
+                "SELECT COUNT(*) FROM files WHERE slate_tree_sort_key(path) = ?1",
+                "φιλοσοφία/λόγοσ.md",
+                "idx_files_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM files WHERE slate_tree_sort_key(name) = ?1",
+                "λόγοσ.md",
+                "idx_files_name_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM dirs WHERE slate_tree_sort_key(path) = ?1",
+                "λόγοσ",
+                "idx_dirs_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM dirs WHERE parent_path = '' AND slate_tree_sort_key(name) = ?1",
+                "λόγοσ",
+                "idx_dirs_parent_tree",
+            ),
+            (
+                "SELECT COUNT(*) FROM links WHERE target_path IS NULL AND is_external = 0 \
+                 AND slate_tree_sort_key(slate_link_target_path(target_raw)) = ?1",
+                "notes/λόγοσ",
+                "idx_links_target_path_fold",
+            ),
+            (
+                "SELECT COUNT(*) FROM links WHERE target_path IS NULL AND is_external = 0 \
+                 AND slate_tree_sort_key(slate_link_target_name(target_raw)) = ?1",
+                "κόσμοσ",
+                "idx_links_target_name_fold",
+            ),
+        ] {
+            let plan: String = conn
+                .query_row(&format!("EXPLAIN QUERY PLAN {sql}"), [key], |row| {
+                    row.get::<_, String>(3)
+                })
+                .unwrap();
+            assert!(plan.contains(index), "{sql} does not use {index}: {plan}");
+            let count: i64 = conn.query_row(sql, [key], |row| row.get(0)).unwrap();
+            assert_eq!(count, 1, "{index} misses {key:?}");
+        }
     }
 
     #[test]
@@ -2019,11 +2187,12 @@ mod tests {
 
     /// #1426: migration 041 adds the two partial indexes over the folded
     /// targets of dangling links — an exact target by its path, a bare
-    /// name by its name — and lands the schema at 41.
+    /// name by its name. Migration 042 (#1705) rebuilds both from the same
+    /// text, so the text holds at the latest schema, 42.
     #[test]
     fn migration_041_adds_the_folded_target_indexes() {
         let mut conn = fresh_db();
-        assert_eq!(migrate(&mut conn).expect("migrate"), 41);
+        assert_eq!(migrate(&mut conn).expect("migrate"), 42);
         for (index, function) in [
             ("idx_links_target_path_fold", "slate_link_target_path"),
             ("idx_links_target_name_fold", "slate_link_target_name"),
