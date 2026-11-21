@@ -1739,7 +1739,8 @@ internal static class SvgPreviewGuard
                 // with its place in the cascade.
                 // A namespaced fill or stroke the decoder reads applies only
                 // where none without a namespace does (measured), so it may
-                // apply.
+                // apply: what it gives is counted under any winner at the
+                // attribute's tier.
                 var own = new List<Declaration>();
                 foreach ((int _, bool stroke, string value, bool namespaced) in OwnAttributes(i))
                 {
@@ -2047,7 +2048,6 @@ internal static class SvgPreviewGuard
                 a.Tier != b.Tier ? b.Tier.CompareTo(a.Tier)
                 : a.Specificity != b.Specificity ? b.Specificity.CompareTo(a.Specificity)
                 : b.Order.CompareTo(a.Order));
-            bool namespacedBelow = isPaint && declarations.Exists(declaration => declaration.Tier == 0 && !declaration.Certain);
             byte result = 0;
             int winnerTier = -1;
             foreach (Declaration declaration in certain)
@@ -2056,7 +2056,7 @@ internal static class SvgPreviewGuard
                 result |= (byte)(value & ~DropsMask);
                 bool ends = !isPaint
                     ? (value & DropsMask) == 0 && declaration.Plain
-                    : (declaration.Tier == 0 && !namespacedBelow) || (value & PatternMask) != 0 || ClearsSurely(declaration, value);
+                    : declaration.Tier == 0 || (value & PatternMask) != 0 || ClearsSurely(declaration, value);
                 if (ends)
                 {
                     winnerTier = declaration.Tier;
