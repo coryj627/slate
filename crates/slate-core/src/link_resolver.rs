@@ -72,7 +72,8 @@ pub trait VaultIndex {
     }
 
     /// The indexed paths `probe` names (#1485): at least every path whose
-    /// lowercased whole path ([`CandidateProbe::Paths`]) or final component
+    /// folded whole path ([`fold_case`]: lowercased, the final sigma folded,
+    /// #1705) ([`CandidateProbe::Paths`]) or final component
     /// ([`CandidateProbe::Names`]) is one of its keys, each once, in index
     /// order — so a caller offering them in turn keeps the first-offered
     /// tie that [`Self::all_paths`] gives. The default filters every path;
@@ -116,8 +117,8 @@ impl InMemoryVaultIndex {
 }
 
 /// [`InMemoryVaultIndex`]'s lookup by the keys a [`CandidateProbe`] names
-/// (#1429): every path's position under the hash of its lowercased whole
-/// path, and again under the hash of its lowercased final component —
+/// (#1429): every path's position under the hash of its folded whole path
+/// ([`fold_case`]), and again under the hash of its folded final component —
 /// each computed exactly as [`LinkCandidateSelector::offer`] compares —
 /// sorted, so one key's candidates are one run, in index order. Two keys
 /// that share a hash share a run: that adds only paths the selector
@@ -497,9 +498,9 @@ pub struct LinkCandidateSelector {
 }
 
 enum SelectorMode {
-    /// The lowercased exact keys, in priority order.
+    /// The folded exact keys ([`fold_case`]), in priority order.
     Exact { keys: Vec<String> },
-    /// The lowercased file name and the source's directories.
+    /// The folded file name ([`fold_case`]) and the source's directories.
     Basename {
         basename: String,
         has_extension: bool,
@@ -599,7 +600,8 @@ impl LinkCandidateSelector {
 
 /// The index rows [`resolve_link`] could match for a target (#1279), so a
 /// caller holding a database can fetch just those instead of snapshotting
-/// every path. Keys are lowercased the way the resolver compares; the
+/// every path. Keys are folded the way the resolver compares
+/// ([`fold_case`]: lowercased, the final sigma folded); the
 /// caller may fold further (a coarser fold only widens the set), and the
 /// resolver's selector over the fetched candidates still decides.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -687,7 +689,7 @@ fn collect_basename_matches<'a>(basename: &str, index: &'a dyn VaultIndex) -> Ve
         .collect()
 }
 
-/// A lowercased file name matches a lowercased basename exactly, or — for a
+/// A folded file name matches a folded basename exactly, or — for a
 /// basename with no extension — as `basename.{md,markdown,mdown,mkd}`
 /// (`[[foo]]` matches `foo.md`, `foo.markdown`, ...).
 fn basename_matches(file_lower: &str, basename_lower: &str, basename_has_ext: bool) -> bool {

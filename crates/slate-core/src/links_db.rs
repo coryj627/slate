@@ -211,7 +211,8 @@ const INDEXED_PATHS_SQL: &str = "SELECT path FROM files ORDER BY path";
 /// file's row.
 ///
 /// The answer is the whole-index answer. The fold (NFC + full-Unicode
-/// lowercase) is a superset of the selector's lowercase comparison, so no
+/// lowercase, the final sigma folded to sigma, #1705) is a superset of the
+/// selector's comparison, so no
 /// row the selector would take is left out, and the selector still decides.
 /// A path target's rows arrive in path order, the order a whole-table
 /// snapshot offers them in ([`indexed_paths_in_path_order`]), because
@@ -1151,9 +1152,22 @@ fn left_edge(text: &str, link_start: usize) -> usize {
     // "toile". Only white space there is a boundary whatever came before.
     let boundary_after =
         |segment: usize| segment > 0 || segments[0].1.chars().any(char::is_whitespace);
+    // A first segment that starts on a combining mark is what the cut left
+    // of a cluster, never a whole word, even when Unicode counts the mark
+    // as alphabetic (an Indic vowel sign, an Arabic haraka, a Hebrew
+    // point): "किताब" cut on its vowel sign stores "ि" then "ताब", and
+    // neither starts the row (the CB-32 merge judge's minor 1).
+    let whole_word_before = |segment: usize, text: &str| {
+        is_word_like(text)
+            && !(segment == 0
+                && text
+                    .chars()
+                    .next()
+                    .is_some_and(unicode_normalization::char::is_combining_mark))
+    };
     for (i, pair) in segments.windows(2).enumerate() {
         let (before, word) = (pair[0].1, pair[1]);
-        if is_word_like(word.1) && (is_word_like(before) || boundary_after(i)) {
+        if is_word_like(word.1) && (whole_word_before(i, before) || boundary_after(i)) {
             return word.0;
         }
     }
@@ -1743,6 +1757,32 @@ mod tests {
             let read = snippets_read_back(&source);
             for shown in read.backlinks.iter().chain(&read.outgoing) {
                 assert!(shown.contains(link), "{link} stays whole: {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cut_on_a_combining_mark_never_starts_on_the_rest_of_its_word() {
+        // A cut that lands on an alphabetic combining mark (an Indic vowel
+        // sign, an Arabic haraka, a Hebrew point) stores the mark, then the
+        // rest of the broken word; neither is a whole word, so the row
+        // starts on the next one (the CB-32 merge judge's minor 1).
+        for (word, mark) in [("किताब", "\u{93F}"), ("كَتَبَ", "\u{64E}"), ("סֵפֶר", "\u{5B5}")]
+        {
+            let mark_at = 2 + word.find(mark).unwrap();
+            let run = mark_at + 56 - word.len();
+            let source = format!("x {word} {} [[Target]] tail.", "y".repeat(run));
+            assert_eq!(
+                source.find("[[Target]]").unwrap() - 60,
+                mark_at,
+                "the fixture puts the cut on the mark of {word}"
+            );
+            let read = snippets_read_back(&source);
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                assert!(
+                    shown.starts_with("…yyy") && shown.ends_with("[[Target]] tail."),
+                    "{word}: the row starts on a whole word: {shown:?}"
+                );
             }
         }
     }
