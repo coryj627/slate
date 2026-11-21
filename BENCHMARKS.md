@@ -1616,3 +1616,91 @@ Misses per rescan stay at 31,236 to 31,240 throughout.
   re-prepared the same way under 3.54.1: the DQL tag lookup, the bases
   temporal operators' `oplog_events` probes and the canvas title lookup.
   They are tracked as #1917.
+
+## One plan for each cached statement (#1917)
+
+#1918 stopped the rescan's file_meta probe from being re-prepared and named
+the same thing in other cached joins as #1917. Step 0 for #1917 found the
+cause is wider than a join on `files.path`. rusqlite's statement cache clears
+a statement's bindings when the statement goes back to it, and SQLite 3.54
+then expires any statement whose plan looked at a bound value, whatever is
+bound next: with one path bound every time a cached join re-prepared 9,999
+times in 10,000 calls, and 0 times when the statement was held. 38 of core's
+276 SQL literals were compiled again on every use from the cache, four of
+them once for every row of a plain bases view.
+
+Every connection core opens now runs under SQLite's query planner stability
+guarantee (`SQLITE_DBCONFIG_ENABLE_QPSG`) and keeps 32 statements where it
+kept 16. The row evaluator's temporal probes and the canvas title lookup come
+from the statement cache, and the five probes that read `oplog_events` name
+`oplog_events_file_ts`.
+
+Recorded 2026-11-21 on the CB-33 desktop, which also runs CI runner VMs, so a
+single reading can move by 10% and more (the DQL row's first reading on this
+change shows it). Release builds of one probe, against `main` at 46f50603 and
+against this change, run in turn: this change, `main`, `main`, this change. A
+vault of 10,000 notes (frontmatter, two tags, a link, an embed, an inline
+field) and a board of 1,000 file cards, one session. Each cell holds the two
+runs' medians, of five passes over the path.
+
+| Path | `main` at 46f50603 | This change |
+|---|---:|---:|
+| Bases view, `oplog.has_change_since` outside the pushed-down position, 10,001 rows | 1,006.5, 1,071.9 ms | 620.8, 672.1 ms |
+| DQL `TABLE file.tags`, 10,001 rows | 1,299.7, 1,252.8 ms | 988.2, 741.8 ms |
+| `note_link_panels`, 2,000 notes | 342.3, 322.2 ms | 175.4, 162.7 ms |
+| `get_file_summary`, 2,000 notes | 427.3, 336.7 ms | 49.8, 50.1 ms |
+| `open_canvas`, a board of 1,000 file cards | 17.1, 17.1 ms | 11.8, 11.7 ms |
+
+That is about 104 to 65 µs a row of the bases view, 128 to 74 or 99 µs a row
+of the DQL table, 166 to 85 µs a note for the link panels and 191 to 25 µs a
+file summary.
+
+The same vault with 20,000 content-change events in the window (50 on each of
+400 notes) and every note last modified 60 days ago, so that
+`oplog.untouched_for` reads the log for every row. Medians of three passes:
+
+| Path, 10,001 rows | `main` at 46f50603 | This change |
+|---|---:|---:|
+| Bases view, `oplog.has_change_since` outside the pushed-down position | 9,662.3, 8,202.0 ms | 625.3, 643.9 ms |
+| Bases view, `oplog.untouched_for` outside the pushed-down position | 9,111.8, 8,946.5 ms | 635.3, 671.7 ms |
+
+- **The two probes on the wrong index.** Outside the pushed-down position
+  `oplog.has_change_since` and `oplog.untouched_for` walked
+  `oplog_events_class_ts`: every content event of every note in the window,
+  for each row. On this log that is about 100,000 VM steps a row for a note
+  with no events of its own (100,016 and 100,029, step 0's probe) against 19
+  and 32 with `oplog_events_file_ts` named. The view's time no longer grows
+  with the vault's history. In a debug build step 0 read 20.2 s for the
+  `has_change_since` view.
+- **Statement memory.** `SQLITE_DBSTATUS_STMT_USED` on the session's
+  connection after the paths above: 106,592 bytes in 22 statements on `main`,
+  283,320 bytes in 36 statements with this change. Step 0 drove every flow it
+  had (a slow rescan, the views, the link panels, a note opened, twenty saves
+  and the red team's 32 flows) with the capacity set by hand: 205,440 bytes
+  at 16, 531,992 at 32, 845,120 at 64. So a connection whose cache has filled
+  holds about 330 KB more than it did.
+- **Why 32.** A rescan that indexes changed notes beside unchanged ones takes
+  17 statements from the cache. At 16 it dropped 15 of them each time it
+  moved between a changed note and an unchanged one, and built them again; at
+  32 it drops none (16.6 against 14.3 compiles a changed file, step 0). The time of
+  that rescan did not move at any capacity: by the counts it is about 7 ms in
+  900.
+- **What the guarantee gives up.** A plan chosen from a bound value. In this
+  schema that could only be an index prefix search for a bound `GLOB` or
+  `LIKE` pattern (26 against 640 µs a call on 10,001 files when planted, step
+  0), and no statement has one: `db::connection_census` refuses a bound
+  `GLOB`, and `no_like_can_use_an_index_prefix` holds that no index has a
+  NOCASE key and `LIKE` stays case-insensitive.
+- **The guards.**
+  `session::tests::statement_class::no_statement_is_re_prepared_per_binding_on_any_driven_path`
+  drives eleven flows through the public API and fails if any statement a
+  flow ran twelve times was re-prepared more than twice, or if a listed
+  statement did not run from the cache. On `main` it lists 35 statements
+  re-prepared and 4 built for every run.
+  `two_sessions::every_connection_core_opens_is_configured` reads the setting
+  and the capacity off each connection, `scan::a_rescan_of_changed_and_unchanged_notes_keeps_its_statements`
+  holds the 17, and `oplog_temporal::a_temporal_probe_reads_only_its_own_notes_events`
+  reads each probe's plan and its VM steps.
+- **Not measured.** macOS and Linux, and the scan's fourteen per-file
+  statements that have never been cached (14.3 compiles a changed file at any
+  capacity).
