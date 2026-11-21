@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use rusqlite::{Connection, Transaction, params};
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 use crate::VaultError;
 use crate::file_meta_db::{FileMetaParseArtifact, FileMetaPreviewObserver};
@@ -61,7 +62,8 @@ pub struct OutgoingLink {
 pub struct Backlink {
     /// Vault-relative path of the source file containing the link.
     pub source_path: String,
-    /// Snippet of ±60 chars around the link site, from cached content.
+    /// Context around the link site, from cached content, on whole words
+    /// with "…" where it was cut (`present_snippet`).
     pub snippet: String,
     /// Source-file ordinal (0-based) of the link within its file.
     pub ordinal: u32,
@@ -766,6 +768,8 @@ fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingL
     // so the row-capped panel arrays can never exceed one note's
     // size in exact-field bytes; hosts bound their DISPLAY of these
     // fields instead.
+    let span_start = row.get::<_, i64>(8)? as u32;
+    let span_end = row.get::<_, i64>(9)? as u32;
     Ok(OutgoingLink {
         target_path: row.get::<_, Option<String>>(0)?,
         target_raw: row.get::<_, String>(1)?,
@@ -778,10 +782,10 @@ fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingL
         // keeps consumers from re-implementing the "internal +
         // null target" check at every call site.
         is_unresolved: row.get::<_, Option<String>>(0)?.is_none() && row.get::<_, i64>(5)? == 0,
-        snippet: bound_snippet(row.get::<_, String>(6)?),
+        snippet: present_snippet(row.get::<_, String>(6)?, span_start, span_end),
         ordinal: row.get::<_, i64>(7)? as u32,
-        span_start: row.get::<_, i64>(8)? as u32,
-        span_end: row.get::<_, i64>(9)? as u32,
+        span_start,
+        span_end,
         display_text: row.get::<_, Option<String>>(10)?.map(bound_snippet),
     })
 }
@@ -865,7 +869,8 @@ pub(crate) fn backlinks_for(
             (None, None)
         };
 
-    let sql = "SELECT files.path, links.snippet, links.ordinal, links.kind, links.is_embed
+    let sql = "SELECT files.path, links.snippet, links.ordinal, links.kind, links.is_embed,
+                      links.span_start, links.span_end
                FROM links
                JOIN files ON files.id = links.source_file_id
                WHERE links.target_path = ?1
@@ -887,7 +892,11 @@ pub(crate) fn backlinks_for(
             |row| {
                 Ok(Backlink {
                     source_path: row.get::<_, String>(0)?,
-                    snippet: bound_snippet(row.get::<_, String>(1)?),
+                    snippet: present_snippet(
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(5)? as u32,
+                        row.get::<_, i64>(6)? as u32,
+                    ),
                     ordinal: row.get::<_, i64>(2)? as u32,
                     kind: row.get::<_, String>(3)?,
                     is_embed: row.get::<_, i64>(4)? != 0,
@@ -935,7 +944,8 @@ pub(crate) fn unresolved_links(
         } else {
             (None, None)
         };
-    let sql = "SELECT files.path, links.target_raw, links.ordinal, links.snippet
+    let sql = "SELECT files.path, links.target_raw, links.ordinal, links.snippet,
+                      links.span_start, links.span_end
                FROM links
                JOIN files ON files.id = links.source_file_id
                WHERE links.target_path IS NULL AND links.is_external = 0
@@ -956,7 +966,11 @@ pub(crate) fn unresolved_links(
                     source_path: row.get::<_, String>(0)?,
                     target_raw: row.get::<_, String>(1)?,
                     ordinal: row.get::<_, i64>(2)? as u32,
-                    snippet: row.get::<_, String>(3)?,
+                    snippet: present_snippet(
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)? as u32,
+                        row.get::<_, i64>(5)? as u32,
+                    ),
                 })
             },
         )?
@@ -985,14 +999,21 @@ pub(crate) fn unresolved_links(
     })
 }
 
-/// Build a ±60-char snippet centered on the link site. Falls back to
-/// less than 60 chars if the source isn't that long on one side; we
+/// Bytes of context [`snippet_around`] keeps on each side of a link,
+/// before it rounds out to char boundaries.
+const SNIPPET_RADIUS: usize = 60;
+
+/// The most bytes that rounding out to a char boundary adds to a side.
+const CHAR_ROUNDING: usize = 3;
+
+/// Build a ±60-byte snippet centered on the link site. Falls back to
+/// less than 60 bytes if the source isn't that long on one side; we
 /// trim to char boundaries so the snippet stays valid UTF-8 even on
-/// multibyte input.
+/// multibyte input. What a reader is shown of it is
+/// [`present_snippet`]'s.
 fn snippet_around(source: &str, span_start: usize, span_end: usize) -> String {
-    const RADIUS: usize = 60;
-    let start = span_start.saturating_sub(RADIUS);
-    let end = span_end.saturating_add(RADIUS).min(source.len());
+    let start = span_start.saturating_sub(SNIPPET_RADIUS);
+    let end = span_end.saturating_add(SNIPPET_RADIUS).min(source.len());
     let safe_start = round_down_to_char_boundary(source, start);
     let safe_end = round_up_to_char_boundary(source, end);
     let raw = &source[safe_start..safe_end];
@@ -1000,6 +1021,199 @@ fn snippet_around(source: &str, span_start: usize, span_end: usize) -> String {
     // inline in the backlinks panel, so a literal `\n` would push
     // the cursor's spoken position off the line VoiceOver expected.
     raw.replace(['\n', '\r'], " ")
+}
+
+/// A link row's context as a reader is shown it (CB-32, #1782; CD22).
+/// `snippet` is what [`snippet_around`] stored for the link at
+/// `span_start..span_end` of its note: sixty bytes on each side, usually
+/// cut inside a word. Each side it cut now starts or ends on a whole word
+/// (a UAX #29 word segment holding an alphanumeric character) and carries
+/// "…" joined to that word, the shape [`bound_snippet`] writes; a side the
+/// note itself ended on is whole and unmarked. The trim happens when a row
+/// is read, so nothing is re-indexed and the stored text stays
+/// [`snippet_around`]'s.
+///
+/// What the stored text cannot tell costs a reader a little, accepted in
+/// CD22: when a cut fell exactly on a word boundary, one whole word is
+/// dropped; a note that ends 60 to 63 bytes after a link reads as cut, so
+/// its last word goes under a "…".
+///
+/// The result is never longer than [`bound_snippet`]'s ceiling plus one
+/// "…", and never carries two marks on one side. A row this rule did not
+/// write (no link of the span's length where [`snippet_around`] put it) is
+/// only bounded.
+fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
+    const MARK: char = '…';
+    let (span_start, span_end) = (span_start as usize, span_end as usize);
+    let Some(span_len) = span_end.checked_sub(span_start).filter(|len| *len > 0) else {
+        return bound_snippet(snippet);
+    };
+    // Where the link sits in the stored text: `snippet_around` started at
+    // `span_start - 60` rounded down to a char boundary, or at 0, so the link
+    // starts somewhere in `min(60, span_start)..=min(63, span_start)`, and
+    // the stored text cannot say where. A link of the span's length starts
+    // with `[`, `!` or `<` and ends with `]`, `)` or `>`: `[[…]]`, `![[…]]`,
+    // `[…](…)`, `![…](…)`, and the autolinks `<https://…>` and `<a@b.co>`.
+    // When brackets beside the link qualify too, each side takes the place
+    // that trims it less.
+    let first = span_start.min(SNIPPET_RADIUS);
+    let last = span_start.min(SNIPPET_RADIUS + CHAR_ROUNDING);
+    let mut places = (first..=last).filter(|&at| holds_link_at(&snippet, at, span_len));
+    let Some(smallest) = places.next() else {
+        return bound_snippet(snippet);
+    };
+    let largest = places.next_back().unwrap_or(smallest);
+
+    let left_cut = largest < span_start;
+    let link_end = smallest + span_len;
+    let right_cut = snippet.len() - link_end >= SNIPPET_RADIUS;
+    let start = if left_cut {
+        left_edge(&snippet, largest)
+    } else {
+        0
+    };
+    let end = if right_cut {
+        right_edge(&snippet, link_end)
+    } else {
+        snippet.len()
+    };
+    // Only a row this rule did not write, with a span of two or three
+    // bytes, could put its two places further apart than the span is long.
+    let end = end.max(start);
+
+    // The ceiling bounds the text between the marks, so a long link keeps
+    // today's ceiling plus one "…"; its truncation takes the right mark,
+    // once, whether or not the right side was cut too.
+    let mut body = &snippet[start..end];
+    let mut right_mark = right_cut;
+    let limit = MAX_LINK_SNIPPET_BYTES - if left_cut { MARK.len_utf8() } else { 0 };
+    if body.len() > limit {
+        body = &body[..grapheme_floor(body, limit)];
+        right_mark = true;
+    }
+    if !left_cut && !right_mark {
+        return snippet;
+    }
+    let mut shown = String::with_capacity(body.len() + 2 * MARK.len_utf8());
+    if left_cut {
+        shown.push(MARK);
+    }
+    shown.push_str(body);
+    if right_mark {
+        shown.push(MARK);
+    }
+    shown
+}
+
+/// Whether `snippet_around`'s text holds a link of `span_len` bytes at
+/// `at`, with no more right context than it keeps.
+fn holds_link_at(text: &str, at: usize, span_len: usize) -> bool {
+    let end = at + span_len;
+    end <= text.len()
+        && text.len() - end <= SNIPPET_RADIUS + CHAR_ROUNDING
+        && text.is_char_boundary(at)
+        && text.is_char_boundary(end)
+        && matches!(text.as_bytes()[at], b'[' | b'!' | b'<')
+        && matches!(text.as_bytes()[end - 1], b']' | b')' | b'>')
+}
+
+/// A UAX #29 word segment that holds a word, not space or punctuation.
+fn is_word_like(segment: &str) -> bool {
+    segment.chars().any(char::is_alphanumeric)
+}
+
+/// Where a cut left side starts: at the first whole word before the link
+/// at `link_start`, a word-like segment that follows space or punctuation
+/// or follows another word-like segment (UAX #29 breaks between two Han
+/// ideographs, or two kana, with nothing between them); else at the link
+/// itself, when space or punctuation comes before it; else (one unbroken
+/// word of sixty bytes or more) at the first grapheme boundary that stands
+/// whatever the cut dropped. Only the left context, at most 63 bytes, is
+/// segmented.
+fn left_edge(text: &str, link_start: usize) -> usize {
+    let context = &text[..link_start];
+    let segments: Vec<(usize, &str)> = context.split_word_bound_indices().collect();
+    // A first segment of space or punctuation can be the tail of what the
+    // cut went through, and the boundary after it then is not the note's
+    // own: "can't" cut after "can" stores "'" then "t", and "étoile"
+    // written as `e` + U+0301 cut after the `e` stores a lone accent then
+    // "toile". Only white space there is a boundary whatever came before.
+    let boundary_after =
+        |segment: usize| segment > 0 || segments[0].1.chars().any(char::is_whitespace);
+    for (i, pair) in segments.windows(2).enumerate() {
+        let (before, word) = (pair[0].1, pair[1]);
+        if is_word_like(word.1) && (is_word_like(before) || boundary_after(i)) {
+            return word.0;
+        }
+    }
+    if segments
+        .last()
+        .is_some_and(|(_, segment)| !is_word_like(segment))
+    {
+        return link_start;
+    }
+    context
+        .char_indices()
+        .skip(1)
+        .map(|(at, _)| at)
+        .find(|&at| is_known_grapheme_boundary(text, at))
+        .unwrap_or(link_start)
+}
+
+/// Where a cut right side ends, mirroring [`left_edge`]: at the end of the
+/// last whole word after the link ending at `link_end`, a word-like
+/// segment that space, punctuation or another word-like segment follows;
+/// else at the link's end, when space or punctuation follows it; else at
+/// the last grapheme boundary that stands whatever the cut dropped. Only
+/// the right context, at most 63 bytes, is segmented.
+fn right_edge(text: &str, link_end: usize) -> usize {
+    let context = &text[link_end..];
+    let segments: Vec<(usize, &str)> = context.split_word_bound_indices().collect();
+    // A last segment of space or punctuation can be the head of what the
+    // cut went through ("foo:bar" cut after the colon stores "foo" then
+    // ":").
+    let last = segments.len().saturating_sub(1);
+    let boundary_before =
+        |segment: usize| segment < last || segments[last].1.chars().any(char::is_whitespace);
+    for (i, pair) in segments.windows(2).enumerate().rev() {
+        let (word, after) = (pair[0], pair[1].1);
+        if is_word_like(word.1) && (is_word_like(after) || boundary_before(i + 1)) {
+            return link_end + word.0 + word.1.len();
+        }
+    }
+    if segments
+        .first()
+        .is_some_and(|(_, segment)| !is_word_like(segment))
+    {
+        return link_end;
+    }
+    context
+        .char_indices()
+        .rev()
+        .map(|(at, _)| at)
+        .take_while(|&at| at > 0)
+        .map(|at| link_end + at)
+        .find(|&at| is_known_grapheme_boundary(text, at))
+        .unwrap_or(link_end)
+}
+
+/// Whether `text` has a grapheme cluster boundary at `at` that holds
+/// whatever the note had before and after `text`: a rule that needs to
+/// see past either end (a combining mark at the start, a regional
+/// indicator's pairing, a ZWJ emoji sequence) answers "not known".
+fn is_known_grapheme_boundary(text: &str, at: usize) -> bool {
+    let mut cursor = GraphemeCursor::new(at + 1, text.len() + 2, true);
+    cursor.is_boundary(text, 1) == Ok(true)
+}
+
+/// The largest grapheme cluster boundary of `text` at or before `at`.
+fn grapheme_floor(text: &str, at: usize) -> usize {
+    let at = round_down_to_char_boundary(text, at);
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    match cursor.is_boundary(text, 0) {
+        Ok(true) => at,
+        _ => cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0),
+    }
 }
 
 fn round_down_to_char_boundary(s: &str, mut idx: usize) -> usize {
