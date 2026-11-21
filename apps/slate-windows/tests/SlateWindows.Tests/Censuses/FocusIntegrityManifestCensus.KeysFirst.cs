@@ -295,7 +295,14 @@ public sealed partial class FocusIntegrityManifestCensus
                 _ = unread.Add($"xaml-setter {file} {UnreadCarrier(owner)} Command");
             }
 
-            foreach (XElement property in document.Descendants().Where(element => element.Name.LocalName.EndsWith(".Command", StringComparison.Ordinal)))
+            // A property element the scrape does not read: a Command, or a state the census
+            // keys (IsEnabled, Visibility, Focusable) given as <X.IsEnabled><Binding …/>
+            // rather than an attribute (the owner's "Small fix, no new round", Codex round 3).
+            foreach (XElement property in document.Descendants().Where(element =>
+                element.Name.LocalName.EndsWith(".Command", StringComparison.Ordinal)
+                || element.Name.LocalName.EndsWith(".IsEnabled", StringComparison.Ordinal)
+                || element.Name.LocalName.EndsWith(".Visibility", StringComparison.Ordinal)
+                || element.Name.LocalName.EndsWith(".Focusable", StringComparison.Ordinal)))
             {
                 _ = unread.Add($"xaml-property {file} {Identity(property.Parent) ?? $"line {((IXmlLineInfo)property).LineNumber}"} {property.Name.LocalName}");
             }
@@ -1086,6 +1093,21 @@ public sealed partial class FocusIntegrityManifestCensus
                     <Binding Path="SaveCommand" />
                   </Button.Command>
                 </Button>
+                <Button x:Name="Enabled">
+                  <Button.IsEnabled>
+                    <Binding Path="CanSave" />
+                  </Button.IsEnabled>
+                </Button>
+                <Button x:Name="Shown">
+                  <Button.Visibility>
+                    <Binding Path="SaveVisibility" />
+                  </Button.Visibility>
+                </Button>
+                <Button x:Name="Stoppable">
+                  <UIElement.Focusable>
+                    <Binding Path="CanFocus" />
+                  </UIElement.Focusable>
+                </Button>
                 <Button x:Name="Elemented">
                   <Button.Style>
                     <Style TargetType="Button">
@@ -1114,7 +1136,10 @@ public sealed partial class FocusIntegrityManifestCensus
             [
                 "code-setter Planted.Styles.Buttons Command=null when (style)",
                 "code-setter Planted.Styles.Rows IsEnabled=false when (unread)",
+                "xaml-property Planted.xaml Enabled Button.IsEnabled",
                 "xaml-property Planted.xaml Propertied Button.Command",
+                "xaml-property Planted.xaml Shown Button.Visibility",
+                "xaml-property Planted.xaml Stoppable UIElement.Focusable",
                 "xaml-setter Planted.xaml Rows Command",
                 "xaml-setter Planted.xaml Style:Commanded Command",
                 "xaml-trigger-binding Planted.xaml Elemented IsEnabled",
