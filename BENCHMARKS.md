@@ -1698,11 +1698,12 @@ The same vault with 20,000 content-change events in the window (50 on each of
      `no_like_can_use_an_index_prefix` holds that no index key is NOCASE.
   2. A partial index, or an index on an expression, that a bound value would
      have matched where the index holds a literal (`exprCompareVariable`,
-     119504). Guarded for partial indexes:
-     `no_product_statement_binds_a_partial_index_condition` reads every partial
-     index's condition, or fails, and refuses a statement that compares a
-     column with a bound value where a condition compares that column with a
-     literal. Not guarded for an index on an expression.
+     119504). Not guarded for product statements. The schema's partial indexes
+     are pinned (`the_schemas_partial_indexes_are_the_ones_pinned`), so a new
+     one is read by its author. No product statement leans on one today, by the
+     value-bound plan comparisons made for #1917 (183 literals under 11 value
+     patterns before the change; 84 statements driven with the setting off and
+     on after it).
   3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`, 87237). Not
      guarded. No product code runs `ANALYZE`, so there are no samples to probe.
   4. A bound `LIMIT`'s value in the row estimate and in the cost of a sort
@@ -1714,7 +1715,7 @@ The same vault with 20,000 content-change events in the window (50 on each of
      weighs one estimate against another; the same runs showed no plan move.
 
   The first, planted, read 26 against 640 µs a call on 10,001 files (step 0).
-  No product statement has the first or the second today.
+  No product statement has the first today.
 - **The guards.**
   `session::tests::statement_class::no_statement_is_re_prepared_per_binding_on_any_driven_path`
   drives eleven flows through the public API and fails if any statement a

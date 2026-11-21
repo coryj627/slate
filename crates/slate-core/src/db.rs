@@ -366,12 +366,13 @@ mod configured {
     ///    NOCASE.
     /// 2. A partial index, or an index on an expression, that a bound value
     ///    would have matched where the index holds a literal
-    ///    (`exprCompareVariable`, 119504). Guarded for partial indexes:
-    ///    `no_product_statement_binds_a_partial_index_condition` reads every
-    ///    partial index's condition, or fails, and refuses a statement that
-    ///    compares a column with a bound value where a condition compares
-    ///    that column with a literal. Not guarded for an index on an
-    ///    expression.
+    ///    (`exprCompareVariable`, 119504). Not guarded for product
+    ///    statements. The schema's partial indexes are pinned
+    ///    (`the_schemas_partial_indexes_are_the_ones_pinned`), so a new one
+    ///    is read by its author. No product statement leans on one today, by
+    ///    the value-bound plan comparisons made for #1917 (183 literals under
+    ///    11 value patterns before the change; 84 statements driven with the
+    ///    setting off and on after it).
     /// 3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`,
     ///    87237). Not guarded. No product code runs `ANALYZE`, so there are
     ///    no samples to probe.
@@ -2560,45 +2561,196 @@ mod tests {
 
     /// SQLite's own word on the second thing the guarantee gives up that a
     /// statement could lean on: a partial index whose condition a bound
-    /// value would have met. `no_product_statement_binds_a_partial_index_condition`
-    /// refuses the statement; this shows what it would lose. If a later
-    /// SQLite changes it, this moves and that census wants another look.
+    /// value would have met. Nothing refuses such a statement (three
+    /// attempts at reading SQL as text for it each left a gap, and it is a
+    /// #1955 line); `the_schemas_partial_indexes_are_the_ones_pinned` makes
+    /// the author of a new partial index read this.
+    ///
+    /// What SQLite 3.54.1 does, by its source and by the plans below. A
+    /// parameter stands in for a literal only as one side of an operator
+    /// (`sqlite3ExprCompare`, sqlite3.c:119559). The members of a list are
+    /// compared with no bound value in hand (`sqlite3ExprListCompare`,
+    /// 119661), so no bound value proves `IN (0, 2)` or `BETWEEN`, with the
+    /// guarantee or without. A list of one constant is not a list: the
+    /// parser writes `x IN (0)` as `x = +0` (185558), and a bound value
+    /// proves that. If a later SQLite changes any of this, this test moves.
     #[test]
     fn the_guarantee_gives_up_a_partial_index_whose_condition_is_bound() {
-        const SCHEMA: &str = "CREATE TABLE links (
-                 target_raw TEXT, target_path TEXT, is_external INTEGER NOT NULL
-             );
-             CREATE INDEX links_unresolved ON links(target_raw)
-             WHERE target_path IS NULL AND is_external = 0;";
-        const BOUND: &str = "SELECT COUNT(*) FROM links
-             WHERE target_raw = 'a' AND target_path IS NULL AND is_external = ?1";
-        const LITERAL: &str = "SELECT COUNT(*) FROM links
-             WHERE target_raw = ?1 AND target_path IS NULL AND is_external = 0";
-        let free = Connection::open_in_memory().unwrap();
-        free.execute_batch(SCHEMA).unwrap();
-        let guaranteed = Connection::open_in_memory().unwrap();
-        guaranteed.execute_batch(SCHEMA).unwrap();
-        guaranteed
-            .set_db_config(
-                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+        // (the index's condition, the statement's term with ?1 for the
+        // literal, whether the statement uses the index without the
+        // guarantee, and with it)
+        let planted = [
+            (
+                "target_path IS NULL AND is_external = 0",
+                "target_path IS NULL AND is_external = ?1",
                 true,
+                false,
+            ),
+            ("is_external IN (0)", "is_external = ?1", true, false),
+            (
+                "is_external IN (0, 2)",
+                "is_external IN (?1, 2)",
+                false,
+                false,
+            ),
+            (
+                "is_external BETWEEN 0 AND 2",
+                "is_external BETWEEN ?1 AND 2",
+                false,
+                false,
+            ),
+        ];
+        for (condition, term, without, with) in planted {
+            let schema = format!(
+                "CREATE TABLE links (
+                     target_raw TEXT, target_path TEXT, is_external INTEGER NOT NULL
+                 );
+                 CREATE INDEX links_unresolved ON links(target_raw) WHERE {condition};"
+            );
+            let bound = format!("SELECT COUNT(*) FROM links WHERE target_raw = 'a' AND {term}");
+            let free = Connection::open_in_memory().unwrap();
+            free.execute_batch(&schema).unwrap();
+            let guaranteed = Connection::open_in_memory().unwrap();
+            guaranteed.execute_batch(&schema).unwrap();
+            guaranteed
+                .set_db_config(
+                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                    true,
+                )
+                .unwrap();
+
+            let plan = plan_once_bound(&free, &bound, 0_i64);
+            assert_eq!(
+                plan.contains("links_unresolved"),
+                without,
+                "without the guarantee, {condition} against `{term}` with 0 bound: {plan}"
+            );
+            let plan = plan_once_bound(&guaranteed, &bound, 0_i64);
+            assert_eq!(
+                plan.contains("links_unresolved"),
+                with,
+                "with the guarantee, {condition} against `{term}` with 0 bound: {plan}"
+            );
+            // The condition written as the index has it keeps the index
+            // either way.
+            let literal =
+                format!("SELECT COUNT(*) FROM links WHERE target_raw = ?1 AND {condition}");
+            for conn in [&free, &guaranteed] {
+                let plan = plan_once_bound(conn, &literal, "a");
+                assert!(plan.contains("links_unresolved"), "{condition}: {plan}");
+            }
+        }
+    }
+
+    /// Every partial index of `conn`'s main schema, by SQLite's own word
+    /// (`PRAGMA index_list` marks them), as `(name, SQL)`, sorted by name.
+    /// The SQL is `sqlite_master`'s text with every run of whitespace, line
+    /// ends among them, made one space. Nothing else is changed and nothing
+    /// is parsed.
+    fn partial_indexes(conn: &Connection) -> Vec<(String, String)> {
+        conn.prepare(
+            "SELECT l.name, (SELECT m.sql FROM sqlite_master m
+                             WHERE m.type = 'index' AND m.name = l.name)
+             FROM sqlite_master t, pragma_index_list(t.name) l
+             WHERE t.type = 'table' AND l.\"partial\" = 1
+             ORDER BY l.name",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            let sql: Option<String> = row.get(1)?;
+            Ok((
+                row.get(0)?,
+                sql.unwrap_or_default()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// The schema's partial indexes and the SQL each was made with.
+    const PARTIAL_INDEXES: [(&str, &str); 5] = [
+        (
+            "files_oplog_name_unique",
+            "CREATE UNIQUE INDEX files_oplog_name_unique ON files(oplog_name) WHERE oplog_name IS \
+             NOT NULL",
+        ),
+        (
+            "idx_links_target_name_fold",
+            "CREATE INDEX idx_links_target_name_fold ON \
+             links(slate_tree_sort_key(slate_link_target_name(target_raw))) WHERE target_path IS \
+             NULL AND is_external = 0",
+        ),
+        (
+            "idx_links_target_path_fold",
+            "CREATE INDEX idx_links_target_path_fold ON \
+             links(slate_tree_sort_key(slate_link_target_path(target_raw))) WHERE target_path IS \
+             NULL AND is_external = 0",
+        ),
+        (
+            "idx_properties_key_norm",
+            "CREATE INDEX idx_properties_key_norm ON properties(key, value_text_norm) WHERE \
+             value_kind NOT IN ('list', 'tag_list')",
+        ),
+        (
+            "idx_tasks_priority",
+            "CREATE INDEX idx_tasks_priority ON tasks(priority) WHERE priority IS NOT NULL",
+        ),
+    ];
+
+    /// #1917: under the query planner stability guarantee a statement that
+    /// binds a value where a partial index's condition holds a literal does
+    /// not use that index (the second of the five uses `configure_connection`
+    /// lists). No fact refuses such a statement. This pin is what stands in
+    /// its place: it parses nothing, it lists what SQLite calls partial, and
+    /// it fails when a partial index is added, dropped or given another
+    /// condition, so the author reads the message below. No product
+    /// statement leans on a bound value for one today, by the value-bound
+    /// plan comparisons made for #1917 (183 literals under 11 value patterns
+    /// before the change; 84 statements driven with the setting off and on
+    /// after it).
+    #[test]
+    fn the_schemas_partial_indexes_are_the_ones_pinned() {
+        // The walk sees a planted partial index, and only that one.
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch
+            .execute_batch(
+                "CREATE TABLE t (a, b);
+                 CREATE INDEX plain ON t(a);
+                 CREATE INDEX on_an_expression ON t(lower(a));
+                 CREATE INDEX planted ON t(a)
+                 WHERE b =   -1;",
             )
             .unwrap();
+        assert_eq!(
+            partial_indexes(&scratch),
+            [(
+                "planted".to_string(),
+                "CREATE INDEX planted ON t(a) WHERE b = -1".to_string()
+            )]
+        );
 
-        let plan = plan_once_bound(&free, BOUND, 0_i64);
-        assert!(
-            plan.contains("links_unresolved"),
-            "without the guarantee the bound 0 proves the index's condition: {plan}"
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let found = partial_indexes(&conn);
+        let pinned: Vec<(String, String)> = PARTIAL_INDEXES
+            .iter()
+            .map(|(name, sql)| (name.to_string(), sql.to_string()))
+            .collect();
+        assert_eq!(
+            found, pinned,
+            "the schema's partial indexes are not the ones pinned (left: the schema; right: \
+             the pin). Core's connections run under the query planner stability guarantee \
+             (#1917): a statement that binds a value where a partial index's condition holds a \
+             literal does not use the index, and scans with the same rows. Nothing checks \
+             product statements for that. Before pinning the new text, read the statements \
+             that query this table, and compare their plans with a value bound, the guarantee \
+             off and on (`the_guarantee_gives_up_a_partial_index_whose_condition_is_bound` \
+             shows how). A statement that should use the index writes the literal the \
+             condition has."
         );
-        let plan = plan_once_bound(&guaranteed, BOUND, 0_i64);
-        assert!(
-            !plan.contains("links_unresolved") && plan.contains("SCAN"),
-            "with the guarantee the same statement scans the table: {plan}"
-        );
-        // The condition written as the index has it keeps the index either way.
-        for conn in [&free, &guaranteed] {
-            let plan = plan_once_bound(conn, LITERAL, "a");
-            assert!(plan.contains("links_unresolved"), "{plan}");
-        }
     }
 }
