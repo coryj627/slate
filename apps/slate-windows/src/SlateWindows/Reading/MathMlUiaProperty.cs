@@ -87,7 +87,7 @@ internal static class MathMlUiaProperty
                 or MemberAccessException)
         {
             _inactiveReason =
-                $"{exception.GetType().Name}: {exception.Message}";
+                $"{exception.GetType().Name}: {FailureDetail.Of(exception)}";
             HostLog.Write(
                 HostDiagnosticEvent.MathMlUiaPropertyUnavailable, exception);
         }
