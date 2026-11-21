@@ -497,12 +497,12 @@ public sealed partial class FocusIntegrityManifestCensus
         {
             var triggers = new Dictionary<string, XElement>(StringComparer.Ordinal);
             foreach (XElement setter in document.Descendants().Where(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") is "IsEnabled" or "Visibility"
+                && PropertyName((string?)element.Attribute("Property")) is "IsEnabled" or "Visibility"
                 && element.Ancestors().Any(ancestor => ancestor.Name.LocalName.EndsWith(".Triggers", StringComparison.Ordinal))))
             {
                 XElement owner = setter.Ancestors().First(ancestor =>
                     ancestor.Name.LocalName is "Style" or "ControlTemplate" or "DataTemplate");
-                string property = (string)setter.Attribute("Property")!;
+                string property = PropertyName((string?)setter.Attribute("Property"))!;
                 // #1866 (CD11): each IsEnabled trigger that can turn its carrier off is
                 // a site of its own, keyed by its condition; one that sets True turns
                 // nothing off.
@@ -531,7 +531,7 @@ public sealed partial class FocusIntegrityManifestCensus
             {
                 foreach (XAttribute attribute in element.Attributes().Where(attribute => attribute.Value.StartsWith('{')))
                 {
-                    string local = attribute.Name.LocalName;
+                    string local = PropertyName(attribute.Name.LocalName)!;
                     string? key = StateProperties.Contains(local)
                         ? $"xaml-binding {file} {Identity(element)} {local}"
                         : local == "ItemsSource" ? $"xaml-items {file} {Identity(element)}"
@@ -576,7 +576,7 @@ public sealed partial class FocusIntegrityManifestCensus
             return null;
         }
 
-        string? identity = commandSites is not null && carrier is not null && Named(carrier) is null && carrier.Attribute("Command") is not null
+        string? identity = commandSites is not null && carrier is not null && Named(carrier) is null && PropertyAttribute(carrier, "Command") is not null
             ? CommandIdentity(carrier, commandSites)
             : Identity(carrier);
         return (identity ?? $"line {((IXmlLineInfo)owner).LineNumber}", carrier, null, NamesOf(carrier));
@@ -601,7 +601,7 @@ public sealed partial class FocusIntegrityManifestCensus
     private static HashSet<string> FocuslessNames(IEnumerable<XDocument> documents) =>
     [
         .. documents.SelectMany(document => document.Descendants())
-            .Where(element => (string?)element.Attribute("Focusable") == "False")
+            .Where(element => IsFalse(PropertyAttribute(element, "Focusable")?.Value))
             .Select(element => (string?)element.Attribute(Xaml + "Name"))
             .OfType<string>(),
     ];

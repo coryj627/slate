@@ -149,6 +149,42 @@ public sealed class KeysFirstRecorderTests
         Assert.Contains("the link never went off", failed.Message, StringComparison.Ordinal);
     });
 
+    /// <summary>A root that does not hold the keys when the act starts can never go off
+    /// holding them, so a fact on it measures nothing and fails (Codex round 1, finding 1).</summary>
+    [Fact]
+    public void TheAssertionFailsWhenNothingHoldsTheKeys() => WithAWindow(rig =>
+    {
+        Keyboard.ClearFocus();
+        Assert.Null(Keyboard.FocusedElement);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("First", rig.First, () => rig.First.IsEnabled = false));
+
+        Assert.Contains("First did not hold the keys", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheAssertionFailsWhenTheKeysAreElsewhere() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.Second);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("First", rig.First, () => rig.First.IsEnabled = false));
+
+        Assert.Contains("First did not hold the keys", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheContentAssertionFailsWhenTheKeysAreElsewhere() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("the link", rig.Link, () => rig.Link.IsEnabled = false));
+
+        Assert.Contains("the link did not hold the keys", failed.Message, StringComparison.Ordinal);
+    });
+
     /// <summary>A popup's content lives in its own visual tree, so the keys on a button in a
     /// popup that the root holds are inside the root by the logical tree only (a menu's
     /// submenu rows are).</summary>

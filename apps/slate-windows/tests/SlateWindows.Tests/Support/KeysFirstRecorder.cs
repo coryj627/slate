@@ -22,9 +22,11 @@ internal static class KeysFirstRecorder
     /// <paramref name="root"/> turned off while the keys were on it or inside it. The root
     /// is the site's element, or a descendant that the site's change turns off with it (a
     /// menu item, for the menu). It also fails when the act never turns the root off: such
-    /// a fact measured nothing about the keys leaving first.</summary>
+    /// a fact measured nothing about the keys leaving first, and when the root does not hold
+    /// the keys as the act starts: it could never go off holding them.</summary>
     internal static void AssertTheKeysLeaveFirst(string what, UIElement root, Action act)
     {
+        Assert.True(TheKeysAreIn(root), $"{what} did not hold the keys when the act began (they were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}), so nothing about them leaving first was measured");
         bool wentOff = false;
         DependencyPropertyChangedEventHandler off = (_, e) => wentOff |= e.NewValue is false;
         List<string> offUnder;
@@ -46,6 +48,7 @@ internal static class KeysFirstRecorder
     /// keys itself.</summary>
     internal static void AssertTheKeysLeaveFirst(string what, ContentElement root, Action act)
     {
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, root), $"{what} did not hold the keys when the act began (they were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}), so nothing about them leaving first was measured");
         var offUnder = new List<string>();
         bool wentOff = false;
         DependencyPropertyChangedEventHandler record = (_, e) =>

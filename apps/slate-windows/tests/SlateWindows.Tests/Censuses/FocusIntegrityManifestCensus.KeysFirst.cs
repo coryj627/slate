@@ -138,7 +138,7 @@ public sealed partial class FocusIntegrityManifestCensus
     /// it cannot turn a control off under the keys (CB-17a review, m6).</summary>
     internal static readonly IReadOnlyDictionary<string, string> UnreadAllowed = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["code-setter SlateWindows.Bases.BaseSurfaceView.BuildListItemStyle IsEnabled"] =
+        ["code-setter SlateWindows.Bases.BaseSurfaceView.BuildListItemStyle IsEnabled=false when IsHeader=true"] =
             "a base list's group header row is off by IsHeader, which is fixed for the item it shows (BaseSurfaceView.cs:1346-1352, "
             + ":1428), so the trigger never turns a row off under the keys",
     };
@@ -242,6 +242,7 @@ public sealed partial class FocusIntegrityManifestCensus
         IEnumerable<(CompilationUnitSyntax Root, SemanticModel Model)> sources, IEnumerable<(string File, XDocument Document)> xaml)
     {
         var unread = new SortedSet<string>(StringComparer.Ordinal);
+        var setters = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach ((CompilationUnitSyntax root, SemanticModel model) in sources)
         {
             // Only a creation written as a Setter, or an implicit new, is bound.
@@ -270,7 +271,16 @@ public sealed partial class FocusIntegrityManifestCensus
 
                     if (disables || commands)
                     {
-                        _ = unread.Add($"code-setter {member?.ContainingType?.ToDisplayString()}.{member?.Name} {field.Name[..^"Property".Length]}");
+                        // Pinned by its target, its value and its trigger's condition, and
+                        // counted, so an allowed entry covers that one setter only (Codex
+                        // round 1, finding 4).
+                        ExpressionSyntax? value = creation.ArgumentList?.Arguments.Skip(1).FirstOrDefault()?.Expression
+                            ?? creation.Initializer?.Expressions.OfType<AssignmentExpressionSyntax>()
+                                .FirstOrDefault(assignment => assignment.Left.ToString() == "Value")?.Right;
+                        string key = $"code-setter {member?.ContainingType?.ToDisplayString()}.{member?.Name} {field.Name[..^"Property".Length]}"
+                            + $"={(value is null ? "(unset)" : Regex.Replace(value.ToString(), @"\s+", " "))} when {SetterCondition(creation, model)}";
+                        int seen = setters[key] = setters.GetValueOrDefault(key) + 1;
+                        _ = unread.Add(seen > 1 ? $"{key} #{seen}" : key);
                     }
                 }
             }
@@ -279,7 +289,7 @@ public sealed partial class FocusIntegrityManifestCensus
         foreach ((string file, XDocument document) in xaml)
         {
             foreach (XElement setter in document.Descendants().Where(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") == "Command"))
+                && PropertyName((string?)element.Attribute("Property")) == "Command"))
             {
                 XElement owner = setter.Ancestors().First(ancestor => ancestor.Name.LocalName is "Style" or "ControlTemplate" or "DataTemplate");
                 _ = unread.Add($"xaml-setter {file} {UnreadCarrier(owner)} Command");
@@ -291,7 +301,7 @@ public sealed partial class FocusIntegrityManifestCensus
             }
 
             foreach (XElement setter in document.Descendants().Where(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") == "IsEnabled"
+                && PropertyName((string?)element.Attribute("Property")) == "IsEnabled"
                 && element.Ancestors().Any(ancestor => ancestor.Name.LocalName.EndsWith(".Triggers", StringComparison.Ordinal))))
             {
                 XElement? trigger = setter.Ancestors().FirstOrDefault(ancestor =>
@@ -305,6 +315,70 @@ public sealed partial class FocusIntegrityManifestCensus
         }
 
         return [.. unread];
+    }
+
+    /// <summary>The condition of the trigger a code-built setter is added to (by
+    /// X.Setters.Add or a Setters initializer): its binding's path or its property, then =
+    /// and its value, as the trigger's initializer writes them; "(style)" for a style's own
+    /// setter; "(unread)" for anything else.</summary>
+    private static string SetterCondition(BaseObjectCreationExpressionSyntax creation, SemanticModel model)
+    {
+        ExpressionSyntax? owner = creation.Parent switch
+        {
+            ArgumentSyntax
+            {
+                Parent: ArgumentListSyntax
+                {
+                    Parent: InvocationExpressionSyntax
+                    {
+                        Expression: MemberAccessExpressionSyntax
+                        {
+                            Name.Identifier.ValueText: "Add",
+                            Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Setters", Expression: var holder },
+                        },
+                    },
+                },
+            } => model.GetSymbolInfo(holder).Symbol?.DeclaringSyntaxReferences.Select(reference => reference.GetSyntax())
+                .OfType<VariableDeclaratorSyntax>().Select(declarator => declarator.Initializer?.Value).FirstOrDefault(),
+            InitializerExpressionSyntax
+            {
+                Parent: AssignmentExpressionSyntax
+                {
+                    Left: IdentifierNameSyntax { Identifier.ValueText: "Setters" },
+                    Parent: InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax made },
+                },
+            } => made,
+            _ => null,
+        };
+        if (owner is not BaseObjectCreationExpressionSyntax trigger)
+        {
+            return "(unread)";
+        }
+
+        string? kind = model.GetTypeInfo(trigger).Type?.Name;
+        if (kind == "Style")
+        {
+            return "(style)";
+        }
+
+        Dictionary<string, ExpressionSyntax> assigned = trigger.Initializer?.Expressions.OfType<AssignmentExpressionSyntax>()
+            .GroupBy(assignment => assignment.Left.ToString())
+            .ToDictionary(group => group.Key, group => group.Last().Right, StringComparer.Ordinal) ?? [];
+        string? path = kind switch
+        {
+            "DataTrigger" => assigned.GetValueOrDefault("Binding") is BaseObjectCreationExpressionSyntax { ArgumentList.Arguments: [var first], Initializer: null }
+                ? first.Expression switch
+                {
+                    LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) => literal.Token.ValueText,
+                    InvocationExpressionSyntax { Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" }, ArgumentList.Arguments: [var named] }
+                        => named.Expression.ToString().Split('.').Last(),
+                    _ => null,
+                }
+                : null,
+            "Trigger" => assigned.GetValueOrDefault("Property")?.ToString().Split('.').Last(),
+            _ => null,
+        };
+        return path is null || assigned.GetValueOrDefault("Value") is not { } value ? "(unread)" : $"{path}={value}";
     }
 
     private static string UnreadCarrier(XElement owner) =>
@@ -557,6 +631,11 @@ public sealed partial class FocusIntegrityManifestCensus
                 ["PlantedTests.InAHelper"] = "[Fact] void InAHelper() => RunSta(() => { var button = host.Pressed; PressUnderTheRecorder(button); });",
                 ["PlantedTests.TheList"] = "[Fact] void TheList() => RunSta(() => { var button = host.Pressed; Assert.Empty(KeysFirstRecorder.DisabledWithTheKeysInside(button, () => { })); });",
                 ["PlantedTests.NoToken"] = "[Fact] void NoToken() => RunSta(() => { var menu = host.Shell.MainMenu; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"menu\", menu, () => host.Workspace.Open()); });",
+                ["PlantedTests.InALocalFunction"] = "[Fact] void InALocalFunction() => RunSta(() => { void Measure() { var button = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); } GC.KeepAlive((Action)Measure); });",
+                ["PlantedTests.InAnUninvokedLambda"] = "[Fact] void InAnUninvokedLambda() => RunSta(() => { var button = host.Pressed; Action measure = () => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); GC.KeepAlive(measure); });",
+                ["PlantedTests.CallInALocalFunction"] = "[Fact] void CallInALocalFunction() => RunSta(() => { var button = host.Pressed; void Measure() => KeysFirstRecorder.AssertTheKeysLeaveFirst(\"button\", button, () => button.Command.Execute(null)); GC.KeepAlive((Action)Measure); });",
+                ["PlantedTests.NameInALocalFunction"] = "[Fact] void NameInALocalFunction() => RunSta(() => { var button = host.Other; void Name() => _ = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"button\", button, () => button.Command.Execute(null)); });",
+                ["PlantedTests.InADispatchedLambda"] = "[Fact] void InADispatchedLambda() => RunSta(() => PumpedDispatcher.Run(() => { var button = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst(\"Pressed\", button, () => button.Command.Execute(null)); }));",
             },
             new HashSet<string>(StringComparer.Ordinal),
             []);
@@ -573,6 +652,13 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Contains("calls", judge.Judge(pressed, "keys-first: PlantedTests.TheList"), StringComparison.Ordinal);
         Assert.Contains("names no fact", judge.Judge(pressed, "keys-first: NoSuchTests.Method"), StringComparison.Ordinal);
         Assert.Contains("AddPropertySheet", judge.Judge(sheet, "keys-first: PlantedTests.NoToken"), StringComparison.Ordinal);
+        // Codex round 1, finding 2: the call and the names in a local function, or in a
+        // lambda nothing is handed, run nowhere; a lambda handed on (RunSta, a dispatcher) counts.
+        Assert.NotNull(judge.Judge(pressed, "keys-first: PlantedTests.InALocalFunction"));
+        Assert.Contains("calls", judge.Judge(pressed, "keys-first: PlantedTests.InAnUninvokedLambda"), StringComparison.Ordinal);
+        Assert.Null(judge.Judge(pressed, "keys-first: PlantedTests.InADispatchedLambda"));
+        Assert.Contains("calls", judge.Judge(pressed, "keys-first: PlantedTests.CallInALocalFunction"), StringComparison.Ordinal);
+        Assert.Contains("does not name the site", judge.Judge(pressed, "keys-first: PlantedTests.NameInALocalFunction"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1012,8 +1098,8 @@ public sealed partial class FocusIntegrityManifestCensus
 
         Assert.Equal(
             [
-                "code-setter Planted.Styles.Buttons Command",
-                "code-setter Planted.Styles.Rows IsEnabled",
+                "code-setter Planted.Styles.Buttons Command=null when (style)",
+                "code-setter Planted.Styles.Rows IsEnabled=false when (unread)",
                 "xaml-property Planted.xaml Propertied Button.Command",
                 "xaml-setter Planted.xaml Rows Command",
                 "xaml-setter Planted.xaml Style:Commanded Command",
@@ -1088,6 +1174,154 @@ public sealed partial class FocusIntegrityManifestCensus
             ],
             sites.Keys.Where(key => key.StartsWith("xaml-command ", StringComparison.Ordinal)));
         Assert.Contains("xaml-trigger Planted.xaml Lowered IsEnabled when (style default)", sites.Keys);
+    }
+
+    /// <summary>A property written with its owner (UIElement.IsEnabled, (UIElement.IsEnabled),
+    /// ButtonBase.Command, MenuItem.StaysOpenOnClick) is read as the property, in a trigger,
+    /// a style's own setter, an element's attribute and the unread syntaxes alike (Codex
+    /// round 1, finding 3).</summary>
+    [Fact]
+    public void OwnerQualifiedPropertiesAreReadAsTheirProperty()
+    {
+        XDocument xaml = XDocument.Parse(
+            """
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Window.Resources>
+                <Style x:Key="Sticky" TargetType="MenuItem">
+                  <Setter Property="MenuItem.StaysOpenOnClick" Value="True" />
+                </Style>
+                <Style x:Key="Commanded" TargetType="Button">
+                  <Setter Property="ButtonBase.Command" Value="{Binding SaveCommand}" />
+                </Style>
+              </Window.Resources>
+              <StackPanel>
+                <Button x:Name="Qualified">
+                  <Button.Style>
+                    <Style TargetType="Button">
+                      <Setter Property="FrameworkElement.IsEnabled" Value="False" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                          <Setter Property="UIElement.IsEnabled" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsLocked}" Value="True">
+                          <Setter Property="(UIElement.IsEnabled)" Value="False" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsHidden}" Value="True">
+                          <Setter Property="UIElement.Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                        <DataTrigger Value="True">
+                          <DataTrigger.Binding>
+                            <Binding Path="IsHeld" />
+                          </DataTrigger.Binding>
+                          <Setter Property="UIElement.IsEnabled" Value="False" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Button.Style>
+                </Button>
+                <Button x:Name="Attributed" ButtonBase.Command="{Binding PressCommand}" UIElement.IsEnabled="{Binding Ready}" />
+                <Menu>
+                  <MenuItem x:Name="StaysOpen" Style="{StaticResource Sticky}" Command="{Binding StayCommand}" />
+                </Menu>
+              </StackPanel>
+            </Window>
+            """,
+            LoadOptions.SetLineInfo);
+
+        SortedDictionary<string, Site> sites = Scrape([], [("Planted.xaml", xaml)]);
+
+        Assert.Contains("xaml-trigger Planted.xaml Qualified IsEnabled when (style default)", sites.Keys);
+        Assert.Contains("xaml-trigger Planted.xaml Qualified IsEnabled when IsBusy=True", sites.Keys);
+        Assert.Contains("xaml-trigger Planted.xaml Qualified IsEnabled when IsLocked=True", sites.Keys);
+        Assert.Contains("xaml-trigger Planted.xaml Qualified Visibility", sites.Keys);
+        Assert.Contains("xaml-command Planted.xaml Attributed PressCommand", sites.Keys);
+        Assert.Contains("xaml-binding Planted.xaml Attributed IsEnabled", sites.Keys);
+        Assert.Contains("xaml-command Planted.xaml StaysOpen StayCommand", sites.Keys);
+        Assert.Equal(
+            ["xaml-setter Planted.xaml Style:Commanded Command", "xaml-trigger-binding Planted.xaml Qualified IsEnabled"],
+            UnreadSyntax([], [("Planted.xaml", xaml)]));
+    }
+
+    /// <summary>A code-built setter the census lets stand is pinned by its target, its value
+    /// and its trigger's condition: a second such setter, or a changed condition, is a new
+    /// syntax that fails the census until it is read or allowed (Codex round 1, finding 4).</summary>
+    [Fact]
+    public void AnAllowedCodeSetterIsPinnedByItsConditionAndTarget()
+    {
+        const string Planted = """
+            using System.Windows;
+            using System.Windows.Controls;
+            using System.Windows.Data;
+
+            namespace Planted;
+
+            internal sealed class Row
+            {
+                public bool IsHeader { get; }
+            }
+
+            internal static class Styles
+            {
+                private static Style Rows()
+                {
+                    var style = new Style(typeof(ListBoxItem));
+                    var header = new DataTrigger { Binding = new Binding(nameof(Row.IsHeader)), Value = true };
+                    header.Setters.Add(new Setter(UIElement.IsEnabledProperty, false));
+                    style.Triggers.Add(header);
+                    return style;
+                }
+
+                private static Style Twice()
+                {
+                    var style = new Style(typeof(ListBoxItem));
+                    var header = new DataTrigger { Binding = new Binding(nameof(Row.IsHeader)), Value = true };
+                    header.Setters.Add(new Setter(UIElement.IsEnabledProperty, false));
+                    header.Setters.Add(new Setter(UIElement.IsEnabledProperty, false));
+                    style.Triggers.Add(header);
+                    return style;
+                }
+
+                private static Style Changed()
+                {
+                    var style = new Style(typeof(ListBoxItem));
+                    var locked = new DataTrigger { Binding = new Binding("IsLocked"), Value = true };
+                    locked.Setters.Add(new Setter(UIElement.IsEnabledProperty, false));
+                    style.Triggers.Add(locked);
+                    return style;
+                }
+            }
+            """;
+        CSharpParseOptions options = (CSharpParseOptions)ShellCompilation.Sources[0].Source.Root.SyntaxTree.Options;
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(Planted, options, path: "Planted.cs");
+        CSharpCompilation compilation = ShellCompilation.Compilation.AddSyntaxTrees(tree);
+
+        string[] unread = UnreadSyntax([((CompilationUnitSyntax)tree.GetRoot(), compilation.GetSemanticModel(tree))], []);
+
+        Assert.Equal(
+            [
+                "code-setter Planted.Styles.Changed IsEnabled=false when IsLocked=true",
+                "code-setter Planted.Styles.Rows IsEnabled=false when IsHeader=true",
+                "code-setter Planted.Styles.Twice IsEnabled=false when IsHeader=true",
+                "code-setter Planted.Styles.Twice IsEnabled=false when IsHeader=true #2",
+            ],
+            unread);
+        var allowed = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["code-setter Planted.Styles.Rows IsEnabled=false when IsHeader=true"] = "a header is fixed for its item",
+        };
+        var judge = new WitnessJudge(
+            new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal), []);
+        var none = new SortedDictionary<string, Site>(StringComparer.Ordinal);
+        var empty = new Dictionary<string, string>(StringComparer.Ordinal);
+        string[] problems = ManifestProblems(none, empty, judge, 0, unread, allowed);
+        Assert.Contains(problems, problem => problem.Contains("Twice IsEnabled=false when IsHeader=true #2", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains("Changed IsEnabled=false when IsLocked=true", StringComparison.Ordinal));
+        Assert.DoesNotContain(problems, problem => problem.Contains("Styles.Rows IsEnabled", StringComparison.Ordinal));
+        // The allowed setter's condition changed: the new one fails, and so does the entry.
+        string[] changed = ManifestProblems(none, empty, judge, 0, ["code-setter Planted.Styles.Rows IsEnabled=false when IsLocked=true"], allowed);
+        Assert.Contains(changed, problem => problem.Contains("Rows IsEnabled=false when IsLocked=true", StringComparison.Ordinal));
+        Assert.Contains(changed, problem => problem.Contains("whose syntax is gone", StringComparison.Ordinal) && problem.Contains("when IsHeader=true", StringComparison.Ordinal));
     }
 
     /// <summary>An IsEnabled setter's trigger, read for its own key: its conditions as
@@ -1195,7 +1429,7 @@ public sealed partial class FocusIntegrityManifestCensus
         foreach (XElement style in document.Descendants().Where(element => element.Name.LocalName == "Style"))
         {
             foreach (string? value in OwnSetters(style)
-                .Where(setter => (string?)setter.Attribute("Property") == "IsEnabled")
+                .Where(setter => PropertyName((string?)setter.Attribute("Property")) == "IsEnabled")
                 .Select(setter => (string?)setter.Attribute("Value")
                     ?? (setter.Elements().Any(element => element.Name.LocalName == "Setter.Value") ? "{" : null)))
             {
@@ -1214,13 +1448,23 @@ public sealed partial class FocusIntegrityManifestCensus
 
     private static bool IsTrue(string? value) => string.Equals(value?.Trim(), "True", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>A property as XAML may write it, with its owner (UIElement.IsEnabled) or in
+    /// parentheses ((UIElement.IsEnabled)), read as its own name (Codex round 1, finding 3).</summary>
+    internal static string? PropertyName(string? written) =>
+        written?.Trim().TrimStart('(').TrimEnd(')').Split('.').Last().Split(':').Last();
+
+    /// <summary>An element's attribute for a property, however its owner is written.</summary>
+    internal static XAttribute? PropertyAttribute(XElement element, string property) =>
+        element.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.Namespace == XNamespace.None && PropertyName(attribute.Name.LocalName) == property);
+
     private static IEnumerable<XElement> OwnSetters(XElement style) =>
         style.Elements()
             .SelectMany(child => child.Name.LocalName == "Style.Setters" ? child.Elements() : [child])
             .Where(element => element.Name.LocalName == "Setter");
 
     private static string? StyleValue(XElement style, string property) =>
-        OwnSetters(style).Where(setter => (string?)setter.Attribute("Property") == property)
+        OwnSetters(style).Where(setter => PropertyName((string?)setter.Attribute("Property")) == property)
             .Select(setter => (string?)setter.Attribute("Value")).LastOrDefault();
 
     /// <summary>Every Command= on an element that can take the keys itself, keyed by its
@@ -1229,7 +1473,7 @@ public sealed partial class FocusIntegrityManifestCensus
     {
         foreach (XElement element in document.Descendants().Where(element => IsACommandSite(element, all)))
         {
-            string command = CommandName((string)element.Attribute("Command")!);
+            string command = CommandName(PropertyAttribute(element, "Command")!.Value);
             string? own = Named(element);
             string? holder = own ?? element.Ancestors().Select(Named).FirstOrDefault(name => name is not null);
             string key = $"xaml-command {file} {(own is null ? CommandIdentity(element, all) : $"{own} {command}")}";
@@ -1238,19 +1482,19 @@ public sealed partial class FocusIntegrityManifestCensus
     }
 
     private static bool IsACommandSite(XElement element, IReadOnlyList<XDocument> all) =>
-        element.Attribute("Command") is not null && TakesTheKeysItself(element) && !IsAMenuRow(element, all);
+        PropertyAttribute(element, "Command") is not null && TakesTheKeysItself(element) && !IsAMenuRow(element, all);
 
     /// <summary>An unnamed command element's identity: its nearest named holder and its
     /// command, with " #2" (and on) for a later one of the same holder and command.</summary>
     private static string CommandIdentity(XElement element, IReadOnlyList<XDocument> all)
     {
-        string command = CommandName((string)element.Attribute("Command")!);
+        string command = CommandName(PropertyAttribute(element, "Command")!.Value);
         string? holder = element.Ancestors().Select(Named).FirstOrDefault(name => name is not null);
         int ordinal = 1 + (element.Document?.Descendants() ?? [])
             .TakeWhile(other => !ReferenceEquals(other, element))
-            .Count(other => other.Attribute("Command") is not null
+            .Count(other => PropertyAttribute(other, "Command") is not null
                 && Named(other) is null
-                && CommandName((string)other.Attribute("Command")!) == command
+                && CommandName(PropertyAttribute(other, "Command")!.Value) == command
                 && other.Ancestors().Select(Named).FirstOrDefault(name => name is not null) == holder
                 && IsACommandSite(other, all));
         return $"{holder ?? "the window"} {command}{(ordinal > 1 ? $" #{ordinal}" : string.Empty)}";
@@ -1258,7 +1502,7 @@ public sealed partial class FocusIntegrityManifestCensus
 
     private static bool TakesTheKeysItself(XElement element) =>
         element.Name == PresentationNamespace + "Hyperlink"
-            ? !IsFalse((string?)element.Attribute("Focusable"))
+            ? !IsFalse(PropertyAttribute(element, "Focusable")?.Value)
             : RegionBoundaryCensus.IsFocusable(element);
 
     /// <summary>A menu row: a MenuItem in a Menu or a ContextMenu that does not stay
@@ -1277,7 +1521,7 @@ public sealed partial class FocusIntegrityManifestCensus
     /// an unknown row stays a site (CB-17a review, low 6).</summary>
     private static bool StaysOpenOnClick(XElement element, IReadOnlyList<XDocument> all)
     {
-        if ((string?)element.Attribute("StaysOpenOnClick") is { } own)
+        if (PropertyAttribute(element, "StaysOpenOnClick")?.Value is { } own)
         {
             return !IsFalse(own);
         }
@@ -1315,10 +1559,10 @@ public sealed partial class FocusIntegrityManifestCensus
     /// read (bound, set by a trigger, or based on a style that cannot be found).</summary>
     private static bool? StaysOpen(XElement style, XElement[] styles, int depth)
     {
-        XElement[] set = [.. OwnSetters(style).Where(setter => (string?)setter.Attribute("Property") == "StaysOpenOnClick")];
+        XElement[] set = [.. OwnSetters(style).Where(setter => PropertyName((string?)setter.Attribute("Property")) == "StaysOpenOnClick")];
         if (depth > 8
             || style.Descendants().Any(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") == "StaysOpenOnClick"
+                && PropertyName((string?)element.Attribute("Property")) == "StaysOpenOnClick"
                 && element.Ancestors().Any(ancestor => ancestor.Name.LocalName.EndsWith(".Triggers", StringComparison.Ordinal))))
         {
             return null;
@@ -1534,7 +1778,7 @@ public sealed partial class FocusIntegrityManifestCensus
                 return $"'{fact}' names no fact in this project";
             }
 
-            HashSet<string> tokens = WitnessJudge.CodeTokens(source);
+            HashSet<string> tokens = WitnessJudge.CodeTokens(WithoutLocalFunctions(source));
             return !site.Names.Any(name => name.Length > 2 && tokens.Contains(name))
                 ? $"the fact's code does not name the site ({string.Join(", ", site.Names)})"
                 : site.Tokens is { Count: > 0 } wanted && !wanted.Any(tokens.Contains)
@@ -1544,7 +1788,10 @@ public sealed partial class FocusIntegrityManifestCensus
 
         /// <summary>An invocation of KeysFirstRecorder.AssertTheKeysLeaveFirst, qualified so,
         /// in the fact's own method: not a nameof, a method group, a string, a look-alike of
-        /// the fact's own class, or a call inside a helper.</summary>
+        /// the fact's own class, or a call inside a helper. It runs when the fact does: not in
+        /// a local function, which runs only if called, and every lambda around it is handed
+        /// straight to a call or a construction (RunSta, a dispatcher), not kept in a variable
+        /// (Codex round 1, finding 2).</summary>
         private static bool CallsTheRecorder(string source) =>
             SyntaxFactory.ParseMemberDeclaration(source) is { } method
             && method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
@@ -1554,7 +1801,23 @@ public sealed partial class FocusIntegrityManifestCensus
                     IdentifierNameSyntax { Identifier.ValueText: "KeysFirstRecorder" } => true,
                     MemberAccessExpressionSyntax { Name.Identifier.ValueText: "KeysFirstRecorder" } => true,
                     _ => false,
-                });
+                }
+                && call.Ancestors().TakeWhile(ancestor => ancestor != method).All(ancestor => ancestor switch
+                {
+                    LocalFunctionStatementSyntax => false,
+                    AnonymousFunctionExpressionSyntax lambda => lambda.Parent is ArgumentSyntax
+                    {
+                        Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax },
+                    },
+                    _ => true,
+                }));
+
+        /// <summary>A fact's source without its local functions, whose code runs only if
+        /// called: they do not name a site for it.</summary>
+        private static string WithoutLocalFunctions(string source) =>
+            SyntaxFactory.ParseMemberDeclaration(source) is { } method
+                ? method.RemoveNodes(method.DescendantNodes().OfType<LocalFunctionStatementSyntax>(), SyntaxRemoveOptions.KeepNoTrivia)?.ToFullString() ?? source
+                : source;
 
         private string? DatedVerdict(Site site, string rest)
         {
@@ -1602,7 +1865,7 @@ public sealed partial class FocusIntegrityManifestCensus
         private static bool Unreachable(XElement element, XElement[] all)
         {
             string? keyed = (string?)element.Attribute("Style") is { } reference ? ResourceKeyOf(reference) : null;
-            bool declared = (string?)element.Attribute("Focusable") switch
+            bool declared = PropertyAttribute(element, "Focusable")?.Value switch
             {
                 { } own when IsFalse(own) => true,
                 null => element.Elements().Where(child => child.Name.LocalName.EndsWith(".Style", StringComparison.Ordinal)).Elements()
@@ -1613,7 +1876,7 @@ public sealed partial class FocusIntegrityManifestCensus
             Type? type = RegionBoundaryCensus.Resolve(element);
             return declared
                 && !(type is not null && (typeof(ItemsControl).IsAssignableFrom(type) || type.Assembly == typeof(MainWindow).Assembly && typeof(Control).IsAssignableFrom(type)))
-                && !(type is not null && typeof(ContentControl).IsAssignableFrom(type) && (string?)element.Attribute("Content") is { } content && content.StartsWith('{'))
+                && !(type is not null && typeof(ContentControl).IsAssignableFrom(type) && PropertyAttribute(element, "Content")?.Value is { } content && content.StartsWith('{'))
                 && !element.Elements()
                     .SelectMany(child => !child.Name.LocalName.Contains('.', StringComparison.Ordinal) ? [child]
                         : child.Name.LocalName.EndsWith(".Content", StringComparison.Ordinal) || child.Name.LocalName.EndsWith(".Child", StringComparison.Ordinal) ? child.Elements()
