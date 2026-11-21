@@ -278,6 +278,14 @@ internal static class SvgPreviewGuard
     /// <summary>The key of a stylesheet rule that applies to every element.</summary>
     private const string AnyElementKey = "*";
 
+    private const string SvgNamespace = "http://www.w3.org/2000/svg";
+    private const string XLinkNamespace = "http://www.w3.org/1999/xlink";
+    private const string XmlNamespace = "http://www.w3.org/XML/1998/namespace";
+
+    /// <summary>The whitespace CSS and the decoder's class tokens know:
+    /// ASCII only (the delta merge judge's G2, stage 14).</summary>
+    private static readonly char[] AsciiWhitespace = [' ', '\t', '\n', '\r', '\f'];
+
     private static readonly string[] ForbiddenTokens =
     [
         "<!doctype",
@@ -455,8 +463,13 @@ internal static class SvgPreviewGuard
         // #1610 (stage 8): each fill and stroke presentation attribute, and
         // each style attribute as ExCSS reads it, kept unread: only a
         // document with a pattern reads them (PaintCascade).
-        private readonly List<(int Element, bool Stroke, string Value)> paintAttributes = [];
+        private readonly List<(int Element, bool Stroke, string Value, bool Namespaced)> paintAttributes = [];
         private readonly List<(int Element, string Text, bool Plain)> styleTexts = [];
+
+        // #1610 (the delta merge judge's G2, stage 14): false once a style
+        // element the decoder applies has a type the guard does not read
+        // as text/css exactly, so no rule is one the guard is sure of.
+        private bool stylesSure = true;
         private readonly List<RuleBlock> ruleBlocks = [];
         private readonly List<int> open = [];
         private readonly List<FilterInputs?> openFilters = [];
@@ -579,6 +592,15 @@ internal static class SvgPreviewGuard
             if (sheet == SvgRefusal.None)
             {
                 Rules = StyleRules(CssText(Stylesheet), steps);
+                if (!stylesSure)
+                {
+                    Rules.ForEach(rule => rule.Sure = false);
+                }
+                if (Stylesheet.Contains('\\', StringComparison.Ordinal)
+                    || Stylesheet.Contains("/*", StringComparison.Ordinal))
+                {
+                    MarkPlainText(Rules, StyleRules(CssText(Stylesheet, marked: true), steps));
+                }
             }
             return sheet;
         }
@@ -611,6 +633,7 @@ internal static class SvgPreviewGuard
                 return SvgRefusal.RenderDepth;
             }
             string name = reader.LocalName;
+            bool styleElement = name == "style" && reader.NamespaceURI == SvgNamespace;
             if (name.Equals("script", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("foreignObject", StringComparison.OrdinalIgnoreCase))
             {
@@ -635,6 +658,7 @@ internal static class SvgPreviewGuard
             string? input2 = null;
             string? result = null;
             string? useTarget = null;
+            string? type = null;
             int vertexCount = name switch
             {
                 "line" => 2,
@@ -653,13 +677,25 @@ internal static class SvgPreviewGuard
                     }
                     string attribute = reader.LocalName;
                     string value = reader.Value;
+
+                    // #1610 (the delta merge judge's G2, stage 14, measured):
+                    // the decoder reads class with no namespace only, and
+                    // id, type, fill and stroke with no namespace or in the
+                    // SVG, XLink or XML namespace, a later one over an
+                    // earlier one.
+                    string space = reader.NamespaceURI;
+                    bool namespaced = space.Length > 0;
+                    bool read = !namespaced || space is SvgNamespace or XLinkNamespace or XmlNamespace;
                     switch (attribute)
                     {
-                        case "id":
+                        case "id" when read:
                             id = value;
                             break;
-                        case "class":
+                        case "class" when !namespaced:
                             classList = value;
+                            break;
+                        case "type" when read:
+                            type = value;
                             break;
                         case "in":
                             input = value;
@@ -671,7 +707,7 @@ internal static class SvgPreviewGuard
                             result = value;
                             break;
                     }
-                    ReadCostAttribute(index, name, attribute, value, ref vertexCount, ref useTarget);
+                    ReadCostAttribute(index, name, attribute, value, read ? namespaced : null, ref vertexCount, ref useTarget);
                     SvgRefusal refusal = attribute.Equals("href", StringComparison.OrdinalIgnoreCase)
                         ? ReadHref(index, name, value)
                         : SvgRefusal.None;
@@ -709,11 +745,20 @@ internal static class SvgPreviewGuard
             }
             AddFilterInputs(index, parent, enclosing, input, input2, result);
 
-            if (styleDepth < 0
-                && !reader.IsEmptyElement
-                && name.Equals("style", StringComparison.OrdinalIgnoreCase))
+            // #1610 (the delta merge judge's G2, stage 14, measured): the
+            // decoder applies a style element in the SVG namespace, named
+            // in lower case, with no type or one whose part before any
+            // semicolon is text/css, and joins only those to its
+            // stylesheet. The guard is sure of their rules only where the
+            // type is none or text/css itself.
+            string? mediaType = type?.Split(';')[0].Trim();
+            if (styleElement && (type is null || mediaType!.Equals("text/css", StringComparison.OrdinalIgnoreCase)))
             {
-                styleDepth = depth;
+                stylesSure &= type is null || type.Trim().Equals("text/css", StringComparison.OrdinalIgnoreCase);
+                if (styleDepth < 0 && !reader.IsEmptyElement)
+                {
+                    styleDepth = depth;
+                }
             }
             return SvgRefusal.None;
         }
@@ -746,9 +791,12 @@ internal static class SvgPreviewGuard
         /// <summary>#1610 (CB-29): what one attribute adds to the decode
         /// estimate: a shape's marker vertices, a marker property, a style
         /// attribute's custom properties, markers and var() uses, a var()
-        /// use in any other attribute, and the id a use draws.</summary>
+        /// use in any other attribute, and the id a use draws. A fill or a
+        /// stroke is kept for the paint cascade when the decoder reads it
+        /// (<paramref name="namespaced"/> not null), and whether it is
+        /// namespaced.</summary>
         private void ReadCostAttribute(
-            int index, string element, string attribute, string value, ref int vertexCount, ref string? useTarget)
+            int index, string element, string attribute, string value, bool? namespaced, ref int vertexCount, ref string? useTarget)
         {
             // The var() and use checks below each read the value.
             Scanned(3L * value.Length);
@@ -767,9 +815,9 @@ internal static class SvgPreviewGuard
                 ReadStyleAttribute(index, element, value, ref vertexCount);
                 return;
             }
-            if (attribute is "fill" or "stroke")
+            if (attribute is "fill" or "stroke" && namespaced is { } inSpace)
             {
-                paintAttributes.Add((index, attribute == "stroke", value));
+                paintAttributes.Add((index, attribute == "stroke", value, inSpace));
             }
             if (MarkerSlots(attribute) is { } slots)
             {
@@ -1390,7 +1438,7 @@ internal static class SvgPreviewGuard
                     continue;
                 }
                 foreach (string name in classList
-                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                    .Split(AsciiWhitespace, StringSplitOptions.RemoveEmptyEntries)
                     .Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     if (keyNodes.TryGetValue("." + name.ToLowerInvariant(), out int byClass))
@@ -1520,21 +1568,22 @@ internal static class SvgPreviewGuard
         private void PaintCascade(Dictionary<string, List<int>> byId, HashSet<string> patternIds)
         {
             int elements = names.Count;
-            static bool IsPaint(string property) =>
-                property.Equals("fill", StringComparison.OrdinalIgnoreCase)
-                || property.Equals("stroke", StringComparison.OrdinalIgnoreCase);
 
-            var styleOf = new Dictionary<int, List<(string Name, string Value)>>();
-            var plainStyle = new HashSet<int>();
+            // Every style attribute's declarations, in document order (the
+            // delta merge judge's G2, stage 14: the decoder reads each), and
+            // whether the attribute they came from is written plainly.
+            var styleOf = new Dictionary<int, List<(string Name, string Value, bool Plain)>>();
             foreach ((int element, string text, bool plain) in styleTexts)
             {
-                styleOf[element] = Declarations(text);
-                if (plain)
+                if (!styleOf.TryGetValue(element, out List<(string Name, string Value, bool Plain)>? declared))
                 {
-                    plainStyle.Add(element);
+                    styleOf[element] = declared = [];
+                }
+                foreach ((string name, string value) in Declarations(text))
+                {
+                    declared.Add((name, value, plain));
                 }
             }
-            bool plainRules = IsPlainCss(Stylesheet);
             gradientIds = new HashSet<string>(StringComparer.Ordinal);
             foreach ((string id, List<int> named) in byId)
             {
@@ -1577,13 +1626,13 @@ internal static class SvgPreviewGuard
                     values.Add(value);
                 }
             }
-            foreach ((int _, bool _, string value) in paintAttributes)
+            foreach ((int _, bool _, string value, bool _) in paintAttributes)
             {
                 Reads(value);
             }
-            foreach (List<(string Name, string Value)> declared in styleOf.Values)
+            foreach (List<(string Name, string Value, bool Plain)> declared in styleOf.Values)
             {
-                foreach ((string name, string value) in declared)
+                foreach ((string name, string value, bool _) in declared)
                 {
                     Sorts(name, value);
                 }
@@ -1607,9 +1656,10 @@ internal static class SvgPreviewGuard
                 }
             }
 
-            // Each rule's fill, stroke and read custom properties, filed
-            // under the key of each of its selectors, or under every
-            // element's when a selector is not a simple one.
+            // Each rule's fill, stroke and read custom properties, as ExCSS
+            // keeps them (LastOfEach), filed under the key of each of its
+            // selectors, or under every element's when a selector is not a
+            // simple one.
             var byKey = new Dictionary<string, List<RuleDeclaration>>(StringComparer.Ordinal);
             int order = 0;
             foreach (StyleRule rule in Rules)
@@ -1619,22 +1669,14 @@ internal static class SvgPreviewGuard
                     continue;
                 }
                 List<(SelectorParts? Parts, string Key)>? selectors = null;
-                foreach ((string name, string value) in rule.Declarations)
+                foreach (KeptDeclaration kept in LastOfEach(rule, relevant))
                 {
-                    steps.Spend(1);
-                    bool paint = IsPaint(name);
-                    if (!paint && !relevant.Contains(name))
-                    {
-                        continue;
-                    }
-                    string plain = WithoutImportant(value, out bool important);
                     order++;
                     selectors ??= SplitTop(rule.Prelude, ',')
                         .Select(selector => ReadSelectorParts(selector) is { } parts
                             ? ((SelectorParts?)parts, SimpleSelectorKey(selector) ?? AnyElementKey)
                             : (null, AnyElementKey))
                         .ToList();
-                    string property = paint ? name.ToLowerInvariant() : name;
                     foreach ((SelectorParts? parts, string key) in selectors)
                     {
                         steps.Spend(1);
@@ -1642,7 +1684,15 @@ internal static class SvgPreviewGuard
                         {
                             byKey[key] = filed = [];
                         }
-                        filed.Add(new RuleDeclaration(property, important ? 3 : 1, parts?.Specificity ?? 0, order, plain, parts));
+                        filed.Add(new RuleDeclaration(
+                            kept.Property,
+                            kept.Important ? 3 : 1,
+                            parts?.Specificity ?? 0,
+                            order,
+                            kept.Value,
+                            parts,
+                            rule.Sure && kept.Sure,
+                            kept.Plain));
                     }
                 }
             }
@@ -1658,7 +1708,7 @@ internal static class SvgPreviewGuard
                 if (byKey.Count > 0 && TakesStyleRules(names[i]))
                 {
                     Scanned((2L * names[i].Length) + (3L * ((ids[i]?.Length ?? 0) + (classLists[i]?.Length ?? 0))));
-                    string[] classes = classLists[i]?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) ?? [];
+                    string[] classes = classLists[i]?.Split(AsciiWhitespace, StringSplitOptions.RemoveEmptyEntries) ?? [];
                     void Visit(string key)
                     {
                         if (!byKey.TryGetValue(key, out List<RuleDeclaration>? filed))
@@ -1687,25 +1737,28 @@ internal static class SvgPreviewGuard
 
                 // Every declaration of a property the element makes itself,
                 // with its place in the cascade.
+                // A namespaced fill or stroke the decoder reads applies only
+                // where none without a namespace does (measured), so it may
+                // apply.
                 var own = new List<Declaration>();
-                foreach ((int _, bool stroke, string value) in OwnAttributes(i))
+                foreach ((int _, bool stroke, string value, bool namespaced) in OwnAttributes(i))
                 {
-                    own.Add(new Declaration(stroke ? "stroke" : "fill", 0, 0, 0, true, value, true));
+                    own.Add(new Declaration(stroke ? "stroke" : "fill", 0, 0, 0, !namespaced, value, true));
                 }
                 int position = 0;
-                foreach ((string name, string value) in styleOf.GetValueOrDefault(i) ?? [])
+                foreach ((string name, string value, bool plain) in styleOf.GetValueOrDefault(i) ?? [])
                 {
                     steps.Spend(1);
                     bool paint = IsPaint(name);
                     if (paint || relevant.Contains(name))
                     {
-                        string plain = WithoutImportant(value, out bool important);
-                        own.Add(new Declaration(paint ? name.ToLowerInvariant() : name, important ? 4 : 2, 0, ++position, true, plain, plainStyle.Contains(i)));
+                        string text = WithoutImportant(value, out bool important);
+                        own.Add(new Declaration(paint ? name.ToLowerInvariant() : name, important ? 4 : 2, 0, ++position, true, text, plain));
                     }
                 }
                 foreach ((RuleDeclaration rule, bool certain) in matched)
                 {
-                    own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain, rule.Value, plainRules));
+                    own.Add(new Declaration(rule.Property, rule.Tier, rule.Specificity, rule.Order, certain && rule.Sure, rule.Value, rule.Plain));
                 }
 
                 CustomScopeLink? inherited = parents[i] >= 0 ? scopes[parents[i]] : null;
@@ -1721,7 +1774,7 @@ internal static class SvgPreviewGuard
         /// <summary>The fill and stroke presentation attributes of element
         /// <paramref name="i"/>, read from the list the read kept, which is
         /// in document order.</summary>
-        private IEnumerable<(int Element, bool Stroke, string Value)> OwnAttributes(int i)
+        private IEnumerable<(int Element, bool Stroke, string Value, bool Namespaced)> OwnAttributes(int i)
         {
             for (int at = LowerBound(i); at < paintAttributes.Count && paintAttributes[at].Element == i; at++)
             {
@@ -1994,15 +2047,16 @@ internal static class SvgPreviewGuard
                 a.Tier != b.Tier ? b.Tier.CompareTo(a.Tier)
                 : a.Specificity != b.Specificity ? b.Specificity.CompareTo(a.Specificity)
                 : b.Order.CompareTo(a.Order));
+            bool namespacedBelow = isPaint && declarations.Exists(declaration => declaration.Tier == 0 && !declaration.Certain);
             byte result = 0;
             int winnerTier = -1;
             foreach (Declaration declaration in certain)
             {
-                byte value = Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds);
+                byte value = Unsure(declaration, Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds), isPaint);
                 result |= (byte)(value & ~DropsMask);
                 bool ends = !isPaint
-                    ? (value & DropsMask) == 0
-                    : declaration.Tier == 0 || (value & PatternMask) != 0 || ClearsSurely(declaration, value);
+                    ? (value & DropsMask) == 0 && declaration.Plain
+                    : (declaration.Tier == 0 && !namespacedBelow) || (value & PatternMask) != 0 || ClearsSurely(declaration, value);
                 if (ends)
                 {
                     winnerTier = declaration.Tier;
@@ -2019,7 +2073,7 @@ internal static class SvgPreviewGuard
                 {
                     continue;
                 }
-                byte value = (byte)(Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds) & ~DropsMask);
+                byte value = (byte)(Unsure(declaration, Evaluate(declaration.Value, isPaint, declaration.Tier == 0, none, scope, patternIds), isPaint) & ~DropsMask);
                 if (isPaint && (value & ~ClearsMask) == 0)
                 {
                     continue;
@@ -2028,6 +2082,20 @@ internal static class SvgPreviewGuard
             }
             return result;
         }
+
+        /// <summary>
+        /// #1610 (the delta merge judge's G3, stage 14, measured): what a
+        /// declaration not written plainly may give besides its own reading.
+        /// The decoder drops an escaped custom property in the style
+        /// attribute, keeps one from a rule as its escaped text, which no
+        /// fill reads as a paint, and finds nothing for a <c>var()</c> whose
+        /// name is escaped: a custom property, or a fill or a stroke read
+        /// through <c>var()</c>, may keep the parent's paint.
+        /// </summary>
+        private static byte Unsure(Declaration declaration, byte value, bool isPaint) =>
+            !declaration.Plain && (!isPaint || declaration.Value.Contains("var(", StringComparison.OrdinalIgnoreCase))
+                ? (byte)(value | KeepsMask)
+                : value;
 
         /// <summary>
         /// What a declared value can give, as a set (<see cref="ClearsMask"/>
@@ -2229,9 +2297,86 @@ internal static class SvgPreviewGuard
         /// <summary>A rule's fill, stroke or read custom property, filed by
         /// one of its selectors: tier 1, or 3 when <c>!important</c>; the
         /// selector's specificity and parts, null when it is not a simple
-        /// one; the rule's place in the stylesheet; and the value.</summary>
+        /// one; the rule's place in the stylesheet; the value; whether the
+        /// guard is sure the decoder applies the rule and keeps the
+        /// declaration (stage 14); and whether its text is written plainly.</summary>
         private sealed record RuleDeclaration(
-            string Property, int Tier, int Specificity, int Order, string Value, SelectorParts? Parts);
+            string Property, int Tier, int Specificity, int Order, string Value, SelectorParts? Parts, bool Sure, bool Plain);
+
+        /// <summary>A declaration of a rule as ExCSS keeps it
+        /// (<see cref="LastOfEach"/>): its property, lower-cased for a fill
+        /// or a stroke, its value without <c>!important</c>, whether it had
+        /// one, whether its text is written plainly, and whether the guard
+        /// is sure ExCSS keeps it.</summary>
+        private readonly record struct KeptDeclaration(string Property, string Value, bool Important, bool Plain, bool Sure);
+
+        private static bool IsPaint(string property) =>
+            property.Equals("fill", StringComparison.OrdinalIgnoreCase)
+            || property.Equals("stroke", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// #1610 (the delta merge judge's G1, stage 14, measured): the fills,
+        /// strokes and read custom properties of a rule as ExCSS keeps them.
+        /// It keeps one declaration of a property in a rule, the last, but a
+        /// later one never replaces an <c>!important</c> one, so where the
+        /// decoder drops the last one's value the tier below applies and the
+        /// earlier one in the rule is gone. A later fill or stroke whose
+        /// name is not in lower case replaces the earlier one only where the
+        /// decoder reads its value, so unless it is a colour the guard
+        /// parses, written plainly, both stay as declarations the guard is
+        /// not sure of. A custom property's name is matched as written.
+        /// </summary>
+        private List<KeptDeclaration> LastOfEach(StyleRule rule, HashSet<string> relevant)
+        {
+            var kept = new List<KeptDeclaration?>();
+            var at = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            for (int k = 0; k < rule.Declarations.Count; k++)
+            {
+                steps.Spend(1);
+                (string name, string value) = rule.Declarations[k];
+                bool paint = IsPaint(name);
+                if (!paint && !relevant.Contains(name))
+                {
+                    continue;
+                }
+                string property = paint ? name.ToLowerInvariant() : name;
+                string text = WithoutImportant(value, out bool important);
+                bool plain = rule.Plain?[k] ?? true;
+                var declaration = new KeptDeclaration(property, text, important, plain, true);
+                if (!at.TryGetValue(property, out List<int>? earlier))
+                {
+                    at[property] = [kept.Count];
+                    kept.Add(declaration);
+                    continue;
+                }
+                steps.Spend(earlier.Count);
+                if (!important && earlier.TrueForAll(e => kept[e]!.Value.Important))
+                {
+                    continue;
+                }
+                bool replaces = (!paint || name == property || (plain && IsColour(text.Trim())))
+                    && (important || !earlier.Exists(e => kept[e]!.Value.Important));
+                foreach (int e in earlier)
+                {
+                    kept[e] = replaces ? null : kept[e]!.Value with { Sure = false };
+                }
+                if (replaces)
+                {
+                    earlier.Clear();
+                }
+                earlier.Add(kept.Count);
+                kept.Add(replaces ? declaration : declaration with { Sure = false });
+            }
+            var result = new List<KeptDeclaration>(kept.Count);
+            foreach (KeptDeclaration? declaration in kept)
+            {
+                if (declaration is { } held)
+                {
+                    result.Add(held);
+                }
+            }
+            return result;
+        }
 
         /// <summary>Whether a rule's selector applies to element
         /// <paramref name="i"/>: true when it certainly does, false when it
@@ -2618,11 +2763,16 @@ internal static class SvgPreviewGuard
     /// CSS text as ExCSS reads it (the red team's M1): escapes resolved
     /// first, as <see cref="Unescape"/> does for the guard's own scan, then
     /// every comment removed, except where <c>/*</c> sits inside a string or
-    /// a <c>url()</c> argument, which a comment cannot open.
+    /// a <c>url()</c> argument, which a comment cannot open. With
+    /// <paramref name="marked"/> (stage 14), each resolved escape is
+    /// preceded by <see cref="EscapeMark"/> and each comment leaves
+    /// <see cref="CommentMark"/>, which no CSS syntax reads, so the same
+    /// rules and declarations show where the text held them
+    /// (<see cref="MarkPlainText"/>).
     /// </summary>
-    private static string CssText(string raw)
+    private static string CssText(string raw, bool marked = false)
     {
-        string css = Unescape(raw);
+        string css = Unescape(raw, marked);
         Scanned(css.Length);
         if (!css.Contains("/*", StringComparison.Ordinal))
         {
@@ -2652,6 +2802,10 @@ internal static class SvgPreviewGuard
                 int after = close < 0 ? css.Length : close + 2;
                 Scanned(after - i);
                 i = after;
+                if (marked)
+                {
+                    text.Append(CommentMark);
+                }
             }
             else
             {
@@ -2662,85 +2816,325 @@ internal static class SvgPreviewGuard
         return text.ToString();
     }
 
-    /// <summary>#1610 (the lead's ruling, stage 13): whether CSS text is
-    /// written plainly, with no escape and no comment, so the guard may be
-    /// sure of a paint read from it. The decoder drops every escaped paint
-    /// in the style attribute (the delta merge judge's E2).</summary>
+    /// <summary>#1610 (the lead's ruling, stage 13): whether a style
+    /// attribute is written plainly, with no escape and no comment, so the
+    /// guard may be sure of a paint read from it. The decoder drops every
+    /// escaped paint in the style attribute (the delta merge judge's
+    /// E2).</summary>
     private static bool IsPlainCss(string raw)
     {
         Scanned(2L * raw.Length);
         return !raw.Contains('\\', StringComparison.Ordinal) && !raw.Contains("/*", StringComparison.Ordinal);
     }
 
-    /// <summary>A stylesheet rule: its prelude and declarations, or a null
-    /// prelude for a block at-rule other than <c>@media</c>.</summary>
-    private sealed record StyleRule(string? Prelude, List<(string Name, string Value)> Declarations);
+    /// <summary><paramref name="text"/> without the whitespace and the
+    /// comments (<see cref="CommentMark"/>) at its ends: what
+    /// <see cref="string.Trim()"/> gives for text with no marks.</summary>
+    private static string TrimComments(string text)
+    {
+        int start = 0;
+        int end = text.Length;
+        while (start < end && (char.IsWhiteSpace(text[start]) || text[start] == CommentMark))
+        {
+            start++;
+        }
+        while (end > start && (char.IsWhiteSpace(text[end - 1]) || text[end - 1] == CommentMark))
+        {
+            end--;
+        }
+        return text[start..end];
+    }
 
-    /// <summary>Every qualified rule of a stylesheet, as <see cref="CssText"/>
-    /// gives it, and those of each <c>@media</c> block, which Svg.Custom
-    /// applies. Any other block at-rule (an animation export's
-    /// <c>@keyframes</c>, the red team's M2) is one rule ExCSS parses and
-    /// Svg.Custom does not apply.</summary>
+    /// <summary>Precedes each resolved escape in marked CSS text: a
+    /// character XML text cannot hold.</summary>
+    private const char EscapeMark = '\u0003';
+
+    /// <summary>Stands for each comment in marked CSS text: a character
+    /// XML text cannot hold.</summary>
+    private const char CommentMark = '\u0002';
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G4, stage 14, measured): a comment in a
+    /// stylesheet is no reason to doubt a declaration, as ExCSS removes it,
+    /// unless it sits inside the declaration's text or a selector's (the
+    /// decoder drops a value with one inside a function's arguments, and a
+    /// declaration with one inside its property's name); and an escape
+    /// makes only its own declaration, or its own rule's selector, one the
+    /// guard is not sure of. <paramref name="marked"/> is the same
+    /// stylesheet read with the escapes and comments marked
+    /// (<see cref="CssText"/>): where it gives the same rules and
+    /// declarations once the marks are gone, a declaration is plain when
+    /// it holds no escape and no comment but at its ends, and a rule is
+    /// sure only when its selector is plain too. Where it does not, no rule
+    /// is sure and no declaration plain.
+    /// </summary>
+    private static void MarkPlainText(List<StyleRule> rules, List<StyleRule> marked)
+    {
+        static string Unmarked(string text) =>
+            text.Replace(EscapeMark.ToString(), string.Empty, StringComparison.Ordinal)
+                .Replace(CommentMark.ToString(), string.Empty, StringComparison.Ordinal)
+                .Trim();
+        static bool Plain(string text)
+        {
+            Scanned(3L * text.Length);
+            return !text.Contains(EscapeMark) && !TrimComments(text).Contains(CommentMark);
+        }
+        bool same = rules.Count == marked.Count;
+        for (int r = 0; same && r < rules.Count; r++)
+        {
+            StyleRule rule = rules[r];
+            StyleRule other = marked[r];
+            same = (rule.Prelude is null) == (other.Prelude is null)
+                && (rule.Prelude is null || rule.Prelude == Unmarked(other.Prelude!))
+                && rule.Declarations.Count == other.Declarations.Count;
+            if (!same)
+            {
+                break;
+            }
+            if (rule.Prelude is not null && !Plain(other.Prelude!))
+            {
+                rule.Sure = false;
+            }
+            var plain = new bool[rule.Declarations.Count];
+            for (int k = 0; same && k < plain.Length; k++)
+            {
+                (string name, string value) = rule.Declarations[k];
+                (string markedName, string markedValue) = other.Declarations[k];
+                same = name == Unmarked(markedName) && value == Unmarked(markedValue);
+                plain[k] = Plain(markedName) && Plain(markedValue);
+            }
+            rule.Plain = plain;
+        }
+        if (!same)
+        {
+            foreach (StyleRule rule in rules)
+            {
+                rule.Sure = false;
+                rule.Plain = new bool[rule.Declarations.Count];
+            }
+        }
+    }
+
+    /// <summary>A stylesheet rule: its prelude and declarations, or a null
+    /// prelude for a block at-rule other than <c>@media</c>; whether the
+    /// guard is sure the decoder applies it (stage 14); and, where the
+    /// stylesheet holds an escape or a comment, whether each declaration is
+    /// written plainly (null when all are).</summary>
+    private sealed record StyleRule(string? Prelude, List<(string Name, string Value)> Declarations)
+    {
+        internal bool Sure { get; set; } = true;
+
+        internal bool[]? Plain { get; set; }
+    }
+
+    /// <summary>
+    /// Every qualified rule of a stylesheet, as <see cref="CssText"/> gives
+    /// it, and those of each <c>@media</c> block, which Svg.Custom applies,
+    /// in document order (stage 14: a rule after an <c>@media</c> block
+    /// comes after the block's rules). Any other block at-rule (an
+    /// animation export's <c>@keyframes</c>, the red team's M2) is one rule
+    /// ExCSS parses and Svg.Custom does not apply. The guard is sure the
+    /// decoder applies a rule (the delta merge judge's G2, stage 14,
+    /// measured) only where it is at the top level or in <c>@media</c>
+    /// all, screen or none (<see cref="MediaApplies"/>), every block around
+    /// it and its own are closed, and its selector list parses
+    /// (<see cref="SelectorListParses"/>).
+    /// </summary>
     private static List<StyleRule> StyleRules(string text, GuardSteps steps)
     {
         var found = new List<StyleRule>();
-        var blocks = new Stack<(int Start, int End)>();
-        blocks.Push((0, text.Length));
-        while (blocks.TryPop(out (int Start, int End) block))
+        var outer = new Stack<(int Resume, int End, bool Sure)>();
+        int i = 0;
+        int end = text.Length;
+        bool sure = true;
+        while (true)
         {
-            int i = block.Start;
-            while (i < block.End)
+            if (i >= end)
             {
-                steps.Spend(1);
-                int open = i;
-                while (open < block.End && text[open] != '{')
-                {
-                    open = text[open] is '"' or '\'' ? CssStringEnd(text, open) : open + 1;
-                }
-                if (open >= block.End)
+                if (!outer.TryPop(out (int Resume, int End, bool Sure) frame))
                 {
                     break;
                 }
-                int depth = 1;
-                int k = open + 1;
-                while (k < block.End && depth > 0)
-                {
-                    char c = text[k];
-                    if (c is '"' or '\'')
-                    {
-                        k = CssStringEnd(text, k);
-                        continue;
-                    }
-                    depth += c == '{' ? 1 : c == '}' ? -1 : 0;
-                    k++;
-                }
-                int bodyEnd = Math.Max(open + 1, k - 1);
-                // The read to the block's end, and the prelude's and the
-                // body's copies.
-                Scanned((k - i) + (3L * (open - i)) + (bodyEnd - open));
-                string prelude = text[i..open];
-                int semicolon = prelude.LastIndexOf(';');
-                prelude = (semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude).Trim();
-                if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
-                {
-                    Scanned(bodyEnd - open);
-                    if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
-                    {
-                        blocks.Push((open + 1, bodyEnd));
-                    }
-                }
-                else if (prelude.StartsWith('@'))
-                {
-                    found.Add(new StyleRule(null, []));
-                }
-                else
-                {
-                    found.Add(new StyleRule(prelude, Declarations(text[(open + 1)..bodyEnd])));
-                }
-                i = k;
+                (i, end, sure) = frame;
+                continue;
             }
+            steps.Spend(1);
+            int open = i;
+            while (open < end && text[open] != '{')
+            {
+                open = text[open] is '"' or '\'' ? CssStringEnd(text, open) : open + 1;
+            }
+            if (open >= end)
+            {
+                i = end;
+                continue;
+            }
+            int depth = 1;
+            int k = open + 1;
+            while (k < end && depth > 0)
+            {
+                char c = text[k];
+                if (c is '"' or '\'')
+                {
+                    k = CssStringEnd(text, k);
+                    continue;
+                }
+                depth += c == '{' ? 1 : c == '}' ? -1 : 0;
+                k++;
+            }
+            bool closed = depth == 0;
+            int bodyEnd = closed ? Math.Max(open + 1, k - 1) : Math.Max(open + 1, k);
+            // The read to the block's end, and the prelude's and the
+            // body's copies.
+            Scanned((k - i) + (3L * (open - i)) + (bodyEnd - open));
+            string prelude = text[i..open];
+            int semicolon = prelude.LastIndexOf(';');
+            prelude = TrimComments(semicolon >= 0 ? prelude[(semicolon + 1)..] : prelude);
+            if (prelude.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
+            {
+                Scanned(bodyEnd - open);
+                if (text.AsSpan(open + 1, bodyEnd - (open + 1)).Contains('{'))
+                {
+                    outer.Push((k, end, sure));
+                    (i, end, sure) = (open + 1, bodyEnd, sure && closed && MediaApplies(prelude[6..]));
+                    continue;
+                }
+            }
+            else if (prelude.StartsWith('@'))
+            {
+                found.Add(new StyleRule(null, []));
+            }
+            else
+            {
+                found.Add(new StyleRule(prelude, Declarations(text[(open + 1)..bodyEnd]))
+                {
+                    Sure = sure && closed && SelectorListParses(prelude),
+                });
+            }
+            i = k;
         }
         return found;
+    }
+
+    /// <summary>#1610 (the delta merge judge's G2, stage 14, measured):
+    /// whether an <c>@media</c> prelude, after the keyword, is one the
+    /// decoder applies and the guard reads: none, <c>all</c> or
+    /// <c>screen</c>, in any case. The decoder applies others (<c>only
+    /// screen</c>, <c>not print</c>) and drops more (<c>print</c>,
+    /// <c>not all</c>, <c>(max-width:1px)</c>, <c>all and
+    /// (color)</c>).</summary>
+    private static bool MediaApplies(string query)
+    {
+        Scanned(query.Length);
+        string text = query.Trim(AsciiWhitespace);
+        return (query.Length == 0 || Array.IndexOf(AsciiWhitespace, query[0]) >= 0)
+            && (text.Length == 0
+                || text.Equals("all", StringComparison.OrdinalIgnoreCase)
+                || text.Equals("screen", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// #1610 (the delta merge judge's G2, stage 14): whether every selector
+    /// of a list is one the guard parses and the decoder keeps: compound
+    /// selectors (a type or <c>*</c>, then classes and ids) joined by
+    /// whitespace or one of <c>&gt;</c>, <c>+</c> and <c>~</c>, none
+    /// empty. The decoder drops a whole list with one selector it cannot
+    /// parse (an empty one, a trailing or doubled combinator, an unknown
+    /// pseudo-class, a name that starts with a digit, measured); the guard
+    /// reads no pseudo-class, attribute selector or namespace, so a list
+    /// that holds one is not sure either.
+    /// </summary>
+    private static bool SelectorListParses(string prelude)
+    {
+        Scanned(2L * prelude.Length);
+        foreach (string selector in prelude.Split(','))
+        {
+            string text = selector.Trim(AsciiWhitespace);
+            int i = 0;
+            while (true)
+            {
+                if (!ReadCompound(text, ref i))
+                {
+                    return false;
+                }
+                int gap = i;
+                while (i < text.Length && Array.IndexOf(AsciiWhitespace, text[i]) >= 0)
+                {
+                    i++;
+                }
+                if (i >= text.Length)
+                {
+                    break;
+                }
+                if (text[i] is '>' or '+' or '~')
+                {
+                    i++;
+                    while (i < text.Length && Array.IndexOf(AsciiWhitespace, text[i]) >= 0)
+                    {
+                        i++;
+                    }
+                }
+                else if (i == gap)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Reads one compound selector at <paramref name="i"/>: an
+    /// optional type or <c>*</c>, then classes and ids, at least one part,
+    /// each name a CSS identifier the decoder keeps (measured: an id may
+    /// not start with <c>-</c>, a class or a type may start with one
+    /// <c>-</c> before a letter or <c>_</c>).</summary>
+    private static bool ReadCompound(string text, ref int i)
+    {
+        int start = i;
+        if (i < text.Length && text[i] == '*')
+        {
+            i++;
+        }
+        else
+        {
+            ReadIdentifier(text, ref i, allowDash: true);
+        }
+        while (i < text.Length && text[i] is '.' or '#')
+        {
+            bool isId = text[i] == '#';
+            i++;
+            if (!ReadIdentifier(text, ref i, allowDash: !isId))
+            {
+                return false;
+            }
+        }
+        return i > start;
+    }
+
+    /// <summary>Reads a CSS identifier at <paramref name="i"/> and moves
+    /// past it: an optional <c>-</c> (where <paramref name="allowDash"/>),
+    /// a letter or <c>_</c>, then letters, digits, <c>-</c> and <c>_</c>;
+    /// a character past ASCII counts only as a letter or a digit. False,
+    /// with <paramref name="i"/> unmoved, when none starts there.</summary>
+    private static bool ReadIdentifier(string text, ref int i, bool allowDash)
+    {
+        int j = i;
+        if (allowDash && j < text.Length && text[j] == '-')
+        {
+            j++;
+        }
+        if (j >= text.Length || !(char.IsAsciiLetter(text[j]) || text[j] == '_' || (text[j] >= '\u0080' && char.IsLetter(text[j]))))
+        {
+            return false;
+        }
+        j++;
+        while (j < text.Length
+            && (char.IsAsciiLetterOrDigit(text[j]) || text[j] is '-' or '_' || (text[j] >= '\u0080' && char.IsLetterOrDigit(text[j]))))
+        {
+            j++;
+        }
+        i = j;
+        return true;
     }
 
     /// <summary>
@@ -3983,7 +4377,7 @@ internal static class SvgPreviewGuard
                     if (document.ClassLists[i] is { } classList)
                     {
                         foreach (string name in classList
-                            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                            .Split(AsciiWhitespace, StringSplitOptions.RemoveEmptyEntries)
                             .Distinct(StringComparer.OrdinalIgnoreCase))
                         {
                             Visit("." + name.ToLowerInvariant());
@@ -5412,7 +5806,7 @@ internal static class SvgPreviewGuard
     /// separate nor start a comment, a selector holding one is not a simple
     /// selector, and a custom property's name may hold it.
     /// </summary>
-    private static string Unescape(string text)
+    private static string Unescape(string text, bool marked = false)
     {
         Scanned(text.Length);
         if (!text.Contains('\\'))
@@ -5426,6 +5820,10 @@ internal static class SvgPreviewGuard
             {
                 builder.Append(text[i]);
                 continue;
+            }
+            if (marked)
+            {
+                builder.Append(EscapeMark);
             }
             int digits = 0;
             int code = 0;
