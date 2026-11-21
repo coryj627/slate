@@ -1,0 +1,160 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// #1866 (CD11): what the keys-first recorder names. It names a control turned off with the
+/// keys on it or inside it, even one turned back on in the same dispatcher operation, and
+/// never a control turned off once the keys have left it.
+/// </summary>
+public sealed class KeysFirstRecorderTests
+{
+    [Fact]
+    public void AFocusedButtonTurnedOffIsNamed() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.First, () => rig.First.IsEnabled = false);
+
+        Assert.Equal([rig.First.ToString()], off);
+    });
+
+    [Fact]
+    public void AButtonTurnedOffAndOnInOneOperationIsNamed() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.First, () =>
+        {
+            rig.First.IsEnabled = false;
+            rig.First.IsEnabled = true;
+        });
+
+        Assert.Equal([rig.First.ToString()], off);
+        Assert.True(rig.First.IsEnabled);
+    });
+
+    [Fact]
+    public void AButtonTurnedOffWithTheKeysElsewhereIsNotNamed() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.Second);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.First, () => rig.First.IsEnabled = false);
+
+        Assert.Empty(off);
+        Assert.False(rig.First.IsEnabled);
+    });
+
+    [Fact]
+    public void TheKeysMovedOffFirstThenTheButtonTurnedOffIsNotNamed() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.First, () =>
+        {
+            Assert.True(rig.Second.Focus());
+            rig.First.IsEnabled = false;
+        });
+
+        Assert.Empty(off);
+        Assert.False(rig.First.IsEnabled);
+    });
+
+    [Fact]
+    public void AnAncestorTurnedOffWithTheKeysInsideTheRootIsNamed() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(rig.First, () => rig.Panel.IsEnabled = false);
+
+        Assert.Equal([rig.First.ToString()], off);
+    });
+
+    [Fact]
+    public void AFocusedHyperlinkTurnedOffIsNamed() => WithAWindow(rig =>
+    {
+        Assert.True(rig.Link.Focus(), "premise: the link could not take the keys");
+        Assert.Same(rig.Link, Keyboard.FocusedElement);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("the link", rig.Link, () => rig.Link.IsEnabled = false));
+
+        Assert.Contains("the link went off with the keys on", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheAssertionNamesWhatHeldTheKeys() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertTheKeysLeaveFirst("First", rig.First, () => rig.First.IsEnabled = false));
+
+        Assert.Contains($"First went off with the keys on {rig.First}", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheAssertionPassesWhenTheKeysLeaveFirst() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("First", rig.First, () =>
+        {
+            Assert.True(rig.Second.Focus());
+            rig.First.IsEnabled = false;
+        });
+
+        Assert.Same(rig.Second, Keyboard.FocusedElement);
+    });
+
+    private sealed record Rig(StackPanel Panel, Button First, Button Second, Hyperlink Link);
+
+    private static void TakeTheKeys(UIElement element) => Assert.True(
+        element.Focus() && ReferenceEquals(element, Keyboard.FocusedElement),
+        $"keyboard premise: {element} could not take the keys (they are on {Keyboard.FocusedElement})");
+
+    private static void WithAWindow(Action<Rig> body) => StaThread.Run(
+        () =>
+        {
+            var first = new Button { Content = "First" };
+            var second = new Button { Content = "Second" };
+            var link = new Hyperlink(new Run("Link"));
+            var inner = new StackPanel();
+            inner.Children.Add(first);
+            var outer = new StackPanel();
+            outer.Children.Add(inner);
+            outer.Children.Add(second);
+            outer.Children.Add(new TextBlock(link));
+            var window = new Window
+            {
+                Content = outer,
+                Width = 320,
+                Height = 240,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -20_000,
+                Top = -20_000,
+            };
+            try
+            {
+                window.Show();
+                window.Activate();
+                window.UpdateLayout();
+                PumpedDispatcher.Drain();
+                body(new Rig(inner, first, second, link));
+            }
+            finally
+            {
+                window.Close();
+            }
+        },
+        TimeSpan.FromSeconds(60),
+        "the recorder's window timed out.");
+}

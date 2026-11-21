@@ -10,11 +10,13 @@ namespace SlateWindows.Tests;
 
 /// <summary>#1690: an overlay disables the view under it, but only once the keys have left
 /// that view. Disabled with the keys still inside, the focused control went unavailable, and
-/// NVDA said "unavailable" before the overlay's field.</summary>
+/// NVDA said "unavailable" before the overlay's field. Each overlay is named by the token of
+/// its view model (QuickSwitcher, Search, Palette), which the focus manifest's per-trigger
+/// rows of the view and the menu read (#1866, CD11).</summary>
 public sealed partial class CommandPaletteTests
 {
     [Theory]
-    [InlineData("QuickOpen")]
+    [InlineData("QuickSwitcher")]
     [InlineData("Search")]
     [InlineData("Palette")]
     public void TheWorkspaceIsDisabledOnlyAfterTheKeysLeaveIt(string overlay) => RunSta(() =>
@@ -33,7 +35,7 @@ public sealed partial class CommandPaletteTests
         TextBox? field = null;
         IInputElement? atOnce = null;
         bool offAtOnce = true;
-        List<string> disabledUnder = DisabledWithTheKeysInside(root, () =>
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the workspace", root, () =>
         {
             field = OpenTheOverlay(host, overlay);
             atOnce = Keyboard.FocusedElement;
@@ -41,7 +43,6 @@ public sealed partial class CommandPaletteTests
             host.Settle();
         });
 
-        Assert.True(disabledUnder.Count == 0, $"the workspace was disabled with the keys on {string.Join(", ", disabledUnder)}");
         // In the turn it opens, so no key, text or click already queued reaches the editor.
         Assert.True(ReferenceEquals(field, atOnce), $"in the turn the overlay opened, the keys were on {atOnce}");
         Assert.True(offAtOnce, "in the turn the overlay opened, the workspace was still on");
@@ -53,7 +54,7 @@ public sealed partial class CommandPaletteTests
     /// drains, stays as typed: no second, queued landing selects it for the next key to
     /// replace.</summary>
     [Theory]
-    [InlineData("QuickOpen")]
+    [InlineData("QuickSwitcher")]
     [InlineData("Search")]
     [InlineData("Palette")]
     public void TextTypedAfterTheLandingIsNotSelectedByASecondOne(string overlay) => RunSta(() =>
@@ -121,14 +122,13 @@ public sealed partial class CommandPaletteTests
         FrameworkElement root = delete.Host.Shell.WorkspaceRoot;
 
         IInputElement? atOnce = null;
-        List<string> disabledUnder = DisabledWithTheKeysInside(root, () =>
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the canvas", root, () =>
         {
             delete.Host.Palette.Open();
             atOnce = Keyboard.FocusedElement;
             delete.Host.Settle();
         });
 
-        Assert.True(disabledUnder.Count == 0, $"the canvas went off with the keys on {string.Join(", ", disabledUnder)}");
         Assert.Same(delete.Host.Shell.CommandPaletteSearchTextBox, atOnce);
         delete.Host.AssertFocusIsOn(delete.Host.Shell.CommandPaletteSearchTextBox);
         Assert.False(((UIElement)row).IsEnabled, "Beta's row stayed on under the palette");
@@ -151,7 +151,7 @@ public sealed partial class CommandPaletteTests
         host.Settle();
         bool quickOpen = id == "EmptyPaneQuickOpen";
 
-        List<string> disabledUnder = DisabledWithTheKeysInside(action, () =>
+        KeysFirstRecorder.AssertTheKeysLeaveFirst(id, action, () =>
         {
             var invoke = (System.Windows.Automation.Provider.IInvokeProvider)new System.Windows.Automation.Peers.ButtonAutomationPeer(action)
                 .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
@@ -159,7 +159,6 @@ public sealed partial class CommandPaletteTests
             host.Settle();
         });
 
-        Assert.True(disabledUnder.Count == 0, $"{id} went off with the keys on {string.Join(", ", disabledUnder)}");
         host.AssertTheOneOpenModalIs(quickOpen ? ModalSurface.QuickOpen : ModalSurface.SearchOverlay);
         host.AssertFocusIsOn(quickOpen ? host.Shell.QuickSwitcherSearchTextBox : host.Shell.SearchOverlaySearchTextBox);
         Assert.False(action.IsEnabled, $"{id} stayed on under the open overlay");
@@ -169,10 +168,10 @@ public sealed partial class CommandPaletteTests
     /// the menu, on its bar or on an item of an open menu, opens an overlay over it: the menu
     /// stays on until the overlay's field takes the keys out of it.</summary>
     [Theory]
-    [InlineData("QuickOpen", false)]
+    [InlineData("QuickSwitcher", false)]
     [InlineData("Search", false)]
     [InlineData("Palette", false)]
-    [InlineData("QuickOpen", true)]
+    [InlineData("QuickSwitcher", true)]
     [InlineData("Search", true)]
     [InlineData("Palette", true)]
     public void TheMenuIsDisabledOnlyAfterTheKeysLeaveIt(string overlay, bool inAnOpenMenu) => RunSta(() =>
@@ -188,21 +187,20 @@ public sealed partial class CommandPaletteTests
             top.IsSubmenuOpen = true;
             host.Settle();
             item = top.Items.OfType<MenuItem>().FirstOrDefault(candidate => candidate.IsEnabled && candidate.IsVisible)
-                ?? SkipWhereTheDesktopRefusesTheMenu("no item of the open menu is on screen");
+                ?? KeysFirstRecorder.SkipWhereTheDesktopRefusesTheMenu("no item of the open menu is on screen");
         }
 
-        TakeTheMenuKeys(item);
+        KeysFirstRecorder.TakeTheMenuKeys(item);
         host.Settle();
         Assert.True(menu.IsEnabled, "premise: the menu is on with no overlay open");
 
         TextBox? field = null;
-        List<string> disabledUnder = DisabledWithTheKeysInside(item, () =>
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the menu", item, () =>
         {
             field = OpenTheOverlay(host, overlay);
             host.Settle();
         });
 
-        Assert.True(disabledUnder.Count == 0, $"the menu went off with the keys on {string.Join(", ", disabledUnder)}");
         host.AssertFocusIsOn(field!);
         Assert.False(menu.IsEnabled, "the menu stayed on under the open overlay");
         Assert.False(top.IsSubmenuOpen, "the menu stayed open under the overlay");
@@ -226,7 +224,7 @@ public sealed partial class CommandPaletteTests
         host.Settle();
         if (under == "menu")
         {
-            TakeTheMenuKeys(holder);
+            KeysFirstRecorder.TakeTheMenuKeys(holder);
         }
         else
         {
@@ -266,7 +264,7 @@ public sealed partial class CommandPaletteTests
         host.Settle();
         if (under == "menu")
         {
-            TakeTheMenuKeys(holder);
+            KeysFirstRecorder.TakeTheMenuKeys(holder);
         }
         else
         {
@@ -277,10 +275,9 @@ public sealed partial class CommandPaletteTests
         TextBox field = host.Shell.CommandPaletteSearchTextBox;
 
         field.Focusable = false;
-        List<string> offUnder = DisabledWithTheKeysInside(holder, () => host.Lifecycle.Palette.Open());
+        KeysFirstRecorder.AssertTheKeysLeaveFirst($"the {under}", holder, () => host.Lifecycle.Palette.Open());
 
-        Assert.True(offUnder.Count == 0, $"the {under} went off with the keys on {string.Join(", ", offUnder)}");
-        Assert.False(TheKeysAreIn(holder), $"the keys stayed on the {under} under the palette: {Keyboard.FocusedElement}");
+        Assert.False(KeysFirstRecorder.TheKeysAreIn(holder), $"the keys stayed on the {under} under the palette: {Keyboard.FocusedElement}");
         Assert.False(holder.IsEnabled, $"the {under} stayed on under the palette");
 
         field.Focusable = true;
@@ -327,15 +324,6 @@ public sealed partial class CommandPaletteTests
         Assert.False(overlay.Focusable, "the palette stayed a stop once it let the keys go");
     });
 
-    /// <summary>Whether the keys are on <paramref name="element"/> or inside it, by where
-    /// they are rather than by its IsKeyboardFocusWithin: WPF moves the keys first and
-    /// updates that flag along each chain after, so an ancestor's trigger can run while an
-    /// element the keys just left still reads true.</summary>
-    internal static bool TheKeysAreIn(UIElement element) =>
-        Keyboard.FocusedElement is DependencyObject keys
-        && (ReferenceEquals(keys, element) || (keys is System.Windows.Media.Visual && element.IsAncestorOf(keys)));
-
-
     private static Button LauncherAction(PaletteShellHost host, string id) => Assert.Single(
         ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<Button>(),
         button => System.Windows.Automation.AutomationProperties.GetAutomationId(button) == id && button.IsVisible);
@@ -343,24 +331,6 @@ public sealed partial class CommandPaletteTests
     private static void TakeTheKeys(UIElement element) => Assert.True(
         element.Focus() && ReferenceEquals(element, Keyboard.FocusedElement),
         $"keyboard premise: {element} could not take the keys (they are on {Keyboard.FocusedElement})");
-
-    /// <summary>The keys onto a menu item. A desktop whose session has no foreground window
-    /// (the hosted runners, #1680) lets no menu keep the keys or open its popup: there the
-    /// fact says it measured nothing rather than passing.</summary>
-    private static void TakeTheMenuKeys(UIElement item)
-    {
-        if (!item.Focus() || !ReferenceEquals(item, Keyboard.FocusedElement))
-        {
-            _ = SkipWhereTheDesktopRefusesTheMenu($"the keys stayed on {Keyboard.FocusedElement}");
-        }
-    }
-
-    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
-    private static MenuItem SkipWhereTheDesktopRefusesTheMenu(string what)
-    {
-        Assert.Skip($"this desktop refused the menu the keys (#1680): {what}, so what an overlay does to the menu holding them wasn't measured on it");
-        throw new System.Diagnostics.UnreachableException("Assert.Skip returned instead of ending the fact");
-    }
 
     /// <summary>The welcome view does the same under the palette, which opens over it for
     /// Switch Theme.</summary>
@@ -377,7 +347,7 @@ public sealed partial class CommandPaletteTests
             $"keyboard premise: Open Vault could not take the keys (they are on {Keyboard.FocusedElement})");
         host.Settle();
 
-        List<string> disabledUnder = DisabledWithTheKeysInside(root, () =>
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the welcome view", root, () =>
         {
             host.Lifecycle.SwitchThemeCommand.Execute(null);
             Assert.True(
@@ -386,41 +356,54 @@ public sealed partial class CommandPaletteTests
             host.Settle();
         });
 
-        Assert.True(disabledUnder.Count == 0, $"the welcome view was disabled with the keys on {string.Join(", ", disabledUnder)}");
         Assert.Same(host.Shell.CommandPaletteSearchTextBox, Keyboard.FocusedElement);
         Assert.False(root.IsEnabled, "the welcome view stayed enabled under the open palette");
     });
 
-    /// <summary>Runs <paramref name="open"/> and returns the element that held the keys each
-    /// time <paramref name="root"/> was disabled with the keys still inside it.</summary>
-    private static List<string> DisabledWithTheKeysInside(UIElement root, Action open)
+    /// <summary>#1866 (CD11): the welcome view's Quick Open and Search triggers never fire.
+    /// The welcome view shows only without a vault, and without one Quick Open has no
+    /// switcher to open and Search refuses to open, so neither can turn the welcome view off
+    /// under the keys. The focus manifest's never-fires exemption of those two rows cites
+    /// this fact.</summary>
+    [Fact]
+    public void QuickOpenAndSearchStayShutOverTheWelcomeView() => RunSta(() =>
     {
-        var disabledUnder = new List<string>();
-        DependencyPropertyChangedEventHandler record = (_, e) =>
-        {
-            if (e.NewValue is false && TheKeysAreIn(root))
-            {
-                disabledUnder.Add(Keyboard.FocusedElement?.ToString() ?? "nothing");
-            }
-        };
-        root.IsEnabledChanged += record;
-        try
-        {
-            open();
-        }
-        finally
-        {
-            root.IsEnabledChanged -= record;
-        }
+        using var host = new ShownShell();
+        host.ShowWelcomeWithoutAWorkspace();
+        FrameworkElement root = host.Shell.WelcomeRoot;
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(root.IsVisible, "premise: the welcome view shows");
+        Assert.False(host.Lifecycle.IsVaultOpen, "premise: no vault is open");
+        Assert.True(
+            host.Shell.OpenVaultButton.Focus() && ReferenceEquals(host.Shell.OpenVaultButton, Keyboard.FocusedElement),
+            $"keyboard premise: Open Vault could not take the keys (they are on {Keyboard.FocusedElement})");
+        host.Settle();
 
-        return disabledUnder;
-    }
+        // Quick Open's chord is bound to the switcher's own command, and there is no
+        // switcher without a vault.
+        KeyBinding quickOpen = Assert.Single(
+            host.Shell.InputBindings.OfType<KeyBinding>(),
+            binding => binding.Key == Key.O && binding.Modifiers == ModifierKeys.Control);
+        Assert.Null(host.Lifecycle.QuickSwitcher);
+        Assert.Null(quickOpen.Command);
+        host.Lifecycle.ToggleSearchCommand.Execute(null);
+        host.Lifecycle.Search.Open();
+        host.Settle();
+
+        Assert.Null(host.Lifecycle.QuickSwitcher);
+        Assert.False(host.Lifecycle.Search.IsOpen, "Search opened over the welcome view without a vault");
+        Assert.False(host.Shell.QuickSwitcherOverlay.IsVisible, "Quick Open showed over the welcome view");
+        Assert.False(host.Shell.SearchOverlay.IsVisible, "Search showed over the welcome view");
+        Assert.True(root.IsEnabled, "the welcome view went off with no overlay open");
+        Assert.Same(host.Shell.OpenVaultButton, Keyboard.FocusedElement);
+    });
 
     private static TextBox OpenTheOverlay(PaletteShellHost host, string overlay)
     {
         switch (overlay)
         {
-            case "QuickOpen":
+            case "QuickSwitcher":
                 host.Lifecycle.QuickSwitcher!.Open();
                 return host.Shell.QuickSwitcherSearchTextBox;
             case "Search":
