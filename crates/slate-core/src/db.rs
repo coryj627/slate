@@ -40,6 +40,11 @@ pub(crate) mod anchored;
 #[path = "db/anchored_windows.rs"]
 pub(crate) mod anchored;
 
+/// #1917: product code opens a connection only here, and binds no pattern
+/// whose plan a configured connection gives up.
+#[cfg(test)]
+mod connection_census;
+
 /// Errors produced by the database layer.
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -2287,6 +2292,149 @@ mod tests {
             assert!(
                 plan.iter().any(|step| step.contains(index)),
                 "{key:?}: the heal must read {index}: {plan:?}"
+            );
+        }
+    }
+
+    /// Every key column of an index on `conn`'s main schema whose collation
+    /// is NOCASE, as `table.index(column)`, and how many indexes were read.
+    /// SQLite reports the collation; nothing here reads a migration's text.
+    fn nocase_index_keys(conn: &Connection) -> (Vec<String>, usize) {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut nocase = Vec::new();
+        let mut indexes_read = 0;
+        for table in tables {
+            let indexes: Vec<String> = conn
+                .prepare("SELECT name FROM pragma_index_list(?1)")
+                .unwrap()
+                .query_map([&table], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            for index in indexes {
+                indexes_read += 1;
+                let keys: Vec<(Option<String>, Option<String>)> = conn
+                    .prepare("SELECT name, coll FROM pragma_index_xinfo(?1) WHERE key = 1")
+                    .unwrap()
+                    .query_map([&index], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                for (column, collation) in keys {
+                    if collation.is_some_and(|collation| collation.eq_ignore_ascii_case("NOCASE")) {
+                        nocase.push(format!(
+                            "{table}.{index}({})",
+                            column.unwrap_or_else(|| "an expression".to_string())
+                        ));
+                    }
+                }
+            }
+        }
+        (nocase, indexes_read)
+    }
+
+    /// The plan SQLite picks for `sql` once `pattern` is bound to its one
+    /// parameter: binding expires a statement whose plan looks at the value,
+    /// so the step compiles it again with the value in hand.
+    fn plan_once_bound(conn: &Connection, sql: &str, pattern: &str) -> String {
+        let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        explain.raw_bind_parameter(1, pattern).unwrap();
+        let mut rows = explain.raw_query();
+        let mut plan = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            plan.push(row.get::<_, String>(3).unwrap());
+        }
+        plan.join(" / ")
+    }
+
+    fn like_ignores_case(conn: &Connection) -> bool {
+        conn.query_row("SELECT 'a' LIKE 'A'", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// #1917: core's connections run under the query planner stability
+    /// guarantee, which gives up one thing Slate could ever lean on: an
+    /// index prefix search for a bound pattern. A `LIKE` can take one only
+    /// when its case rule matches its index's collation: a case-sensitive
+    /// `LIKE` on a BINARY index (the pragma, which
+    /// `no_product_statement_binds_a_glob_pattern` refuses and
+    /// `every_connection_core_opens_is_configured` reads off every
+    /// connection), or the default `LIKE` on a NOCASE index, which this
+    /// holds the schema has none of. So no `LIKE` in core, however its SQL
+    /// is put together, has a plan the guarantee could take away.
+    #[test]
+    fn no_like_can_use_an_index_prefix() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let (nocase, indexes_read) = nocase_index_keys(&conn);
+        assert!(
+            indexes_read >= 40,
+            "the walk must see the schema's indexes: {indexes_read}"
+        );
+        assert!(
+            nocase.is_empty(),
+            "an index with a NOCASE key lets `LIKE ?` search a prefix of it, which a connection \
+             core opens will not do (#1917); index the folded key instead, as the fold indexes \
+             do: {nocase:?}"
+        );
+        assert!(like_ignores_case(&conn));
+    }
+
+    /// The planted cases for `no_like_can_use_an_index_prefix`, and SQLite's
+    /// own word on what the guarantee gives up. If a later SQLite changes
+    /// that, the last part moves and the two guards want another look.
+    #[test]
+    fn the_guards_see_each_way_a_bound_prefix_search_could_come_back() {
+        const SCHEMA: &str =
+            "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
+             CREATE TABLE people (name TEXT COLLATE NOCASE);
+             CREATE INDEX people_name ON people(name);";
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch.execute_batch(SCHEMA).unwrap();
+
+        // The index walk sees a NOCASE key, and only that one.
+        assert_eq!(
+            nocase_index_keys(&scratch).0,
+            vec!["people.people_name(name)".to_string()]
+        );
+
+        // The LIKE probe sees the pragma.
+        let case_sensitive = Connection::open_in_memory().unwrap();
+        assert!(like_ignores_case(&case_sensitive));
+        case_sensitive
+            .pragma_update(None, "case_sensitive_like", true)
+            .unwrap();
+        assert!(!like_ignores_case(&case_sensitive));
+
+        // What the guarantee gives up, as SQLite plans it: without it a
+        // bound prefix searches the index, with it the same statement scans.
+        let guaranteed = Connection::open_in_memory().unwrap();
+        guaranteed.execute_batch(SCHEMA).unwrap();
+        guaranteed
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .unwrap();
+        for (sql, pattern) in [
+            ("SELECT COUNT(*) FROM files WHERE path GLOB ?1", "notes/a*"),
+            ("SELECT COUNT(*) FROM people WHERE name LIKE ?1", "ab%"),
+        ] {
+            let free = plan_once_bound(&scratch, sql, pattern);
+            assert!(
+                free.contains("SEARCH"),
+                "without the guarantee a bound prefix searches the index: {sql}: {free}"
+            );
+            let held = plan_once_bound(&guaranteed, sql, pattern);
+            assert!(
+                held.contains("SCAN") && !held.contains("SEARCH"),
+                "with the guarantee the same statement scans: {sql}: {held}"
             );
         }
     }

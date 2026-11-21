@@ -1520,33 +1520,6 @@ fn rescan_unchanged_files_skips_rehashing() {
     assert_eq!(second.bytes_processed, 0);
 }
 
-/// Every statement still prepared on `conn` that SQLite has re-prepared
-/// more than `limit` times, with its SQL.
-fn statements_reprepared_more_than(conn: &rusqlite::Connection, limit: i32) -> Vec<(String, i32)> {
-    let mut found = Vec::new();
-    // SAFETY: the handle is `conn`'s own and outlives the walk, which only
-    // reads each statement's SQL and counter and finalizes none of them.
-    unsafe {
-        let db = conn.handle();
-        let mut stmt = rusqlite::ffi::sqlite3_next_stmt(db, std::ptr::null_mut());
-        while !stmt.is_null() {
-            let reprepares = rusqlite::ffi::sqlite3_stmt_status(
-                stmt,
-                rusqlite::ffi::SQLITE_STMTSTATUS_REPREPARE,
-                0,
-            );
-            if reprepares > limit {
-                let sql = std::ffi::CStr::from_ptr(rusqlite::ffi::sqlite3_sql(stmt))
-                    .to_string_lossy()
-                    .into_owned();
-                found.push((sql, reprepares));
-            }
-            stmt = rusqlite::ffi::sqlite3_next_stmt(db, stmt);
-        }
-    }
-    found
-}
-
 #[test]
 fn a_rescan_prepares_its_per_file_statements_once() {
     // #1912: SQLite 3.54 re-prepares a cached statement each time a newly
@@ -1577,6 +1550,196 @@ fn a_rescan_prepares_its_per_file_statements_once() {
     assert!(
         reprepared.is_empty(),
         "statements re-prepared per file across a scan and a rescan of {NOTES} notes: {reprepared:#?}"
+    );
+}
+
+/// The join #1917 names, as a statement of its own: the planted case for the
+/// counter the facts of #1917 read, and for the cause.
+const A_JOIN_ON_A_BOUND_PATH: &str = "SELECT t.tag_raw FROM dql_file_tags t \
+     JOIN files f ON f.id = t.file_id WHERE f.path = ?1 ORDER BY t.ordinal ASC";
+
+/// Takes [`A_JOIN_ON_A_BOUND_PATH`] from `conn`'s statement cache twice and
+/// runs it each time; says how often SQLite compiled it again.
+fn reprepares_of_a_join_taken_from_the_cache_twice(conn: &rusqlite::Connection) -> i32 {
+    for path in ["n00.md", "n01.md"] {
+        let mut statement = conn.prepare_cached(A_JOIN_ON_A_BOUND_PATH).unwrap();
+        let mut rows = statement.query(rusqlite::params![path]).unwrap();
+        while rows.next().unwrap().is_some() {}
+    }
+    conn.prepare_cached(A_JOIN_ON_A_BOUND_PATH)
+        .unwrap()
+        .get_status(rusqlite::StatementStatus::RePrepare)
+}
+
+#[test]
+fn a_cached_join_is_re_prepared_only_without_the_setting() {
+    // #1917: rusqlite's statement cache clears a statement's bindings when
+    // the statement goes back in, and SQLite 3.54 then expires any statement
+    // whose plan looked at a bound value, so the next use compiles it again.
+    // A connection core opens runs under the query planner stability
+    // guarantee, where the planner looks at no bound value. A raw connection
+    // to the same cache does not, and is the control: it shows the counter
+    // sees the defect, and that the setting is what stops it. If a later
+    // SQLite stops re-preparing here, the control reads 0 and this fact says
+    // so on that upgrade: the setting has then become a choice, not a need.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("n00.md", b"#one\n").unwrap();
+        p.write_file("n01.md", b"#two\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let raw = rusqlite::Connection::open(session.config.cache_dir.join("cache.sqlite")).unwrap();
+    assert_eq!(
+        reprepares_of_a_join_taken_from_the_cache_twice(&raw),
+        1,
+        "a raw connection no longer re-prepares a cached join on a bound path: SQLite changed, \
+         and the stability guarantee is no longer what keeps core's statements compiled once"
+    );
+
+    let conn = session.conn.lock().unwrap();
+    assert_eq!(
+        reprepares_of_a_join_taken_from_the_cache_twice(&conn),
+        0,
+        "the session's connection compiled a cached join again when it came back out of the cache"
+    );
+}
+
+/// A note that runs every statement the scan caches for a Markdown file:
+/// headings, links, an embed, tags, a task, a list property, an inline
+/// field, two block ids, two citations and a base fence.
+fn a_note_with_every_kind_of_content(note: usize, round: usize) -> String {
+    format!(
+        "---\ntitle: Title {note}\nstatus: open\ntags: [alpha, t{}]\n---\n# Note {note}\n\n\
+         ## Part A\n\nBody #inline links [[n{:02}]] and embeds ![[n{:02}]].\n\n\
+         ## Part B\n\n- [ ] task {note}\n\n## Part R{round}\nextra{round}:: 1\n\n\
+         A cited claim [@smith2020, p. 4] here. ^r{round}a\n\n\
+         Another paragraph [@doe2019]. ^r{round}b\n\n\
+         ```base\nviews:\n  - type: table\n    name: X{round}\n```\n",
+        note % 7,
+        (note + 1) % 40,
+        (note + 2) % 40,
+    )
+}
+
+/// The start of each statement the scan takes from the statement cache while
+/// it indexes changed notes of every kind beside unchanged ones: fifteen for
+/// a changed note, and the two the fast path adds for an unchanged one
+/// (`SELECT mtime_ms …` runs for both).
+const THE_SCANS_CACHED_STATEMENTS: [&str; 17] = [
+    "SELECT mtime_ms, size_bytes, ctime_ms, content_hash FROM files WHERE path = ?1",
+    "SELECT EXISTS( SELECT 1 FROM file_meta",
+    "UPDATE files SET indexed_at_ms",
+    "DELETE FROM file_meta WHERE file_id = (SELECT id FROM files",
+    "INSERT INTO files (",
+    "SELECT id FROM files WHERE path = ?1",
+    "INSERT INTO headings",
+    "INSERT INTO links (",
+    "INSERT INTO properties (",
+    "INSERT INTO properties_list_values",
+    "INSERT INTO file_tags",
+    "INSERT INTO dql_file_tags",
+    "INSERT INTO dql_inline_fields (",
+    "INSERT INTO dql_inline_field_state",
+    "INSERT INTO tasks (",
+    "INSERT INTO blocks",
+    "INSERT INTO bases_blocks",
+];
+
+#[test]
+fn a_rescan_of_changed_and_unchanged_notes_keeps_its_statements() {
+    // #1917, by a route `a_rescan_prepares_its_per_file_statements_once`
+    // cannot see: a statement the cache dropped has lost its counters. A
+    // rescan that indexes changed notes beside unchanged ones takes
+    // seventeen statements from the cache. rusqlite's default cache holds
+    // sixteen, so at each boundary between a changed note and an unchanged
+    // one it dropped fourteen of them and built them again, four of them
+    // with an equality on `files.path` and two of them #1918's own. Core's
+    // connections hold 32.
+    const NOTES: usize = 40;
+    let (tmp, session) = make_vault(|p| {
+        for note in 0..NOTES {
+            p.write_file(
+                &format!("n{note:02}.md"),
+                a_note_with_every_kind_of_content(note, 0).as_bytes(),
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Every other note changes, so each changed note sits between two
+    // unchanged ones.
+    for note in (0..NOTES).step_by(2) {
+        std::fs::write(
+            tmp.path().join(format!("n{note:02}.md")),
+            a_note_with_every_kind_of_content(note, 1),
+        )
+        .unwrap();
+    }
+    session
+        .conn
+        .lock()
+        .unwrap()
+        .flush_prepared_statement_cache();
+    let (rescan, counts) = counting_statements(&session, || {
+        session
+            .rescan_with_progress(&CancelToken::new(), None)
+            .unwrap()
+    });
+    assert_eq!(rescan.files_indexed, (NOTES / 2) as u64);
+    assert_eq!(rescan.files_skipped, (NOTES / 2) as u64);
+
+    // A note that runs sixteen of the seventeen fits in a cache of sixteen
+    // and would prove nothing, so the fact first holds that all seventeen
+    // ran.
+    let ran: Vec<(&str, StatementCount)> = THE_SCANS_CACHED_STATEMENTS
+        .iter()
+        .map(|start| {
+            let matching: Vec<(&str, StatementCount)> = counts
+                .0
+                .iter()
+                .filter(|(sql, _)| sql.starts_with(start))
+                .map(|(sql, count)| (sql.as_str(), *count))
+                .collect();
+            assert!(
+                matching.len() == 1,
+                "{start:?} names {} of the statements the rescan ran: {matching:#?}",
+                matching.len()
+            );
+            matching[0]
+        })
+        .collect();
+
+    let rebuilt: Vec<String> = ran
+        .iter()
+        .filter(|(_, count)| count.objects != 1)
+        .map(|(sql, count)| {
+            format!(
+                "built {} times for {} runs: {sql}",
+                count.objects, count.runs
+            )
+        })
+        .collect();
+    assert!(
+        rebuilt.is_empty(),
+        "the statement cache dropped these and the rescan built them again:\n  {}",
+        rebuilt.join("\n  ")
+    );
+
+    let conn = session.conn.lock().unwrap();
+    let cached = cached_statements(&conn);
+    let missing: Vec<&str> = THE_SCANS_CACHED_STATEMENTS
+        .iter()
+        .copied()
+        .filter(|start| {
+            !cached
+                .iter()
+                .any(|statement| statement.sql.starts_with(start))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "after the rescan the statement cache no longer holds: {missing:#?}"
     );
 }
 

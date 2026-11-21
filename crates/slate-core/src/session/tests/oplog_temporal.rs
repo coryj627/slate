@@ -1056,6 +1056,21 @@ fn created_since_and_untouched_for_operators() {
 
 #[test]
 fn census_temporal_operators_vs_reference() {
+    temporal_census(|filter| filter.to_string());
+}
+
+/// #1917: the same generated probes, each outside the pushed-down position,
+/// so the statements the row evaluator runs per row (the ones
+/// `a_bases_view_prepares_each_temporal_probe_once` holds in the cache) are
+/// checked against the same model as the pushed-down forms.
+#[test]
+fn the_row_eval_probes_agree_with_the_reference() {
+    temporal_census(|filter| format!(r#"{filter} || file.name == "no such note""#));
+}
+
+/// The census behind both facts above. `position` places each generated
+/// operator call in the filter.
+fn temporal_census(position: fn(&str) -> String) {
     // Random edit HISTORIES with scripted timestamps, built at the
     // oplog layer (`append_entry` with constructed entries) and fed
     // through the production rebuild (`derive_events_for_log` →
@@ -1454,6 +1469,7 @@ fn census_temporal_operators_vs_reference() {
                 )
             }
         };
+        let filter = position(&filter);
         let (mut got, err) = filter_paths(&session, &filter);
         assert_eq!(err, None, "probe {probe}: {filter}");
         got.sort();
@@ -2548,5 +2564,193 @@ fn typed_key_edits_keep_projected_temporal_queries_and_readable_history() {
             .iter()
             .flat_map(|v| &v.annotations)
             .any(|a| a.display == format!("Set property '{identity}'"))
+    );
+}
+// --- #1917: the row evaluator's probes are compiled once ----------------
+
+/// Each temporal operator with a phrase only its row-eval statement holds.
+const ROW_EVAL_PROBES: [(&str, &str); 6] = [
+    (
+        r#"oplog.has_change_since("7d")"#,
+        "e.event_class = 1 AND e.ts_ms >= ?2 LIMIT 1",
+    ),
+    (
+        r#"oplog.has_property_change("status", "7d")"#,
+        "e.property_key = ?2",
+    ),
+    (
+        r#"oplog.deleted_content_matches("nothing like it", "7d")"#,
+        "e.deleted_text LIKE",
+    ),
+    (
+        r#"oplog.deleted_content_matches_regex("nothing.like.it", "7d")"#,
+        "SELECT e.deleted_text FROM oplog_events",
+    ),
+    (r#"oplog.created_since("7d")"#, "birthtime_ms >= ?2"),
+    (r#"oplog.untouched_for("7d")"#, "f.mtime_ms < ?2"),
+];
+
+#[test]
+fn a_bases_view_prepares_each_temporal_probe_once() {
+    // #1917: outside the pushed-down position an operator runs once per
+    // row. Five of the six went through `query_row`, a fresh prepare for
+    // every row, and the sixth was cached and compiled again for every row.
+    // Each is now in the statement cache, runs from it, and is not
+    // re-prepared. All three are held: a statement that is only present may
+    // have been dropped and rebuilt for every row, and a re-prepare count
+    // alone passes for a statement no cache ever held.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_vault(|p| {
+        for note in 0..NOTES {
+            p.write_file(&format!("n{note:02}.md"), b"a note\n")
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let mut wrong = Vec::new();
+    for (operator, phrase) in ROW_EVAL_PROBES {
+        let filter = format!(r#"{operator} || file.name == "no such note""#);
+        let ((_, error), counts) =
+            counting_statements(&session, || filter_paths(&session, &filter));
+        assert_eq!(error, None, "{filter}");
+        let (sql, ran) = counts.only(phrase);
+        assert!(
+            ran.runs >= NOTES as u64,
+            "{operator}: the view ran its probe {} times for {NOTES} rows",
+            ran.runs
+        );
+        let conn = session.conn.lock().unwrap();
+        match cached_statement(&conn, sql) {
+            None => wrong.push(format!(
+                "{operator}: not in the statement cache after {} runs: {sql}",
+                ran.runs
+            )),
+            Some(cached) => {
+                if cached.runs < NOTES as i32 {
+                    wrong.push(format!(
+                        "{operator}: the cached statement ran {} times for {NOTES} rows",
+                        cached.runs
+                    ));
+                }
+                if cached.reprepares > 2 {
+                    wrong.push(format!(
+                        "{operator}: re-prepared {} times for {NOTES} rows",
+                        cached.reprepares
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "temporal probes compiled per row:\n  {}",
+        wrong.join("\n  ")
+    );
+}
+
+#[test]
+fn a_temporal_probe_reads_only_its_own_notes_events() {
+    // Found with #1917: outside the pushed-down position,
+    // `oplog.has_change_since` and `oplog.untouched_for` walked every
+    // content-change event in the window for every row, on the index
+    // migration 029 built for the pushed-down form, where the migration
+    // gives `oplog_events_file_ts` to "the row-eval fallback's per-file
+    // EXISTS probes". Each of the five probes that read events names that
+    // index, and a probe for a note with no events of its own stays small
+    // whatever the other notes logged.
+    const EACH: usize = 20;
+    let (_tmp, session) = make_vault(|p| {
+        for note in 0..EACH {
+            p.write_file(&format!("busy/b{note:02}.md"), b"busy\n")
+                .unwrap();
+            p.write_file(&format!("quiet/q{note:02}.md"), b"quiet\n")
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let now = now_ms();
+    {
+        let conn = session.conn.lock().unwrap();
+        // Every note was last modified sixty days ago: `untouched_for` only
+        // reads the log for a note older than its window.
+        conn.execute(
+            "UPDATE files SET mtime_ms = ?1",
+            rusqlite::params![now - 60 * DAY_MS],
+        )
+        .unwrap();
+        let busy: Vec<i64> = conn
+            .prepare("SELECT id FROM files WHERE path LIKE 'busy/%' ORDER BY path")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(busy.len(), EACH);
+        // 2,000 content changes in the last two hours, none on a quiet note.
+        let mut insert = conn
+            .prepare(
+                "INSERT INTO oplog_events (file_id, ts_ms, event_class, property_key, deleted_text)
+                 VALUES (?1, ?2, 1, NULL, ?3)",
+            )
+            .unwrap();
+        for (note, id) in busy.iter().enumerate() {
+            for event in 0..100 {
+                insert
+                    .execute(rusqlite::params![
+                        id,
+                        now - HOUR_MS - ((note * 100 + event) as i64) * 1000,
+                        format!("gone {note} {event}"),
+                    ])
+                    .unwrap();
+            }
+        }
+    }
+
+    let mut wrong = Vec::new();
+    for (operator, phrase) in ROW_EVAL_PROBES {
+        if operator.starts_with("oplog.created_since") {
+            // Reads `files` alone: no event, no index to name.
+            continue;
+        }
+        let filter =
+            format!(r#"file.inFolder("quiet") && ({operator} || file.name == "no such note")"#);
+        let ((_, error), counts) =
+            counting_statements(&session, || filter_paths(&session, &filter));
+        assert_eq!(error, None, "{filter}");
+        let (sql, ran) = counts.only(phrase);
+        assert_eq!(
+            ran.runs, EACH as u64,
+            "{operator}: the probe runs once for each quiet note"
+        );
+        let plan: Vec<String> = {
+            let conn = session.conn.lock().unwrap();
+            let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let mut rows = explain.raw_query();
+            let mut plan = Vec::new();
+            while let Some(row) = rows.next().unwrap() {
+                plan.push(row.get::<_, String>(3).unwrap());
+            }
+            plan
+        };
+        if !plan
+            .iter()
+            .any(|step| step.contains("oplog_events_file_ts"))
+        {
+            wrong.push(format!(
+                "{operator}: its plan does not use oplog_events_file_ts: {plan:?}"
+            ));
+        }
+        let steps = ran.vm_steps / ran.runs;
+        if steps >= 200 {
+            wrong.push(format!(
+                "{operator}: {steps} VM steps a row for a note with no events of its own"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "temporal probes that read other notes' events:\n  {}",
+        wrong.join("\n  ")
     );
 }

@@ -1039,3 +1039,32 @@ fn tag_tree_page_rejects_a_limit_over_the_cap() {
             .is_ok()
     );
 }
+#[test]
+fn a_file_summary_is_prepared_once() {
+    // #1917: `get_file_summary` is one cached statement of twelve SELECTs
+    // over a CTE on `files WHERE path = ?1`. SQLite 3.54 compiled it again
+    // on every call, which was most of what a call cost.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_counted_vault(NOTES);
+    for note in 0..NOTES {
+        assert!(
+            session
+                .get_file_summary(&format!("n{note:02}.md"))
+                .unwrap()
+                .is_some()
+        );
+    }
+    let conn = session.conn.lock().unwrap();
+    let summary = cached_statement(&conn, "WITH candidates AS")
+        .expect("the summary statement is in the statement cache");
+    assert!(
+        summary.runs >= NOTES as i32,
+        "the cached summary statement ran {} times for {NOTES} calls",
+        summary.runs
+    );
+    assert!(
+        summary.reprepares <= 2,
+        "the summary statement was re-prepared {} times for {NOTES} calls",
+        summary.reprepares
+    );
+}

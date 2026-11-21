@@ -23569,6 +23569,9 @@ mod tests {
     mod repair_announcement;
 
     mod two_sessions;
+
+    // #1917: no statement is compiled again per binding, on any driven path.
+    mod statement_class;
 }
 
 /// Plan 44 WB-31: the environment variable naming the one test a

@@ -5062,3 +5062,82 @@ fn a_failed_dql_inline_link_lookup_fails_the_query() {
     let failed = execute_with_lookup_fault(&session, &query, None);
     assert_link_lookup_failure(&failed, "Notes/A.md", "the inline field");
 }
+// --- #1917: a view compiles nothing again per row -----------------------
+
+#[test]
+fn a_dql_query_prepares_its_tag_lookup_once() {
+    // #1917: DQL's `file.tags` reads one note's tags per row through a
+    // cached join on `files.path = ?1`, which SQLite 3.54 compiled again
+    // every time the statement came back out of the cache.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_counted_vault(NOTES);
+    let handle = session.open_dql("TABLE file.tags\n", None).unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    session.close_base(handle);
+    assert_eq!(result.view_error, None);
+    assert_eq!(result.rows.len(), NOTES);
+
+    let conn = session.conn.lock().unwrap();
+    let lookup = cached_statement(&conn, "FROM dql_file_tags t JOIN files f")
+        .expect("the tag lookup is in the statement cache");
+    assert!(
+        lookup.runs >= NOTES as i32,
+        "the cached tag lookup ran {} times for {NOTES} rows",
+        lookup.runs
+    );
+    assert!(
+        lookup.reprepares <= 2,
+        "the tag lookup was re-prepared {} times for {NOTES} rows",
+        lookup.reprepares
+    );
+}
+
+/// What it cannot see: a lookup that goes through `query_row` leaves no
+/// statement on the connection, so the plain one-row lookups a row still
+/// prepares per call (`SELECT id FROM files WHERE path = ?1` for
+/// `file.outlinks`, for one) pass beside it. Those cost a tenth of a join's
+/// compile and were left as they are (#1917).
+#[test]
+fn a_bases_view_re_prepares_nothing_per_row() {
+    // #1917: every row of every view reads its properties, tags, outgoing
+    // links and backlinks through four cached statements. Each has an
+    // equality on a bare parameter with an ORDER BY or a join, so SQLite
+    // 3.54 compiled all four again for every row, whatever the view asked.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_counted_vault(NOTES);
+    let (base, warnings) = crate::bases::parse_base(
+        "views:\n  - type: table\n    name: T\n    order:\n      - file.name\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let query_json = serde_json::to_string(&crate::bases::view_query(&base, 0)).unwrap();
+    let handle = session.open_query(&query_json, None).unwrap();
+    let result = session
+        .base_execute(handle, 0, None, None, &CancelToken::new())
+        .unwrap();
+    session.close_base(handle);
+    assert_eq!(result.view_error, None);
+    assert_eq!(result.rows.len(), NOTES);
+
+    let conn = session.conn.lock().unwrap();
+    let reprepared = statements_reprepared_more_than(&conn, 2);
+    assert!(
+        reprepared.is_empty(),
+        "statements re-prepared per row of a {NOTES}-row view: {reprepared:#?}"
+    );
+    for row_statement in [
+        "SELECT key, value_kind, value_text FROM properties WHERE file_id = ?1 ORDER BY ordinal",
+        "SELECT tag_norm FROM file_tags WHERE file_id = ?1 ORDER BY tag_norm",
+        "FROM links WHERE source_file_id = ?1 AND is_external = 0",
+        "FROM links l JOIN files src ON src.id = l.source_file_id WHERE l.target_path = ?1",
+    ] {
+        let cached = cached_statement(&conn, row_statement)
+            .unwrap_or_else(|| panic!("not in the statement cache: {row_statement}"));
+        assert!(
+            cached.runs >= NOTES as i32,
+            "ran {} times for {NOTES} rows: {row_statement}",
+            cached.runs
+        );
+    }
+}
