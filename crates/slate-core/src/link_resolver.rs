@@ -49,6 +49,7 @@ use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
 use std::sync::OnceLock;
 
 use crate::links::{LinkAnchor, looks_external_for_resolver};
+use crate::name_fold::fold_case;
 
 /// Vault-relative paths the resolver can match against. Paths use
 /// forward slashes regardless of platform.
@@ -81,11 +82,11 @@ pub trait VaultIndex {
             CandidateProbe::None => Vec::new(),
             CandidateProbe::Paths(keys) => self
                 .all_paths()
-                .filter(|path| keys.contains(&path.to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(path)))
                 .collect(),
             CandidateProbe::Names(keys) => self
                 .all_paths()
-                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(final_component(path))))
                 .collect(),
         }
     }
@@ -135,8 +136,8 @@ impl CandidateTable {
         let mut by_path = Vec::with_capacity(paths.len());
         let mut by_name = Vec::with_capacity(paths.len());
         for (position, path) in paths.iter().enumerate() {
-            by_path.push((key_hash(&path.to_lowercase()), position));
-            by_name.push((key_hash(&final_component(path).to_lowercase()), position));
+            by_path.push((key_hash(&fold_case(path)), position));
+            by_name.push((key_hash(&fold_case(final_component(path))), position));
         }
         // The pairs are distinct (each position once), so the order is
         // total: by hash, then by position — index order within a run.
@@ -279,10 +280,10 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
     let paths: Vec<&str> = index.all_paths().collect();
     let target_stem_path = markdown_stem_path(target_path)?;
 
-    let target_folded = target_path.to_lowercase();
+    let target_folded = fold_case(target_path);
     if paths
         .iter()
-        .filter(|path| path.to_lowercase() == target_folded)
+        .filter(|path| fold_case(path) == target_folded)
         .count()
         != 1
     {
@@ -299,19 +300,19 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
     {
         return None;
     }
-    let target_stem_folded = target_stem.to_lowercase();
+    let target_stem_folded = fold_case(target_stem);
     let globally_unique_markdown_stem = paths
         .iter()
         .filter_map(|path| markdown_stem_path(path))
-        .filter(|stem_path| final_component(stem_path).to_lowercase() == target_stem_folded)
+        .filter(|stem_path| fold_case(final_component(stem_path)) == target_stem_folded)
         .count()
         == 1;
 
-    let target_stem_path_folded = target_stem_path.to_lowercase();
+    let target_stem_path_folded = fold_case(target_stem_path);
     let markdown_flavor_collision = paths
         .iter()
         .filter_map(|path| markdown_stem_path(path))
-        .filter(|stem_path| stem_path.to_lowercase() == target_stem_path_folded)
+        .filter(|stem_path| fold_case(stem_path) == target_stem_path_folded)
         .count()
         > 1;
     let retain_extension = target_stem.contains('.') || markdown_flavor_collision;
@@ -520,7 +521,7 @@ impl LinkCandidateSelector {
     pub fn new(target_raw: &str, source_path: &str) -> Option<Self> {
         let mode = match selector_target(target_raw)? {
             SelectorTarget::Exact(normalized) => {
-                let lower = normalized.to_lowercase();
+                let lower = fold_case(&normalized);
                 let mut keys = vec![lower.clone()];
                 if !has_extension(&normalized) {
                     keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
@@ -528,7 +529,7 @@ impl LinkCandidateSelector {
                 SelectorMode::Exact { keys }
             }
             SelectorTarget::Basename(normalized) => SelectorMode::Basename {
-                basename: normalized.to_lowercase(),
+                basename: fold_case(&normalized),
                 has_extension: has_extension(&normalized),
                 source_dirs: dir_components(source_path)
                     .into_iter()
@@ -564,7 +565,7 @@ impl LinkCandidateSelector {
         PATHS_OFFERED.with(|count| count.set(count.get() + 1));
         let rank = match &self.mode {
             SelectorMode::Exact { keys } => {
-                let lower = path.to_lowercase();
+                let lower = fold_case(path);
                 match keys.iter().position(|key| *key == lower) {
                     Some(index) => SelectorRank::Exact(index),
                     None => return,
@@ -575,7 +576,7 @@ impl LinkCandidateSelector {
                 has_extension,
                 source_dirs,
             } => {
-                let file = final_component(path).to_lowercase();
+                let file = fold_case(final_component(path));
                 if !basename_matches(&file, basename, *has_extension) {
                     return;
                 }
@@ -629,8 +630,10 @@ pub(crate) enum SelectorTarget {
 /// Changing it needs a migration that rebuilds those indexes, and so does
 /// anything that changes its answers: [`looks_external_for_resolver`], or a
 /// toolchain whose `trim` reads a different White_Space table. A stale stored
-/// key is worse than a missed heal: SQLite reports the index corrupt when an
-/// UPDATE or DELETE cannot find its entry.
+/// key is worse than a missed heal: the bundled SQLite (3.54.1) reports
+/// nothing, every lookup by the new key misses silently, and only `PRAGMA
+/// integrity_check` lists the rows missing from the index (measured for
+/// #1705, whose fold change migration 042 rebuilds).
 ///
 /// A leading `./` or `/` is stripped, so `./notes/foo.md` and
 /// `/notes/foo.md` read as `notes/foo.md`; Obsidian renders a leading `/` as
@@ -670,13 +673,13 @@ pub fn candidate_probe(target_raw: &str) -> CandidateProbe {
 /// Gather all index entries whose final path component matches
 /// `basename` (case-insensitive, Markdown-extension-aware).
 fn collect_basename_matches<'a>(basename: &str, index: &'a dyn VaultIndex) -> Vec<&'a str> {
-    let basename_lower = basename.to_lowercase();
+    let basename_lower = fold_case(basename);
     let basename_has_ext = has_extension(basename);
     index
         .all_paths()
         .filter(|path| {
             basename_matches(
-                &final_component(path).to_lowercase(),
+                &fold_case(final_component(path)),
                 &basename_lower,
                 basename_has_ext,
             )
@@ -1438,11 +1441,11 @@ mod tests {
             CandidateProbe::None => 0,
             CandidateProbe::Paths(keys) => paths
                 .iter()
-                .filter(|path| keys.contains(&path.to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(path)))
                 .count(),
             CandidateProbe::Names(keys) => paths
                 .iter()
-                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .filter(|path| keys.contains(&fold_case(final_component(path))))
                 .count(),
         }
     }

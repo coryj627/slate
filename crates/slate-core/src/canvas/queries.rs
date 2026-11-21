@@ -373,8 +373,10 @@ pub fn filter(model: &CanvasModel, query: &str) -> Vec<NodeId> {
     if needle.is_empty() {
         return model.reading_order.clone();
     }
-    let needle = needle.to_lowercase();
-    let hit = |haystack: &str| haystack.to_lowercase().contains(&needle);
+    // The fold every name match in core shares (#1705): a final sigma
+    // meets a sigma, so `ΚΟΣ` finds `κοσμος`.
+    let needle = crate::name_fold::fold_case(needle);
+    let hit = |haystack: &str| crate::name_fold::fold_case(haystack).contains(&needle);
     model
         .reading_order
         .iter()

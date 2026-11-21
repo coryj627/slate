@@ -207,12 +207,16 @@ const WORD_BOUNDARY: [&str; 5] = [" ", ".", "-", ":", "_"];
 /// Comparison key for one extended grapheme cluster: canonical (NFC)
 /// form, lowercased, re-normalized. Two clusters compare equal exactly
 /// when their keys do — the Rust spelling of Swift's canonical
-/// `Character` equality over `lowercased()` strings.
+/// `Character` equality over `lowercased()` strings. The final sigma folds
+/// to sigma (#1705, plan 47 CB-32), so `κοσμος`, `ΚΟΣΜΟΣ` and `κοσμοσ` all
+/// meet a name however its sigma lowercases, as every name match in core
+/// does ([`crate::name_fold`]).
 fn grapheme_key(grapheme: &str) -> String {
     grapheme
         .chars()
         .nfc()
         .flat_map(char::to_lowercase)
+        .map(crate::name_fold::fold_sigma)
         .nfc()
         .collect()
 }

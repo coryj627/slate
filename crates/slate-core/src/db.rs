@@ -243,6 +243,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "links: folded target indexes so a create heals only the rows that could name it (#1426)",
         sql: include_str!("../migrations/041_links_target_fold_index.sql"),
     },
+    Migration {
+        description: "fold: the tree key folds the final sigma; rebuild its seven indexes (#1705)",
+        sql: include_str!("../migrations/042_tree_key_folds_final_sigma.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -329,12 +333,14 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
 
 /// Register the SQL helpers shared by every Slate-owned connection.
 ///
-/// Directory paging must apply the exact Rust NFC/full-Unicode-lowercase key
-/// before SQL LIMIT/OFFSET. Keeping the function here makes file-backed,
-/// in-memory, and background-worker connections agree instead of teaching SQL
-/// a weaker ASCII-only approximation. Migration 033 persists this function in
-/// expression indexes; changing its Unicode/casefold semantics requires an
-/// explicit schema migration that rebuilds those indexes.
+/// Directory paging must apply the exact Rust tree key ([`tree_sort_key`]:
+/// NFC, full-Unicode lowercase, the final sigma folded) before SQL
+/// LIMIT/OFFSET. Keeping the function here makes file-backed, in-memory, and
+/// background-worker connections agree instead of teaching SQL a weaker
+/// ASCII-only approximation. Migrations 033, 037, 039 and 041 persist this
+/// function in expression indexes; changing its Unicode/casefold semantics
+/// requires an explicit schema migration that rebuilds those indexes, as 042
+/// did for the final sigma (#1705).
 ///
 /// Plan 43 PR 21a (#1293): migration 040's change-feed triggers call
 /// `slate_feed_writer()` and `slate_feed_origin()`, so every Slate connection
@@ -437,9 +443,13 @@ pub(crate) fn effective_name_key(
     tree_sort_key(&effective)
 }
 
+/// NFC, then [`crate::name_fold::fold_case`]: full-Unicode lowercase with
+/// the final sigma folded to sigma (#1705, plan 47 CB-32). Stored in seven
+/// expression indexes (migrations 033, 037, 039, 041, all rebuilt by 042),
+/// so any change to its answers ships a migration that rebuilds them.
 pub(crate) fn tree_sort_key(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    name.nfc().collect::<String>().to_lowercase()
+    crate::name_fold::fold_case(&name.nfc().collect::<String>())
 }
 
 fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError> {
@@ -905,6 +915,53 @@ mod tests {
             assert_eq!(key, tree_sort_key(name), "{name:?}");
             assert!(key.starts_with("κοσμοσ"), "{name:?} folds to {key:?}");
         }
+    }
+
+    /// The indexes whose SQL calls a registered `slate_` function, less the
+    /// ones migration 042 rebuilds: an index a later fold change would
+    /// leave stale.
+    fn indexes_over_a_slate_function_042_does_not_rebuild(conn: &Connection) -> Vec<String> {
+        let rebuilt: Vec<&str> = include_str!("../migrations/042_tree_key_folds_final_sigma.sql")
+            .lines()
+            .filter_map(|line| line.strip_prefix("CREATE INDEX "))
+            .map(|rest| rest.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(rebuilt.len(), 7, "{rebuilt:?}");
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' \
+                 AND sql LIKE '%slate\\_%(%' ESCAPE '\\' ORDER BY name",
+            )
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|name| !rebuilt.contains(&name.as_str()))
+            .collect()
+    }
+
+    /// #1705 (CB-32): every index over a registered function is one migration
+    /// 042 rebuilds, so the next change to the fold knows the whole list.
+    #[test]
+    fn every_index_over_a_slate_function_is_rebuilt_by_the_last_fold_migration() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        assert_eq!(
+            indexes_over_a_slate_function_042_does_not_rebuild(&conn),
+            Vec::<String>::new()
+        );
+
+        // The guard bites: a later index over the fold is reported.
+        let mut later = fresh_db();
+        migrate_with_later_migration_for_tests(
+            &mut later,
+            "CREATE INDEX idx_scratch_fold ON dirs(slate_tree_sort_key(name));",
+        )
+        .expect("a later migration");
+        assert_eq!(
+            indexes_over_a_slate_function_042_does_not_rebuild(&later),
+            vec!["idx_scratch_fold".to_string()]
+        );
     }
 
     /// #1705 (CB-32): the tree key gives one key for every sigma spelling,
@@ -2130,11 +2187,12 @@ mod tests {
 
     /// #1426: migration 041 adds the two partial indexes over the folded
     /// targets of dangling links — an exact target by its path, a bare
-    /// name by its name — and lands the schema at 41.
+    /// name by its name. Migration 042 (#1705) rebuilds both from the same
+    /// text, so the text holds at the latest schema, 42.
     #[test]
     fn migration_041_adds_the_folded_target_indexes() {
         let mut conn = fresh_db();
-        assert_eq!(migrate(&mut conn).expect("migrate"), 41);
+        assert_eq!(migrate(&mut conn).expect("migrate"), 42);
         for (index, function) in [
             ("idx_links_target_path_fold", "slate_link_target_path"),
             ("idx_links_target_name_fold", "slate_link_target_name"),

@@ -7482,8 +7482,8 @@ impl VaultSession {
     /// resolver's selector, which keeps only the best candidate, with a
     /// cooperative boundary before and after every row — a basename every
     /// directory carries (`index.md`) is a walk the host can stop. The fold
-    /// is NFC + full-Unicode lowercase, a superset of the resolver's own
-    /// lowercase comparison, and the selector still decides: the answer is
+    /// is NFC + full-Unicode lowercase with the final sigma folded (#1705),
+    /// a superset of the resolver's own comparison, and the selector still decides: the answer is
     /// the whole-index answer.
     fn resolve_embed_link_target(
         &self,
@@ -13116,7 +13116,8 @@ fn get_file_summary_impl(conn: &Connection, path: &str) -> Result<Option<FileSum
 /// Case-insensitive sort key for a tree node name.
 ///
 /// The spec pins the key to `name.to_lowercase()` on the **NFC**
-/// normalization: a decomposed (NFD) and precomposed (NFC) spelling of
+/// normalization, with the final sigma folded to sigma (#1705, plan 47
+/// CB-32; [`crate::name_fold::fold_case`]): a decomposed (NFD) and precomposed (NFC) spelling of
 /// the same name normalize to the same key, so they sort adjacently and
 /// deterministically rather than by raw code-unit order (where the
 /// combining-mark form sorts after the base letter of the *next* name).
@@ -14180,7 +14181,7 @@ fn structural_batch_index_snapshot_cancellable(
     for path in files.keys().chain(dirs.iter()) {
         cancel.check()?;
         occupied_lower
-            .entry(path.to_lowercase())
+            .entry(tree_sort_key(path))
             .and_modify(|existing: &mut String| {
                 if path < existing {
                     *existing = path.clone();
@@ -15014,7 +15015,7 @@ impl VaultSession {
             std::collections::BTreeMap::new();
         for (index, plan) in plans.iter().enumerate() {
             destinations
-                .entry(plan.destination.to_lowercase())
+                .entry(tree_sort_key(&plan.destination))
                 .or_default()
                 .push(index);
         }
@@ -15030,7 +15031,7 @@ impl VaultSession {
         for plan in &plans {
             if let Some(existing) = snapshot
                 .occupied_lower
-                .get(&plan.destination.to_lowercase())
+                .get(&tree_sort_key(&plan.destination))
             {
                 envelope.preflight_failures.push(structural_batch_failure(
                     Some(plan.item.clone()),
@@ -16068,7 +16069,7 @@ impl VaultSession {
             std::collections::BTreeMap::new();
         for (index, plan) in plans.iter().enumerate() {
             destinations
-                .entry(plan.destination.to_lowercase())
+                .entry(tree_sort_key(&plan.destination))
                 .or_default()
                 .push(index);
         }
@@ -16084,7 +16085,7 @@ impl VaultSession {
         for plan in &plans {
             if let Some(existing) = snapshot
                 .occupied_lower
-                .get(&plan.destination.to_lowercase())
+                .get(&tree_sort_key(&plan.destination))
             {
                 envelope.preflight_failures.push(structural_batch_failure(
                     Some(plan.item.clone()),
@@ -19106,7 +19107,9 @@ fn collect_rewrite_candidates(
                 break;
             }
         }
-        stem.to_lowercase()
+        // The resolver's fold (#1705): a stem lowered alone and the same
+        // stem lowered with its extension meet whatever their final sigma.
+        crate::name_fold::fold_case(stem)
     };
     let moved_stems: std::collections::HashSet<String> =
         moved.iter().map(|(old, _)| stem_of(old)).collect();
@@ -19198,10 +19201,13 @@ fn validate_leaf_component(name: &str) -> Result<(), VaultError> {
 /// on every volume: APFS and NTFS default to case-insensitive, so a name
 /// differing only in case — or Unicode normalization — would shadow an
 /// existing one the moment the vault lands there. Folds with the
-/// registered `slate_tree_sort_key` (NFC + full-Unicode lowercase, the
-/// rule the tree already sorts by; migration 037 indexes it) rather than
+/// registered `slate_tree_sort_key` (NFC + full-Unicode lowercase with the
+/// final sigma folded, #1705; the rule the tree already sorts by;
+/// migration 037 indexes it, 042 rebuilt it) rather than
 /// SQLite's `lower()`, which folds ASCII only — `Ä.md` beside `ä.md`
-/// slipped through while APFS and NTFS treat them as one file. Kanji,
+/// slipped through while APFS and NTFS treat them as one file. APFS, by
+/// reading, also treats a `ς`/`σ` pair as one name while NTFS keeps them
+/// apart, so the gate refuses such a pair for portability. Kanji,
 /// kana, and width are untouched by the fold (no case; NFC keeps
 /// full-width distinct). Returns the existing entry's stored path for the
 /// error message — callers renaming a path onto its OWN alias (the

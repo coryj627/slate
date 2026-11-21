@@ -191,6 +191,34 @@ fn renaming_a_final_sigma_note_rewrites_every_link_that_names_it() {
     }
 }
 
+/// A rename of a note whose own name carries an authored final sigma
+/// rewrites the links that spell it with a capital or a medial sigma: the
+/// rewrite's old-to-new mapping keys the old path by the same fold.
+#[test]
+fn renaming_a_note_named_with_a_final_sigma_rewrites_every_spelling() {
+    let (tmp, session) = scanned(|provider| {
+        provider
+            .write_file("κοσμος.md", "# k\n".as_bytes())
+            .unwrap();
+        provider
+            .write_file("E.md", "[[ΚΟΣΜΟΣ]] [[κοσμοσ]] [[Κοσμος]]\n".as_bytes())
+            .unwrap();
+    });
+    session.rename_file("κοσμος.md", "Νεος.md").unwrap();
+    let text = std::fs::read_to_string(tmp.path().join("E.md")).unwrap();
+    assert!(
+        !text.to_lowercase().contains("κοσμο"),
+        "E.md still names the old stem: {text:?}"
+    );
+    assert!(
+        targets(&session, "E.md")
+            .iter()
+            .all(|(_, resolved)| resolved.as_deref() == Some("Νεος.md")),
+        "{:?}",
+        targets(&session, "E.md")
+    );
+}
+
 /// A move keeps every spelling resolved to the moved note.
 #[test]
 fn moving_a_final_sigma_note_keeps_every_link_that_names_it() {

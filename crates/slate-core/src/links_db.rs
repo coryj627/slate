@@ -648,8 +648,8 @@ fn without_implied_extension(form: &str) -> Option<&str> {
 /// exact target is found by the path, and a bare name by its final
 /// component. Each
 /// form is also tried without a trailing Markdown extension, because the
-/// selector implies one. The fold (NFC, then lowercase) is a superset of
-/// the selector's lowercase comparison, and the selector still decides, so
+/// selector implies one. The fold (NFC, then lowercase with the final sigma
+/// folded, #1705) is a superset of the selector's comparison, and the selector still decides, so
 /// this heals exactly what [`re_resolve_unresolved_links`] heals. A failed
 /// read, or a row whose lookup fails, is the caller's error: never skipped,
 /// never written unresolved.

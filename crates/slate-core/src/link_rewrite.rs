@@ -67,13 +67,13 @@ impl MoveMapping {
         let mut moved_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for (old, new) in pairs {
             moved_by_path
-                .entry(old.to_lowercase())
+                .entry(crate::name_fold::fold_case(&old))
                 .or_default()
-                .push(new.to_lowercase());
+                .push(crate::name_fold::fold_case(&new));
             moved_by_name
-                .entry(final_component(&old).to_lowercase())
+                .entry(crate::name_fold::fold_case(final_component(&old)))
                 .or_default()
-                .push(final_component(&new).to_lowercase());
+                .push(crate::name_fold::fold_case(final_component(&new)));
             reverse.insert(new.clone(), old.clone());
             forward.insert(old, new);
         }
