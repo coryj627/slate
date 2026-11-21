@@ -1801,6 +1801,8 @@ internal static class SvgPreviewGuard
 
             // The delta merge judge's nit F (stage 13): definitions more than
             // the cap has left are refused before anything is built for them.
+            // A scope made anew holds as many values as there are
+            // definitions, so this is the only read of the cap it needs.
             if (defined.Count > MaxCustomScopeEntries - scopeEntries)
             {
                 throw new GuardStepsSpentException();
@@ -1866,10 +1868,6 @@ internal static class SvgPreviewGuard
                 madeScopes[(inherited, hash)] = made = [];
             }
             scopeEntries += held.Count;
-            if (scopeEntries > MaxCustomScopeEntries)
-            {
-                throw new GuardStepsSpentException();
-            }
             made.Add(scope);
             return scope;
         }
