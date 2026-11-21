@@ -406,10 +406,11 @@ public sealed class EditorSurfaceCommandTests
 
     // ---- The pointer while the cache loads (Design 5, ruling 4) ---------------
 
-    /// <summary>A Ctrl+click on prose, or on a checkbox the cache does not yet
-    /// know, says nothing while the note's links and tasks load: not at the
-    /// click, not when the load ends, and not when it faults. The click is
-    /// still taken.</summary>
+    /// <summary>A Ctrl+click in a note whose links and tasks have never loaded
+    /// says nothing: not at the click, not when the load ends, and not when it
+    /// faults. No task list is published yet, so a click on a checkbox cannot
+    /// be told from a click on prose, and its rows are silent as prose is. The
+    /// click is still taken.</summary>
     [Theory]
     [InlineData("prose", false)]
     [InlineData("prose", true)]
@@ -444,6 +445,89 @@ public sealed class EditorSurfaceCommandTests
 
         Assert.Empty(announced.Select(Render));
         Assert.Equal(before, StableText(vault.SourcePath));
+    });
+
+    /// <summary>Any scan or core write moves the session on, which is the
+    /// loading state for every other open note; the task list each last
+    /// published stays in place and still describes its saved text. There a
+    /// Ctrl+click on a checkbox that list names is on a real target, so it
+    /// hears why nothing happened, as a Ctrl+click on a link does. On prose,
+    /// in that same state, it stays silent. Either way the click is taken, a
+    /// load starts, its end says nothing and nothing is written.</summary>
+    [Theory]
+    [InlineData("checkbox")]
+    [InlineData("prose")]
+    public void ACtrlClickOnACheckboxTheCacheStillNamesSaysWhyNothingHappened(string target) => RunSta(() =>
+    {
+        using var vault = new Vault();
+        var announced = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = vault.Tab(announced);
+        EditorInteractionCoordinator interactions = Current(tab);
+        vault.ChangeAnotherNote();
+        long loads = interactions.ArtifactCacheLoadCountForTests;
+        string before = File.ReadAllText(vault.SourcePath);
+
+        Assert.True(
+            interactions.ActivateAt(Offset(target), EditorInteractionOrigin.Pointer),
+            "the click was passed on while the cache loads");
+
+        if (target == "checkbox")
+        {
+            A11yEvent.HostComposed spoken = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(announced));
+            Assert.Equal(Loading, spoken.Text);
+            Assert.Equal(A11yPriority.Medium, spoken.Priority);
+        }
+        else
+        {
+            Assert.Empty(announced.Select(Render));
+        }
+
+        announced.Clear();
+        Quiesce(tab, interactions);
+
+        Assert.Empty(announced.Select(Render));
+        Assert.True(interactions.ArtifactCacheLoadCountForTests > loads, "the click started no load");
+        Assert.Equal(before, StableText(vault.SourcePath));
+    });
+
+    /// <summary>A list from an older save of this note cannot vouch for a
+    /// click: its positions describe text the note no longer holds. Here a
+    /// paragraph typed above the task and saved leaves the old list naming a
+    /// checkbox where the note now holds prose, and a Ctrl+click there stays
+    /// silent, as on any prose while the cache loads.</summary>
+    [Fact]
+    public void ACtrlClickWhereAnOlderSavesListNamedACheckboxStaysSilent() => RunSta(() =>
+    {
+        using var vault = new Vault();
+        var announced = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = vault.Tab(announced);
+        EditorInteractionCoordinator interactions = Current(tab);
+        int published = interactions.ArtifactCacheGenerationForTests;
+        long loads = interactions.ArtifactCacheLoadCountForTests;
+        const string typed = "A paragraph typed above the task.\n\n";
+        tab.EditorDocument!.Insert(At("- [ ] buy milk", 0), typed);
+        Assert.True(tab.Save(), "premise: the note saved");
+        interactions.RefreshMathRangesForTests();
+        string saved = StableText(vault.SourcePath);
+        Assert.Contains(typed + "- [ ] buy milk", saved, StringComparison.Ordinal);
+        Assert.False(tab.IsDirty, "premise: the tab is clean after its save");
+        Assert.True(
+            interactions.ArtifactCacheGenerationForTests == published
+                && interactions.ArtifactCacheLoadCountForTests == loads,
+            "premise: the list published before the save is still the one in place");
+        announced.Clear();
+
+        // Where the checkbox was before the save: prose now.
+        Assert.True(
+            interactions.ActivateAt(Offset("checkbox"), EditorInteractionOrigin.Pointer),
+            "the click was passed on while the cache loads");
+        Assert.Empty(announced.Select(Render));
+
+        Quiesce(tab, interactions);
+
+        Assert.Empty(announced.Select(Render));
+        Assert.True(interactions.ArtifactCacheLoadCountForTests > loads, "the click started no load");
+        Assert.Equal(saved, StableText(vault.SourcePath));
     });
 
     /// <summary>Ruling 4: a note changed on disk is another state. "Reload x.md
@@ -600,10 +684,17 @@ public sealed class EditorSurfaceCommandTests
         Assert.Equal(0, ran);
         Assert.Equal(size, host.Workspace.EditorPreferences.FontSize);
         Assert.Empty(host.Announced.Select(Render));
+
+        // The fact's own premise: a letter typed this way, in this same open
+        // menu, does reach the menu's access keys.
+        menu.PressAccessKey("z");
+
+        Assert.Equal(1, ran);
+        Assert.Equal(EditorPreferencesViewModel.ActualFontSize, host.Workspace.EditorPreferences.FontSize);
     });
 
-    /// <summary>Actual Size answers to a key of its own, Z, and the driver the
-    /// fact above uses does reach the menu's access keys.</summary>
+    /// <summary>Actual Size answers to a key of its own, Z, in the editor as
+    /// in the reading view.</summary>
     [Fact]
     public void ActualSizeAnswersToItsOwnAccessKey() => RunSta(() =>
     {
@@ -835,6 +926,17 @@ public sealed class EditorSurfaceCommandTests
             interactions.RefreshArtifactCacheForTests();
             Assert.False(interactions.ArtifactCacheSourceCurrentForTests, "premise: the cache's source is not current");
             return outside;
+        }
+
+        /// <summary>Another note written and seen by the index: the session
+        /// moves on, and nothing tells the tab on this note, whose published
+        /// links and tasks stay as they were.</summary>
+        public void ChangeAnotherNote()
+        {
+            ulong before = Session.InteractionGeneration();
+            File.WriteAllText(Path.Combine(Root, "target.md"), TargetText + "\nA line added to the other note.\n");
+            Session.ReindexPath("target.md");
+            Assert.NotEqual(before, Session.InteractionGeneration());
         }
 
         public void Dispose()
