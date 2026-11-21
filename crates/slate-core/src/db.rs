@@ -272,7 +272,7 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
         ))]
         let path = anchored::display_path(path);
         log::debug!(
-            "the cache database at {} did not open: {error}",
+            "the cache database at {} did not open or could not be configured: {error}",
             path.display()
         );
     })?;
@@ -287,55 +287,91 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
 /// here too, so every connection to an anchored cache resolves through the
 /// held `.slate`, and every connection core opens is configured alike.
 ///
-/// It has one exit on purpose. The open has two branches, and a session's
-/// cache takes the first on macOS and Linux and the second on Windows:
-/// configuring after one of them only would leave the other platforms'
-/// sessions without it.
+/// It has one exit on purpose. The open has two branches: a session's
+/// cache takes the first on macOS, where `anchored::VFS` names a VFS, and
+/// the second on Linux and Windows. No CI lane runs core's tests on macOS,
+/// so a configuration made inside one branch would pass every fact on every
+/// lane and leave the other platforms' sessions without it. Two things hold
+/// the shape where no run can: [`Unconfigured`], which makes an open that
+/// skips the configuration fail to compile on every target, and
+/// `db::connection_census::the_open_has_one_exit_through_configure`, which
+/// reads this file.
 pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
-    let conn = open_unconfigured(path)?;
-    configure_connection(&conn)?;
-    Ok(conn)
+    configure_connection(open_unconfigured(path)?)
 }
 
-/// How many prepared statements a connection keeps for reuse. rusqlite's
-/// default is 16, and a rescan that mixes changed notes with unchanged ones
-/// runs 17 cached statements: at 16 the cache dropped 15 of them, and the
-/// scan built them again, each time it moved between a changed note and an
-/// unchanged one (#1917). 32 holds that path with room, for about 330 KB
-/// more statement memory on a connection that has run everything.
-const STATEMENT_CACHE_CAPACITY: usize = 32;
+use configured::{Unconfigured, configure_connection};
 
-/// The configuration every connection core opens runs under (#1917).
-///
-/// The query planner stability guarantee: SQLite picks a statement's plan
-/// from its SQL and the schema, never from the values bound to it. Without
-/// it SQLite 3.54 marks a bound equality in a statement with more than one
-/// source or an `ORDER BY` (and a bound `LIMIT`) as worth a second look,
-/// and a marked statement is compiled again on every use once the statement
-/// cache has cleared its bindings. 38 of core's SQL literals were: four of
-/// them for every row of a bases view, and the link panels' reads and the
-/// file summary on every call. What the guarantee gives up is a plan chosen
-/// from a bound value, which in this schema could only be an index prefix
-/// search for a bound pattern; `db::connection_census` and
-/// `no_like_can_use_an_index_prefix` hold that no statement can have one.
-///
-/// No `cfg` in here: whichever branch opened the connection, it is
-/// configured the same way.
-fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
-    conn.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
-        true,
-    )?;
-    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    Ok(())
+/// Core's configuration of a connection, and the type that keeps an open
+/// from going round it (#1917).
+mod configured {
+    use rusqlite::Connection;
+
+    /// How many prepared statements a connection keeps for reuse.
+    /// rusqlite's default is 16, and a rescan that mixes changed notes with
+    /// unchanged ones runs 17 cached statements: at 16 the cache dropped 15
+    /// of them, and the scan built them again, each time it moved between a
+    /// changed note and an unchanged one (#1917). 32 holds that path with
+    /// room, for about 330 KB more statement memory on a connection that
+    /// has run everything.
+    const STATEMENT_CACHE_CAPACITY: usize = 32;
+
+    /// A connection SQLite has opened and core has not configured.
+    ///
+    /// The connection inside is private to this module, and
+    /// [`configure_connection`] is the only function that gives it up. So
+    /// no open can hand out a `Connection` that went round the
+    /// configuration, on any target: with `open_connection` returning what
+    /// `open_unconfigured` gave it, or with a branch of the open returning
+    /// a connection it configured for itself, the crate does not compile
+    /// (`error[E0308]: mismatched types`, seen on Windows for the plain
+    /// branch and for the anchored one, which Windows compiles and macOS
+    /// alone runs).
+    pub(super) struct Unconfigured(Connection);
+
+    impl Unconfigured {
+        /// A connection as SQLite opened it.
+        pub(super) fn opened(conn: Connection) -> Self {
+            Self(conn)
+        }
+    }
+
+    /// The configuration every connection core opens runs under (#1917).
+    ///
+    /// The query planner stability guarantee: SQLite picks a statement's
+    /// plan from its SQL and the schema, never from the values bound to it.
+    /// Without it SQLite 3.54 marks a bound equality in a statement with
+    /// more than one source or an `ORDER BY` (and a bound `LIMIT`) as worth
+    /// a second look, and a marked statement is compiled again on every use
+    /// once the statement cache has cleared its bindings. 38 of core's SQL
+    /// literals were: four of them for every row of a bases view, and the
+    /// link panels' reads and the file summary on every call. What the
+    /// guarantee gives up is a plan chosen from a bound value, which in
+    /// this schema could only be an index prefix search for a bound
+    /// pattern; `db::connection_census` and
+    /// `no_like_can_use_an_index_prefix` hold that no statement can have
+    /// one.
+    ///
+    /// No `cfg` in here: whichever branch opened the connection, it is
+    /// configured the same way.
+    pub(super) fn configure_connection(conn: Unconfigured) -> rusqlite::Result<Connection> {
+        let Unconfigured(conn) = conn;
+        conn.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+            true,
+        )?;
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+        Ok(conn)
+    }
 }
 
 /// A bare connection to `path`: a session's anchored cache path
 /// (`/.slate-fd/<token>/...`, from `CacheDir::sqlite_path`) opens through
-/// the unix VFS variant the descriptor hook expects (`anchored::VFS`);
-/// every other path through the default, as before. Only
-/// [`open_connection`] calls it.
-fn open_unconfigured(path: &Path) -> rusqlite::Result<Connection> {
+/// the unix VFS variant the descriptor hook expects where there is one
+/// (`anchored::VFS`, macOS); every other path, and every path on Linux and
+/// Windows, through the default, as before. Only [`open_connection`] calls
+/// it.
+fn open_unconfigured(path: &Path) -> rusqlite::Result<Unconfigured> {
     #[cfg(any(
         all(
             any(target_os = "macos", target_os = "linux"),
@@ -346,9 +382,10 @@ fn open_unconfigured(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(vfs) = anchored::VFS
         && anchored::is_synthetic(path)
     {
-        return Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs);
+        return Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs)
+            .map(Unconfigured::opened);
     }
-    Connection::open(sqlite_open_path(path))
+    Connection::open(sqlite_open_path(path)).map(Unconfigured::opened)
 }
 
 /// The spelling SQLite opens `path` by.
@@ -377,8 +414,7 @@ pub(crate) fn sqlite_open_path(path: &Path) -> std::borrow::Cow<'_, Path> {
 /// Open an in-memory database for tests.
 #[cfg(test)]
 pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
-    let conn = Connection::open_in_memory()?;
-    configure_connection(&conn)?;
+    let conn = configure_connection(Unconfigured::opened(Connection::open_in_memory()?))?;
     register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)

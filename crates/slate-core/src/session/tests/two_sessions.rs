@@ -488,7 +488,10 @@ fn read_configuration(conn: &Connection) -> Configured {
 ///
 /// Which branch of the open this proves depends on where it runs: a
 /// session's cache opens by its anchored path, which takes the VFS branch
-/// on macOS and Linux and the plain one on Windows.
+/// on macOS alone and the plain one on Linux and Windows. No CI lane runs
+/// this on macOS, so the VFS branch is not held here: the type the open
+/// returns (`db.rs`, `Unconfigured`) and
+/// `db::connection_census::the_open_has_one_exit_through_configure` hold it.
 #[test]
 fn every_connection_core_opens_is_configured() {
     const AS_CORE_CONFIGURES: Configured = Configured {
