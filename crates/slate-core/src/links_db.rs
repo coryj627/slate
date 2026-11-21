@@ -1073,13 +1073,18 @@ fn present_snippet(snippet: String, span_start: u32, span_end: u32) -> String {
     // CD22 accepted; hiding one leaves the broken word this trim removes.
     let left_cut = smallest < span_start;
     let right_cut = snippet.len() - (smallest + span_len) >= SNIPPET_RADIUS;
+    // A cluster that joins the link (a combining mark after its last `]`,
+    // a prepended mark before its first `[`) is kept whole: the edges
+    // never fall inside the cluster at either end of the link (Codex
+    // round 2).
     let start = if left_cut {
-        left_edge(&snippet, smallest)
+        left_edge(&snippet, smallest).min(grapheme_floor(&snippet, smallest))
     } else {
         0
     };
     let end = if right_cut {
-        right_edge(&snippet, (largest + span_len).min(snippet.len()))
+        let link_end = (largest + span_len).min(snippet.len());
+        right_edge(&snippet, link_end).max(grapheme_ceil(&snippet, link_end))
     } else {
         snippet.len()
     };
@@ -1210,6 +1215,20 @@ fn right_edge(text: &str, link_end: usize) -> usize {
 fn is_known_grapheme_boundary(text: &str, at: usize) -> bool {
     let mut cursor = GraphemeCursor::new(at + 1, text.len() + 2, true);
     cursor.is_boundary(text, 1) == Ok(true)
+}
+
+/// The smallest grapheme cluster boundary of `text` at or after `at`.
+fn grapheme_ceil(text: &str, at: usize) -> usize {
+    let at = round_down_to_char_boundary(text, at);
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    match cursor.is_boundary(text, 0) {
+        Ok(true) => at,
+        _ => cursor
+            .next_boundary(text, 0)
+            .ok()
+            .flatten()
+            .unwrap_or(text.len()),
+    }
 }
 
 /// The largest grapheme cluster boundary of `text` at or before `at`.
@@ -1724,6 +1743,32 @@ mod tests {
             let read = snippets_read_back(&source);
             for shown in read.backlinks.iter().chain(&read.outgoing) {
                 assert!(shown.contains(link), "{link} stays whole: {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cluster_that_joins_the_link_is_kept_whole() {
+        use unicode_segmentation::UnicodeSegmentation;
+        // A combining mark right after the link joins its last `]`, and a
+        // prepended mark right before it joins its first `[`: the trim
+        // keeps the whole cluster, never half of it (Codex round 2).
+        let cases = [
+            format!("[[Target]]\u{301}{}", "a".repeat(100)),
+            format!("{} \u{600}[[Target]] tail.", "a".repeat(100)),
+        ];
+        for source in cases {
+            let read = snippets_read_back(&source);
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                let body = shown.trim_start_matches('…').trim_end_matches('…');
+                let at = source.find(body).unwrap_or_else(|| panic!("{shown:?}"));
+                for edge in [at, at + body.len()] {
+                    assert!(
+                        edge == source.len()
+                            || source.grapheme_indices(true).any(|(i, _)| i == edge),
+                        "the edge at {edge} splits a cluster: {shown:?}"
+                    );
+                }
             }
         }
     }
