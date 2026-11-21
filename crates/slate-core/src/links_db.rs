@@ -1223,4 +1223,283 @@ mod tests {
             "the snapshot must not sort: {plan:?}"
         );
     }
+
+    /// CB-32 (#1782): one note's link rows as an index writes them, and
+    /// as the panels read them back.
+    struct ReadBack {
+        /// `links.snippet` as stored: `snippet_around`'s cut, untouched.
+        stored: Vec<String>,
+        /// The backlink rows of `Target.md` and `Λογος.md`.
+        backlinks: Vec<String>,
+        /// The note's outgoing rows, in document order.
+        outgoing: Vec<String>,
+    }
+
+    fn snippets_read_back(source: &str) -> ReadBack {
+        let mut conn = migrated_db();
+        let paths = ["Source.md", "Target.md", "Λογος.md"];
+        for path in paths {
+            conn.execute(
+                "INSERT INTO files
+                    (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
+                     content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+                 VALUES (?1, ?1, 'md', 0, 0, 0, 0, '', 1, 1, 1, '')",
+                [path],
+            )
+            .unwrap();
+        }
+        let tx = conn.transaction().unwrap();
+        let source_id: i64 = tx
+            .query_row("SELECT id FROM files WHERE path = 'Source.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let snapshot = InMemoryVaultIndex::new(paths.iter().map(|path| path.to_string()).collect());
+        replace_links_for_file(&tx, source_id, "Source.md", source, &snapshot).unwrap();
+        tx.commit().unwrap();
+        let stored = conn
+            .prepare("SELECT snippet FROM links ORDER BY ordinal")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        let mut backlinks = Vec::new();
+        for target in ["Target.md", "Λογος.md"] {
+            let page = backlinks_for(&conn, target, Paging::first(100)).unwrap();
+            backlinks.extend(page.items.into_iter().map(|row| row.snippet));
+        }
+        let outgoing = outgoing_links_for(&conn, "Source.md")
+            .unwrap()
+            .into_iter()
+            .map(|row| row.snippet)
+            .collect();
+        ReadBack {
+            stored,
+            backlinks,
+            outgoing,
+        }
+    }
+
+    /// Step 0's paragraph (#1782): more than sixty bytes of words on each
+    /// side of the link, so `snippet_around` cuts inside "epsilon" on the
+    /// left and inside "lambda" on the right.
+    const WORD_RUN: &str =
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho";
+
+    fn cut_paragraph(link: &str) -> String {
+        format!("{WORD_RUN} {link} {WORD_RUN}")
+    }
+
+    /// What a reader is shown for [`cut_paragraph`]: whole words on each
+    /// side, and "…" joined to the word on each side that was cut.
+    fn cut_paragraph_shown(link: &str) -> String {
+        format!(
+            "…zeta eta theta iota kappa lambda mu nu xi omicron pi rho {link} \
+             alpha beta gamma delta epsilon zeta eta theta iota kappa…"
+        )
+    }
+
+    /// Words of filler `len` bytes long, starting and ending on a space.
+    fn filler(len: usize) -> String {
+        let mut text = String::from(" ");
+        while text.len() + "word ".len() <= len {
+            text.push_str("word ");
+        }
+        while text.len() < len {
+            text.push(' ');
+        }
+        text
+    }
+
+    /// `shown` is "…" where cut, then a run of `source` that starts and
+    /// ends on a whole word (UAX #29) and on a grapheme boundary, with no
+    /// half of a flag in it; it holds the link whole.
+    fn assert_whole_words(source: &str, shown: &str, link: &str) {
+        use unicode_segmentation::UnicodeSegmentation;
+        let body = shown
+            .strip_prefix('…')
+            .and_then(|rest| rest.strip_suffix('…'))
+            .unwrap_or_else(|| panic!("both cut sides carry a mark: {shown:?}"));
+        assert!(
+            !body.starts_with('…') && !body.ends_with('…'),
+            "one mark a side: {shown:?}"
+        );
+        assert!(body.contains(link), "the link stays whole: {shown:?}");
+        assert_eq!(
+            source.matches(body).count(),
+            1,
+            "the text between the marks is the note's own: {shown:?}"
+        );
+        let start = source.find(body).unwrap();
+        let end = start + body.len();
+        let graphemes: Vec<usize> = source
+            .grapheme_indices(true)
+            .map(|(at, _)| at)
+            .chain([source.len()])
+            .collect();
+        let words: Vec<usize> = source
+            .split_word_bound_indices()
+            .map(|(at, _)| at)
+            .chain([source.len()])
+            .collect();
+        for (side, at) in [("start", start), ("end", end)] {
+            assert!(
+                graphemes.contains(&at),
+                "the {side} is a grapheme boundary of the note: {shown:?}"
+            );
+            assert!(
+                words.contains(&at),
+                "the {side} is a word boundary of the note: {shown:?}"
+            );
+        }
+        let regional = body
+            .chars()
+            .filter(|c| ('\u{1F1E6}'..='\u{1F1FF}').contains(c))
+            .count();
+        assert_eq!(regional % 2, 0, "no half of a flag remains: {shown:?}");
+    }
+
+    #[test]
+    fn a_snippet_starts_and_ends_on_a_word_with_a_mark_where_cut() {
+        let source = cut_paragraph("[[Λογος]]");
+        let read = snippets_read_back(&source);
+        let shown = cut_paragraph_shown("[[Λογος]]");
+        assert_eq!(read.backlinks, [shown.as_str()], "the backlink row");
+        assert_eq!(read.outgoing, [shown.as_str()], "the outgoing row");
+        assert_whole_words(&source, &shown, "[[Λογος]]");
+    }
+
+    /// Han ideographs are each a word to UAX #29, with no space or
+    /// punctuation between them, so a cut side starts and ends between two
+    /// of them: the context is kept, not dropped down to the link.
+    #[test]
+    fn a_snippet_in_a_script_without_spaces_keeps_its_context() {
+        let source = "我们今天在图书馆里读了很多关于历史和文化的书籍然后回家 [[Λογος]] \
+                      之后我们一起吃晚饭并且讨论了明天的计划和安排还有很多事情";
+        let read = snippets_read_back(source);
+        let shown = "…里读了很多关于历史和文化的书籍然后回家 [[Λογος]] \
+                     之后我们一起吃晚饭并且讨论了明天的计划…";
+        assert_eq!(read.backlinks, [shown], "the backlink row in Chinese");
+        assert_eq!(read.outgoing, [shown], "the outgoing row in Chinese");
+        assert_whole_words(source, shown, "[[Λογος]]");
+    }
+
+    #[test]
+    fn an_autolink_snippet_is_trimmed_too() {
+        for link in ["<https://example.com/a>", "<a@b.co>"] {
+            let read = snippets_read_back(&cut_paragraph(link));
+            assert_eq!(
+                read.outgoing,
+                [cut_paragraph_shown(link)],
+                "the outgoing row of {link}"
+            );
+        }
+    }
+
+    /// A guard: a side the note itself ends on was never cut, so it takes
+    /// no mark, and a whole short note comes back whole.
+    #[test]
+    fn a_snippet_at_the_start_or_end_of_a_note_has_no_mark_on_that_side() {
+        let source = format!("[[Target]] opens it, {WORD_RUN}, and it closes on [[Target]]");
+        let read = snippets_read_back(&source);
+        let [first, last] = read.outgoing.as_slice() else {
+            panic!("two outgoing rows: {:?}", read.outgoing);
+        };
+        assert!(first.starts_with("[[Target]] opens it,"), "{first:?}");
+        assert!(last.ends_with("it closes on [[Target]]"), "{last:?}");
+        // The notes the two mutation goldens hold, and step 0's `C.md`
+        // shape: whole, so unchanged.
+        for note in [
+            "See [[a]]. ",
+            "Link: [[renamed2]]. ",
+            "Lead. [[Target]] tail.",
+        ] {
+            assert_eq!(snippets_read_back(note).outgoing, [note], "{note:?}");
+        }
+    }
+
+    #[test]
+    fn a_snippet_never_splits_a_grapheme() {
+        let link = "[[Target]]";
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let flags = "\u{1F1EC}\u{1F1F7}\u{1F1EB}\u{1F1F7}";
+        // Each note puts `snippet_around`'s left cut, sixty bytes before the
+        // link, and its right cut, sixty bytes after it, inside a sequence.
+        let cases = [
+            (
+                "inside e + U+0301, in a word on each side",
+                format!(
+                    "Zut. e\u{301}toile{}{link}{}cafe\u{301} au lait.",
+                    filler(60 + 1 - "e\u{301}toile".len()),
+                    filler(60 - "cafe".len()),
+                ),
+                "\u{301}toile",
+                "cafe",
+            ),
+            (
+                "inside a ZWJ family",
+                format!(
+                    "Zut {family}{}{link}{}{family} fin.",
+                    filler(60 + 4 - family.len()),
+                    filler(60 - "\u{1F468}\u{200D}".len()),
+                ),
+                "\u{200D}\u{1F469}",
+                "\u{1F468}\u{200D}",
+            ),
+            (
+                "inside a flag pair",
+                format!(
+                    "Zut {flags}{}{link}{}{flags} fin.",
+                    filler(60 + 4 - flags.len()),
+                    filler(60 - "\u{1F1EC}\u{1F1F7}\u{1F1EB}".len()),
+                ),
+                "\u{1F1F7}\u{1F1EB}\u{1F1F7}",
+                "\u{1F1EC}\u{1F1F7}\u{1F1EB}",
+            ),
+        ];
+        for (case, source, stored_starts, stored_ends) in cases {
+            let read = snippets_read_back(&source);
+            let [stored] = read.stored.as_slice() else {
+                panic!("{case}: one row: {:?}", read.stored);
+            };
+            assert!(
+                stored.starts_with(stored_starts) && stored.ends_with(stored_ends),
+                "{case}: the stored cut falls inside the sequence: {stored:?}"
+            );
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                assert_whole_words(&source, shown, link);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unbroken_word_beside_a_link_keeps_the_link_whole() {
+        use unicode_segmentation::UnicodeSegmentation;
+        // No UAX #29 word break in either run (a URL would not do: it
+        // breaks at `:`, `/`, `?` and `=`); the second puts the cut between
+        // an `e` and its combining accent.
+        let runs = [
+            "a1".repeat(60),
+            format!("{}e\u{301}{}", "a1".repeat(30), "b2".repeat(29)),
+        ];
+        for run in runs {
+            let source = format!("{run}[[Target]] tail.");
+            let read = snippets_read_back(&source);
+            for shown in read.backlinks.iter().chain(&read.outgoing) {
+                let body = shown
+                    .strip_prefix('…')
+                    .unwrap_or_else(|| panic!("the cut side carries a mark: {shown:?}"));
+                assert!(
+                    body.ends_with("[[Target]] tail.") && source.ends_with(body),
+                    "the link stays whole: {shown:?}"
+                );
+                let start = source.len() - body.len();
+                assert!(
+                    source.grapheme_indices(true).any(|(at, _)| at == start),
+                    "the edge is a grapheme boundary of the note: {shown:?}"
+                );
+            }
+        }
+    }
 }
