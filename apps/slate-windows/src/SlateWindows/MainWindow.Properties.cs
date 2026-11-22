@@ -293,11 +293,12 @@ public partial class MainWindow
     /// <summary>Plan 47 CB-17b (#1866, CD11): a property row's write goes in flight, which
     /// turns its Save off. When the keys are on that row's Save (its own press, or Keep Mine
     /// after a conflict), they leave it first, through the rows' landing, for the property's
-    /// field, where they landed after the off. Enter in the field, and a delete, move
+    /// field, where they landed after the off. Enter in the field, the boolean switch (a
+    /// CheckBox that runs the same command and keeps the keys), and a delete, move
     /// nothing.</summary>
     private void Workspace_PropertyRowWriteStarting(PropertyRowViewModel row)
     {
-        if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.ButtonBase { DataContext: var context, Command: var command } save
+        if (Keyboard.FocusedElement is System.Windows.Controls.Button { DataContext: var context, Command: var command } save
             && ReferenceEquals(context, row)
             && ReferenceEquals(command, row.CommitCommand))
         {
