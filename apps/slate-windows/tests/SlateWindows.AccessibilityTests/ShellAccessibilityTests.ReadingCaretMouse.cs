@@ -93,28 +93,25 @@ public sealed partial class ShellAccessibilityTests
                 }
                 // Its line at the top of the view, so the line below shows too.
                 speech.ScrollIntoView(true);
-                FlaUI.Core.ITextRange line = speech.Clone();
-                line.ExpandToEnclosingUnit(TextUnit.Line);
-                Rectangle[] lineBoxes = [];
+                Rectangle[] speechBoxes = [];
                 Rectangle[] targetBoxes = [];
                 _ = SpinWait.SpinUntil(
                     () =>
                     {
-                        lineBoxes = line.GetBoundingRectangles();
-                        if (lineBoxes.Length == 0)
-                        {
-                            lineBoxes = speech.GetBoundingRectangles();
-                        }
+                        speechBoxes = speech.GetBoundingRectangles();
                         targetBoxes = target.GetBoundingRectangles();
-                        return lineBoxes.Length > 0 && targetBoxes.Length > 0;
+                        return speechBoxes.Length > 0 && targetBoxes.Length > 0;
                     },
                     TimeSpan.FromSeconds(5));
-                if (lineBoxes.Length == 0 || targetBoxes.Length == 0)
+                if (speechBoxes.Length == 0 || targetBoxes.Length == 0)
                 {
-                    failures.Add($"{kind}: its line ({lineBoxes.Length} boxes) or the line below ({targetBoxes.Length} boxes) has no box on screen");
+                    failures.Add($"{kind}: its speech ({speechBoxes.Length} boxes) or the line below ({targetBoxes.Length} boxes) has no box on screen");
                     continue;
                 }
-                Rectangle box = lineBoxes.Aggregate(Rectangle.Union);
+                // The hidden speech's box spans its line's height, at the line's
+                // left: to its left, at its middle, is the margin of that line (a
+                // Line range's box can reach into the line above).
+                Rectangle box = speechBoxes[0];
                 var press = new Point(box.Left - 12, box.Top + (box.Height / 2));
                 if (press.X <= page.Left + 2)
                 {
@@ -134,6 +131,9 @@ public sealed partial class ShellAccessibilityTests
                     failures.Add($"{kind}: a drag from beside it selected \"{selected}\", which leaves the element out");
                 }
 
+                // A press inside the drag's selection would wait for a drag, so
+                // the selection is collapsed past it first, as a reader would.
+                Keyboard.Type(FlaUI.Core.WindowsAPI.VirtualKeyShort.RIGHT);
                 Mouse.Click(press);
                 // The release moves a plain click's caret past the element.
                 if (!SpinWait.SpinUntil(
@@ -141,7 +141,14 @@ public sealed partial class ShellAccessibilityTests
                         TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.End) > 0,
                     TimeSpan.FromSeconds(5)))
                 {
-                    failures.Add($"{kind}: a click beside it left the caret in its hidden speech");
+                    FlaUI.Core.ITextRange caret = text.GetSelection()[0];
+                    FlaUI.Core.ITextRange caretLine = caret.Clone();
+                    caretLine.ExpandToEnclosingUnit(TextUnit.Line);
+                    failures.Add(
+                        $"{kind}: a click beside it left the caret in its hidden speech (against the speech's start "
+                        + $"{caret.CompareEndpoints(TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.Start)}, "
+                        + $"its end {caret.CompareEndpoints(TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.End)}; "
+                        + $"the caret's line \"{caretLine.GetText(-1)}\"; pressed at {press}, the speech's box {box})");
                 }
             }
 

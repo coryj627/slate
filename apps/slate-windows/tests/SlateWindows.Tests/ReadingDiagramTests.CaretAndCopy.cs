@@ -32,11 +32,72 @@ public sealed partial class ReadingDiagramTests
     /// <summary>The button released, and whatever the release posted.</summary>
     private static void ReleaseMouse(ReadingSurface surface)
     {
+        RaiseMouseUp(surface);
+        PumpedDispatcher.Drain();
+    }
+
+    /// <summary>The button released, what the release posted still queued.</summary>
+    private static void RaiseMouseUp(ReadingSurface surface) =>
         surface.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
         {
             RoutedEvent = Mouse.PreviewMouseUpEvent,
         });
-        PumpedDispatcher.Drain();
+
+    /// <summary>Codex round 6: what a release posts belongs to that release.
+    /// A newer press, a key or a caret set (a UIA client's) before it runs
+    /// supersedes it, so it never moves the caret those put in hidden
+    /// speech; a drag the newer press starts still selects the element.</summary>
+    [Theory]
+    [InlineData("press")]
+    [InlineData("key")]
+    [InlineData("caret set")]
+    public void AReleaseSupersededByNewerInputMovesNothing(string newer)
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine("rendered", $"reading-caret-stale-{newer.Replace(' ', '-')}");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                surface.CaretPosition = PositionAtText(surface.Document, "Before the line.");
+                Run hidden = Assert.Single(HiddenRuns(line));
+                InlineUIContainer container = line.Inlines.OfType<InlineUIContainer>().First();
+                PressMouse(surface);
+                surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                RaiseMouseUp(surface);
+
+                TextPointer expected;
+                switch (newer)
+                {
+                    case "press":
+                        PressMouse(surface);
+                        surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                        expected = hidden.ContentStart;
+                        break;
+                    case "key":
+                        Press(surface, Key.Right, EditingCommands.MoveRightByCharacter);
+                        expected = hidden.ContentStart.GetPositionAtOffset(1)!;
+                        break;
+                    default:
+                        expected = hidden.ContentStart.GetPositionAtOffset(2)!;
+                        surface.Selection.Select(expected, expected);
+                        break;
+                }
+                PumpedDispatcher.Drain();
+
+                Assert.Equal(0, surface.CaretPosition.CompareTo(expected));
+                if (newer == "press")
+                {
+                    TextPointer below = PositionAtText(surface.Document, "After the line.").GetPositionAtOffset(5)!;
+                    surface.Selection.Select(surface.Selection.Start, below);
+                    ReleaseMouse(surface);
+                    Assert.True(
+                        surface.Selection.Start.CompareTo(container.ElementStart) <= 0,
+                        "the newer press's drag begins after the element");
+                }
+            }
+        });
     }
 
     /// <summary>The merge judge's M1, a plain click: a press in the margin
