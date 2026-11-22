@@ -10,8 +10,10 @@ CB-15c, CB-17a, CB-19, CB-24, CB-25 and CB-27 to CB-32, merged from
 C8). Wave C9 is done: CB-15c (#2032), CB-32 (#2033) and CB-17a (#2037).
 Wave C10 started early, on 2026-11-21, when Principal V's slot freed at
 CB-15c's merge: CB-22 (#2035) and CB-33 (#2036) are merged, and CB-17b
-is in progress. CB-22b, a chunk added on 2026-11-21, follows CB-17b
-(§5, §6). §12 keeps the delivery record.
+is in progress, as two PRs. CB-22b, a chunk added on 2026-11-21,
+follows CB-17b (§5, §6). Wave C11 opened the same day, when Principal
+X's slot freed: CB-45's design is in progress, and CB-16 and CB-20 wait
+for CB-17b. §12 keeps the delivery record.
 Written from the requirements brief the owner approved on 2026-11-13
 (`docs/superpowers/specs/2026-11-13-plan-47-windows-core-closeout-design.md`).
 Baseline: `main` at c2377210 (#1927). The reading was done at 1ec9bf31
@@ -427,7 +429,8 @@ CB-28's delivery left for the owner (§12, Wave C7); and whether the
 The Run process row is dated 2026-11-15, the day of the delivery
 instruction. The #1991 row is a later call, dated 2026-11-18, on an
 issue that CB-9b's spec work filed. The CD20 (second step) and CD9
-(wording) rows are later calls, dated 2026-11-20, in wave C8. CD1 is
+(wording) rows are later calls, dated 2026-11-20, in wave C8. The CD11
+(CB-17b) row is a later call, dated 2026-11-21, in wave C10. CD1 is
 overtaken and has no answer.
 
 Some rows also carry a call the owner did not make. It is marked "the
@@ -452,6 +455,7 @@ owner can change any of them.
 | #1991 | 2026-11-18 | **A task toggle made through a tab counts as the reader's own edit.** It stays on the tab's undo stack and is undoable. An undo that takes it back is ordinary editor behaviour, and a save then writes what the reader sees. The call is read as covering every route through a tab (the editor, the reading view, and the Tasks panel and Tasks Review through an open tab), since the reader makes the toggle on each. | #1991 is closed as not planned, with no code change. CB-9b's no-undo rule (its Design 0) stays for the writes the reader did not make: property writes, the bulk rename, Bases cell edits, the tag edit and link rewrites. CB-14's landed-but-unindexed path splices no tab, rebaselines none and leaves every undo stack as it was. |
 | CD20 (second step) | 2026-11-20 | **One estimated decode time and one limit, 3 s,** in place of the two limits CD20 put. The owner picked 3 s from CB-29's calibration table, after approving the CI-runner probe run; no real plotting export was fetched first. | CB-29's guard refuses an SVG whose estimated decode passes 3,000 ms (`MaxEstimatedDecodeMilliseconds`); a matplotlib-shaped scatter is admitted up to 3,425 points and refused from 3,426. CD20 has no step left. §12's Wave C8 record says how. |
 | CD9 (wording) | 2026-11-20 | **"Plain words. Please change it."** The answer to #2020's "For the owner" section: under CD9 the search's invalid-query sentence had become core's developer text. | Core's invalid-query detail is a plain sentence, "Check the quotes, symbols and operators in your search.", after "Search error:" on both hosts and in Bases' `file.matches`, delivered by #2028 (§12). |
+| CD11 (CB-17b) | 2026-11-21 | **"Stay, and speak on a press".** Preview and Expand loaded folders stay available while they run. A press made during a run speaks a sentence from core and does nothing else. | CB-17b's question departed from CD11's words, which have every self-disabling button move the keys first, and this is the owner's answer to it. The CD11 row above stands for every other button. CB-17b delivers it (§5). |
 
 Two adopted rows changed in delivery by the lead's rulings, and §12's
 Wave C6 record says how. CB-14 speaks CD8's tab sentence before the new
@@ -476,10 +480,11 @@ the same and contract 29's S7 announces a summary only when it
 changes; the recorded alternative is a sentence for each refused query
 (§12's Wave C8 record).
 
-In waves C9 and C10 no decision row was answered again, and the three
-answers the owner gave were on Codex stop questions (§12's record of
-those waves). Three notes on rows above, each the plan lead's,
-2026-11-21:
+In waves C9 and C10 the owner gave four answers. Three were on Codex
+stop questions (§12's record of those waves). The fourth is the CD11
+(CB-17b) row above: CB-17b put a question that departed from CD11's
+words, and "Stay, and speak on a press" is the owner's answer to it.
+Three notes on other rows above, each the plan lead's, 2026-11-21:
 
 - CD14's "disabled" means that in reading mode the Editor menu's arrow
   keys skip Activate at Cursor and Preview Embed, since WPF skips a
@@ -614,8 +619,8 @@ work the chunk carries.
 | CB-15b | Canvas, graph and search: 21 sites, `GraphConfigStore` among them; the four search and graph error arms go, and one sentence (the invalid-query one) changes, on search and on graph | Refs #1890 | M | windows | NVDA spot, the invalid-query sentence on search and on graph among them | CD9 |
 | CB-15c | Panels, reading, workspace, lifecycle and commands; the census covers the whole shell | #1890 | M | windows | NVDA spot | CD9 |
 | CB-16 | A cancelled import says so, and the import summary and cancel sentences are core events that Windows speaks; the status bar shows an import running, with a Cancel that moves the keys first; the Files status line never stays on "Loading files…"; the sidebar filter's and the Bases export's cancel paths are checked | #1830 #1791 | M–L | windows, rust, swift | NVDA spot | CD10 |
-| CB-17a | One NVDA session hears a sheet opened from the menu and from the launcher, and each self-disabling button; the manifest census gains the keys-first witness and scrapes `Command=`, with today's sites as dated exceptions that CB-17b ends; the session's record is kept whatever it hears; no button is changed here | Refs #1866 | M | windows | NVDA: the session | CD11 |
-| CB-17b | Nothing holding the keys goes off as a sheet opens, over all fourteen sheets and the launcher; every self-disabling button the `Command=` scrape finds moves the keys first, heard to fail or not: the reading's six groups and any other the scrape lists, all of them here; no dated exception of this class is left. Scope added on 2026-11-21 from CB-17a's delivery (§12, Waves C9 and C10), in this order. First, the two finds of CB-17a's NVDA session: the keyboard is dead after a cancelled Import… box, until Alt, and the keys rest on the bare window after the launcher's template picker and Import's folder picker close; restore-after-box facts for Import…, Delete folder note and the Queries leaf's Delete…, and the launcher's restore (#1866 comment 7067654509). Then the Clear All Marks button, which is stuck off on the open marks list on `main` because nothing raises its command's `CanExecuteChanged`; CB-17a's red test is its failing fact (#1955 comment 7067701218). Then CB-17a's merge-judge findings, all seven deferred here (#1955 comment 7069935142): a witness that skips at run time counts as running, a witness is not tied to its recorder's root, a dated row could be rewritten as an own-press exemption with the ceiling lowered in the same edit, and four nits. And the 47 dated rows of the focus manifest, which this chunk ends: the menu's fourteen sheet triggers, the launcher's one and 32 more, where the reading counted about twenty buttons | #1866 | L | windows (gate) | NVDA spot: three sheets, and one button of each group | CD11 |
+| CB-17a | One NVDA session hears a sheet opened from the menu and from the launcher, and each self-disabling button; the manifest census gains the keys-first witness and scrapes `Command=`, with today's sites as dated exceptions that CB-17b ends; the session's record is kept whatever it hears; no button is changed here | Refs #1866 | L (M until 2026-11-21: its spec sized it L, and the lead's ruling took L) | windows | NVDA: the session | CD11 |
+| CB-17b | Nothing holding the keys goes off as a sheet opens, over all fourteen sheets and the launcher; every self-disabling button the `Command=` scrape finds moves the keys first, heard to fail or not: the reading's six groups and any other the scrape lists, all of them here; no dated exception of this class is left. Scope added on 2026-11-21 from CB-17a's delivery (§12, Waves C9 and C10), in this order. First, the two finds of CB-17a's NVDA session: the keyboard is dead after a cancelled Import… box, until Alt, and the keys rest on the bare window after the launcher's template picker and Import's folder picker close; restore-after-box facts for Import…, Delete folder note and the Queries leaf's Delete…, and the launcher's restore (#1866 comment 7067654509). Then the Clear All Marks button, which is stuck off on the open marks list on `main` because nothing raises its command's `CanExecuteChanged`; CB-17a's red test is its failing fact (#1955 comment 7067701218). Then CB-17a's merge-judge findings, all seven deferred here (#1955 comment 7069935142): a witness that skips at run time counts as running, a witness is not tied to its recorder's root, a dated row could be rewritten as an own-press exemption with the ceiling lowered in the same edit, and four nits. And the 47 dated rows of the focus manifest, which this chunk ends: the menu's fourteen sheet triggers, the launcher's one and 32 more, where the reading counted about twenty buttons. It ships as two PRs (recorded 2026-11-21). PR 1 is the 32 buttons, with Import…'s box, Bulk Rename and Clear All Marks; it is Refs #1866 and takes the dated ceiling from 47 to 15. PR 2 is the fourteen sheets, the launcher and its restore, and the end of the dated kind, and it closes #1866. Its step 0 found that Space or a click on any button in a sheet that stays open sends the keys behind the sheet, because each sheet is a focus scope and `ButtonBase` gives the keys back when it loses capture. By the owner's answer of 2026-11-21 (§3.1), "Stay, and speak on a press", Preview and Expand loaded folders stay available while they run, and a press made during a run speaks a sentence from core and does nothing else | #1866 | L | windows (gate) | NVDA spot: three sheets, and one button of each group | CD11 |
 | CB-18 | Deleting the last note of a date group lands the keys with no "unavailable"; diagnosis first | #1671 | M | windows (gate) | NVDA spot | — |
 | CB-19 | Every open combo box's rows report their place; `ComboBoxCensus`; the gate scans a list open in each family; probe first | #1783 #1836 | S–M | windows (gate) | NVDA spot | — |
 | CB-20 | Line reading speaks a diagram's description, rendered and pending; `ReadingEmbeddedElementCensus`; spike first | #1708 | M | windows (gate) | NVDA full, Narrator spot | CD12 |
@@ -659,7 +664,7 @@ Only rows where something beyond the chunk's merge must happen.
 | #1788 | CB-7 | closes (CD3) | the pin passes on `main` |
 | #1889 | CB-9a, CB-9b | Refs, then closes | CB-9b; the two accepted exceptions (five census rows, CB-9b's row in §5) named in CB-46's table |
 | #1890 | CB-15a to CB-15c | Refs, Refs, closes | the census over the whole shell |
-| #1866 | CB-17a, CB-17b | Refs, then closes | CB-17b: every self-disabling button the scrape finds moves the keys first; no accepted exception is left (CD11) |
+| #1866 | CB-17a, CB-17b (two PRs) | Refs, Refs, then closes | CB-17b: every self-disabling button the scrape finds moves the keys first; no accepted exception is left (CD11). Its PR 1 is Refs and its PR 2 closes. Two buttons stay available while they run, by the owner's answer of 2026-11-21 (§3.1) |
 | #1846 | CB-24 | closes by comment (CD16) | the recorded NVDA run |
 | #1835 | CB-0 | ended by hand, with a comment (CD40) | done on 2026-11-16 (§12) |
 | #1694 | CB-38 | closes by decision (CD26) | the contract line merged |
@@ -764,6 +769,14 @@ and C10). CB-22b runs after CB-17b in one slot, a sixth allowed pair,
 because both edit `MainWindow.xaml`; it takes the file before CB-16
 does in C11. Its letters go to the owner as one table, and its slot is
 confirmed when its spec is written.
+
+Wave C11 opened on 2026-11-21, when Principal X's slot freed at CB-33's
+merge and while CB-17b was still in wave C10. Principal Z has CB-45,
+the design, which is documents only and Refs #1718, so it shares no
+file with CB-17b. The wave's other two chunks start after CB-17b
+merges: CB-16 waits for it, as "Why this order" says, and CB-20 is
+placed after it because both edit the gate
+(`ShellAccessibilityTests*.cs`, below).
 
 Why this order:
 
@@ -2179,8 +2192,8 @@ V's slot freed at CB-15c's merge, so Principal X took CB-22, whose
 shared files were free from that merge, and then CB-33, whose code
 waited for CB-32's merge, as §6 asks. CB-17b waited for CB-17a.
 Principal Y started it when wave C9 was done; it is in progress, and
-this record does not cover it. Wave C10 also gained a chunk, CB-22b
-(below).
+this record covers only how it is cut and one owner answer (below).
+Wave C10 also gained a chunk, CB-22b (below).
 
 The lead's brief for wave C9 had two errors, and Principal W caught both
 before any code. It gave CD22 as selector keys, where the owner's answer
@@ -2352,10 +2365,10 @@ reconciliation tables, which Principal W regenerated with
 `canvas_reconciliation.py --write`. Under NVDA 2026.3.1, Quick Open on
 `κοσμος` said "No files matching" on base (47bcf77e) and "1 file
 matching" on head, and the Backlinks leaf of `ΚΟΣΜΟΣ.md` said "No notes
-link here yet." on base and listed two rows on head. CB-32's PR body
-ends with the count at its READY report, 8 / 5 / 3 / 0. The §12 row
-carries Principal W's final count, 13 / 7 / 6 / 0, after the Codex
-rounds and the judge's delta, as the lead's record gives it.
+link here yet." on base and listed two rows on head. CB-32's count is
+13 / 7 / 6 / 0, as its §12 row has it. #2033's body says 8 / 5 / 3 / 0
+because it was written before the merge judge: after it, the judge's
+minor 1 and nit 3 were fixed, and its nits 1, 2 and 5 were deferred.
 
 Five claims in CB-32's spec were wrong. NTFS does not treat `ς` and `σ`
 names as one. The fold is in seven indexes, not six. The `MoveMapping`
@@ -2365,8 +2378,9 @@ again. Not verified by anyone: a VoiceOver pass, the Mac's rebuild
 timing, APFS's treatment of a `ς` and `σ` pair, and cold-cache timings.
 
 The lead ruled CB-17a's eight calls on 2026-11-21, all as recommended.
-CB-17a changes no product code, as CD11 was answered (§3.1), and its
-spec sizes it L where §5 says M. One site per `IsEnabled` trigger, so 19
+CB-17a changes no product code, as CD11 was answered (§3.1). Its spec
+sized it L where §5 said M, the lead's ruling took L, and this docs PR
+changes §5's row to L. One site per `IsEnabled` trigger, so 19
 rows become 41; a keys-first fact names its condition's token, and
 #1867's six facts name their overlay (Call 1). Menu rows are not command
 sites, which `MenuRowCommandTests` shows; its skip on the hosted runners
@@ -2391,11 +2405,13 @@ turns it off". A fact showed it red on `main`: on the canvas's open
 marks list the button is stuck off, because nothing raises its command's
 `CanExecuteChanged`. The row is dated, a #1955 comment (7067701218)
 points to CB-17b, no issue is filed, and the lead keeps the red test's
-source outside the repository for CB-17b. Two parts of ruling 8 were not
-found when this record was written. #1955 holds no comment for the other
-drivers, though the manifest's `_doc` cites #1955 for them. And #2037's
-"For the owner" section, as merged, names only Clear All Marks. The
-merged manifest holds 35 rows under the own-press exemption. The
+source outside the repository for CB-17b. Ruling 8's #1955 line was not
+posted at the merge, though the manifest's `_doc` cites #1955 for the
+other drivers, and #2037's "For the owner" section, as merged, names
+only Clear All Marks. This docs PR's worker found the gap, and the lead
+posted the line
+([#1955, comment 7071845546](https://github.com/coryj627/slate/issues/1955#issuecomment-7071845546)).
+The merged manifest holds 35 rows under the own-press exemption. The
 question is carried under "For the owner" below. The NVDA session ran
 from 13:06 to 13:49 on a Release build of `main`'s product, and its
 record is
@@ -2592,13 +2608,37 @@ to a Codex stop question the lead put under the 2026-11-20 rule:
 - CB-17a's Codex round 3, the property-element binding: "Small fix, no
   new round".
 
+A fourth answer came the same day, on a question CB-17b put, and it is
+not a stop question: "Stay, and speak on a press". Preview and Expand
+loaded folders stay available while they run, and a press made during
+a run speaks a sentence from core and does nothing else. The question
+departed from CD11's words, and this is the owner's answer to it. §3.1
+has the row.
+
+CB-17b, in progress, ships as two PRs. PR 1 is the 32 buttons, with
+Import…'s box, Bulk Rename and Clear All Marks. It is Refs #1866 and
+takes the dated ceiling from 47 to 15. PR 2 is the fourteen sheets, the
+launcher and its restore, and the end of the dated kind, and it closes
+#1866. CB-17b's step 0 found one thing no earlier reading had: Space or
+a click on any button in a sheet that stays open sends the keys behind
+the sheet, because each sheet is a focus scope and `ButtonBase` gives
+the keys back when it loses capture. §5's row carries all of this, and
+CB-17b's own record comes with its merge.
+
+Wave C11 opened on 2026-11-21, when Principal X's slot freed. Principal
+Z has CB-45, the design, which is documents only and Refs #1718. CB-16
+waits for CB-17b, and CB-20 is placed after CB-17b, because both edit
+the gate (§6).
+
 CD37: wave C9's start read was posted on 2026-11-21 on #1493 (comment
 7059486945: `notify` 9.0.0 stable was released on 2026-11-21 and clears
 the cooldown on 2026-11-28), #480 (comment 7059487234: no change) and
 #1628 (comment 7059487458: `mathcat` 0.7.8 clears the cooldown on
 2026-11-23, and the pinned 0.7.7 has been yanked). §8's watch row for
 #1628 is still not met. Wave C10 opened the same morning, so its read
-was the same one.
+was the same one. The lists were read again when wave C11 opened, with
+no change (`notify` 9.0.0 clears on 2026-11-28 and `mathcat` 0.7.8 on
+2026-11-23), so no comments were posted.
 
 Shared files. This docs PR corrects §6's rows for what these chunks did.
 CB-32's rebuild is migration 042 in `db.rs` and did not start in
@@ -2679,6 +2719,8 @@ at its line:
   mode switch.
 - §5's CB-17b row gains the scope CB-17a's delivery gave it, and §5's
   CB-38b row says its spec reads CB-22's.
+- §5's CB-17a row is sized L, where it said M: its spec sized it L, and
+  the lead's ruling took L.
 
 For the owner. These questions from waves C9 and C10 are open:
 
@@ -2699,10 +2741,12 @@ For the owner. These questions from waves C9 and C10 are open:
   connection, with the five things it gives up; and the drafted report
   for SQLite, in #2036's body, which no one has posted.
 - CB-17a: the other drivers that can turn a control off under the keys,
-  which the census does not judge: file the class, or date its rows for
-  CB-17b (28 at the spec's count; the merged manifest holds 35 rows
-  under the own-press exemption). Ruling 8 put this to the owner, and
-  neither the PR body nor #1955 carries it yet (above).
+  which the census does not judge. The class is one #1955 line
+  (comment 7071845546), and the owner has three ways to take it: leave
+  the line, which the lead recommends; file it as an issue; or date
+  all of its rows, so that CB-17b or a later chunk covers them with
+  keys-first facts (28 at the spec's count; the merged manifest holds
+  35 rows under the own-press exemption).
 - CB-22b's letters, which will come as one table in its PR.
 
 The questions from earlier waves are still open: a second refused search
@@ -2720,5 +2764,7 @@ owner.
 
 Wave C9 is done: CB-15c (#2032), CB-32 (#2033) and CB-17a (#2037). Wave
 C10 started early, when Principal V's slot freed. It has CB-22 (#2035)
-and CB-33 (#2036) merged and CB-17b in progress, and CB-22b follows
+and CB-33 (#2036) merged and CB-17b in progress, as two PRs, and CB-22b
+follows CB-17b. Wave C11 opened on 2026-11-21, when Principal X's slot
+freed: CB-45's design is in progress, and CB-16 and CB-20 wait for
 CB-17b.
