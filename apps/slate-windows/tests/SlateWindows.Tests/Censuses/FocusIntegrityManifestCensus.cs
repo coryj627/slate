@@ -758,7 +758,8 @@ public sealed partial class FocusIntegrityManifestCensus
         IReadOnlyList<XDocument> documents,
         IReadOnlyDictionary<string, string[]>? creators = null,
         Compilation? commands = null,
-        IReadOnlyCollection<string>? dated = null)
+        IReadOnlyCollection<string>? dated = null,
+        SkipReach? skips = null)
     {
         private readonly Dictionary<XDocument, HashSet<XElement>> _regionRoots = [];
         private KeysFirstRule? _keysFirst;
@@ -1122,11 +1123,17 @@ public sealed partial class FocusIntegrityManifestCensus
                     .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).ToArray() is [var fact] && !NeverRuns(fact))
                     .Select(method => $"{type.Name}.{method.Name}")),
         ];
-        string tests = Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests");
-        return FactSources(
-            Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-                .Select(file => CSharpSource.LoadPath(file).Root),
-            declared);
+        return FactSources(TestSources.Value, declared);
     }
+
+    /// <summary>This project's sources, parsed once per test process: the facts' code, and
+    /// the helpers the skip reading follows (m1).</summary>
+    private static readonly Lazy<CompilationUnitSyntax[]> TestSources = new(() =>
+    [
+        .. Directory.EnumerateFiles(
+                Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .Select(file => CSharpSource.LoadPath(file).Root),
+    ]);
 }

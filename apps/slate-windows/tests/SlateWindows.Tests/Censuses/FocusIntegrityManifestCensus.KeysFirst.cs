@@ -140,13 +140,53 @@ public sealed partial class FocusIntegrityManifestCensus
             "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True",
     };
 
+    /// <summary>Plan 47 CB-17b (red team F10): the keys CB-17b deleted with their trigger,
+    /// each with why it is gone. A key here fails the census if the scrape finds it again or
+    /// the manifest lists it.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> GoneWithCb17b = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>Plan 47 CB-17b (CB-17a's merge judge, m1): how a row is written whose
+    /// keys-first fact can skip at run time, where a desktop refuses a menu the keys (#1680).
+    /// Only the rows in <see cref="WhereADesktopGivesAMenuTheKeys"/> are written so, and each
+    /// of them is.</summary>
+    internal const string MenuMarked = "keys-first, where a desktop gives a menu the keys (#1680): ";
+
+    /// <summary>The menu's seventeen rows: the menu turned off under each overlay and each
+    /// sheet. Their facts take the keys into the menu, which a desktop with no foreground
+    /// window refuses, so they skip there (#1680); every other keys-first and stays-on
+    /// witness runs on every lane.</summary>
+    internal static readonly string[] WhereADesktopGivesAMenuTheKeys =
+    [
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Palette.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when QuickSwitcher.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Search.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BaseQueryBuilderSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BulkRenameSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardEditorSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardPickerSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasPromptSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationDetails=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationSummary=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.DashboardEditorSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
+    ];
+
     /// <summary>The witnesses a row in <see cref="EndedByCb17b"/> may take: each is measured
     /// by a fact or checked by the census against the code.</summary>
     internal static readonly string[] EndedWitnesses = ["keys-first: ", "stays-on: ", "exempt: always on: ", "exempt: not focusable"];
 
     /// <summary>A row CB-17b ended whose key is gone from the manifest, or whose witness is
     /// not measured or checked.</summary>
-    internal static string[] EndedProblems(IReadOnlyDictionary<string, string> manifest, IReadOnlyDictionary<string, string> ended) =>
+    internal static string[] EndedProblems(
+        IReadOnlyDictionary<string, string> manifest,
+        IReadOnlyDictionary<string, string> ended,
+        IReadOnlyDictionary<string, string>? gone = null,
+        IReadOnlyCollection<string>? scraped = null) =>
     [
         .. ended.Where(entry => !manifest.ContainsKey(entry.Key))
             .Select(entry => $"{entry.Key} is gone from the manifest (dated as {entry.Value}): a key that moved is rewritten in EndedByCb17b in the same PR"),
@@ -478,6 +518,16 @@ public sealed partial class FocusIntegrityManifestCensus
                 private void Set() => _button.SetValue(ButtonBase.CommandProperty, _command);
                 private void Bind() => BindingOperations.SetBinding(_button, ButtonBase.CommandProperty, new Binding("Command"));
             }
+
+            // CB-17a's merge judge, nit 4: a receiver named as a focusless XAML element but
+            // of another type is not that element.
+            internal sealed class Elsewhere
+            {
+                private readonly ToggleButton Unfocused = new();
+                private readonly ICommand _command = new RoutedCommand();
+
+                private void Caption() => Unfocused.Command = _command;
+            }
             """;
         CSharpParseOptions options = (CSharpParseOptions)ShellCompilation.Sources[0].Source.Root.SyntaxTree.Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(Planted, options, path: "Planted.cs");
@@ -535,6 +585,7 @@ public sealed partial class FocusIntegrityManifestCensus
                 "command Planted.Commands.Bind _button",
                 "command Planted.Commands.Set _button",
                 "command Planted.Commands.Stay _stays",
+                "command Planted.Elsewhere.Caption Unfocused",
                 "ui-state Planted.Commands..ctor _button IsEnabled",
                 "xaml-command Planted.xaml Checked CheckCommand",
                 "xaml-command Planted.xaml Group RevertCommand",
@@ -833,6 +884,29 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Contains(problems, problem => problem.StartsWith("k-gone", StringComparison.Ordinal) && problem.Contains("k-gone-was", StringComparison.Ordinal));
     }
 
+    /// <summary>Plan 47 CB-17b (red team F10): a key CB-17b deleted with its trigger stays
+    /// gone. The census fails, naming why it went, when the scrape finds it again or the
+    /// manifest lists it.</summary>
+    [Fact]
+    public void AKeyCb17bDeletedFailsTheCensusIfItComesBack()
+    {
+        var gone = new Dictionary<string, string>(StringComparer.Ordinal) { ["k-deleted"] = "its trigger is deleted" };
+        var none = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        Assert.Empty(EndedProblems(none, none, gone, scraped: ["k-other"]));
+        Assert.Contains(
+            EndedProblems(none, none, gone, scraped: ["k-deleted"]),
+            problem => problem.StartsWith("k-deleted", StringComparison.Ordinal) && problem.Contains("its trigger is deleted", StringComparison.Ordinal));
+        Assert.Contains(
+            EndedProblems(new Dictionary<string, string>(StringComparer.Ordinal) { ["k-deleted"] = "keys-first: PlantedTests.Holds" }, none, gone, scraped: []),
+            problem => problem.StartsWith("k-deleted", StringComparison.Ordinal) && problem.Contains("its trigger is deleted", StringComparison.Ordinal));
+    }
+
+    /// <summary>Plan 47 CB-17b: the dated kind is gone, and so is every dated row.</summary>
+    [Fact]
+    public void TheManifestHasNoDatedRow() =>
+        Assert.Empty(Manifest().Where(entry => entry.Value.StartsWith("dated:", StringComparison.Ordinal)).Select(entry => entry.Key));
+
     [Fact]
     public void ADisableSiteTakesOnlyKeysFirstAnExemptionOrADate()
     {
@@ -1047,28 +1121,37 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Contains(DatedProblems(one, ceiling: 2), problem => problem.Contains("lower DatedCeiling to 1", StringComparison.Ordinal));
     }
 
-    /// <summary>The 47 rows CB-17a dated are the rows still dated and the rows CB-17b ended,
-    /// each once: CB-17b's first PR ends the 32 buttons and leaves the menu's fourteen sheet
-    /// triggers and the launcher's one. An ended key is held by its key now, and only the
-    /// three Queries groups' keys changed, with their condition.</summary>
+    /// <summary>The 47 rows CB-17a dated are the rows CB-17b ended, each once, by its key now,
+    /// and the keys CB-17b deleted with their trigger. Only the three Queries groups' keys
+    /// changed, with their condition. The menu's seventeen are its three overlay rows, never
+    /// dated, and its fourteen sheet rows, which CB-17b ended.</summary>
     [Fact]
-    public void TheDatedAndEndedRowsAreTheFortySevenOfD()
+    public void TheRowsCb17bEndedAreTheFortySevenCb17aDated()
     {
-        Assert.Equal(15, DatedBaseline.Length);
-        Assert.Equal(32, EndedByCb17b.Count);
-        string[] then = [.. DatedBaseline, .. EndedByCb17b.Values];
+        string[] then = [.. EndedByCb17b.Values, .. GoneWithCb17b.Keys];
+        Assert.Equal(47, then.Length);
         Assert.Equal(47, then.Distinct(StringComparer.Ordinal).Count());
-        Assert.Empty(DatedBaseline.Intersect(EndedByCb17b.Keys, StringComparer.Ordinal));
-        Assert.All(DatedBaseline, key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
-        Assert.All(EndedByCb17b.Keys, key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
+        Assert.All(EndedByCb17b.Keys.Concat(GoneWithCb17b.Keys), key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
         Assert.Equal(
             ["QueriesOpenBaseFile", "QueriesOpenDashboard", "QueriesRun"],
             EndedByCb17b.Where(entry => entry.Key != entry.Value)
                 .Select(entry => Regex.Match(entry.Key, @"WrapPanel\((?<group>\w+)\)").Groups["group"].Value)
                 .Order(StringComparer.Ordinal));
-        Assert.All(DatedBaseline, key => Assert.True(
-            key.Contains(" MainMenu IsEnabled when ", StringComparison.Ordinal) || key.Contains("Slate.LauncherRowStyle", StringComparison.Ordinal),
-            $"{key} is not one of the sheets' rows CB-17b's second PR ends"));
+        Assert.All(GoneWithCb17b, entry => Assert.True(
+            entry.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 4, $"{entry.Key} is gone with no reason: '{entry.Value}'"));
+
+        Assert.Equal(17, WhereADesktopGivesAMenuTheKeys.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(WhereADesktopGivesAMenuTheKeys, key => Assert.StartsWith("xaml-trigger MainWindow.xaml MainMenu IsEnabled when ", key, StringComparison.Ordinal));
+        Assert.Equal(
+            ["Palette", "QuickSwitcher", "Search"],
+            WhereADesktopGivesAMenuTheKeys.Where(key => !EndedByCb17b.ContainsKey(key))
+                .Select(key => key.Split(" when ")[1].Split('.')[0])
+                .Order(StringComparer.Ordinal));
+
+        // The launcher's sheet key is ended here until its trigger is deleted (D10).
+        Assert.True(
+            EndedByCb17b.ContainsKey("xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"),
+            "the launcher's sheet key is not among the rows CB-17b ended");
     }
 
     /// <summary>The ceiling is the baseline's length: a PR that ends a dated row removes its
@@ -1089,6 +1172,9 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.True(NeverRuns(new FactAttribute { SkipUnless = "On" }));
         Assert.True(NeverRuns(new FactAttribute { SkipWhen = "Off" }));
         Assert.True(NeverRuns(new TheoryAttribute { Skip = "not run" }));
+        // CB-17a's merge judge, nit 3: a theory that skips when it has no data.
+        Assert.True(NeverRuns(new TheoryAttribute { SkipTestWithoutData = true }));
+        Assert.False(NeverRuns(new TheoryAttribute()));
         CompilationUnitSyntax planted = SyntaxFactory.ParseCompilationUnit(
             """
             public sealed class PlantedTests
@@ -1110,13 +1196,17 @@ public sealed partial class FocusIntegrityManifestCensus
 
                 [Fact(SkipUnless = nameof(On))]
                 public void UnlessOn() => KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", host.Pressed, () => { });
+
+                [Theory(SkipTestWithoutData = true)]
+                [MemberData(nameof(Rows))]
+                public void WithoutData(int row) => KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", host.Pressed, () => { });
             }
             """);
 
         Dictionary<string, string> facts = FactSources(
             [planted],
             new HashSet<string>(
-                ["PlantedTests.Holds", "PlantedTests.Skipped", "PlantedTests.ByRequest", "PlantedTests.WhenOff", "PlantedTests.UnlessOn"],
+                ["PlantedTests.Holds", "PlantedTests.Skipped", "PlantedTests.ByRequest", "PlantedTests.WhenOff", "PlantedTests.UnlessOn", "PlantedTests.WithoutData"],
                 StringComparer.Ordinal));
 
         Assert.Equal(["PlantedTests.Holds"], facts.Keys);
