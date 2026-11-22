@@ -406,6 +406,35 @@ public sealed class CommandKeysFirstTests
         Assert.Equal(2, raised);
     });
 
+    /// <summary>The merge judge's nit 4: two listeners that fail in one held scope are both
+    /// reported, in order, and every command after them is still raised; the first failure is
+    /// not lost to the second.</summary>
+    [Fact]
+    public void TwoRaisesThatFailInAHeldScopeAreBothReported() => RunSta(() =>
+    {
+        var first = new RelayCommand(_ => { }, _ => true);
+        var second = new RelayCommand(_ => { }, _ => true);
+        var third = new RelayCommand(_ => { }, _ => true);
+        int thirdRaised = 0;
+        first.CanExecuteChanged += (_, _) => throw new InvalidOperationException("the first listener failed");
+        second.CanExecuteChanged += (_, _) => throw new InvalidOperationException("the second listener failed");
+        third.CanExecuteChanged += (_, _) => thirdRaised++;
+
+        Exception thrown = Assert.ThrowsAny<Exception>(() =>
+        {
+            using (CommandKeysFirst.Hold())
+            {
+                first.RaiseCanExecuteChanged();
+                second.RaiseCanExecuteChanged();
+                third.RaiseCanExecuteChanged();
+            }
+        });
+
+        string[] reported = thrown is AggregateException all ? [.. all.InnerExceptions.Select(failure => failure.Message)] : [thrown.Message];
+        Assert.Equal(["the first listener failed", "the second listener failed"], reported);
+        Assert.Equal(1, thirdRaised);
+    });
+
     /// <summary>A hold is its thread's: a raise on another thread is not put off by
     /// it.</summary>
     [Fact]

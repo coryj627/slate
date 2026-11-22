@@ -244,6 +244,47 @@ public sealed class BulkRenameKeysTests
             $"after the refusal the keys were on {Describe(Keyboard.FocusedElement)}, not on Apply, on");
     });
 
+    /// <summary>The merge judge's nit 2: the held-Enter fence is the sheet's buttons' and
+    /// fields', not the preview grid's. Enter on a cell of the preview runs Preview once (CB-19
+    /// keeps that route), and a held Enter's repeats still walk the grid down its rows, as a
+    /// grid's Enter does; they start no second run and say nothing.</summary>
+    [Fact]
+    public void AHeldEnterInThePreviewGridStillWalksItsRows() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note), ("b.md", Note), ("c.md", Note), ("d.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        _ = OpenBulkRename(host);
+        BulkRenameViewModel sheet = host.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        int published = 0;
+        sheet.RunPublished += () => published++;
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => published == 1 && !sheet.WorkInFlight, TimeSpan.FromSeconds(30)), "premise: the preview never published");
+        host.Settle();
+        DataGrid grid = ShownShell.Descendants(host.Shell.BulkRenameOverlay).OfType<DataGrid>().Single(candidate => candidate.IsVisible);
+        Assert.True(grid.Items.Count >= 4, $"premise: the preview shows {grid.Items.Count} rows");
+        grid.UpdateLayout();
+        var firstRow = (DataGridRow)grid.ItemContainerGenerator.ContainerFromIndex(0);
+        DataGridCell cell = ShownShell.Descendants(firstRow).OfType<DataGridCell>().First(candidate => candidate.Focusable && candidate.IsVisible);
+        Assert.True(cell.Focus(), "premise: the preview's first cell took no keys");
+        host.Settle();
+        int heard = host.Announced.Count;
+        int runsBefore = sheet.RequestIdForTests;
+        using var held = new HeldWork(hook => sheet.PreviewHookForTests = hook);
+
+        HeldKeys.Hold(host.Shell, Key.Enter, repeats: 2);
+        held.WaitUntilEntered();
+        int row = grid.CurrentCell.Item is { } current ? grid.Items.IndexOf(current) : -1;
+        held.Release();
+        Assert.True(PumpedDispatcher.PumpUntil(() => published == 2 && !sheet.WorkInFlight, TimeSpan.FromSeconds(30)), "the preview the first Enter ran never published");
+        held.AssertHeldUntilReleased();
+
+        Assert.Equal(runsBefore + 1, sheet.RequestIdForTests);
+        Assert.True(row == 2, $"a held Enter's two repeats left the preview's current row at {row}, not two rows down");
+        Assert.DoesNotContain(host.Announced.Skip(heard), line => line is A11yEvent.WorkStillRunning);
+    });
+
     /// <summary>The real Bulk Rename sheet over a note, opened from the editor, holding the
     /// keys.</summary>
     private static FrameworkElement OpenBulkRename(ShownShell host)

@@ -757,6 +757,9 @@ public sealed partial class FocusIntegrityManifestCensus
                 ["PlantedTests.ConstantReached"] = "[Fact] void ConstantReached() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), () => true); });",
                 ["PlantedTests.ReturnedConstant"] = "[Fact] void ReturnedConstant() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), () => { return true; }); });",
                 ["PlantedTests.LiteralReached"] = "[Fact] void LiteralReached() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), static () => (true)); });",
+                ["PlantedTests.NegatedConstant"] = "[Fact] void NegatedConstant() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), () => !false); });",
+                ["PlantedTests.ComparedConstant"] = "[Fact] void ComparedConstant() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), () => 1 == 1); });",
+                ["PlantedTests.ReturnedExpression"] = "[Fact] void ReturnedExpression() => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertItStaysOn(\"Pressed\", button, () => button.Command.Execute(null), () => { return !(false || false); }); });",
                 ["PlantedTests.NoName"] = "[Fact] void NoName() => RunSta(() => { var button = host.Other; KeysFirstRecorder.AssertItStaysOn(\"button\", button, () => { }, () => true); });",
                 ["PlantedTests.NoToken"] = "[Fact] void NoToken() => RunSta(() => { var menu = host.Shell.MainMenu; KeysFirstRecorder.AssertItStaysOn(\"menu\", menu, () => host.Workspace.Open(), () => true); });",
                 ["PlantedTests.InAString"] = "[Fact] void InAString() => RunSta(() => { var button = host.Pressed; Log(\"KeysFirstRecorder.AssertItStaysOn(button)\"); });",
@@ -774,7 +777,8 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Null(judge.Judge(pressed, "stays-on: PlantedTests.Dispatched"));
         Assert.Contains("reached", judge.Judge(pressed, "stays-on: PlantedTests.NoReached") ?? "a call with three arguments was taken", StringComparison.Ordinal);
         // Red team F7: a predicate that is a constant says nothing about the driver.
-        foreach (string constant in new[] { "ConstantReached", "ReturnedConstant", "LiteralReached" })
+        // The merge judge's nit 5: so does any constant expression, not only a bare literal.
+        foreach (string constant in new[] { "ConstantReached", "ReturnedConstant", "LiteralReached", "NegatedConstant", "ComparedConstant", "ReturnedExpression" })
         {
             Assert.Contains("reached", judge.Judge(pressed, $"stays-on: PlantedTests.{constant}") ?? $"{constant} was taken as a witness", StringComparison.Ordinal);
         }

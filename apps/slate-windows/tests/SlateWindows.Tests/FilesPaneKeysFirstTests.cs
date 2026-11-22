@@ -497,6 +497,9 @@ public sealed class FilesPaneKeysFirstTests
         host.Settle();
         Assert.True(File.Exists(Path.Combine(host.Root, "a.md")), "the cancelled trash moved a.md");
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+        // The merge judge's nit 6: once the keys have left Cancel, the window keeps no hold on
+        // the element they came from (a tree row can be removed with its whole subtree).
+        Assert.Null(host.Shell.TrashCancelCameFromForTests);
     });
 
     /// <summary>The trash's Cancel, when the keys came to it from nothing: they go first to
@@ -732,6 +735,28 @@ public sealed class FilesPaneKeysFirstTests
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, expand), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Expand loaded folders");
     });
 
+    /// <summary>The merge judge's minor 1: Import… stays on while its box is up, and the
+    /// box's default button is Cancel, so a held Enter's repeats closed the box and pressed
+    /// Import… again, opening its box once a repeat. One physical press, one step: the
+    /// repeats press nothing, and the box opens once.</summary>
+    [Fact]
+    public void AHeldEnterOnImportOpensItsBoxOnce() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { CancelAtOnce = true };
+        using var pane = new FilesPane(host, import: import);
+        Button importButton = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.ImportCommand);
+        pane.TakeTheKeys(importButton);
+
+        HeldKeys.Hold(host.Shell, Key.Enter, repeats: 6);
+        host.Settle();
+
+        Assert.True(import.Picks == 1, $"a held Enter opened Import…'s box {import.Picks} times");
+        Assert.Equal(0, import.WorkRuns);
+        Assert.True(importButton.IsEnabled, "Import… is off after a cancelled box");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, importButton), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Import…");
+    });
+
     /// <summary>A press as UI Automation makes it, which needs no mouse capture.</summary>
     private static void Press(Button button)
     {
@@ -901,6 +926,10 @@ public sealed class FilesPaneKeysFirstTests
 
         public bool HandOverAtOnce { get; init; }
 
+        /// <summary>Each pick returns nothing at once, as the box does when its default
+        /// button, Cancel, is pressed.</summary>
+        public bool CancelAtOnce { get; init; }
+
         public bool HoldTheWorker { get; init; }
 
         public string SourceName => Path.GetFileName(_source);
@@ -918,6 +947,10 @@ public sealed class FilesPaneKeysFirstTests
             if (HandOverAtOnce)
             {
                 pick.SetResult([_source]);
+            }
+            else if (CancelAtOnce)
+            {
+                pick.SetResult([]);
             }
 
             return pick.Task;

@@ -204,12 +204,15 @@ public sealed class KeysFirstRecorderTests
     {
         TakeTheKeys(rig.First);
 
+        bool ran = false;
+
         Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
             () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () =>
             {
                 rig.First.IsEnabled = false;
                 rig.First.IsEnabled = true;
-            }, () => true));
+                ran = true;
+            }, () => ran));
 
         Assert.Contains("First went off in the act", failed.Message, StringComparison.Ordinal);
     });
@@ -220,10 +223,29 @@ public sealed class KeysFirstRecorderTests
     {
         TakeTheKeys(rig.First);
 
+        bool ran = false;
+
         Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
-            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => rig.Panel.IsEnabled = false, () => true));
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () =>
+            {
+                rig.Panel.IsEnabled = false;
+                ran = true;
+            }, () => ran));
 
         Assert.Contains("First went off in the act", failed.Message, StringComparison.Ordinal);
+    });
+
+    /// <summary>The merge judge's nit 5: a predicate already true before the act cannot say
+    /// the act reached what used to turn the control off, so the fact fails.</summary>
+    [Fact]
+    public void TheStaysOnAssertionFailsWhenTheDriverHadAlreadyRun() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => { }, () => true));
+
+        Assert.Contains("First: reached was already true before the act", failed.Message, StringComparison.Ordinal);
     });
 
     /// <summary>A fact that never pumped as far as what used to turn the control off

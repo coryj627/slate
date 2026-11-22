@@ -20,6 +20,9 @@ public partial class MainWindow
     /// when it asks to confirm.</summary>
     private IInputElement? _trashCancelCameFrom;
 
+    /// <summary>The element Cancel's landing would go back to, for the facts.</summary>
+    internal IInputElement? TrashCancelCameFromForTests => _trashCancelCameFrom;
+
     private void TrashFallback_KeyDown(object sender, KeyEventArgs e)
     {
         // This bubbling fallback runs only after the focused control declines
