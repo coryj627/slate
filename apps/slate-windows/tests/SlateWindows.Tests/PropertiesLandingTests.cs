@@ -126,6 +126,8 @@ public sealed class PropertiesLandingTests
         host.Settle();
         var save = (Button)ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
             .Single(button => button.IsVisible && ReferenceEquals(button.DataContext, title) && ReferenceEquals(button.Command, title.CommitCommand));
+        object rowTemplate = save.FindResource("PropertyRowTemplate");
+        Assert.True(IsAPartOf(save, rowTemplate), "premise: this Save is not the row template's Save");
         Assert.True(save.IsEnabled && save.Focus(), "premise: PropertyRowTemplate's Save refused the keys");
         List<IInputElement> changes = host.RecordFocusChanges();
         bool writeInFlight = false;
@@ -701,6 +703,21 @@ public sealed class PropertiesLandingTests
     private static T RowControl<T>(ShownShell host, PropertyRowViewModel row)
         where T : FrameworkElement =>
         ShownShell.Descendants(host.Shell).OfType<T>().Single(control => control.IsVisible && ReferenceEquals(control.DataContext, row));
+
+    /// <summary>Whether <paramref name="control"/> was built by <paramref name="template"/>:
+    /// an item presenter above it shows its row with that template.</summary>
+    private static bool IsAPartOf(DependencyObject control, object template)
+    {
+        for (DependencyObject? at = control; at is not null; at = System.Windows.Media.VisualTreeHelper.GetParent(at))
+        {
+            if (at is ContentPresenter presenter && ReferenceEquals(presenter.ContentTemplate, template))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>A property's shown Delete.</summary>
     private static ButtonBase DeleteOf(ShownShell host, PropertyRowViewModel row) =>

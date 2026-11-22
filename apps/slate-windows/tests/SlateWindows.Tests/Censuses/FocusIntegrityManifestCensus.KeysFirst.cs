@@ -61,39 +61,15 @@ public sealed partial class FocusIntegrityManifestCensus
     internal const string DatedOwner = "CB-17b (CD11)";
 
     /// <summary>The dated rows the manifest may hold: a PR that ends rows lowers it, and
-    /// nothing raises it. CB-17b lowers it to zero and deletes the dated kind.</summary>
-    internal const int DatedCeiling = 47;
+    /// nothing raises it. CB-17b's first PR ended the 32 buttons (47 to 15); its second
+    /// lowers it to zero and deletes the dated kind.</summary>
+    internal const int DatedCeiling = 15;
 
-    /// <summary>Every key dated on <see cref="DatedOn"/>. Nothing is ever added.</summary>
+    /// <summary>Every key dated on <see cref="DatedOn"/> and not yet ended: the menu's
+    /// fourteen sheet triggers and the launcher's one. Nothing is ever added; an ended key
+    /// moves to <see cref="EndedByCb17b"/>.</summary>
     internal static readonly string[] DatedBaseline =
     [
-        "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled",
-        "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled",
-        "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled",
-        "ui-state SlateWindows.Graph.GraphInspectorView.RenderGate section IsEnabled",
-        "xaml-binding MainWindow.xaml BulkRenameApplyButton IsEnabled",
-        "xaml-binding MainWindow.xaml BulkRenamePreviewButton IsEnabled",
-        "xaml-binding MainWindow.xaml CitationSummaryWalkButton IsEnabled",
-        "xaml-command MainWindow.xaml CancelTrash CancelTrashCommand",
-        "xaml-command MainWindow.xaml CanvasInspectionClose CloseCanvasInspectionCommand",
-        "xaml-command MainWindow.xaml CanvasPromptClearMarksButton CanvasPromptClearMarksCommand",
-        "xaml-command MainWindow.xaml MoveToCancelButton CancelCommand",
-        "xaml-command MainWindow.xaml MoveToRetry RetryCommand",
-        "xaml-command MainWindow.xaml QuickSwitcherClose DismissCommand",
-        "xaml-command MainWindow.xaml SidebarBatchActions BatchTrashCommand",
-        "xaml-command MainWindow.xaml SidebarBatchActions MoveToCommand",
-        "xaml-command MainWindow.xaml SidebarExpandLoaded ExpandLoadedCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander CancelImportCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander CreateFolderNoteCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteFolderNoteCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander ImportCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander MoveToCommand",
-        "xaml-command MainWindow.xaml SidebarFileActionsExpander RenameCommand",
-        "xaml-command MainWindow.xaml SidebarSettingsRetry RetrySettingsCommand",
-        "xaml-command MainWindow.xaml SidebarShortcutsActions RemoveShortcutCommand",
-        "xaml-command WorkspaceTemplates.xaml EditorPopoverClose ClosePopoverCommand",
-        "xaml-command WorkspaceTemplates.xaml EditorPopoverOpenSource OpenPopoverSourceCommand",
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True",
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True",
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True",
@@ -108,19 +84,74 @@ public sealed partial class FocusIntegrityManifestCensus
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
         "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
-        "xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenBaseFile) IsEnabled when QueriesBaseFilesList.SelectedItem={x:Null}",
-        "xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenDashboard) IsEnabled when QueriesDashboardsList.SelectedItem={x:Null}",
-        "xaml-trigger MainWindow.xaml WrapPanel(QueriesRun) IsEnabled when QueriesSavedList.SelectedItem={x:Null}",
-        "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when (style default)",
-        "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True",
         "xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True",
     ];
 
-    /// <summary>Tests-first stub: the rows CB-17b ended.</summary>
-    internal static readonly IReadOnlyDictionary<string, string> EndedByCb17b = new Dictionary<string, string>(StringComparer.Ordinal);
+    /// <summary>
+    /// Plan 47 CB-17b (CB-17a's merge judge, m3): the rows CB-17b ended, frozen. Each is the
+    /// key now, mapped to the key it was dated under on <see cref="DatedOn"/> (the Queries
+    /// groups' keys changed with their condition, which now waits for the republish). Such a
+    /// row takes only a measured or checked witness (<see cref="EndedWitnesses"/>), never a
+    /// free-text exemption or a date: a key here cannot be turned back into one with the
+    /// ceiling lowered in the same edit. Nothing is ever removed; a key that moves is
+    /// rewritten here in the same PR.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> EndedByCb17b = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled",
+        ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled",
+        ["ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled"] = "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled",
+        ["ui-state SlateWindows.Graph.GraphInspectorView.RenderGate section IsEnabled"] = "ui-state SlateWindows.Graph.GraphInspectorView.RenderGate section IsEnabled",
+        ["xaml-binding MainWindow.xaml BulkRenameApplyButton IsEnabled"] = "xaml-binding MainWindow.xaml BulkRenameApplyButton IsEnabled",
+        ["xaml-binding MainWindow.xaml BulkRenamePreviewButton IsEnabled"] = "xaml-binding MainWindow.xaml BulkRenamePreviewButton IsEnabled",
+        ["xaml-binding MainWindow.xaml CitationSummaryWalkButton IsEnabled"] = "xaml-binding MainWindow.xaml CitationSummaryWalkButton IsEnabled",
+        ["xaml-command MainWindow.xaml CancelTrash CancelTrashCommand"] = "xaml-command MainWindow.xaml CancelTrash CancelTrashCommand",
+        ["xaml-command MainWindow.xaml CanvasInspectionClose CloseCanvasInspectionCommand"] = "xaml-command MainWindow.xaml CanvasInspectionClose CloseCanvasInspectionCommand",
+        ["xaml-command MainWindow.xaml CanvasPromptClearMarksButton CanvasPromptClearMarksCommand"] = "xaml-command MainWindow.xaml CanvasPromptClearMarksButton CanvasPromptClearMarksCommand",
+        ["xaml-command MainWindow.xaml MoveToCancelButton CancelCommand"] = "xaml-command MainWindow.xaml MoveToCancelButton CancelCommand",
+        ["xaml-command MainWindow.xaml MoveToRetry RetryCommand"] = "xaml-command MainWindow.xaml MoveToRetry RetryCommand",
+        ["xaml-command MainWindow.xaml QuickSwitcherClose DismissCommand"] = "xaml-command MainWindow.xaml QuickSwitcherClose DismissCommand",
+        ["xaml-command MainWindow.xaml SidebarBatchActions BatchTrashCommand"] = "xaml-command MainWindow.xaml SidebarBatchActions BatchTrashCommand",
+        ["xaml-command MainWindow.xaml SidebarBatchActions MoveToCommand"] = "xaml-command MainWindow.xaml SidebarBatchActions MoveToCommand",
+        ["xaml-command MainWindow.xaml SidebarExpandLoaded ExpandLoadedCommand"] = "xaml-command MainWindow.xaml SidebarExpandLoaded ExpandLoadedCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander CancelImportCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander CancelImportCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander CreateFolderNoteCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander CreateFolderNoteCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteFolderNoteCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander DeleteFolderNoteCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander ImportCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander ImportCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander MoveToCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander MoveToCommand",
+        ["xaml-command MainWindow.xaml SidebarFileActionsExpander RenameCommand"] = "xaml-command MainWindow.xaml SidebarFileActionsExpander RenameCommand",
+        ["xaml-command MainWindow.xaml SidebarSettingsRetry RetrySettingsCommand"] = "xaml-command MainWindow.xaml SidebarSettingsRetry RetrySettingsCommand",
+        ["xaml-command MainWindow.xaml SidebarShortcutsActions RemoveShortcutCommand"] = "xaml-command MainWindow.xaml SidebarShortcutsActions RemoveShortcutCommand",
+        ["xaml-command WorkspaceTemplates.xaml EditorPopoverClose ClosePopoverCommand"] = "xaml-command WorkspaceTemplates.xaml EditorPopoverClose ClosePopoverCommand",
+        ["xaml-command WorkspaceTemplates.xaml EditorPopoverOpenSource OpenPopoverSourceCommand"] = "xaml-command WorkspaceTemplates.xaml EditorPopoverOpenSource OpenPopoverSourceCommand",
+        ["xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenBaseFile) IsEnabled when QueriesBaseFilesList.SelectedItem={x:Null} & IsQueriesRepublishing=False"] =
+            "xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenBaseFile) IsEnabled when QueriesBaseFilesList.SelectedItem={x:Null}",
+        ["xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenDashboard) IsEnabled when QueriesDashboardsList.SelectedItem={x:Null} & IsQueriesRepublishing=False"] =
+            "xaml-trigger MainWindow.xaml WrapPanel(QueriesOpenDashboard) IsEnabled when QueriesDashboardsList.SelectedItem={x:Null}",
+        ["xaml-trigger MainWindow.xaml WrapPanel(QueriesRun) IsEnabled when QueriesSavedList.SelectedItem={x:Null} & IsQueriesRepublishing=False"] =
+            "xaml-trigger MainWindow.xaml WrapPanel(QueriesRun) IsEnabled when QueriesSavedList.SelectedItem={x:Null}",
+        ["xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when (style default)"] =
+            "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when (style default)",
+        ["xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True"] =
+            "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True",
+    };
 
-    /// <summary>Tests-first stub.</summary>
-    internal static string[] EndedProblems(IReadOnlyDictionary<string, string> manifest, IReadOnlyDictionary<string, string> ended) => [];
+    /// <summary>The witnesses a row in <see cref="EndedByCb17b"/> may take: each is measured
+    /// by a fact or checked by the census against the code.</summary>
+    internal static readonly string[] EndedWitnesses = ["keys-first: ", "stays-on: ", "exempt: always on: ", "exempt: not focusable"];
+
+    /// <summary>A row CB-17b ended whose key is gone from the manifest, or whose witness is
+    /// not measured or checked.</summary>
+    internal static string[] EndedProblems(IReadOnlyDictionary<string, string> manifest, IReadOnlyDictionary<string, string> ended) =>
+    [
+        .. ended.Where(entry => !manifest.ContainsKey(entry.Key))
+            .Select(entry => $"{entry.Key} is gone from the manifest (dated as {entry.Value}): a key that moved is rewritten in EndedByCb17b in the same PR"),
+        .. ended.Where(entry => manifest.TryGetValue(entry.Key, out string? witness)
+                && !EndedWitnesses.Any(kind => witness.StartsWith(kind, StringComparison.Ordinal)))
+            .Select(entry => $"{entry.Key} → '{manifest[entry.Key]}': a row CB-17b ended (EndedByCb17b) takes only "
+                + "'keys-first: Class.Method', 'stays-on: Class.Method', 'exempt: always on: Type.Property' or 'exempt: not focusable'"),
+    ];
 
     private static readonly XNamespace PresentationNamespace = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
     private static readonly string[] Untokened = ["IsOpen", "IsKeyboardFocusWithin", "SelectedItem"];
@@ -232,6 +263,7 @@ public sealed partial class FocusIntegrityManifestCensus
                 .Select(judged => $"{judged.Key} → {judged.Verdict}"),
         ];
         string[] dated = DatedProblems(manifest, ceiling);
+        string[] endedRows = EndedProblems(manifest, ended ?? EndedByCb17b);
         string[] unknown = [.. read.Where(syntax => !allowed.ContainsKey(syntax))];
         string[] gone = [.. allowed.Keys.Where(syntax => !read.Contains(syntax, StringComparer.Ordinal))];
         static IEnumerable<string> Section(string heading, string[] rows) =>
@@ -242,6 +274,7 @@ public sealed partial class FocusIntegrityManifestCensus
             .. Section($"Manifest entries whose site is gone or was renamed. {Renamed}", stale),
             .. Section("Manifest witnesses that do not hold:", unwitnessed),
             .. Section("The dated rows (#1866, CD11) only shrink:", dated),
+            .. Section("The rows CB-17b ended (EndedByCb17b) take only a measured or checked witness:", endedRows),
             .. Section("Syntaxes that can turn a control off and that this census does not read yet (#1866): read them, "
                 + "or allow one in UnreadAllowed with why it cannot:", unknown),
             .. Section("UnreadAllowed entries whose syntax is gone:", gone),
@@ -1874,6 +1907,7 @@ public sealed partial class FocusIntegrityManifestCensus
         IReadOnlyCollection<string> dated)
     {
         private const string KeysFirst = "keys-first: ";
+        private const string StaysOn = "stays-on: ";
         private const string Dated = "dated: ";
         private const string AlwaysOn = "exempt: always on: ";
         private const string OwnPress = "exempt: its own press never turns it off: ";
@@ -1888,7 +1922,13 @@ public sealed partial class FocusIntegrityManifestCensus
             verdict = null;
             if (witness.StartsWith(KeysFirst, StringComparison.Ordinal))
             {
-                verdict = KeysFirstVerdict(site, witness[KeysFirst.Length..].Trim());
+                verdict = KeysFirstVerdict(site, witness[KeysFirst.Length..].Trim(), "AssertTheKeysLeaveFirst", arguments: null);
+            }
+            else if (witness.StartsWith(StaysOn, StringComparison.Ordinal))
+            {
+                verdict = disables
+                    ? KeysFirstVerdict(site, witness[StaysOn.Length..].Trim(), "AssertItStaysOn", arguments: 4)
+                    : "stays-on is only for a site that can turn a control off with the keys on it";
             }
             else if (witness.StartsWith(Dated, StringComparison.Ordinal))
             {
@@ -1925,14 +1965,19 @@ public sealed partial class FocusIntegrityManifestCensus
             else
             {
                 verdict = "a site that can turn a control off with the keys on it (#1866, CD11) takes 'keys-first: Class.Method', "
-                    + "'exempt: not focusable', 'exempt: always on: Type.Property', 'exempt: its own press never turns it off: <why>', "
+                    + "'stays-on: Class.Method', 'exempt: not focusable', 'exempt: always on: Type.Property', 'exempt: its own press never turns it off: <why>', "
                     + $"'exempt: never fires: <why> (Class.Method)' or 'dated: {DatedOn}; {DatedOwner}: <mechanism>'";
             }
 
             return true;
         }
 
-        private string? KeysFirstVerdict(Site site, string fact)
+        /// <summary>A keys-first or stays-on witness: the fact exists, its code names the
+        /// site (and a trigger's condition token or an unnamed button's command), and its own
+        /// method calls <paramref name="recorder"/> on KeysFirstRecorder, with
+        /// <paramref name="arguments"/> arguments when that is given (stays-on's fourth is
+        /// the predicate that says the driver ran).</summary>
+        private string? KeysFirstVerdict(Site site, string fact, string recorder, int? arguments)
         {
             if (!facts.TryGetValue(fact, out string? source))
             {
@@ -1944,20 +1989,25 @@ public sealed partial class FocusIntegrityManifestCensus
                 ? $"the fact's code does not name the site ({string.Join(", ", site.Names)})"
                 : site.Tokens is { Count: > 0 } wanted && !wanted.Any(tokens.Contains)
                     ? $"the fact's code does not name the trigger's condition or the button's command ({string.Join(", ", wanted)})"
-                    : CallsTheRecorder(source) ? null : "the fact's own code never calls KeysFirstRecorder.AssertTheKeysLeaveFirst";
+                    : CallsTheRecorder(source, recorder, arguments) ? null
+                    : arguments is { } count
+                        ? $"the fact's own code never calls KeysFirstRecorder.{recorder} with its {count} arguments (what, root, act, and reached: the driver that used to turn the control off ran)"
+                        : $"the fact's own code never calls KeysFirstRecorder.{recorder}";
         }
 
-        /// <summary>An invocation of KeysFirstRecorder.AssertTheKeysLeaveFirst, qualified so,
+        /// <summary>An invocation of KeysFirstRecorder.<paramref name="recorder"/>, qualified so,
         /// in the fact's own method: not a nameof, a method group, a string, a look-alike of
         /// the fact's own class, or a call inside a helper. It runs when the fact does: not in
         /// a local function, which runs only if called, and every lambda around it is handed
         /// straight to a named runner that runs it before returning, not kept in a variable or
         /// handed to a delegate, a Lazy, a thread, a task or any other consumer (Codex rounds 1
-        /// and 2).</summary>
-        private static bool CallsTheRecorder(string source) =>
+        /// and 2). With <paramref name="arguments"/>, the call passes exactly that many.</summary>
+        private static bool CallsTheRecorder(string source, string recorder, int? arguments) =>
             SyntaxFactory.ParseMemberDeclaration(source) is { } method
             && method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
-                call.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "AssertTheKeysLeaveFirst" } access
+                call.Expression is MemberAccessExpressionSyntax access
+                && access.Name.Identifier.ValueText == recorder
+                && (arguments is not { } count || call.ArgumentList.Arguments.Count == count)
                 && access.Expression switch
                 {
                     IdentifierNameSyntax { Identifier.ValueText: "KeysFirstRecorder" } => true,
