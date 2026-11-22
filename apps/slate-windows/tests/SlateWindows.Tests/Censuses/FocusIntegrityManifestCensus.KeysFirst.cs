@@ -15,7 +15,7 @@
 //   - keys each IsEnabled trigger on its own, by its condition, and a style's
 //     own IsEnabled setter that sets False or binds;
 //   - holds every site that can turn a control off (an IsEnabled trigger,
-//     binding or write, and every command site) to one of seven witnesses:
+//     binding or write, and every command site) to one of six witnesses:
 //       keys-first: Class.Method   a fact whose code names the site (and, for
 //                                  a trigger, its condition's token; for an
 //                                  unnamed button, its command) and whose own
@@ -29,12 +29,15 @@
 //                                  every property of that name in the shell
 //       exempt: its own press never turns it off: <why>
 //       exempt: never fires: <why> (Class.Method)
-//       dated: <DatedOn>; CB-17b (CD11): <mechanism>   only for a key in
-//                                  DatedBaseline, and only fewer each time
 //     guard: and a fact that only names the site no longer witness such a site.
+//   - refuses a keys-first or stays-on witness whose fact can skip at run time
+//     (FocusIntegrityManifestCensus.Skips.cs, CB-17a's merge judge, m1), except
+//     on the menu's seventeen rows (WhereADesktopGivesAMenuTheKeys), each written
+//     'keys-first, where a desktop gives a menu the keys (#1680): Class.Method';
 //   - holds every row CB-17b ended (EndedByCb17b) to a measured or checked
 //     witness: keys-first, stays-on, always on or not focusable, never a
-//     free-text exemption (CB-17a's merge judge, m3).
+//     free-text exemption (CB-17a's merge judge, m3), and keeps every key it
+//     deleted with its trigger (GoneWithCb17b) gone.
 //
 // The press class's limit: a control bound to a RelayCommand, an
 // AsyncRelayCommand or a ReasonedCommand has its keys moved first whoever
@@ -57,50 +60,31 @@ namespace SlateWindows.Tests.Censuses;
 
 public sealed partial class FocusIntegrityManifestCensus
 {
-    /// <summary>The one day the dated rows were written.</summary>
-    internal const string DatedOn = "2026-11-21";
-
-    /// <summary>The chunk that ends every dated row, then deletes this kind.</summary>
-    internal const string DatedOwner = "CB-17b (CD11)";
-
-    /// <summary>The dated rows the manifest may hold: a PR that ends rows lowers it, and
-    /// nothing raises it. CB-17b's first PR ended the 32 buttons (47 to 15); its second
-    /// lowers it to zero and deletes the dated kind.</summary>
-    internal const int DatedCeiling = 15;
-
-    /// <summary>Every key dated on <see cref="DatedOn"/> and not yet ended: the menu's
-    /// fourteen sheet triggers and the launcher's one. Nothing is ever added; an ended key
-    /// moves to <see cref="EndedByCb17b"/>.</summary>
-    internal static readonly string[] DatedBaseline =
-    [
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BaseQueryBuilderSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BulkRenameSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardEditorSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardPickerSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasPromptSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationDetails=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationSummary=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.DashboardEditorSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
-        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
-        "xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True",
-    ];
-
     /// <summary>
-    /// Plan 47 CB-17b (CB-17a's merge judge, m3): the rows CB-17b ended, frozen. Each is the
-    /// key now, mapped to the key it was dated under on <see cref="DatedOn"/> (the Queries
-    /// groups' keys changed with their condition, which now waits for the republish). Such a
-    /// row takes only a measured or checked witness (<see cref="EndedWitnesses"/>), never a
-    /// free-text exemption or a date: a key here cannot be turned back into one with the
-    /// ceiling lowered in the same edit. Nothing is ever removed; a key that moves is
-    /// rewritten here in the same PR.
+    /// Plan 47 CB-17b (CB-17a's merge judge, m3): the 47 rows CB-17a dated on 2026-11-21,
+    /// which CB-17b ended, frozen. Each is the key now, mapped to the key it was dated under
+    /// (the Queries groups' keys changed with their condition, which now waits for the
+    /// republish). Such a row takes only a measured or checked witness
+    /// (<see cref="EndedWitnesses"/>), never a free-text exemption. Nothing is ever removed:
+    /// a key that moves is rewritten here in the same PR, and a key deleted with its trigger
+    /// moves to <see cref="GoneWithCb17b"/> with why.
     /// </summary>
     internal static readonly IReadOnlyDictionary<string, string> EndedByCb17b = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BaseQueryBuilderSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BaseQueryBuilderSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BulkRenameSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BulkRenameSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardEditorSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardEditorSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardPickerSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardPickerSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasPromptSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasPromptSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationDetails=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationDetails=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationSummary=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationSummary=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.DashboardEditorSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.DashboardEditorSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
+        ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
         ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled",
         ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled",
         ["ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled"] = "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled",
@@ -140,20 +124,70 @@ public sealed partial class FocusIntegrityManifestCensus
             "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True",
     };
 
+    /// <summary>Plan 47 CB-17b (red team F10): the keys CB-17b deleted with their trigger,
+    /// each with why it is gone. A key here fails the census if the scrape finds it again or
+    /// the manifest lists it.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> GoneWithCb17b = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"] =
+            "its trigger is deleted with IsModalSheetOpen (CB-17b D10): a launcher row goes off under a sheet only by the "
+            + "modal-surface trigger, once the keys have left it",
+    };
+
+    /// <summary>Plan 47 CB-17b (CB-17a's merge judge, m1): how a row is written whose
+    /// keys-first fact can skip at run time, where a desktop refuses a menu the keys (#1680).
+    /// Only the rows in <see cref="WhereADesktopGivesAMenuTheKeys"/> are written so, and each
+    /// of them is.</summary>
+    internal const string MenuMarked = "keys-first, where a desktop gives a menu the keys (#1680): ";
+
+    /// <summary>The menu's seventeen rows: the menu turned off under each overlay and each
+    /// sheet. Their facts take the keys into the menu, which a desktop with no foreground
+    /// window refuses, so they skip there (#1680); every other keys-first and stays-on
+    /// witness runs on every lane.</summary>
+    internal static readonly string[] WhereADesktopGivesAMenuTheKeys =
+    [
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when FileSidebar.MoveToSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Palette.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when QuickSwitcher.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Search.IsOpen=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when SettingsSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.AddPropertySheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BaseQueryBuilderSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.BulkRenameSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardEditorSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasCardPickerSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CanvasPromptSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationDetails=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.CitationSummary=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.DashboardEditorSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
+        "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
+    ];
+
     /// <summary>The witnesses a row in <see cref="EndedByCb17b"/> may take: each is measured
     /// by a fact or checked by the census against the code.</summary>
-    internal static readonly string[] EndedWitnesses = ["keys-first: ", "stays-on: ", "exempt: always on: ", "exempt: not focusable"];
+    internal static readonly string[] EndedWitnesses = ["keys-first: ", MenuMarked, "stays-on: ", "exempt: always on: ", "exempt: not focusable"];
 
     /// <summary>A row CB-17b ended whose key is gone from the manifest, or whose witness is
-    /// not measured or checked.</summary>
-    internal static string[] EndedProblems(IReadOnlyDictionary<string, string> manifest, IReadOnlyDictionary<string, string> ended) =>
+    /// not measured or checked; and a key CB-17b deleted that the scrape finds again or the
+    /// manifest lists (red team F10).</summary>
+    internal static string[] EndedProblems(
+        IReadOnlyDictionary<string, string> manifest,
+        IReadOnlyDictionary<string, string> ended,
+        IReadOnlyDictionary<string, string>? gone = null,
+        IReadOnlyCollection<string>? scraped = null) =>
     [
         .. ended.Where(entry => !manifest.ContainsKey(entry.Key))
-            .Select(entry => $"{entry.Key} is gone from the manifest (dated as {entry.Value}): a key that moved is rewritten in EndedByCb17b in the same PR"),
+            .Select(entry => $"{entry.Key} is gone from the manifest (dated as {entry.Value}): a key that moved is rewritten in EndedByCb17b in the same PR, "
+                + "and a key deleted with its trigger moves to GoneWithCb17b with why"),
         .. ended.Where(entry => manifest.TryGetValue(entry.Key, out string? witness)
                 && !EndedWitnesses.Any(kind => witness.StartsWith(kind, StringComparison.Ordinal)))
             .Select(entry => $"{entry.Key} → '{manifest[entry.Key]}': a row CB-17b ended (EndedByCb17b) takes only "
-                + "'keys-first: Class.Method', 'stays-on: Class.Method', 'exempt: always on: Type.Property' or 'exempt: not focusable'"),
+                + $"'keys-first: Class.Method', '{MenuMarked}Class.Method', 'stays-on: Class.Method', 'exempt: always on: Type.Property' or 'exempt: not focusable'"),
+        .. (gone ?? new Dictionary<string, string>(StringComparer.Ordinal))
+            .Where(entry => manifest.ContainsKey(entry.Key) || scraped?.Contains(entry.Key, StringComparer.Ordinal) == true)
+            .Select(entry => $"{entry.Key} is back, and CB-17b deleted it ({entry.Value}): a gone key is never scraped or witnessed again (GoneWithCb17b)"),
     ];
 
     private static readonly XNamespace PresentationNamespace = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
@@ -169,18 +203,6 @@ public sealed partial class FocusIntegrityManifestCensus
                 || key.StartsWith("ui-state ", StringComparison.Ordinal))
             && (key.EndsWith(" IsEnabled", StringComparison.Ordinal) || key.Contains(" IsEnabled when ", StringComparison.Ordinal)));
 
-    /// <summary>The dated rows against their ceiling: more is a new dated row, fewer is a
-    /// ceiling to lower.</summary>
-    internal static string[] DatedProblems(IReadOnlyDictionary<string, string> manifest, int ceiling)
-    {
-        int rows = manifest.Values.Count(witness => witness.StartsWith("dated: ", StringComparison.Ordinal));
-        return rows > ceiling
-            ? [$"{rows} dated rows, above DatedCeiling {ceiling}: a new site takes keys-first or an exemption, never a dated row"]
-            : rows < ceiling
-                ? [$"{rows} dated rows, under DatedCeiling {ceiling}: lower DatedCeiling to {rows}, so the rows this PR ended cannot come back"]
-                : [];
-    }
-
     /// <summary>The syntaxes the census does not read that it lets stand, each with why
     /// it cannot turn a control off under the keys (CB-17a review, m6).</summary>
     internal static readonly IReadOnlyDictionary<string, string> UnreadAllowed = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -191,15 +213,17 @@ public sealed partial class FocusIntegrityManifestCensus
     };
 
     /// <summary>Whether xunit never runs what <paramref name="attribute"/> marks: skipped,
-    /// explicit (run only on request), or skipped by a condition or an exception
-    /// (TestEvidence.NeverRuns reads the same arguments from source).</summary>
+    /// explicit (run only on request), skipped by a condition or an exception, or a theory
+    /// that skips when it has no data (TestEvidence.NeverRuns reads the same arguments from
+    /// source).</summary>
     internal static bool NeverRuns(FactAttribute attribute) =>
         attribute.Skip is not null
         || attribute.Explicit
         || attribute.SkipUnless is not null
         || attribute.SkipWhen is not null
         || attribute.SkipType is not null
-        || attribute.SkipExceptions is { Length: > 0 };
+        || attribute.SkipExceptions is { Length: > 0 }
+        || attribute is TheoryAttribute { SkipTestWithoutData: true };
 
     /// <summary>Each declared fact's source: the one method of its name that carries a
     /// Fact or Theory attribute xunit runs, never a helper of the same name.</summary>
@@ -234,25 +258,25 @@ public sealed partial class FocusIntegrityManifestCensus
         attribute.ArgumentList?.Arguments.Any(argument => argument.NameEquals?.Name.Identifier.ValueText switch
         {
             "Skip" or "SkipUnless" or "SkipWhen" or "SkipType" or "SkipExceptions" => !argument.Expression.IsKind(SyntaxKind.NullLiteralExpression),
-            "Explicit" => !argument.Expression.IsKind(SyntaxKind.FalseLiteralExpression),
+            "Explicit" or "SkipTestWithoutData" => !argument.Expression.IsKind(SyntaxKind.FalseLiteralExpression),
             _ => false,
         }) == true;
 
     /// <summary>What fails the main fact: an unlisted site, a stale row, a witness that does
-    /// not hold, the dated rows against their ceiling, and a syntax the census does not
-    /// read. An unlisted site and a stale row say how a renamed key keeps its witness.</summary>
+    /// not hold, a row CB-17b ended or deleted out of its place, and a syntax the census does
+    /// not read. An unlisted site and a stale row say how a renamed key keeps its
+    /// witness.</summary>
     internal static string[] ManifestProblems(
         SortedDictionary<string, Site> scraped,
         IReadOnlyDictionary<string, string> manifest,
         WitnessJudge judge,
-        int ceiling,
         IEnumerable<string> unread,
         IReadOnlyDictionary<string, string>? allowed = null,
-        IReadOnlyDictionary<string, string>? ended = null)
+        IReadOnlyDictionary<string, string>? ended = null,
+        IReadOnlyDictionary<string, string>? gone = null)
     {
         const string Renamed = "A site an edit elsewhere renamed keeps its witness under its new key: rewrite with "
-            + "SLATE_FOCUS_MANIFEST_UPDATE=1 and move the witness; a dated row's key is replaced in DatedBaseline in the same PR, "
-            + "so the count stays.";
+            + "SLATE_FOCUS_MANIFEST_UPDATE=1 and move the witness; a row CB-17b ended is rewritten in EndedByCb17b in the same PR.";
         allowed ??= UnreadAllowed;
         string[] read = [.. unread];
         string[] unlisted = [.. scraped.Keys.Where(site => !manifest.ContainsKey(site))];
@@ -265,10 +289,9 @@ public sealed partial class FocusIntegrityManifestCensus
                 .Where(judged => judged.Verdict is not null)
                 .Select(judged => $"{judged.Key} → {judged.Verdict}"),
         ];
-        string[] dated = DatedProblems(manifest, ceiling);
-        string[] endedRows = EndedProblems(manifest, ended ?? EndedByCb17b);
+        string[] endedRows = EndedProblems(manifest, ended ?? EndedByCb17b, gone ?? GoneWithCb17b, scraped.Keys);
         string[] unknown = [.. read.Where(syntax => !allowed.ContainsKey(syntax))];
-        string[] gone = [.. allowed.Keys.Where(syntax => !read.Contains(syntax, StringComparer.Ordinal))];
+        string[] goneSyntax = [.. allowed.Keys.Where(syntax => !read.Contains(syntax, StringComparer.Ordinal))];
         static IEnumerable<string> Section(string heading, string[] rows) =>
             rows.Length == 0 ? [] : [heading + "\n  " + string.Join("\n  ", rows)];
         return
@@ -276,11 +299,10 @@ public sealed partial class FocusIntegrityManifestCensus
             .. Section($"Sites that can take the keys away with no witness in the manifest (S6). {Renamed}", unlisted),
             .. Section($"Manifest entries whose site is gone or was renamed. {Renamed}", stale),
             .. Section("Manifest witnesses that do not hold:", unwitnessed),
-            .. Section("The dated rows (#1866, CD11) only shrink:", dated),
-            .. Section("The rows CB-17b ended (EndedByCb17b) take only a measured or checked witness:", endedRows),
+            .. Section("The rows CB-17b ended (EndedByCb17b) take only a measured or checked witness, and the keys it deleted stay gone:", endedRows),
             .. Section("Syntaxes that can turn a control off and that this census does not read yet (#1866): read them, "
                 + "or allow one in UnreadAllowed with why it cannot:", unknown),
-            .. Section("UnreadAllowed entries whose syntax is gone:", gone),
+            .. Section("UnreadAllowed entries whose syntax is gone:", goneSyntax),
         ];
     }
 
@@ -478,6 +500,16 @@ public sealed partial class FocusIntegrityManifestCensus
                 private void Set() => _button.SetValue(ButtonBase.CommandProperty, _command);
                 private void Bind() => BindingOperations.SetBinding(_button, ButtonBase.CommandProperty, new Binding("Command"));
             }
+
+            // CB-17a's merge judge, nit 4: a receiver named as a focusless XAML element but
+            // of another type is not that element.
+            internal sealed class Elsewhere
+            {
+                private readonly ToggleButton Unfocused = new();
+                private readonly ICommand _command = new RoutedCommand();
+
+                private void Caption() => Unfocused.Command = _command;
+            }
             """;
         CSharpParseOptions options = (CSharpParseOptions)ShellCompilation.Sources[0].Source.Root.SyntaxTree.Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(Planted, options, path: "Planted.cs");
@@ -535,6 +567,7 @@ public sealed partial class FocusIntegrityManifestCensus
                 "command Planted.Commands.Bind _button",
                 "command Planted.Commands.Set _button",
                 "command Planted.Commands.Stay _stays",
+                "command Planted.Elsewhere.Caption Unfocused",
                 "ui-state Planted.Commands..ctor _button IsEnabled",
                 "xaml-command Planted.xaml Checked CheckCommand",
                 "xaml-command Planted.xaml Group RevertCommand",
@@ -822,7 +855,7 @@ public sealed partial class FocusIntegrityManifestCensus
             ["k-unfocused"] = "exempt: not focusable",
             ["k-press"] = "exempt: its own press never turns it off: it reads Ready, which no press of its changes",
             ["k-fires"] = "exempt: never fires: the model is never busy here (PlantedTests.NeverOpens)",
-            ["k-dated"] = $"dated: {DatedOn}; CB-17b (CD11): its press starts the work",
+            ["k-dated"] = "dated: 2026-11-21; CB-17b (CD11): its press starts the work",
             ["k-named"] = "PlantedTests.Holds",
         };
 
@@ -833,8 +866,34 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Contains(problems, problem => problem.StartsWith("k-gone", StringComparison.Ordinal) && problem.Contains("k-gone-was", StringComparison.Ordinal));
     }
 
+    /// <summary>Plan 47 CB-17b (red team F10): a key CB-17b deleted with its trigger stays
+    /// gone. The census fails, naming why it went, when the scrape finds it again or the
+    /// manifest lists it.</summary>
     [Fact]
-    public void ADisableSiteTakesOnlyKeysFirstAnExemptionOrADate()
+    public void AKeyCb17bDeletedFailsTheCensusIfItComesBack()
+    {
+        var gone = new Dictionary<string, string>(StringComparer.Ordinal) { ["k-deleted"] = "its trigger is deleted" };
+        var none = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        Assert.Empty(EndedProblems(none, none, gone, scraped: ["k-other"]));
+        Assert.Contains(
+            EndedProblems(none, none, gone, scraped: ["k-deleted"]),
+            problem => problem.StartsWith("k-deleted", StringComparison.Ordinal) && problem.Contains("its trigger is deleted", StringComparison.Ordinal));
+        Assert.Contains(
+            EndedProblems(new Dictionary<string, string>(StringComparer.Ordinal) { ["k-deleted"] = "keys-first: PlantedTests.Holds" }, none, gone, scraped: []),
+            problem => problem.StartsWith("k-deleted", StringComparison.Ordinal) && problem.Contains("its trigger is deleted", StringComparison.Ordinal));
+    }
+
+    /// <summary>Plan 47 CB-17b: the dated kind is gone, and so is every dated row.</summary>
+    [Fact]
+    public void TheManifestHasNoDatedRow() =>
+        Assert.Empty(Manifest().Where(entry => entry.Value.StartsWith("dated:", StringComparison.Ordinal)).Select(entry => entry.Key));
+
+    /// <summary>A site that can turn a control off takes keys-first, stays-on or one of the
+    /// four exemptions. A guard, a fact that only names it, a reason a cited fact does not back
+    /// and a dated row (a kind CB-17b deleted) do not hold.</summary>
+    [Fact]
+    public void ADisableSiteTakesOnlyKeysFirstOrAnExemption()
     {
         XDocument xaml = XDocument.Parse(
             """
@@ -914,7 +973,10 @@ public sealed partial class FocusIntegrityManifestCensus
             Assert.NotNull(judge.Judge(site, "exempt: its own press never turns it off: fine"));
             Assert.NotNull(judge.Judge(site, "exempt: its own press never turns it off: it reads Ready, as PlantedTests.NoSuchFact shows"));
             Assert.NotNull(judge.Judge(site, "exempt: not focusable"));
+            Assert.NotNull(judge.Judge(site, "dated: 2026-11-21; CB-17b (CD11): its press starts the work"));
         }
+
+        Assert.NotNull(judge.Judge(shown, "dated: 2026-11-21; CB-17b (CD11): it hides"));
 
         Assert.Null(judge.Judge(quiet, "exempt: not focusable"));
         Assert.Null(judge.Judge(unfocused, "exempt: not focusable"));
@@ -1014,68 +1076,38 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Contains("getter", judge.Judge(Bound("PlantedLongGetterCommand"), "exempt: always on: AlwaysOn.PlantedLongGetterCommand"), StringComparison.Ordinal);
     }
 
+    /// <summary>The 47 rows CB-17a dated are the rows CB-17b ended, each once, by its key now,
+    /// and the keys CB-17b deleted with their trigger. Only the three Queries groups' keys
+    /// changed, with their condition. The menu's seventeen are its three overlay rows, never
+    /// dated, and its fourteen sheet rows, which CB-17b ended.</summary>
     [Fact]
-    public void ADatedWitnessHasItsDateItsOwnerAndAMechanism()
+    public void TheRowsCb17bEndedAreTheFortySevenCb17aDated()
     {
-        var bound = new Site("xaml-binding Planted.xaml Apply IsEnabled", null, null, null, null, ["Apply"]);
-        var outside = new Site("xaml-binding Planted.xaml Preview IsEnabled", null, null, null, null, ["Preview"]);
-        var shown = new Site("xaml-binding Planted.xaml Apply Visibility", null, null, null, null, ["Apply"]);
-        var judge = new WitnessJudge(
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            new HashSet<string>(StringComparer.Ordinal),
-            [],
-            dated: [bound.Key, shown.Key]);
-
-        Assert.Null(judge.Judge(bound, $"dated: {DatedOn}; CB-17b (CD11): its press starts the apply and CanApply falls"));
-        Assert.Contains(DatedOn, judge.Judge(bound, "dated: 2026-11-22; CB-17b (CD11): its press starts the apply"), StringComparison.Ordinal);
-        Assert.Contains("owned by", judge.Judge(bound, $"dated: {DatedOn}; CB-18 (CD11): its press starts the apply"), StringComparison.Ordinal);
-        Assert.Contains("says how", judge.Judge(bound, $"dated: {DatedOn}; CB-17b (CD11):  "), StringComparison.Ordinal);
-        Assert.Contains("DatedBaseline", judge.Judge(outside, $"dated: {DatedOn}; CB-17b (CD11): its press runs the preview"), StringComparison.Ordinal);
-        Assert.Contains("only for a site", judge.Judge(shown, $"dated: {DatedOn}; CB-17b (CD11): it hides"), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void TheDatedRowsOnlyShrink()
-    {
-        string row = $"dated: {DatedOn}; CB-17b (CD11): its press starts the work";
-        var two = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = row, ["b"] = row, ["c"] = "guard: Pane" };
-        var three = new Dictionary<string, string>(two, StringComparer.Ordinal) { ["d"] = row };
-        var one = new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = row, ["c"] = "guard: Pane" };
-
-        Assert.Empty(DatedProblems(two, ceiling: 2));
-        Assert.Contains(DatedProblems(three, ceiling: 2), problem => problem.Contains("never a dated row", StringComparison.Ordinal));
-        Assert.Contains(DatedProblems(one, ceiling: 2), problem => problem.Contains("lower DatedCeiling to 1", StringComparison.Ordinal));
-    }
-
-    /// <summary>The 47 rows CB-17a dated are the rows still dated and the rows CB-17b ended,
-    /// each once: CB-17b's first PR ends the 32 buttons and leaves the menu's fourteen sheet
-    /// triggers and the launcher's one. An ended key is held by its key now, and only the
-    /// three Queries groups' keys changed, with their condition.</summary>
-    [Fact]
-    public void TheDatedAndEndedRowsAreTheFortySevenOfD()
-    {
-        Assert.Equal(15, DatedBaseline.Length);
-        Assert.Equal(32, EndedByCb17b.Count);
-        string[] then = [.. DatedBaseline, .. EndedByCb17b.Values];
+        string[] then = [.. EndedByCb17b.Values, .. GoneWithCb17b.Keys];
+        Assert.Equal(47, then.Length);
         Assert.Equal(47, then.Distinct(StringComparer.Ordinal).Count());
-        Assert.Empty(DatedBaseline.Intersect(EndedByCb17b.Keys, StringComparer.Ordinal));
-        Assert.All(DatedBaseline, key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
-        Assert.All(EndedByCb17b.Keys, key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
+        Assert.All(EndedByCb17b.Keys.Concat(GoneWithCb17b.Keys), key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
         Assert.Equal(
             ["QueriesOpenBaseFile", "QueriesOpenDashboard", "QueriesRun"],
             EndedByCb17b.Where(entry => entry.Key != entry.Value)
                 .Select(entry => Regex.Match(entry.Key, @"WrapPanel\((?<group>\w+)\)").Groups["group"].Value)
                 .Order(StringComparer.Ordinal));
-        Assert.All(DatedBaseline, key => Assert.True(
-            key.Contains(" MainMenu IsEnabled when ", StringComparison.Ordinal) || key.Contains("Slate.LauncherRowStyle", StringComparison.Ordinal),
-            $"{key} is not one of the sheets' rows CB-17b's second PR ends"));
-    }
+        Assert.All(GoneWithCb17b, entry => Assert.True(
+            entry.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 4, $"{entry.Key} is gone with no reason: '{entry.Value}'"));
 
-    /// <summary>The ceiling is the baseline's length: a PR that ends a dated row removes its
-    /// key from the baseline and lowers the ceiling with it, so an ended key cannot be
-    /// swapped for another (CB-17a review, low 1).</summary>
-    [Fact]
-    public void TheDatedCeilingIsTheBaselinesLength() => Assert.Equal(DatedCeiling, DatedBaseline.Length);
+        Assert.Equal(17, WhereADesktopGivesAMenuTheKeys.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(WhereADesktopGivesAMenuTheKeys, key => Assert.StartsWith("xaml-trigger MainWindow.xaml MainMenu IsEnabled when ", key, StringComparison.Ordinal));
+        Assert.Equal(
+            ["Palette", "QuickSwitcher", "Search"],
+            WhereADesktopGivesAMenuTheKeys.Where(key => !EndedByCb17b.ContainsKey(key))
+                .Select(key => key.Split(" when ")[1].Split('.')[0])
+                .Order(StringComparer.Ordinal));
+
+        // Red team F10: the gone set is the launcher's sheet key alone, deleted with its trigger (D10).
+        Assert.Equal(
+            ["xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"],
+            GoneWithCb17b.Keys);
+    }
 
     /// <summary>A witness fact is one xunit runs, and its source is the method that carries
     /// the attribute: a skipped, explicit or conditionally skipped fact witnesses nothing,
@@ -1089,6 +1121,9 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.True(NeverRuns(new FactAttribute { SkipUnless = "On" }));
         Assert.True(NeverRuns(new FactAttribute { SkipWhen = "Off" }));
         Assert.True(NeverRuns(new TheoryAttribute { Skip = "not run" }));
+        // CB-17a's merge judge, nit 3: a theory that skips when it has no data.
+        Assert.True(NeverRuns(new TheoryAttribute { SkipTestWithoutData = true }));
+        Assert.False(NeverRuns(new TheoryAttribute()));
         CompilationUnitSyntax planted = SyntaxFactory.ParseCompilationUnit(
             """
             public sealed class PlantedTests
@@ -1110,13 +1145,17 @@ public sealed partial class FocusIntegrityManifestCensus
 
                 [Fact(SkipUnless = nameof(On))]
                 public void UnlessOn() => KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", host.Pressed, () => { });
+
+                [Theory(SkipTestWithoutData = true)]
+                [MemberData(nameof(Rows))]
+                public void WithoutData(int row) => KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", host.Pressed, () => { });
             }
             """);
 
         Dictionary<string, string> facts = FactSources(
             [planted],
             new HashSet<string>(
-                ["PlantedTests.Holds", "PlantedTests.Skipped", "PlantedTests.ByRequest", "PlantedTests.WhenOff", "PlantedTests.UnlessOn"],
+                ["PlantedTests.Holds", "PlantedTests.Skipped", "PlantedTests.ByRequest", "PlantedTests.WhenOff", "PlantedTests.UnlessOn", "PlantedTests.WithoutData"],
                 StringComparer.Ordinal));
 
         Assert.Equal(["PlantedTests.Holds"], facts.Keys);
@@ -1169,32 +1208,33 @@ public sealed partial class FocusIntegrityManifestCensus
 
     /// <summary>The main fact's problems, in one place so their wiring is held: an unlisted
     /// site and a stale row name the way a renamed key keeps its witness (and its place in
-    /// DatedBaseline), the dated rows are held to the ceiling, and a syntax the census does
-    /// not read fails it (CB-17a review, m5, m6, low 7).</summary>
+    /// EndedByCb17b), a witness that does not hold, a row CB-17b ended that is gone, a key it
+    /// deleted that is back, and a syntax the census does not read (CB-17a review, m5, m6,
+    /// low 7; red team F10).</summary>
     [Fact]
-    public void TheManifestProblemsNameEachKindAndTheDatedCeiling()
+    public void TheManifestProblemsNameEachKind()
     {
         var apply = new Site("xaml-binding Planted.xaml Apply IsEnabled", null, null, null, null, ["Apply"]);
         var preview = new Site("xaml-binding Planted.xaml Preview IsEnabled", null, null, null, null, ["Preview"]);
-        var scraped = new SortedDictionary<string, Site>(StringComparer.Ordinal) { [apply.Key] = apply, [preview.Key] = preview };
-        string row = $"dated: {DatedOn}; CB-17b (CD11): its press starts the apply";
+        var back = new Site("xaml-binding Planted.xaml Deleted IsEnabled", null, null, null, null, ["Deleted"]);
+        var scraped = new SortedDictionary<string, Site>(StringComparer.Ordinal) { [apply.Key] = apply, [preview.Key] = preview, [back.Key] = back };
         var manifest = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [apply.Key] = row,
-            ["xaml-binding Planted.xaml Gone IsEnabled"] = row,
+            [apply.Key] = "dated: 2026-11-21; CB-17b (CD11): its press starts the apply",
+            ["xaml-binding Planted.xaml Gone IsEnabled"] = "exempt: not focusable",
         };
-        var judge = new WitnessJudge(
-            new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal), [], dated: [apply.Key]);
-
+        var judge = new WitnessJudge(new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal), []);
         var ended = new Dictionary<string, string>(StringComparer.Ordinal) { ["xaml-binding Planted.xaml Ended IsEnabled"] = "xaml-binding Planted.xaml Ended IsEnabled" };
+        var gone = new Dictionary<string, string>(StringComparer.Ordinal) { [back.Key] = "its binding is deleted with its button" };
 
-        string[] problems = ManifestProblems(scraped, manifest, judge, ceiling: 1, unread: ["xaml-setter Planted.xaml Command (line 3)"], ended: ended);
+        string[] problems = ManifestProblems(scraped, manifest, judge, unread: ["xaml-setter Planted.xaml Command (line 3)"], ended: ended, gone: gone);
 
-        Assert.Contains(problems, problem => problem.Contains(preview.Key, StringComparison.Ordinal) && problem.Contains("DatedBaseline", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains(preview.Key, StringComparison.Ordinal) && problem.Contains("EndedByCb17b", StringComparison.Ordinal));
         Assert.Contains(problems, problem => problem.Contains("xaml-binding Planted.xaml Gone IsEnabled", StringComparison.Ordinal) && problem.Contains("renamed", StringComparison.Ordinal));
-        Assert.Contains(problems, problem => problem.Contains("never a dated row", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains($"{apply.Key} → ", StringComparison.Ordinal) && problem.Contains("keys-first", StringComparison.Ordinal));
         Assert.Contains(problems, problem => problem.Contains("xaml-setter Planted.xaml Command (line 3)", StringComparison.Ordinal));
         Assert.Contains(problems, problem => problem.Contains("EndedByCb17b", StringComparison.Ordinal) && problem.Contains("Planted.xaml Ended", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains($"{back.Key} is back", StringComparison.Ordinal) && problem.Contains("its binding is deleted", StringComparison.Ordinal));
     }
 
     /// <summary>The syntaxes that can turn a control off and that the census does not read
@@ -1523,12 +1563,12 @@ public sealed partial class FocusIntegrityManifestCensus
             new Dictionary<string, string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal), []);
         var none = new SortedDictionary<string, Site>(StringComparer.Ordinal);
         var empty = new Dictionary<string, string>(StringComparer.Ordinal);
-        string[] problems = ManifestProblems(none, empty, judge, 0, unread, allowed);
+        string[] problems = ManifestProblems(none, empty, judge, unread, allowed);
         Assert.Contains(problems, problem => problem.Contains("Twice IsEnabled=false when IsHeader=true #2", StringComparison.Ordinal));
         Assert.Contains(problems, problem => problem.Contains("Changed IsEnabled=false when IsLocked=true", StringComparison.Ordinal));
         Assert.DoesNotContain(problems, problem => problem.Contains("Styles.Rows IsEnabled", StringComparison.Ordinal));
         // The allowed setter's condition changed: the new one fails, and so does the entry.
-        string[] changed = ManifestProblems(none, empty, judge, 0, ["code-setter Planted.Styles.Rows IsEnabled=false when IsLocked=true"], allowed);
+        string[] changed = ManifestProblems(none, empty, judge, ["code-setter Planted.Styles.Rows IsEnabled=false when IsLocked=true"], allowed);
         Assert.Contains(changed, problem => problem.Contains("Rows IsEnabled=false when IsLocked=true", StringComparison.Ordinal));
         Assert.Contains(changed, problem => problem.Contains("whose syntax is gone", StringComparison.Ordinal) && problem.Contains("when IsHeader=true", StringComparison.Ordinal));
     }
@@ -1830,7 +1870,7 @@ public sealed partial class FocusIntegrityManifestCensus
     /// A write of null, and a write to a named XAML element out of the keys' reach, are
     /// not sites.</summary>
     private static bool ScrapeACommandWrite(
-        SortedDictionary<string, Site> sites, SemanticModel model, AssignmentExpressionSyntax assignment, IReadOnlySet<string> focusless)
+        SortedDictionary<string, Site> sites, SemanticModel model, AssignmentExpressionSyntax assignment, IReadOnlySet<(string Name, string? Type)> focusless)
     {
         if (model.GetSymbolInfo(assignment.Left).Symbol is not IPropertySymbol { Name: "Command" } property
             || !TakesACommand(property.ContainingType))
@@ -1838,10 +1878,12 @@ public sealed partial class FocusIntegrityManifestCensus
             return false;
         }
 
-        string receiver = assignment.Left is MemberAccessExpressionSyntax access
-            ? access.Expression.ToString()
-            : assignment.Parent is InitializerExpressionSyntax initializer ? InitializedReceiver(initializer) : "this";
-        if (!IsNull(assignment.Right) && IsACommandSite(assignment, property.ContainingType, receiver, focusless))
+        (string receiver, ITypeSymbol? declared) = assignment.Left is MemberAccessExpressionSyntax access
+            ? (access.Expression.ToString(), model.GetTypeInfo(access.Expression).Type)
+            : assignment.Parent is InitializerExpressionSyntax { Parent: { } made } initializer
+                ? (InitializedReceiver(initializer), model.GetTypeInfo(made).Type)
+                : ("this", model.GetEnclosingSymbol(assignment.SpanStart)?.ContainingType);
+        if (!IsNull(assignment.Right) && IsACommandSite(assignment, property.ContainingType, receiver, declared, focusless))
         {
             Add(sites, model, assignment, "command", receiver, property: null, constructorWrite: true);
         }
@@ -1850,7 +1892,7 @@ public sealed partial class FocusIntegrityManifestCensus
     }
 
     private static bool ScrapeACommandCall(
-        SortedDictionary<string, Site> sites, SemanticModel model, InvocationExpressionSyntax call, MemberAccessExpressionSyntax member, IReadOnlySet<string> focusless)
+        SortedDictionary<string, Site> sites, SemanticModel model, InvocationExpressionSyntax call, MemberAccessExpressionSyntax member, IReadOnlySet<(string Name, string? Type)> focusless)
     {
         bool operations = member.Expression.ToString() == "BindingOperations";
         int at = operations ? 1 : 0;
@@ -1863,8 +1905,10 @@ public sealed partial class FocusIntegrityManifestCensus
             return false;
         }
 
-        string receiver = operations ? arguments[0].Expression.ToString() : member.Expression.ToString();
-        if (!(arguments.Count > at + 1 && IsNull(arguments[at + 1].Expression)) && IsACommandSite(call, field.ContainingType, receiver, focusless))
+        ExpressionSyntax written = operations ? arguments[0].Expression : member.Expression;
+        string receiver = written.ToString();
+        if (!(arguments.Count > at + 1 && IsNull(arguments[at + 1].Expression))
+            && IsACommandSite(call, field.ContainingType, receiver, model.GetTypeInfo(written).Type, focusless))
         {
             Add(sites, model, call, "command", receiver, property: null, constructorWrite: true);
         }
@@ -1877,8 +1921,13 @@ public sealed partial class FocusIntegrityManifestCensus
         || Derives(type, "System.Windows.Documents.Hyperlink")
         || Derives(type, "System.Windows.Controls.MenuItem");
 
-    private static bool IsACommandSite(SyntaxNode node, ITypeSymbol owner, string receiver, IReadOnlySet<string> focusless) =>
-        !focusless.Contains(receiver.TrimEnd('!'))
+    private static readonly SymbolDisplayFormat TypeName = new(typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces);
+
+    /// <summary>A command write that is a site: not to a focusless XAML element (one of its
+    /// name and its type), and not to a menu row unless its type keeps it open.</summary>
+    private static bool IsACommandSite(
+        SyntaxNode node, ITypeSymbol owner, string receiver, ITypeSymbol? declared, IReadOnlySet<(string Name, string? Type)> focusless) =>
+        !(declared is not null && focusless.Contains((receiver.TrimEnd('!'), declared.ToDisplayString(TypeName))))
         && (!Derives(owner, "System.Windows.Controls.MenuItem") || StaysOpenIn(node, receiver));
 
     /// <summary>Whether the type writing a menu item's command also keeps that item open
@@ -1914,16 +1963,17 @@ public sealed partial class FocusIntegrityManifestCensus
     private static bool BindsAState(string call, string property) => call == "SetBinding" && property == "IsEnabled";
 
     /// <summary>#1866 (CD11): the witnesses of a site that can turn a control off, and the
-    /// keys-first and dated kinds wherever they are written.</summary>
+    /// keys-first and stays-on kinds wherever they are written. A keys-first or stays-on
+    /// fact that can skip at run time witnesses only one of the menu's seventeen rows, written
+    /// with <see cref="MenuMarked"/> (m1).</summary>
     internal sealed class KeysFirstRule(
         IReadOnlyDictionary<string, string> facts,
         IReadOnlyList<XDocument> documents,
         Compilation? commands,
-        IReadOnlyCollection<string> dated)
+        SkipReach? skips)
     {
         private const string KeysFirst = "keys-first: ";
         private const string StaysOn = "stays-on: ";
-        private const string Dated = "dated: ";
         private const string AlwaysOn = "exempt: always on: ";
         private const string OwnPress = "exempt: its own press never turns it off: ";
         private const string NeverFires = "exempt: never fires: ";
@@ -1934,20 +1984,29 @@ public sealed partial class FocusIntegrityManifestCensus
         public bool Judges(Site site, string witness, out string? verdict)
         {
             bool disables = IsDisableSite(site.Key);
+            bool menu = WhereADesktopGivesAMenuTheKeys.Contains(site.Key, StringComparer.Ordinal);
             verdict = null;
-            if (witness.StartsWith(KeysFirst, StringComparison.Ordinal))
+            if (witness.StartsWith(MenuMarked, StringComparison.Ordinal))
             {
-                verdict = KeysFirstVerdict(site, witness[KeysFirst.Length..].Trim(), "AssertTheKeysLeaveFirst", arguments: null);
+                verdict = menu
+                    ? KeysFirstVerdict(site, witness[MenuMarked.Length..].Trim(), "AssertTheKeysLeaveFirst", arguments: null, maySkip: true)
+                    : $"only the menu's seventeen rows ({nameof(WhereADesktopGivesAMenuTheKeys)}) are written '{MenuMarked}Class.Method': "
+                        + "every other keys-first fact must run on every lane, so it cannot skip";
+            }
+            else if (menu)
+            {
+                verdict = $"one of the menu's seventeen rows ({nameof(WhereADesktopGivesAMenuTheKeys)}), whose facts skip where a desktop "
+                    + $"refuses a menu the keys: it is written '{MenuMarked}Class.Method'";
+            }
+            else if (witness.StartsWith(KeysFirst, StringComparison.Ordinal))
+            {
+                verdict = KeysFirstVerdict(site, witness[KeysFirst.Length..].Trim(), "AssertTheKeysLeaveFirst", arguments: null, maySkip: false);
             }
             else if (witness.StartsWith(StaysOn, StringComparison.Ordinal))
             {
                 verdict = disables
-                    ? KeysFirstVerdict(site, witness[StaysOn.Length..].Trim(), "AssertItStaysOn", arguments: 4)
+                    ? KeysFirstVerdict(site, witness[StaysOn.Length..].Trim(), "AssertItStaysOn", arguments: 4, maySkip: false)
                     : "stays-on is only for a site that can turn a control off with the keys on it";
-            }
-            else if (witness.StartsWith(Dated, StringComparison.Ordinal))
-            {
-                verdict = disables ? DatedVerdict(site, witness[Dated.Length..]) : "a dated row is only for a site that can turn a control off with the keys on it";
             }
             else if (!disables)
             {
@@ -1980,19 +2039,20 @@ public sealed partial class FocusIntegrityManifestCensus
             else
             {
                 verdict = "a site that can turn a control off with the keys on it (#1866, CD11) takes 'keys-first: Class.Method', "
-                    + "'stays-on: Class.Method', 'exempt: not focusable', 'exempt: always on: Type.Property', 'exempt: its own press never turns it off: <why>', "
-                    + $"'exempt: never fires: <why> (Class.Method)' or 'dated: {DatedOn}; {DatedOwner}: <mechanism>'";
+                    + "'stays-on: Class.Method', 'exempt: not focusable', 'exempt: always on: Type.Property', 'exempt: its own press never turns it off: <why>' "
+                    + "or 'exempt: never fires: <why> (Class.Method)'";
             }
 
             return true;
         }
 
         /// <summary>A keys-first or stays-on witness: the fact exists, its code names the
-        /// site (and a trigger's condition token or an unnamed button's command), and its own
+        /// site (and a trigger's condition token or an unnamed button's command), its own
         /// method calls <paramref name="recorder"/> on KeysFirstRecorder, with
         /// <paramref name="arguments"/> arguments when that is given (stays-on's fourth is
-        /// the predicate that says the driver ran).</summary>
-        private string? KeysFirstVerdict(Site site, string fact, string recorder, int? arguments)
+        /// the predicate that says the driver ran), it has no skipped or explicit data row,
+        /// and, unless <paramref name="maySkip"/>, nothing it runs can skip it (m1).</summary>
+        private string? KeysFirstVerdict(Site site, string fact, string recorder, int? arguments, bool maySkip)
         {
             if (!facts.TryGetValue(fact, out string? source))
             {
@@ -2004,10 +2064,16 @@ public sealed partial class FocusIntegrityManifestCensus
                 ? $"the fact's code does not name the site ({string.Join(", ", site.Names)})"
                 : site.Tokens is { Count: > 0 } wanted && !wanted.Any(tokens.Contains)
                     ? $"the fact's code does not name the trigger's condition or the button's command ({string.Join(", ", wanted)})"
-                    : CallsTheRecorder(source, recorder, arguments) ? null
-                    : arguments is { } count
-                        ? $"the fact's own code never calls KeysFirstRecorder.{recorder} with its {count} arguments (what, root, act, and reached: the driver that used to turn the control off ran)"
-                        : $"the fact's own code never calls KeysFirstRecorder.{recorder}";
+                    : !CallsTheRecorder(source, recorder, arguments)
+                        ? arguments is { } count
+                            ? $"the fact's own code never calls KeysFirstRecorder.{recorder} with its {count} arguments (what, root, act, and reached: the driver that used to turn the control off ran)"
+                            : $"the fact's own code never calls KeysFirstRecorder.{recorder}"
+                    : skips?.SkippedRow(fact) is { } row
+                        ? $"the fact is a theory with a skipped or explicit row, {row}, which witnesses nothing where it does not run: refused outright (m1)"
+                    : !maySkip && skips?.Skips(fact) is { } path
+                        ? $"the fact can skip at run time ({path}), and where it skips the row is witnessed by nothing: only the menu's seventeen rows "
+                            + $"({nameof(WhereADesktopGivesAMenuTheKeys)}) may lean on such a fact, written '{MenuMarked}Class.Method' (m1)"
+                    : null;
         }
 
         /// <summary>An invocation of KeysFirstRecorder.<paramref name="recorder"/>, qualified so,
@@ -2084,21 +2150,6 @@ public sealed partial class FocusIntegrityManifestCensus
             SyntaxFactory.ParseMemberDeclaration(source) is { } method
                 ? method.RemoveNodes(method.DescendantNodes().OfType<LocalFunctionStatementSyntax>(), SyntaxRemoveOptions.KeepNoTrivia)?.ToFullString() ?? source
                 : source;
-
-        private string? DatedVerdict(Site site, string rest)
-        {
-            int semicolon = rest.IndexOf("; ", StringComparison.Ordinal);
-            string owned = semicolon < 0 ? string.Empty : rest[(semicolon + 2)..];
-            return semicolon < 0 || rest[..semicolon] != DatedOn
-                ? $"a dated row carries {DatedOn}, the one day the rows were written: 'dated: {DatedOn}; {DatedOwner}: <mechanism>'"
-                : !owned.StartsWith(DatedOwner + ":", StringComparison.Ordinal)
-                    ? $"a dated row is owned by {DatedOwner}, which ends it"
-                    : owned[(DatedOwner.Length + 1)..].Trim().Length == 0
-                        ? "a dated row says how the control goes off under the keys"
-                        : dated.Contains(site.Key)
-                            ? null
-                            : "a new site takes keys-first or an exemption, never a dated row: DatedBaseline does not hold it";
-        }
 
         private string? Uncited(string text) =>
             Regex.Matches(text, @"\b[A-Z]\w*Tests\.[A-Z]\w*\b").Select(match => match.Value)
