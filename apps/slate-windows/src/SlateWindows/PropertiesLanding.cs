@@ -143,8 +143,14 @@ internal static class PropertiesLanding
     private static FrameworkElement? Stop(DependencyObject root, string? role = null) =>
         Controls(root).FirstOrDefault(control => IsAStop(control) && (role is null || RoleOf(control) == role));
 
+    /// <summary>A control that is about to go off is no stop (#1866): the keys are being
+    /// moved off it, and the same property's next stop takes them.</summary>
     private static bool IsAStop(FrameworkElement control) =>
-        control.Focusable && control.IsVisible && control.IsEnabled && KeyboardNavigation.GetIsTabStop(control);
+        control.Focusable
+        && control.IsVisible
+        && control.IsEnabled
+        && KeyboardNavigation.GetIsTabStop(control)
+        && !RegionFocusGuard.IsLeaving(control);
 
     private static bool Land(FrameworkElement? control) =>
         control is not null && IsAStop(control) && SelectorFocus.LandOnStop(control);

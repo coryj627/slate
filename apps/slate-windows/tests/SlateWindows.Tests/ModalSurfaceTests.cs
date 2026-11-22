@@ -792,6 +792,10 @@ public sealed class ModalSurfaceTests
         // only nominally, and a sheet landing over an open Quick Open
         // had focus stolen back out from behind its scrim.
         ("MainWindow.xaml.cs", "RestoreFocusAfterQuickOpen"),
+        // #1866 (CD11): the window's return with the keys on nothing can
+        // find search open over it, and the search box is then where they
+        // belong, not the element behind it.
+        ("MainWindow.xaml.cs", "RestoreFocusAfterActivation"),
     ];
 
     private static readonly Dictionary<(string File, string Method), string> ExemptRestoreSites =

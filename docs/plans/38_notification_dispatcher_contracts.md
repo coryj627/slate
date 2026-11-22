@@ -1192,6 +1192,30 @@ landed toggle still undoes, on the tab and on its mirrored peer
 The Mac posts `taskToggleFailed` on this error until it adopts the event
 (#1954; the ledger's designation below).
 
+## Work-still-running amendment (plan 47 CB-17b, #1866, CD11, 2026-11-21)
+
+On Windows, Bulk Rename's Preview and the Files pane's Expand Loaded
+Folders stay available while the work their press started runs, so the
+keys stay on them. A press made while that work is
+still running starts nothing and speaks one sentence (the owner's answer
+to CD11: stay, and speak on a press; wording approved 2026-11-21). Core's
+`WorkStillRunning { work }` (High, the arm of `PaletteCommandUnavailable`)
+renders it, and `RunningWork` names the work:
+
+| `RunningWork` | Sentence |
+|---|---|
+| `BulkRenamePreview` | "The preview is still running." |
+| `BulkRenameApply` | "The rename is still running." |
+| `ExpandLoadedFolders` | "Folders are still expanding." |
+
+Windows posts it from Bulk Rename's Preview, while a preview or an apply
+runs (Enter in the sheet's fields reaches the same press), and from Expand
+Loaded Folders, while its run goes on; the palette's and the menu's rows of
+that command are the same press. The Mac's adoption is owed on #1954, with
+a VoiceOver pass; until then its bulk rename sheet turns Preview and Apply
+off while a rename is in flight, and its Expand Loaded Folders starts over
+on a second press (the ledger's Mac designation below).
+
 <!-- a11y-trigger-ledger:start -->
 
 ## Whole-corpus trigger ledger (D-7)
@@ -1444,6 +1468,7 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `VaultScanProgress` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.FileIndexed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanStarted` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Started@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `WelcomeShown` | posted | `WelcomeView.swift#body@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `WorkStillRunning` | posted | — | `FilesSidebarViewModel.cs#FilesSidebarViewModel.FilesSidebarViewModel@1`; `Panels/BulkRenameViewModel.cs#BulkRenameViewModel.RunPreview@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: Plan 47 CB-17b (#1866, CD11): the Mac's adoption is owed on #1954; until then its bulk rename sheet turns Preview and Apply off while a rename is in flight, and its Expand Loaded Folders starts over on a second press. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
 
 ## Host-composed residue register (D-8)
 

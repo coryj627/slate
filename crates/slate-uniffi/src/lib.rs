@@ -9924,6 +9924,25 @@ impl From<RescanReason> for core::a11y::RescanReason {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::RunningWork` (plan 47 CB-17b, #1866,
+/// CD11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RunningWork {
+    BulkRenamePreview,
+    BulkRenameApply,
+    ExpandLoadedFolders,
+}
+
+impl From<RunningWork> for core::a11y::RunningWork {
+    fn from(w: RunningWork) -> Self {
+        match w {
+            RunningWork::BulkRenamePreview => Self::BulkRenamePreview,
+            RunningWork::BulkRenameApply => Self::BulkRenameApply,
+            RunningWork::ExpandLoadedFolders => Self::ExpandLoadedFolders,
+        }
+    }
+}
+
 /// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
 /// (see that module for per-variant docs, the copy rules, and the
 /// `HostComposed` residue contract).
@@ -10286,6 +10305,12 @@ pub enum A11yEvent {
     },
     PaletteCommandUnavailable {
         reason: String,
+    },
+    /// Plan 47 CB-17b (#1866, CD11): a press on a button whose work is
+    /// still running. The host keeps the button available so the keys stay
+    /// on it, and the press speaks this and starts nothing.
+    WorkStillRunning {
+        work: RunningWork,
     },
     PaletteChoicesOpened {
         prompt: String,
@@ -12143,6 +12168,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::PaletteCommandFailed { label, detail } => C::PaletteCommandFailed { label, detail },
             F::PaletteCommandNotFound { id } => C::PaletteCommandNotFound { id },
             F::PaletteCommandUnavailable { reason } => C::PaletteCommandUnavailable { reason },
+            F::WorkStillRunning { work } => C::WorkStillRunning { work: work.into() },
             F::PaletteChoicesOpened { prompt, current } => {
                 C::PaletteChoicesOpened { prompt, current }
             }
@@ -15884,6 +15910,36 @@ mod tests {
             core::a11y::editor_integrity_detail()
         );
         assert!(!editor_integrity_detail().trim().is_empty());
+    }
+
+    /// Plan 47 CB-17b (#1866, CD11): each member of `RunningWork` crosses
+    /// the FFI as its own member, and the press on a button whose work is
+    /// still running renders core's sentence at core's priority.
+    #[test]
+    fn work_still_running_crosses_the_ffi_as_core_renders_it() {
+        use slate_core::a11y::RunningWork as CoreWork;
+        for (ffi, core_work, sentence) in [
+            (
+                RunningWork::BulkRenamePreview,
+                CoreWork::BulkRenamePreview,
+                "The preview is still running.",
+            ),
+            (
+                RunningWork::BulkRenameApply,
+                CoreWork::BulkRenameApply,
+                "The rename is still running.",
+            ),
+            (
+                RunningWork::ExpandLoadedFolders,
+                CoreWork::ExpandLoadedFolders,
+                "Folders are still expanding.",
+            ),
+        ] {
+            assert_eq!(CoreWork::from(ffi), core_work);
+            let rendered = a11y_render(A11yEvent::WorkStillRunning { work: ffi });
+            assert_eq!(rendered.text, sentence, "{ffi:?}");
+            assert_eq!(rendered.priority, A11yPriority::High, "{ffi:?}");
+        }
     }
 
     /// The mac corpus mirror must stay in lockstep with `corpus()`.

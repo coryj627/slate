@@ -1341,6 +1341,19 @@ internal static class OpenLists
         Settle(host);
     }
 
+    /// <summary>A key let go, as the keyboard sends it between two presses. Without it WPF
+    /// takes a second press of the same key for the key repeating (KeyEventArgs.IsRepeat),
+    /// which a held-Enter fence swallows (plan 47 CB-17b).</summary>
+    internal static void Release(ShownShell host, Key key)
+    {
+        InputManager.Current.ProcessInput(new KeyEventArgs(
+            Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, key)
+        {
+            RoutedEvent = Keyboard.PreviewKeyUpEvent,
+        });
+        Settle(host);
+    }
+
     /// <summary>The popup rule. Walking the peers from the open list's own
     /// window reaches one ListItem for each realized row, and at least one;
     /// each is paired with its row's item peer through its events source, not

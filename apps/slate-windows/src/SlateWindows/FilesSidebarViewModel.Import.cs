@@ -22,9 +22,18 @@ internal sealed partial class FilesSidebarViewModel
     private CancellationTokenSource? _importCancellation;
     private Task _importCompletion = Task.CompletedTask;
     private bool _isImporting;
+    private bool _isImportRunning;
 
     internal Task ImportCompletion => _importCompletion;
 
+    /// <summary>
+    /// The import's admission: set at the press and cleared when the import ends, its pick
+    /// included. A rescan is refused while it is set (R-9), a second press starts nothing,
+    /// and a vault close cancels the import first. Plan 47 CB-17b (#1866, D3): it no longer
+    /// turns Import… or the other verbs off; <see cref="IsImportRunning"/> does, once the
+    /// pick has returned sources, so Import… is on while its own box is up and the box's
+    /// close can hand the keys back to it.
+    /// </summary>
     public bool IsImporting
     {
         get => _isImporting;
@@ -32,13 +41,28 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (SetField(ref _isImporting, value))
             {
+                RaiseCommandStates();
+            }
+        }
+    }
+
+    /// <summary>Plan 47 CB-17b (#1866, D3): the import is copying, from the moment its pick
+    /// returned sources until it ends. Import…, Cancel import, the status line and the
+    /// other verbs read it, as they read <see cref="IsImporting"/> before.</summary>
+    public bool IsImportRunning
+    {
+        get => _isImportRunning;
+        private set
+        {
+            if (SetField(ref _isImportRunning, value))
+            {
                 OnPropertyChanged(nameof(ImportStatus));
                 RaiseCommandStates();
             }
         }
     }
 
-    public string ImportStatus => IsImporting ? "Import in progress" : "Import is idle";
+    public string ImportStatus => IsImportRunning ? "Import in progress" : "Import is idle";
 
     public void CancelImport()
     {
@@ -72,6 +96,11 @@ internal sealed partial class FilesSidebarViewModel
             cancellation.Dispose();
         }
     }
+
+    /// <summary>Import…'s press. Plan 47 CB-17b (#1866, D3): the command admits while it
+    /// executes, so Import… stays on through its pick; a press while an import is admitted
+    /// starts nothing, and the admitted import's completion stays the one reported.</summary>
+    private Task StartImport() => IsImporting ? Task.CompletedTask : _importCompletion = ImportAsync();
 
     private async Task ImportAsync()
     {
@@ -127,6 +156,8 @@ internal sealed partial class FilesSidebarViewModel
                 : ParentPath(SelectedNode?.Path);
             string[] acceptedSources = sources.Take(256).ToArray();
             int omittedSources = sources.Count - acceptedSources.Length;
+            // D3: Import… goes off here, the keys moved off it first.
+            IsImportRunning = true;
             (bool admitted, ImportResult? result) = await RunImportWorkerAsync(
                 acceptedSources,
                 destination,
@@ -175,6 +206,7 @@ internal sealed partial class FilesSidebarViewModel
                 cancellation.Dispose();
             }
 
+            IsImportRunning = false;
             IsImporting = false;
         }
     }

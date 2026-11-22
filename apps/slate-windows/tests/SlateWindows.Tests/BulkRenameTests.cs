@@ -371,13 +371,17 @@ public sealed class BulkRenameTests : IDisposable
         sheet.NewKey = "renamed";
 
         // Adversarial round 2: a run can never start while another is
-        // in flight — Preview cannot supersede an in-flight Apply.
+        // in flight — Preview cannot supersede an in-flight Apply. Plan 47
+        // CB-17b (#1866, the owner's answer to Call 4): Preview stays on
+        // through the run, and its press is refused with core's sentence.
         sheet.MarkWorkInFlightForTests();
         int before = sheet.RequestIdForTests;
         sheet.Preview();
         Assert.Equal(before, sheet.RequestIdForTests);
-        Assert.False(sheet.CanPreview);
+        Assert.True(sheet.CanPreview);
         Assert.False(sheet.CanApply);
+        Assert.IsType<A11yEvent.WorkStillRunning>(Assert.Single(announced));
+        announced.Clear();
 
         var report = new RenameReport(
             Affected: [new RenameAffected("a.md", "old", "new", true, "hash-after")],

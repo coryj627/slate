@@ -54,5 +54,6 @@ internal sealed class ReasonedCommand : ICommand, IUnavailableReason
         }
     }
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() =>
+        CommandKeysFirst.Raise(this, static self => ((ReasonedCommand)self).CanExecuteChanged?.Invoke(self, EventArgs.Empty));
 }
