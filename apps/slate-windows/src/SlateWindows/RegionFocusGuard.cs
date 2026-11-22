@@ -337,6 +337,18 @@ internal static class RegionFocusGuard
             ? Land(old, proposed: null, scopes)
             : old is UIElement element && StrandedLandings.TryGetValue(element, out Func<bool>? own) && own() && Landed(old);
 
+    /// <summary>#1866 (CD11): moves the keys off <paramref name="leaving"/> before it
+    /// goes off. A stub for the facts' first commit: nothing moves.</summary>
+    internal static bool LandBeforeLeaving(UIElement leaving) => LandBeforeLeaving([leaving]);
+
+    /// <summary>The same for a set of elements that go off together.</summary>
+    internal static bool LandBeforeLeaving(IReadOnlyCollection<UIElement> leaving) => false;
+
+    /// <summary>Whether <paramref name="element"/> is in the set a running
+    /// <see cref="LandBeforeLeaving(IReadOnlyCollection{UIElement})"/> is leaving, or inside
+    /// one of its members.</summary>
+    internal static bool IsLeaving(DependencyObject element) => false;
+
     /// <summary>Lands the keys stranded on <paramref name="old"/>; true when
     /// they are now on a live element other than it.</summary>
     private static bool Land(IInputElement old, UIElement? proposed, UIElement[] scopes)
