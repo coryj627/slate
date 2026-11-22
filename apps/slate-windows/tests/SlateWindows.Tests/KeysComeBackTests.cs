@@ -160,8 +160,9 @@ public sealed class KeysComeBackTests
         var region = (FrameworkElement)host.Shell.FindName("ContentPaneBorder");
         Button button = ShownShell.Descendants(region).OfType<Button>()
             .First(candidate => AutomationProperties.GetAutomationId(candidate) == "PropertiesAddButton" && candidate.IsVisible);
-        // The keys on nothing, with nothing for WPF to hand them back to, and the window's
-        // focused element one that is off and never held them.
+        // The window not active, the keys on nothing with nothing for WPF to hand them back
+        // to, and the window's focused element one that is off and never held them.
+        WindowActivation.Deactivate(host.Shell);
         Keyboard.ClearFocus();
         button.SetCurrentValue(UIElement.IsEnabledProperty, false);
         FocusManager.SetFocusedElement(host.Shell, button);
@@ -170,10 +171,13 @@ public sealed class KeysComeBackTests
         Assert.False(RegionFocusGuard.HeldTheKeys(button), "premise: the button has held the keys");
         Assert.True(Keyboard.FocusedElement is null or Window, $"premise: the keys are on {Describe(Keyboard.FocusedElement)}");
         host.Announced.Clear();
+        int activations = 0;
+        host.Shell.Activated += (_, _) => activations++;
 
         WindowActivation.ComeBack(host.Shell);
         host.Settle();
 
+        Assert.Equal(1, activations);
         Assert.True(
             Keyboard.FocusedElement is null or Window,
             $"the window landed the keys on {Describe(Keyboard.FocusedElement)} by an element that never held them");
@@ -182,9 +186,65 @@ public sealed class KeysComeBackTests
 
     /// <summary>While a modal loop runs over the window (a box of its own, a picker), the
     /// box owns the keys and nothing is landed beneath it. The activation that follows the
-    /// loop's end lands them.</summary>
+    /// loop's end lands them. An open sheet holds the button here: the editor's own landing
+    /// refuses under a modal loop by itself, and a sheet's does not.</summary>
     [Fact]
     public void NothingIsLandedUnderAModalLoopAndTheNextActivationLands() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "---\nstatus: draft\n---\n# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(host.Land(ShellRegionKind.Editor), "premise: the editor did not take the keys");
+        host.Settle();
+        host.Workspace.OpenBulkRenameSheet();
+        host.Settle();
+        var sheet = host.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        host.Settle();
+        var overlay = (FrameworkElement)host.Shell.FindName("BulkRenameOverlay");
+        Button preview = ShownShell.Descendants(overlay).OfType<Button>()
+            .Single(candidate => AutomationProperties.GetAutomationId(candidate) == "BulkRenamePreviewButton");
+        TakeTheKeys(preview);
+        host.Settle();
+
+        WindowActivation.GoAway(host.Shell);
+        preview.SetCurrentValue(UIElement.IsEnabledProperty, false);
+        host.Settle();
+        int activations = 0;
+        host.Shell.Activated += (_, _) => activations++;
+        System.Windows.Interop.ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the window does not see the modal loop");
+            WindowActivation.ComeBack(host.Shell);
+            host.Settle();
+
+            Assert.Equal(1, activations);
+            Assert.True(
+                Keyboard.FocusedElement is null or Window,
+                $"under a modal loop the keys were landed on {Describe(Keyboard.FocusedElement)}");
+        }
+        finally
+        {
+            System.Windows.Interop.ComponentDispatcher.PopModal();
+        }
+
+        // The loop's end asks again: no second activation comes when a picker's own loop
+        // delivered the first.
+        Assert.False(host.Shell.ModalLoops.IsModalLoopActive, "premise: the window still sees a modal loop");
+        host.Settle();
+
+        Assert.Equal(1, activations);
+        AssertTheKeysAreOnALiveElementIn(overlay, "the open sheet");
+    });
+
+    /// <summary>The keys of a window that is not the active one are nobody's to land: a
+    /// modal loop that ends while the reader is in another program moves nothing.</summary>
+    [Fact]
+    public void NothingIsLandedInAWindowThatIsNotActive() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "---\nstatus: draft\n---\n# A\n"));
         host.Workspace.OpenPath("a.md");
@@ -199,24 +259,15 @@ public sealed class KeysComeBackTests
 
         WindowActivation.GoAway(host.Shell);
         button.SetCurrentValue(UIElement.IsEnabledProperty, false);
-        host.Settle();
         System.Windows.Interop.ComponentDispatcher.PushModal();
-        try
-        {
-            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the window does not see the modal loop");
-            WindowActivation.ComeBack(host.Shell);
-            host.Settle();
+        System.Windows.Interop.ComponentDispatcher.PopModal();
+        host.Settle();
 
-            Assert.True(
-                Keyboard.FocusedElement is null or Window,
-                $"under a modal loop the keys were landed on {Describe(Keyboard.FocusedElement)}");
-        }
-        finally
-        {
-            System.Windows.Interop.ComponentDispatcher.PopModal();
-        }
+        Assert.False(host.Shell.IsActive, "premise: the window is active");
+        Assert.True(
+            Keyboard.FocusedElement is null or Window,
+            $"with the window away the keys were landed on {Describe(Keyboard.FocusedElement)}");
 
-        WindowActivation.GoAway(host.Shell);
         WindowActivation.ComeBack(host.Shell);
         host.Settle();
 

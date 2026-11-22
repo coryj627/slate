@@ -340,6 +340,11 @@ public partial class MainWindow : IShellRegionHost
         {
             // WB-9 (#1296): a handoff parked behind the loop runs now.
             RunParkedExternalActivation();
+            // #1866 (CD11): the window's activation can be delivered while the loop
+            // still counts as running (a picker's own loop pumps it), and the step
+            // that lands keys left on nothing stands down then. The loop's end asks
+            // again.
+            RestoreFocusAfterActivation();
         }
     }
 

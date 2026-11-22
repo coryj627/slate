@@ -288,12 +288,44 @@ public sealed class RegionFocusGuardTests
     });
 
     /// <summary>The rule is for a holder that can still hold the keys. One that went off or
-    /// left the screen inside a sheet is stranded, WPF's re-evaluation proposes the window,
-    /// and the sheet's landing takes the keys as before.</summary>
+    /// left the screen inside a sheet is stranded: a request to the window made from it (a
+    /// pressed button that goes off loses the capture too) is the guard's to land, at once,
+    /// through the sheet's landing as before, and is not declined to leave the keys on a
+    /// control that is off.</summary>
     [Theory]
     [InlineData("disable")]
     [InlineData("collapse")]
     public void AStrandedElementInASheetStillLandsThroughIt(string departure) => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.Second.Focus());
+        host.FocusChanges.Clear();
+
+        if (departure == "disable")
+        {
+            host.Second.IsEnabled = false;
+        }
+        else
+        {
+            host.Second.Visibility = Visibility.Collapsed;
+        }
+
+        _ = Keyboard.Focus(null);
+
+        Assert.Same(host.First, Keyboard.FocusedElement);
+        PumpedDispatcher.Drain();
+        Assert.Same(host.First, Keyboard.FocusedElement);
+        Assert.Equal([host.First], host.FocusChanges);
+    });
+
+    /// <summary>The same with no request made: WPF's own re-evaluation hands a stranded
+    /// element's keys up to its sheet, a focus scope, and the sheet's landing takes
+    /// them.</summary>
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("collapse")]
+    public void AStrandedElementInASheetIsLandedByTheReEvaluation(string departure) => RunSta(() =>
     {
         using var host = new SheetHost();
         Assert.True(host.Outside.Focus());

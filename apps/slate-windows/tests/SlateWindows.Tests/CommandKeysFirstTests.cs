@@ -187,6 +187,19 @@ public sealed class CommandKeysFirstTests
         Assert.False(RegionFocusGuard.LandBeforeLeaving(button));
         Assert.Same(button, Keyboard.FocusedElement);
 
+        // A landing that puts the keys on another control of the set that is leaving has
+        // not landed them: that control goes off too.
+        var beside = new Button { Content = "Beside" };
+        StackPanel section = Panel(beside);
+        stage.Content.Children.Remove(button);
+        section.Children.Add(button);
+        stage.Content.Children.Add(section);
+        stage.Settle();
+        TakeTheKeys(button);
+        stage.Landing = () => beside.Focus();
+        Assert.False(RegionFocusGuard.LandBeforeLeaving([section]));
+        Assert.Same(beside, Keyboard.FocusedElement);
+
         // And the keys somewhere else: nothing is asked of the landing at all.
         TakeTheKeys(stage.Outside);
         int landings = 0;

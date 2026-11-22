@@ -1656,12 +1656,14 @@ public partial class MainWindow : Window
     /// (<see cref="Commands.CommandKeysFirst"/> sees only a holder). When the reader comes
     /// back, or a box over the window closes, WPF offers the keys to the element that had
     /// them; one that is off refuses, and the keys rest on nothing or on the window, where
-    /// no chord has a target. One step at Input, after WPF's own restore: if no modal loop
-    /// runs and the keys are on nothing or the window, they go to the element that held
-    /// them last (<see cref="LastFocusedElement"/>), else to the scopes it was in, else,
-    /// with no modal surface open, to the editor. An element that never held the keys is
-    /// no one's to land by: the launch landing is not this step's. While a modal loop runs
-    /// nothing is done, and the activation that follows its end asks again.
+    /// no chord has a target. One step at Input, after WPF's own restore: if the window is
+    /// active, no modal loop runs and the keys are on nothing or the window, they go to
+    /// the element that held them last (<see cref="LastFocusedElement"/>), else to the
+    /// scopes it was in, else, with no modal surface open, to the editor. An element that
+    /// never held the keys is no one's to land by: the launch landing is not this step's.
+    /// While a modal loop runs nothing is done, and the loop's end asks again
+    /// (<see cref="ModalLoopChanged"/>): a picker's own loop can deliver the activation
+    /// before it counts as over.
     /// </summary>
     private void RestoreFocusAfterActivation() =>
         _ = Dispatcher.InvokeAsync(
@@ -1669,6 +1671,7 @@ public partial class MainWindow : Window
             {
                 IInputElement? keys = Keyboard.FocusedElement;
                 if (_windowClosed
+                    || !IsActive
                     || _modalLoops.IsModalLoopActive
                     || (keys is not null && !ReferenceEquals(keys, this))
                     || LastFocusedElement() is not { } last
