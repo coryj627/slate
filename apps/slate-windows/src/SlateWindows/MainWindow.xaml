@@ -2436,12 +2436,19 @@
                                             <WrapPanel.Resources>
                                                 <!-- Selection-scoped actions disable without a
                                                      selection instead of clicking into silence
-                                                     (red team round 1). -->
+                                                     (red team round 1). Plan 47 CB-17b (#1866): not
+                                                     while the registry republishes, whose rebuild drops
+                                                     the selection; the window lands the keys before the
+                                                     flag falls (Queries_Republished). -->
                                                 <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesSavedList}" Value="{x:Null}">
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding SelectedItem, ElementName=QueriesSavedList}" Value="{x:Null}" />
+                                                                <Condition Binding="{Binding IsQueriesRepublishing, RelativeSource={RelativeSource AncestorType=Window}, FallbackValue=False}" Value="False" />
+                                                            </MultiDataTrigger.Conditions>
                                                             <Setter Property="IsEnabled" Value="False" />
-                                                        </DataTrigger>
+                                                        </MultiDataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>
@@ -2511,9 +2518,13 @@
                                             <WrapPanel.Resources>
                                                 <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}">
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}" />
+                                                                <Condition Binding="{Binding IsQueriesRepublishing, RelativeSource={RelativeSource AncestorType=Window}, FallbackValue=False}" Value="False" />
+                                                            </MultiDataTrigger.Conditions>
                                                             <Setter Property="IsEnabled" Value="False" />
-                                                        </DataTrigger>
+                                                        </MultiDataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>
@@ -2569,9 +2580,13 @@
                                             <WrapPanel.Resources>
                                                 <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}">
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}" />
+                                                                <Condition Binding="{Binding IsQueriesRepublishing, RelativeSource={RelativeSource AncestorType=Window}, FallbackValue=False}" Value="False" />
+                                                            </MultiDataTrigger.Conditions>
                                                             <Setter Property="IsEnabled" Value="False" />
-                                                        </DataTrigger>
+                                                        </MultiDataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>

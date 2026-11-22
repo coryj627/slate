@@ -74,7 +74,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             localAppDataRoot,
             VaultRootAnchor.Of(session));
         OpenCommand = new RelayCommand(_ => Open(), _ => !IsOpen);
-        DismissCommand = new RelayCommand(_ => Dismiss(), _ => IsOpen);
+        // Plan 47 CB-17b (#1866, CD11): always on. Only Close reads it, Close shows only while
+        // Quick Open does, and Dismiss guards itself; on only while open, Close went off in its
+        // own press with the keys on it.
+        DismissCommand = new RelayCommand(_ => Dismiss(), _ => true);
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => SelectedRow is not null);
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => SelectedRow is not null);
         OpenSplitRightCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => SelectedRow is not null);

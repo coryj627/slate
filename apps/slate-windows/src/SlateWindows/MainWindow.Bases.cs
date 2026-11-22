@@ -73,11 +73,28 @@ public partial class MainWindow
     /// rebuild found them.</summary>
     private (string? SavedQuery, string? BaseFile, string? Dashboard) _queriesSelection;
 
-    private void Queries_Republishing() =>
+    public static readonly DependencyProperty IsQueriesRepublishingProperty = DependencyProperty.Register(
+        nameof(IsQueriesRepublishing), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): up while the registry rebuilds the Queries
+    /// leaf's three lists, whose Clear drops every selection. Each list's action group goes
+    /// off only when its list has no selection and this is down (MainWindow.xaml), so no group
+    /// goes off for the rebuild's moment, and one whose selection is gone for good goes off
+    /// only after <see cref="Queries_Republished"/> has moved the keys off it.</summary>
+    public bool IsQueriesRepublishing
+    {
+        get => (bool)GetValue(IsQueriesRepublishingProperty);
+        private set => SetValue(IsQueriesRepublishingProperty, value);
+    }
+
+    private void Queries_Republishing()
+    {
         _queriesSelection = (
             (QueriesSavedList.SelectedItem as SavedQuerySummary)?.Id,
             (QueriesBaseFilesList.SelectedItem as BaseFileSummary)?.Path,
             (QueriesDashboardsList.SelectedItem as DashboardSummary)?.Id);
+        IsQueriesRepublishing = true;
+    }
 
     /// <summary>
     /// W7-7 PR 4 (#1247, R-5; codex PR 4 round 6 high 3 and the completeness
@@ -91,27 +108,47 @@ public partial class MainWindow
     /// re-evaluation runs and the list keeper lands a removed row's keys on
     /// the fresh row of the same query. A button whose selection is gone
     /// for good (Delete) hands the keys to its list's row, else to the
-    /// leaf's own landing.
+    /// leaf's own landing. Plan 47 CB-17b (#1866, CD11): it does so while
+    /// <see cref="IsQueriesRepublishing"/> still holds its group on, and the
+    /// flag falls only then, so no group goes off with the keys on it.
     /// </summary>
     private void Queries_Republished()
     {
-        (string? query, string? file, string? dashboard) = _queriesSelection;
-        bool lost = !Reselect(QueriesSavedList, query, (SavedQuerySummary summary) => summary.Id)
-            | !Reselect(QueriesBaseFilesList, file, (BaseFileSummary summary) => summary.Path)
-            | !Reselect(QueriesDashboardsList, dashboard, (DashboardSummary summary) => summary.Id);
-        if (!lost
-            || Keyboard.FocusedElement is not UIElement { IsEnabled: false } disabled
-            || LeafBodyOf(QueriesSavedList) is not { } body
-            || !IsWithin(disabled, body))
+        try
         {
-            return;
-        }
+            (string? query, string? file, string? dashboard) = _queriesSelection;
+            bool lost = !Reselect(QueriesSavedList, query, (SavedQuerySummary summary) => summary.Id)
+                | !Reselect(QueriesBaseFilesList, file, (BaseFileSummary summary) => summary.Path)
+                | !Reselect(QueriesDashboardsList, dashboard, (DashboardSummary summary) => summary.Id);
+            if (!lost
+                || Keyboard.FocusedElement is not UIElement holder
+                || LeafBodyOf(QueriesSavedList) is not { } body
+                || !IsWithin(holder, body))
+            {
+                return;
+            }
 
-        ListBox home = ListAbove(disabled) ?? QueriesSavedList;
-        if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)) && !LandInLeaf(body))
+            // The keys are on a control about to go off: one already off (a host whose
+            // group does not read the flag), or a button of a group whose list's selection
+            // is gone, which goes off as the flag falls.
+            ListBox? above = ListAbove(holder);
+            bool goingOff = !holder.IsEnabled
+                || (holder is Button && LogicalTreeHelper.GetParent(holder) is WrapPanel && above is { SelectedItem: null });
+            if (!goingOff)
+            {
+                return;
+            }
+
+            ListBox home = above ?? QueriesSavedList;
+            if (!(home.HasItems && SelectorFocus.FocusFirstOrSelectedItem(home)) && !LandInLeaf(body))
+            {
+                // Not even the rail's row took them — the pane's last stable
+                // stop: WPF's own re-evaluation keeps them in the window.
+            }
+        }
+        finally
         {
-            // Not even the rail's row took them — the pane's last stable
-            // stop: WPF's own re-evaluation keeps them in the window.
+            IsQueriesRepublishing = false;
         }
     }
 
