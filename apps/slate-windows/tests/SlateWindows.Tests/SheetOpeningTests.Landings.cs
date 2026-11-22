@@ -346,6 +346,41 @@ public sealed partial class SheetOpeningTests
             $"once Files Citing closed over the details sheet the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
     });
 
+    /// <summary>The red team on PR 2's diff, F1's mirror: the card editor has no restore of
+    /// its own. Presented over Move To (a card's editor arriving while Move To is open) and
+    /// closed, it leaves the keys to WPF, which hands them to the window's own element
+    /// beneath Move To; the close's check lands Move To again.</summary>
+    [Fact]
+    public void ASheetWithNoRestoreClosedOverAnotherLandsTheOneLeftOnTop() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Board);
+        bench.SelectTheCard("alpha");
+        bench.AttachASidebarAndSelect(Note);
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        bench.Sidebar!.MoveToCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.MoveToOverlay), $"premise: Move To holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        bench.Workspace.OpenCanvasCardEditor();
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.CanvasCardEditor, bench.Shell.OpenModalSurface);
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.CanvasCardEditorOverlay), $"premise: the card editor holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        bench.Workspace.CloseCanvasCardEditor();
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
+        Assert.True(
+            KeysFirstRecorder.TheKeysAreIn(bench.Shell.MoveToOverlay),
+            $"once the card editor closed over Move To the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
+    });
+
     /// <summary>The red team on PR 2's diff, F2 and F4: when the window comes back with the
     /// keys outside the open sheet (WPF gives them to the window's own focused element, under
     /// the sheet), they go back to the stop the reader left in the sheet, not to its first
