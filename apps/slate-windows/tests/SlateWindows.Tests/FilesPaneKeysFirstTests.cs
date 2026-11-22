@@ -757,6 +757,31 @@ public sealed class FilesPaneKeysFirstTests
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, importButton), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Import…");
     });
 
+    /// <summary>Codex round 2: the box takes Enter's key-up, so the window never sees it.
+    /// The reader cancels the box and presses Enter again, a new press by the keyboard's own
+    /// account: Import… opens its box again. WPF, which saw no key-up, took the new press for
+    /// the key held down repeating, and the fence swallowed it.</summary>
+    [Fact]
+    public void ANewEnterOnImportAfterItsBoxTookTheKeyUpOpensItAgain() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { CancelAtOnce = true };
+        using var pane = new FilesPane(host, import: import);
+        Button importButton = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.ImportCommand);
+        pane.TakeTheKeys(importButton);
+
+        HeldKeys.Down(host.Shell, Key.Enter, held: false);
+        host.Settle();
+        Assert.True(import.Picks == 1, $"premise: Enter opened Import…'s box {import.Picks} times");
+        // No key-up reaches the window: the box took it.
+        HeldKeys.Down(host.Shell, Key.Enter, held: false);
+        HeldKeys.Up(host.Shell, Key.Enter);
+        host.Settle();
+
+        Assert.True(import.Picks == 2, $"a new Enter after the box opened Import…'s box {import.Picks} times in all, not twice");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, importButton), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Import…");
+    });
+
     /// <summary>A press as UI Automation makes it, which needs no mouse capture.</summary>
     private static void Press(Button button)
     {

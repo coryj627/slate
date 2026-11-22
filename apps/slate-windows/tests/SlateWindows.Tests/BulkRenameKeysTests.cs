@@ -244,6 +244,48 @@ public sealed class BulkRenameKeysTests
             $"after the refusal the keys were on {Describe(Keyboard.FocusedElement)}, not on Apply, on");
     });
 
+    /// <summary>Codex round 2: Shift+Enter held on Preview, and Shift let go while Enter is
+    /// still down. WPF took the next repeat for a new press, since any key-up ends its guess at
+    /// a repeat, and the press said the sentence again. By the keyboard's own account Enter is
+    /// still held: its repeats press nothing, before Shift is let go and after.</summary>
+    [Fact]
+    public void AHeldEnterStaysHeldWhenAnotherKeyIsLetGo() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        FrameworkElement overlay = OpenBulkRename(host);
+        BulkRenameViewModel sheet = host.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        host.Settle();
+        Button preview = ButtonOf(overlay, "BulkRenamePreviewButton");
+        Assert.True(
+            preview.Focus() && ReferenceEquals(preview, Keyboard.FocusedElement),
+            $"keyboard premise: Preview could not take the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        int published = 0;
+        sheet.RunPublished += () => published++;
+        int heard = host.Announced.Count;
+        int runsBefore = sheet.RequestIdForTests;
+        using var held = new HeldWork(hook => sheet.PreviewHookForTests = hook);
+
+        HeldKeys.Down(host.Shell, Key.LeftShift, held: false);
+        HeldKeys.Down(host.Shell, Key.Enter, held: false);
+        held.WaitUntilEntered();
+        HeldKeys.Down(host.Shell, Key.Enter, held: true);
+        HeldKeys.Up(host.Shell, Key.LeftShift);
+        HeldKeys.Down(host.Shell, Key.Enter, held: true);
+        HeldKeys.Down(host.Shell, Key.Enter, held: true);
+        HeldKeys.Up(host.Shell, Key.Enter);
+        int runsAfterTheHold = sheet.RequestIdForTests;
+        A11yEvent[] saidInTheHold = [.. host.Announced.Skip(heard)];
+        held.Release();
+        Assert.True(PumpedDispatcher.PumpUntil(() => published == 1 && !sheet.WorkInFlight, TimeSpan.FromSeconds(30)), "the preview never published");
+        held.AssertHeldUntilReleased();
+
+        Assert.Equal(runsBefore + 1, runsAfterTheHold);
+        Assert.DoesNotContain(saidInTheHold, line => line is A11yEvent.WorkStillRunning);
+    });
+
     /// <summary>The merge judge's nit 2: the held-Enter fence is the sheet's buttons' and
     /// fields', not the preview grid's. Enter on a cell of the preview runs Preview once (CB-19
     /// keeps that route), and a held Enter's repeats still walk the grid down its rows, as a
