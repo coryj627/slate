@@ -185,6 +185,71 @@ public sealed class KeysFirstRecorderTests
         Assert.Contains("the link did not hold the keys", failed.Message, StringComparison.Ordinal);
     });
 
+    /// <summary>Plan 47 CB-17b: the stays-on form passes when the root holds the keys, never
+    /// goes off, and the driver ran.</summary>
+    [Fact]
+    public void TheStaysOnAssertionPassesWhenTheRootStaysOnAndTheDriverRan() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+        bool ran = false;
+
+        KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => ran = true, () => ran);
+
+        Assert.Same(rig.First, Keyboard.FocusedElement);
+    });
+
+    /// <summary>Off and back on within the act is still off under the keys.</summary>
+    [Fact]
+    public void TheStaysOnAssertionFailsWhenTheRootGoesOffEvenForAMoment() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () =>
+            {
+                rig.First.IsEnabled = false;
+                rig.First.IsEnabled = true;
+            }, () => true));
+
+        Assert.Contains("First went off in the act", failed.Message, StringComparison.Ordinal);
+    });
+
+    /// <summary>An ancestor turning off turns the root off with it.</summary>
+    [Fact]
+    public void TheStaysOnAssertionFailsWhenAnAncestorTurnsTheRootOff() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => rig.Panel.IsEnabled = false, () => true));
+
+        Assert.Contains("First went off in the act", failed.Message, StringComparison.Ordinal);
+    });
+
+    /// <summary>A fact that never pumped as far as what used to turn the control off
+    /// measured nothing, so it fails rather than passing.</summary>
+    [Fact]
+    public void TheStaysOnAssertionFailsWhenTheDriverNeverRan() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.First);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => { }, () => false));
+
+        Assert.Contains("First stayed on, but the act never reached", failed.Message, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public void TheStaysOnAssertionFailsWhenTheKeysAreElsewhere() => WithAWindow(rig =>
+    {
+        TakeTheKeys(rig.Second);
+
+        Xunit.Sdk.XunitException failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => KeysFirstRecorder.AssertItStaysOn("First", rig.First, () => { }, () => true));
+
+        Assert.Contains("First did not hold the keys", failed.Message, StringComparison.Ordinal);
+    });
+
     /// <summary>A popup's content lives in its own visual tree, so the keys on a button in a
     /// popup that the root holds are inside the root by the logical tree only (a menu's
     /// submenu rows are).</summary>
