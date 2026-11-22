@@ -221,18 +221,19 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Makes <paramref name="surface"/> a stop that can hold the keys while its
-    /// landing waits, and no stop again once it has let them go. Never a Tab stop.</summary>
-    private void SetHoldsTheKeys(FrameworkElement surface, bool holds)
+    /// <summary>Makes <paramref name="overlay"/>, a sheet or an overlay, a stop that can hold
+    /// the keys while its landing waits, and no stop again once it has let them go. Never a
+    /// Tab stop.</summary>
+    private void SetHoldsTheKeys(FrameworkElement overlay, bool holds)
     {
-        surface.LostKeyboardFocus -= SurfaceLetsTheKeysGo;
+        overlay.LostKeyboardFocus -= SurfaceLetsTheKeysGo;
         if (holds)
         {
-            KeyboardNavigation.SetIsTabStop(surface, false);
-            surface.LostKeyboardFocus += SurfaceLetsTheKeysGo;
+            KeyboardNavigation.SetIsTabStop(overlay, false);
+            overlay.LostKeyboardFocus += SurfaceLetsTheKeysGo;
         }
 
-        surface.Focusable = holds;
+        overlay.Focusable = holds;
     }
 
     /// <summary>A surface holding the keys lets them go once they leave it, for a stop

@@ -144,8 +144,8 @@ public sealed partial class SheetOpeningTests
     /// in, with no dispatcher turn in between, so the view under it is off before any key,
     /// text or click already queued is delivered. The keys start in the editor, or on the
     /// canvas for the three canvas sheets, or in the template picker for the template flow.
-    /// The template picker is held only to the keys being inside it: it opens loading, and
-    /// its list is filled later in the same call.</summary>
+    /// The template picker opens loading, and its list is filled later in the same call:
+    /// its row has the keys by the end of that turn, never its Cancel.</summary>
     [Theory]
     [InlineData(nameof(WorkspaceViewModel.AddPropertySheet))]
     [InlineData(nameof(WorkspaceViewModel.BulkRenameSheet))]
@@ -553,8 +553,9 @@ public sealed partial class SheetOpeningTests
             Prepare: static _ => { },
             Approach: null,
             Open: static bench => bench.Workspace.NewFromTemplateCommand.Execute(null),
-            // It opens loading, with no row yet; its list is filled later in the same call.
-            Stop: null),
+            // It opens loading, with no row yet; its list is filled later in the same call,
+            // and its row takes the keys then, in the opening turn (red team F1).
+            Stop: static bench => RowOf(bench.Shell.TemplatePickerList)),
         ModalSurface.TemplateFlow => new Sheet(
             surface,
             nameof(WorkspaceViewModel.TemplateFlowSheet),
