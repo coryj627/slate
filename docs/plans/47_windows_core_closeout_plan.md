@@ -622,7 +622,7 @@ work the chunk carries.
 | CB-20b | A diagram's source is spoken on request, never on Tab | — (found by the sweep) | M | rust, windows, swift | NVDA spot | CD12 |
 | CB-21 | Narrator announces the selection on Ctrl+A in the reading view; diagnosis first | #1330 | S–M | windows (gate) | Narrator | CD13 |
 | CB-22 | Activate at Cursor and Preview Embed are unavailable in reading mode; a Ctrl+click on prose stays silent while the cache loads | #1661 | S | windows | NVDA spot | CD14 |
-| CB-22b | No two items of one menu level share an access key: an access-key sweep ends the sixteen dated rows of `MenuAccessKeyCensus`, with the letters put to the owner as one table before any of them changes; a folder name with an underscore shows whole in the note header's Folders menu, where a folder `my_notes` shows "mynotes" today. Added on 2026-11-21 by the lead's second ruling on CB-22's Call 8 (§12, Waves C9 and C10); it runs after CB-17b, since both edit `MainWindow.xaml` | — (found by CB-22's census; Refs #1955) | S | windows | NVDA spot: the changed keys | the owner's letters, as one table in its PR |
+| CB-22b | No two items of one menu level share an access key: an access-key sweep ends the sixteen dated rows of `MenuAccessKeyCensus`, with the letters put to the owner as one table before any of them changes; a folder name with an underscore shows whole in the note header's Folders menu, where a folder `my_notes` shows "mynotes" today. Added on 2026-11-21 by the lead's second ruling on CB-22's Call 8 (§12, Waves C9 and C10); it runs after CB-17b, since both edit `MainWindow.xaml` | none (found by CB-22's census; Refs #1955, comment 7066667520) | S | windows | NVDA spot: the changed keys | the owner's letters, as one table in its PR |
 | CB-23 | A right-pane panel with no body says what it will show, in a line core owns | #1800 | S–M | rust, windows, swift | NVDA spot | CD15 |
 | CB-24 | One NVDA session records #1846 and #1849; the note header's menu keeps its first row under a resting pointer, by #1944's remedy | #1849; #1846 by comment | S–M | windows (gate) | NVDA full on the steps | CD16 |
 | CB-25 | A `LayoutItemsControl` drops a removed item's raw-view peer | #1860 | S | windows | — | — |
@@ -2471,11 +2471,12 @@ probed, and filed if real (ruling 9); it was real on three routes, and
 it is #2034.
 
 The census's survey brought a second ruling on Call 8 the same day. It
-found 18 shared keys in the shell's menus, all in `MainWindow.xaml`, and
-in 14 of them the key runs the twin's command at once when the learned
-item is disabled. CB-22 fixes the Editor menu's two, "Actual Si_ze" and
-"Zoom Ou_t". The other sixteen are dated rows in `MenuAccessKeyCensus`,
-on one #1955 line. They are not left for CB-46: the lead cut a new
+found 18 shared keys in the shell's menus, all in `MainWindow.xaml`. By
+reading, in 14 of them the key runs the twin's command at once when the
+learned item is disabled. CB-22 fixes the Editor menu's two, "Actual
+Si_ze" and "Zoom Ou_t". The other sixteen are dated rows in
+`MenuAccessKeyCensus`, on one #1955 line (comment 7066667520). They
+are not left for CB-46: the lead cut a new
 chunk, CB-22b, to run after CB-17b, when `MainWindow.xaml` is free. It
 is an access-key sweep that puts the letters to the owner as one table
 and ends every dated row. It also takes the underscore in a data header,
@@ -2483,7 +2484,7 @@ which Principal X's probe proved: in the note header's Folders menu a
 folder named `my_notes` shows as "mynotes", because the menu item's
 header is the folder's name. This docs PR adds CB-22b to §5 and §6.
 
-Two later calls on CB-22 were the lead's. With A and O unique in the
+The lead accepted two later calls on CB-22. With A and O unique in the
 Editor menu, in editing mode Alt+E, A runs Activate at Cursor at once
 and Alt+E, O opens Bulk Rename Properties at once, where on `main` each
 only moved the keys; the lead accepted it, the PR body names all four
@@ -2718,5 +2719,6 @@ These waves left five empty worktree folders on the lead's machine:
 owner.
 
 Wave C9 is done: CB-15c (#2032), CB-32 (#2033) and CB-17a (#2037). Wave
-C10 has CB-22 (#2035) and CB-33 (#2036) merged and CB-17b in progress;
-CB-22b follows CB-17b.
+C10 started early, when Principal V's slot freed. It has CB-22 (#2035)
+and CB-33 (#2036) merged and CB-17b in progress, and CB-22b follows
+CB-17b.
