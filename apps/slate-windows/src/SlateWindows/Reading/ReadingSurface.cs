@@ -1606,6 +1606,12 @@ internal sealed class ReadingSurface : RichTextBox
     /// newer input superseded it.</summary>
     private int _caretInputs;
 
+    /// <summary>#1708 (Codex round 7): the press selected, by Shift or by a
+    /// drag while the button was down, so its release is not a plain click
+    /// and leaves the caret where the gesture put it (on its anchor, after a
+    /// collapse back onto it).</summary>
+    private bool _pressSelected;
+
     /// <summary>#1708 (the merge judge's m2): a republish or a rebind is
     /// putting the reader back where they were, hidden letter included.</summary>
     private bool _restoringCaret;
@@ -1649,6 +1655,7 @@ internal sealed class ReadingSurface : RichTextBox
         _caretMovedAlongItsLine = false;
         _pointerHeld = true;
         _caretInputs++;
+        _pressSelected = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
         base.OnPreviewMouseDown(e);
     }
 
@@ -1683,11 +1690,13 @@ internal sealed class ReadingSurface : RichTextBox
         // or restore, or a caret set anywhere else since, supersedes it.
         int release = ++_caretInputs;
         TextPointer released = CaretPosition;
+        bool plainClick = !_pressSelected;
         _ = Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Input,
             () =>
             {
-                if (release == _caretInputs
+                if (plainClick
+                    && release == _caretInputs
                     && !_pointerHeld
                     && Selection.IsEmpty
                     && CaretPosition.CompareTo(released) == 0)
@@ -1723,6 +1732,7 @@ internal sealed class ReadingSurface : RichTextBox
         if (!Selection.IsEmpty)
         {
             _selectionAnchor = caret.CompareTo(Selection.Start) == 0 ? Selection.End : Selection.Start;
+            _pressSelected |= _pointerHeld;
             return;
         }
         _selectionAnchor = null;
