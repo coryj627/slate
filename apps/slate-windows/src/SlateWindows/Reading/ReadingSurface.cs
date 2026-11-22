@@ -71,16 +71,6 @@ internal sealed class ReadingSurface : RichTextBox
         AutomationProperties.SetHelpText(this, Commands.NavigationHelp.Reading);
         DataObject.AddCopyingHandler(this, OnCopying);
         DataObject.AddSettingDataHandler(this, OnSettingData);
-        // #1708 (the merge judge's M1): the end of a press, however WPF's
-        // own selection handling marks its events.
-        AddHandler(
-            System.Windows.Input.Mouse.MouseUpEvent,
-            new System.Windows.Input.MouseButtonEventHandler((_, _) => ReleasePointer()),
-            handledEventsToo: true);
-        AddHandler(
-            System.Windows.Input.Mouse.LostMouseCaptureEvent,
-            new System.Windows.Input.MouseEventHandler((_, _) => ReleasePointer()),
-            handledEventsToo: true);
 
         // ONE document for the surface's whole life. Replacing the
         // Document property on a live RichTextBox breaks the UIA
@@ -1665,6 +1655,15 @@ internal sealed class ReadingSurface : RichTextBox
     protected override void OnPreviewMouseUp(System.Windows.Input.MouseButtonEventArgs e)
     {
         base.OnPreviewMouseUp(e);
+        ReleasePointer();
+    }
+
+    /// <summary>#1708 (the merge judge's M1): WPF captures the mouse for a
+    /// press on the surface and lets it go on release, so the loss of that
+    /// capture ends the press too, whatever marked the release handled.</summary>
+    protected override void OnLostMouseCapture(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnLostMouseCapture(e);
         ReleasePointer();
     }
 
