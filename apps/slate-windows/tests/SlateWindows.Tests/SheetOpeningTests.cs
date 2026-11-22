@@ -134,8 +134,8 @@ public sealed partial class SheetOpeningTests
 
         KeysFirstRecorder.AssertTheKeysLeaveFirst($"the launcher's row, as {sheet.Token} opened,", row, () => bench.OpenAndSettle(sheet));
 
-        // The launcher style's sheet trigger reads this.
-        Assert.True(bench.Shell.IsModalSheetOpen, $"premise: {sheet.Token} is a sheet to the launcher");
+        // The launcher style's trigger reads this, with the keys gone from the row.
+        Assert.True(bench.Shell.IsModalSurfaceOpen, $"premise: {sheet.Token} is a modal surface to the launcher");
         bench.AssertTheSheetHasTheKeys(sheet);
         Assert.False(row.IsEnabled, $"the launcher's row stayed on under {sheet.Token}");
     });

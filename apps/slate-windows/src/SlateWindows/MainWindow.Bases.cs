@@ -198,14 +198,18 @@ public partial class MainWindow
         switch (eventArgs.PropertyName)
         {
             case nameof(WorkspaceViewModel.BaseQueryBuilderSheet):
-                if (workspace.BaseQueryBuilderSheet is not null)
+                if (workspace.BaseQueryBuilderSheet is { } builder)
                 {
                     // Through the shared helper: this sheet presents
                     // from the edit-JSON continuation, so a picker may
                     // still be open and focused here (red team after
                     // round 11) — its pre-open token is the lineage.
                     _focusBeforeBuilder = CapturePreSheetFocus();
-                    FocusWhenReady(() => BuilderCombinatorBox.Focus());
+                    FocusWhenReady(
+                        ModalSurface.BaseQueryBuilder,
+                        BaseQueryBuilderOverlay,
+                        BuilderCombinatorBox,
+                        () => ReferenceEquals(_viewModel.Workspace?.BaseQueryBuilderSheet, builder));
                 }
                 else
                 {
@@ -214,10 +218,14 @@ public partial class MainWindow
                 }
                 break;
             case nameof(WorkspaceViewModel.DashboardEditorSheet):
-                if (workspace.DashboardEditorSheet is not null)
+                if (workspace.DashboardEditorSheet is { } editor)
                 {
                     _focusBeforeDashboardEditor = CapturePreSheetFocus();
-                    FocusWhenReady(() => DashboardEditorNameBox.Focus());
+                    FocusWhenReady(
+                        ModalSurface.DashboardEditor,
+                        DashboardEditorOverlay,
+                        DashboardEditorNameBox,
+                        () => ReferenceEquals(_viewModel.Workspace?.DashboardEditorSheet, editor));
                 }
                 else
                 {

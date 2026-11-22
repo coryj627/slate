@@ -73,16 +73,12 @@ public partial class MainWindow
         if (sidebar.MoveToSheet is { } picker)
         {
             _focusBeforeMoveTo ??= CapturePreSheetFocus();
-            _ = Dispatcher.InvokeAsync(
-                () =>
-                {
-                    if (ReferenceEquals(_observedFileSidebar, sidebar)
-                        && ReferenceEquals(sidebar.MoveToSheet, picker)
-                        && OpenModalSurface == ModalSurface.MoveTo)
-                    {
-                        MoveToFilterTextBox.Focus();
-                    }
-                }, DispatcherPriority.Input);
+            LandInOpeningSurface(
+                ModalSurface.MoveTo,
+                MoveToOverlay,
+                MoveToFilterTextBox,
+                MoveToFilterTextBox.Focus,
+                () => ReferenceEquals(_observedFileSidebar, sidebar) && ReferenceEquals(sidebar.MoveToSheet, picker));
         }
         else
         {

@@ -592,7 +592,11 @@ public partial class MainWindow
                 if (workspace.CitationDetails is { } details)
                 {
                     _openCitationDetails = details;
-                    FocusWhenReady(() => CitationDetailsCloseButton.Focus());
+                    FocusWhenReady(
+                        ModalSurface.CitationDetails,
+                        CitationDetailsOverlay,
+                        CitationDetailsCloseButton,
+                        () => ReferenceEquals(_viewModel.Workspace?.CitationDetails, details));
                 }
                 else
                 {
@@ -613,9 +617,11 @@ public partial class MainWindow
                     // and the picker's pre-open token is the true
                     // lineage, not its about-to-collapse box.
                     _focusBeforeCitationSummary = CapturePreSheetFocus();
-                    FocusWhenReady(() => (summary.CanWalkThrough
-                        ? CitationSummaryWalkButton
-                        : CitationSummaryDismissButton).Focus());
+                    FocusWhenReady(
+                        ModalSurface.CitationSummary,
+                        CitationSummaryOverlay,
+                        summary.CanWalkThrough ? CitationSummaryWalkButton : CitationSummaryDismissButton,
+                        () => ReferenceEquals(_viewModel.Workspace?.CitationSummary, summary));
                 }
                 else
                 {
@@ -628,7 +634,11 @@ public partial class MainWindow
                 if (workspace.FilesCiting is { } filesCiting)
                 {
                     _openFilesCiting = filesCiting;
-                    FocusWhenReady(() => FilesCitingCloseButton.Focus());
+                    FocusWhenReady(
+                        ModalSurface.FilesCiting,
+                        FilesCitingOverlay,
+                        FilesCitingCloseButton,
+                        () => ReferenceEquals(_viewModel.Workspace?.FilesCiting, filesCiting));
                 }
                 else
                 {
@@ -641,9 +651,10 @@ public partial class MainWindow
         }
     }
 
-    private void FocusWhenReady(Action focusInitial) =>
-        _ = Dispatcher.InvokeAsync(
-            focusInitial, System.Windows.Threading.DispatcherPriority.Input);
+    /// <summary>Plan 47 CB-17b (#1866): a sheet whose landing is one stop takes the keys
+    /// on it in the turn it opens (<see cref="LandInOpeningSurface"/>).</summary>
+    private void FocusWhenReady(ModalSurface which, FrameworkElement surface, UIElement stop, Func<bool> stillOpen) =>
+        LandInOpeningSurface(which, surface, stop, stop.Focus, stillOpen);
 
     /// <summary>
     /// Contract 11, PER SHEET. The W4-4 sheets share one

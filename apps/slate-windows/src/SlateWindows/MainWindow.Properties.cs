@@ -196,12 +196,15 @@ public partial class MainWindow
         }
         if (eventArgs.PropertyName == nameof(WorkspaceViewModel.AddPropertySheet))
         {
-            if (workspace.AddPropertySheet is not null)
+            if (workspace.AddPropertySheet is { } addProperty)
             {
                 _focusBeforeSheet ??= CapturePreSheetFocus();
-                _ = Dispatcher.InvokeAsync(
-                    () => AddPropertyKeyTextBox.Focus(),
-                    System.Windows.Threading.DispatcherPriority.Input);
+                LandInOpeningSurface(
+                    ModalSurface.AddProperty,
+                    AddPropertyOverlay,
+                    AddPropertyKeyTextBox,
+                    AddPropertyKeyTextBox.Focus,
+                    () => ReferenceEquals(_observedWorkspace?.AddPropertySheet, addProperty));
             }
             else
             {
@@ -211,13 +214,16 @@ public partial class MainWindow
         else if (eventArgs.PropertyName == nameof(WorkspaceViewModel.BulkRenameSheet))
         {
             ObserveBulkRenameSheet(workspace.BulkRenameSheet);
-            if (workspace.BulkRenameSheet is not null)
+            if (workspace.BulkRenameSheet is { } bulkRename)
             {
                 _focusBeforeSheet ??= CapturePreSheetFocus();
-                BindBulkRenameGrid(workspace.BulkRenameSheet);
-                _ = Dispatcher.InvokeAsync(
-                    () => BulkRenameOldKeyTextBox.Focus(),
-                    System.Windows.Threading.DispatcherPriority.Input);
+                BindBulkRenameGrid(bulkRename);
+                LandInOpeningSurface(
+                    ModalSurface.BulkRename,
+                    BulkRenameOverlay,
+                    BulkRenameOldKeyTextBox,
+                    BulkRenameOldKeyTextBox.Focus,
+                    () => ReferenceEquals(_observedWorkspace?.BulkRenameSheet, bulkRename));
             }
             else
             {
