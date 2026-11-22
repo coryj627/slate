@@ -183,9 +183,20 @@ internal static class ReadingLineReserve
         {
             return reserve;
         }
+        // The run's own language picks its fallback fonts, as its layout
+        // does (the merge judge's nit 3).
+        System.Globalization.CultureInfo culture;
+        try
+        {
+            culture = run.Language.GetSpecificCulture();
+        }
+        catch (InvalidOperationException)
+        {
+            culture = System.Globalization.CultureInfo.CurrentUICulture;
+        }
         var text = new System.Windows.Media.FormattedText(
             run.Text,
-            System.Globalization.CultureInfo.CurrentUICulture,
+            culture,
             run.FlowDirection,
             new System.Windows.Media.Typeface(run.FontFamily, run.FontStyle, run.FontWeight, run.FontStretch),
             run.FontSize,

@@ -310,22 +310,14 @@ public sealed partial class ReadingDiagramTests
             }
             else
             {
-                ReadingSurface.PlainTextClipboardForTests = _ => { };
                 IDataObject? copied = null;
-                try
+                DataObject.AddCopyingHandler(surface, (_, e) =>
                 {
-                    DataObject.AddCopyingHandler(surface, (_, e) =>
-                    {
-                        copied = e.DataObject;
-                        cancelled = e.CommandCancelled;
-                        e.CancelCommand();
-                    });
-                    surface.Copy();
-                }
-                finally
-                {
-                    ReadingSurface.PlainTextClipboardForTests = null;
-                }
+                    copied = e.DataObject;
+                    cancelled = e.CommandCancelled;
+                    e.CancelCommand();
+                });
+                surface.Copy();
                 Assert.NotNull(copied);
                 data = copied!;
             }

@@ -273,7 +273,10 @@ internal sealed class ReadingNavigator
     /// </summary>
     private void Navigate(Func<ReadingLandmark, bool> matches, A11yEvent miss, bool forward)
     {
-        TextPointer caret = _surface.CaretPosition;
+        // #1708 (the merge judge's nit 5): a math or diagram landmark sits
+        // just after its element, so a caret inside the element's hidden
+        // speech counts as there, and "next" moves on to the next block.
+        TextPointer caret = ReadingDocumentBuilder.VisibleCaretPast(_surface.CaretPosition) ?? _surface.CaretPosition;
         ReadingLandmark? target = null;
         if (forward)
         {

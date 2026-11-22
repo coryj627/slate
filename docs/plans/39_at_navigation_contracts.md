@@ -139,10 +139,16 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   runs and a copy carries the fenced source or what is shown (CD12(c)). An
   embedded image's line reads its card's name, and a thematic break is no
   longer "unavailable". A caret that reaches a formula's, a diagram's or an
-  embedded image's line from another line (Up, Down, a page, a click, a
-  landing, the math and diagram chords) rests just after the element, where
-  it is drawn at the line's height; Left, Right, Home and End stop where they
-  did, the hidden run's letters included. No chord and no help line change;
+  embedded image's line from another line (Up, Down, a page, a landing, the
+  math and diagram chords) rests just after the element, where it is drawn
+  at the line's height; Left, Right, Home and End stop where they did, the
+  hidden run's letters included. A mouse press stays where it was pressed
+  until the button is released, so a drag from beside an element selects it;
+  a plain click there rests after it. A selection collapsed onto its anchor,
+  a republish and a rebind leave the caret where the reader was, and "next"
+  from inside a block's speech moves on. A copy or a drag keeps the rich
+  text and pictures, with a formula's or a rendered diagram's fenced source
+  in its place. No chord and no help line change;
   Tab still reads a diagram's source, which CB-20b moves to a chord
   (CD12(d)). Census: `ReadingEmbeddedElementCensus`.
 

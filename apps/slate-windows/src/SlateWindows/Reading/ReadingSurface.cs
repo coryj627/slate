@@ -71,6 +71,16 @@ internal sealed class ReadingSurface : RichTextBox
         AutomationProperties.SetHelpText(this, Commands.NavigationHelp.Reading);
         DataObject.AddCopyingHandler(this, OnCopying);
         DataObject.AddSettingDataHandler(this, OnSettingData);
+        // #1708 (the merge judge's M1): the end of a press, however WPF's
+        // own selection handling marks its events.
+        AddHandler(
+            System.Windows.Input.Mouse.MouseUpEvent,
+            new System.Windows.Input.MouseButtonEventHandler((_, _) => ReleasePointer()),
+            handledEventsToo: true);
+        AddHandler(
+            System.Windows.Input.Mouse.LostMouseCaptureEvent,
+            new System.Windows.Input.MouseEventHandler((_, _) => ReleasePointer()),
+            handledEventsToo: true);
 
         // ONE document for the surface's whole life. Replacing the
         // Document property on a live RichTextBox breaks the UIA
@@ -297,10 +307,10 @@ internal sealed class ReadingSurface : RichTextBox
                 // field pass: a target saved in another tab stayed
                 // stale forever — the current content remains visible
                 // while the digest decides whether anything changed).
-                surface.CaretPosition =
+                surface.RestoreCaret(
                     surface.Document.ContentStart.GetPositionAtOffset(
                         Math.Max(0, model.SavedCaretOffsetForRebind))
-                    ?? surface.Document.ContentEnd;
+                    ?? surface.Document.ContentEnd);
                 if (model.HasPendingDependencyRefresh)
                 {
                     model.RefreshForDependencies();
@@ -781,7 +791,7 @@ internal sealed class ReadingSurface : RichTextBox
         {
             try
             {
-                CaretPosition = PositionAt(Document, anchor);
+                RestoreCaret(PositionAt(Document, anchor));
             }
             catch (InvalidOperationException)
             {
@@ -1591,8 +1601,39 @@ internal sealed class ReadingSurface : RichTextBox
     /// <summary>#1708: where the caret was at the last selection change.</summary>
     private TextPointer? _caretBefore;
 
+    /// <summary>#1708 (the merge judge's M1): the anchor of the selection
+    /// while it was not empty, so a selection collapsed back onto its anchor
+    /// leaves the caret there.</summary>
+    private TextPointer? _selectionAnchor;
+
+    /// <summary>#1708 (the merge judge's M1): a mouse button is down on the
+    /// surface. WPF anchors a drag where the press put the caret, so the
+    /// caret is left there until the button is released.</summary>
+    private bool _pointerHeld;
+
+    /// <summary>#1708 (the merge judge's m2): a republish or a rebind is
+    /// putting the reader back where they were, hidden letter included.</summary>
+    private bool _restoringCaret;
+
+    /// <summary>Puts the caret back where a republish or a rebind found the
+    /// reader, exactly, a hidden letter included.</summary>
+    private void RestoreCaret(TextPointer position)
+    {
+        _restoringCaret = true;
+        try
+        {
+            CaretPosition = position;
+        }
+        finally
+        {
+            _restoringCaret = false;
+        }
+    }
+
     protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
     {
+        // A key while the button is down ends the press's hold.
+        _pointerHeld = false;
         _caretMovedAlongItsLine = e.Key is System.Windows.Input.Key.Left or System.Windows.Input.Key.Right
             || (e.Key is System.Windows.Input.Key.Home or System.Windows.Input.Key.End
                 && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0);
@@ -1609,35 +1650,97 @@ internal sealed class ReadingSurface : RichTextBox
     protected override void OnPreviewMouseDown(System.Windows.Input.MouseButtonEventArgs e)
     {
         _caretMovedAlongItsLine = false;
+        _pointerHeld = true;
         base.OnPreviewMouseDown(e);
+    }
+
+    protected override void OnPreviewMouseUp(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnPreviewMouseUp(e);
+        ReleasePointer();
+    }
+
+    /// <summary>The press is over: once WPF has settled the selection, a
+    /// plain click in hidden speech rests just after the element, and a
+    /// drag keeps its selection.</summary>
+    private void ReleasePointer()
+    {
+        if (!_pointerHeld)
+        {
+            return;
+        }
+        _pointerHeld = false;
+        // After WPF's own release has settled the selection: a plain click
+        // in hidden speech rests just after the element; a drag keeps its
+        // selection.
+        _ = Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            () =>
+            {
+                if (Selection.IsEmpty)
+                {
+                    MoveCaretPastHiddenSpeech(CaretPosition);
+                }
+            });
     }
 
     /// <summary>
     /// #1708 (CB-20): a caret that arrives at or inside hidden speech from
-    /// another line (Up, Down, a page, a click, a landing) moves just after
-    /// the element the speech stands for, on the same line, where it is drawn
-    /// at the line's height and not as the sliver of a point the speech is.
+    /// another line (Up, Down, a page, a landing) moves just after the
+    /// element the speech stands for, on the same line, where it is drawn at
+    /// the line's height and not as the sliver of a point the speech is.
     /// A move along the line (Left, Right, Home, End, or a caret set on the
     /// same line) stays, so the speech's letters are still caret stops, as a
-    /// formula's have been since #1595. No stop is added or taken away.
+    /// formula's have been since #1595. No stop is added or taken away. The
+    /// merge judge's findings: a mouse press is left where it was pressed
+    /// until the button is released (a drag is anchored there), a selection
+    /// collapsed onto its anchor stays on it, a republish or a rebind puts
+    /// the reader back exactly, and the caret moves only onto the element's
+    /// own line.
     /// </summary>
     protected override void OnSelectionChanged(RoutedEventArgs e)
     {
         base.OnSelectionChanged(e);
         TextPointer? before = _caretBefore;
+        TextPointer? anchor = _selectionAnchor;
         bool alongItsLine = _caretMovedAlongItsLine;
         _caretMovedAlongItsLine = false;
         TextPointer caret = CaretPosition;
         _caretBefore = caret;
+        if (!Selection.IsEmpty)
+        {
+            _selectionAnchor = caret.CompareTo(Selection.Start) == 0 ? Selection.End : Selection.Start;
+            return;
+        }
+        _selectionAnchor = null;
+        if (_pointerHeld || _restoringCaret || alongItsLine || (anchor is not null && caret.CompareTo(anchor) == 0))
+        {
+            return;
+        }
         // Caret state is repairable UI state (ApplyBuiltDocument's rule): a
         // layout that cannot answer leaves the caret where WPF put it.
         try
         {
-            if (!Selection.IsEmpty || alongItsLine || (before is not null && OnOneLine(before, caret)))
+            if (before is not null && OnOneLine(before, caret))
             {
                 return;
             }
-            if (ReadingDocumentBuilder.VisibleCaretPast(caret) is { } visible)
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+        MoveCaretPastHiddenSpeech(caret);
+    }
+
+    /// <summary>#1708: a caret at or inside hidden speech moves just after
+    /// the element, when that is on its own line (the merge judge's m1: a
+    /// wrap between them would make Up a trap).</summary>
+    private void MoveCaretPastHiddenSpeech(TextPointer caret)
+    {
+        try
+        {
+            if (ReadingDocumentBuilder.VisibleCaretPast(caret) is { } visible && OnOneLine(caret, visible))
             {
                 CaretPosition = visible;
             }
@@ -1674,45 +1777,18 @@ internal sealed class ReadingSurface : RichTextBox
             e.CancelCommand();
             return;
         }
-        if (!copy.Substituted)
-        {
-            // #1708 (CB-20): only hidden runs were left out (a pending
-            // diagram's name, an embedded image's name), so WPF's formats
-            // stand, each without them: its rich text is made again from
-            // the range with those runs removed.
-            e.DataObject.SetData(DataFormats.UnicodeText, text);
-            e.DataObject.SetData(DataFormats.Text, text);
-            e.DataObject.SetData(
-                DataFormats.Rtf,
-                RtfWithoutHiddenSpeech(new TextRange(Selection.Start, Selection.End)) ?? PlainTextRtf(text));
-            return;
-        }
-        if (e.IsDragDrop)
-        {
-            e.DataObject.SetData(DataFormats.UnicodeText, text);
-            e.DataObject.SetData(DataFormats.Text, text);
-            // #1708 (CB-20, the lead's ruling on Call 12): WPF's RTF of the
-            // range carries the hidden runs as transparent text at a sliver
-            // of a point, so a drag whose copy changed the text carries RTF
-            // of that same text.
-            e.DataObject.SetData(DataFormats.Rtf, PlainTextRtf(text));
-            return;
-        }
-        e.CancelCommand();
-        try
-        {
-            if (PlainTextClipboardForTests is { } seam)
-            {
-                seam(text);
-                return;
-            }
-            Clipboard.SetDataObject(new DataObject(DataFormats.UnicodeText, text), copy: true);
-        }
-        catch (System.Runtime.InteropServices.ExternalException)
-        {
-            // Another process holds the clipboard; the copy is lost, as
-            // WPF's own would be.
-        }
+        // #1708 (CB-20; the lead's ruling on Call 12 and the merge judge's
+        // m3): a copy that changes the text (a formula's or a rendered
+        // diagram's fenced source in its place, hidden speech left out)
+        // keeps WPF's formats, a copy and a drag alike. Its plain text is
+        // the changed text, and its rich text is made again with the same
+        // changes, the rest's formatting and pictures kept, so neither
+        // carries hidden speech.
+        e.DataObject.SetData(DataFormats.UnicodeText, text);
+        e.DataObject.SetData(DataFormats.Text, text);
+        e.DataObject.SetData(
+            DataFormats.Rtf,
+            RichTextOfCopy(Selection.Start, Selection.End, copy.Changes) ?? PlainTextRtf(text));
     }
 
     /// <summary>The text a copy of [start, end] puts on the clipboard, or
@@ -1723,14 +1799,10 @@ internal sealed class ReadingSurface : RichTextBox
     /// embedded image's name) is left out, so the rest copies as shown.</summary>
     internal string? CopyTextOf(TextPointer start, TextPointer end) => CopyOf(start, end)?.Text;
 
-    /// <summary>Test seam: where a copy that changed the text puts its plain
-    /// text, in place of the clipboard. Null in production.</summary>
-    internal static Action<string>? PlainTextClipboardForTests;
-
-    /// <summary>A copy's text, and whether a fenced source took a
-    /// paragraph's place (when only hidden runs were left out, WPF's rich
-    /// text can stand without them).</summary>
-    private (string Text, bool Substituted)? CopyOf(TextPointer start, TextPointer end)
+    /// <summary>A copy's text, and the changes that made it from the range
+    /// (a paragraph replaced by its fenced source, a hidden run left out),
+    /// in document order, for its rich text to make the same.</summary>
+    private (string Text, List<(TextPointer From, TextPointer To, string Text)> Changes)? CopyOf(TextPointer start, TextPointer end)
     {
         var changes = new List<(TextPointer From, TextPointer To, string Text)>();
         CollectCopyChanges(Document.Blocks, start, end, changes);
@@ -1753,25 +1825,39 @@ internal sealed class ReadingSurface : RichTextBox
         {
             text.Append(new TextRange(cursor, end).Text);
         }
-        return (text.ToString(), changes.Any(change => change.Text.Length > 0));
+        return (text.ToString(), changes);
     }
 
-    /// <summary>#1708: RTF of <paramref name="range"/> without its hidden
-    /// speech. A XAML package keeps a run's exact size and colour, which RTF
-    /// rounds, and the pictures, which plain XAML drops (Codex round 1), so
-    /// the range goes through a package into a scratch document, every run
-    /// drawn transparent below a point is emptied (the census holds that
-    /// those are exactly the hidden runs), and that is saved as RTF. Null
-    /// when the round trip fails, and the caller falls back to plain RTF.</summary>
-    internal static string? RtfWithoutHiddenSpeech(TextRange range)
+    /// <summary>#1708: RTF for a copy of [start, end] with
+    /// <paramref name="changes"/> made (the merge judge's m3). The parts
+    /// between replaced paragraphs go through a XAML package, which keeps a
+    /// run's exact size and colour (RTF rounds them) and the pictures (plain
+    /// XAML drops them, Codex round 1). Each replaced paragraph, a formula
+    /// or a rendered diagram, becomes its fenced source in the code face,
+    /// a paragraph in its place. Every run drawn transparent below a point
+    /// is emptied (the census holds that those are exactly the hidden runs).
+    /// Null when any step throws, and the caller falls back to plain RTF,
+    /// so Ctrl+C never fails here (the merge judge's nit 2).</summary>
+    private string? RichTextOfCopy(
+        TextPointer start, TextPointer end, List<(TextPointer From, TextPointer To, string Text)> changes)
     {
         try
         {
-            using var xaml = new System.IO.MemoryStream();
-            range.Save(xaml, DataFormats.XamlPackage);
-            xaml.Position = 0;
             var scratch = new FlowDocument();
-            new TextRange(scratch.ContentStart, scratch.ContentEnd).Load(xaml, DataFormats.XamlPackage);
+            TextPointer cursor = start;
+            foreach ((TextPointer from, TextPointer to, string fencedSource) in changes.Where(change => change.Text.Length > 0))
+            {
+                AppendRichText(scratch, cursor, from);
+                scratch.Blocks.Add(FencedSourceParagraph(fencedSource));
+                cursor = to.CompareTo(end) < 0 ? to : end;
+            }
+            AppendRichText(scratch, cursor, end);
+            // RTF writes a run's line breaks as nothing, so a run of several
+            // lines (a pending diagram's source) becomes runs with breaks.
+            foreach (Run run in RunsIn(scratch.Blocks).Where(run => run.Text.Contains('\n') || run.Text.Contains('\r')).ToList())
+            {
+                BreakLines(run);
+            }
             // Emptied in place, not removed: a scratch document holds no keys,
             // so it needs no edit of a collection, which the focus manifest
             // would ask a witness of; an empty run writes no letter.
@@ -1783,11 +1869,82 @@ internal sealed class ReadingSurface : RichTextBox
             new TextRange(scratch.ContentStart, scratch.ContentEnd).Save(rtf, DataFormats.Rtf);
             return ShippedFontNames.InRtfFontTable(System.Text.Encoding.ASCII.GetString(rtf.ToArray()));
         }
-        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException or System.IO.IOException
-            or System.Xml.XmlException or System.Windows.Markup.XamlParseException)
+        catch (Exception failure) when (failure is not OutOfMemoryException)
         {
             return null;
         }
+    }
+
+    /// <summary>[from, to] of the reading document appended to
+    /// <paramref name="scratch"/> through a XAML package, in a paragraph of
+    /// its own. A part that begins at a paragraph's end, or ends at one's
+    /// start, leaves that empty edge out.</summary>
+    private static void AppendRichText(FlowDocument scratch, TextPointer from, TextPointer to)
+    {
+        if (from.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.ElementEnd)
+        {
+            from = from.GetNextInsertionPosition(LogicalDirection.Forward) ?? from;
+        }
+        if (to.GetPointerContext(LogicalDirection.Backward) == TextPointerContext.ElementStart)
+        {
+            to = to.GetNextInsertionPosition(LogicalDirection.Backward) ?? to;
+        }
+        if (from.CompareTo(to) >= 0)
+        {
+            return;
+        }
+        using var package = new System.IO.MemoryStream();
+        new TextRange(from, to).Save(package, DataFormats.XamlPackage);
+        package.Position = 0;
+        var holder = new Paragraph();
+        scratch.Blocks.Add(holder);
+        new TextRange(holder.ContentStart, holder.ContentEnd).Load(package, DataFormats.XamlPackage);
+    }
+
+    /// <summary>A scratch run of several lines as one run per line, each
+    /// with the run's own formatting, a line break between them.</summary>
+    private static void BreakLines(Run run)
+    {
+        string[] lines = run.Text.ReplaceLineEndings("\n").Split('\n');
+        run.Text = lines[0];
+        Inline after = run;
+        for (int index = 1; index < lines.Length; index++)
+        {
+            var lineBreak = new LineBreak();
+            run.SiblingInlines.InsertAfter(after, lineBreak);
+            var next = new Run(lines[index]);
+            LocalValueEnumerator values = run.GetLocalValueEnumerator();
+            while (values.MoveNext())
+            {
+                if (values.Current.Property != Run.TextProperty && !values.Current.Property.ReadOnly)
+                {
+                    next.SetValue(values.Current.Property, values.Current.Value);
+                }
+            }
+            run.SiblingInlines.InsertAfter(lineBreak, next);
+            after = next;
+        }
+    }
+
+    /// <summary>A formula's or a rendered diagram's fenced source as one
+    /// paragraph in the code face, a line break between its lines.</summary>
+    private Paragraph FencedSourceParagraph(string fencedSource)
+    {
+        var paragraph = new Paragraph();
+        if (TryFindResource(ReadingDocumentBuilder.CodeFontKey) is System.Windows.Media.FontFamily code)
+        {
+            paragraph.FontFamily = code;
+        }
+        string[] lines = fencedSource.ReplaceLineEndings("\n").Split('\n');
+        for (int index = 0; index < lines.Length; index++)
+        {
+            if (index > 0)
+            {
+                paragraph.Inlines.Add(new LineBreak());
+            }
+            paragraph.Inlines.Add(new Run(lines[index]));
+        }
+        return paragraph;
     }
 
     private static bool LooksHidden(Run run) =>
@@ -1880,8 +2037,9 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     /// <summary>#1708: RTF holding <paramref name="text"/> and nothing
-    /// else: braces and backslashes escaped, a line break as a paragraph,
-    /// and any character past ASCII as its UTF-16 unit.</summary>
+    /// else: braces and backslashes escaped, a line break as a paragraph, a
+    /// tab as RTF's tab (the merge judge's nit 1), no other control
+    /// character, and any character past ASCII as its UTF-16 unit.</summary>
     internal static string PlainTextRtf(string text)
     {
         var rtf = new System.Text.StringBuilder(@"{\rtf1\ansi ");
@@ -1894,6 +2052,11 @@ internal sealed class ReadingSurface : RichTextBox
                     break;
                 case '\n':
                     rtf.Append(@"\par ");
+                    break;
+                case '\t':
+                    rtf.Append(@"\tab ");
+                    break;
+                case < (char)0x20 or (char)0x7F:
                     break;
                 case < (char)0x80:
                     rtf.Append(character);

@@ -809,7 +809,7 @@ internal static class ReadingDocumentBuilder
 
     /// <summary>The face for code and for source shown in place of a render,
     /// from the type layer, so it's the one the app ships (DS-1).</summary>
-    private const string CodeFontKey = "Slate.CodeFontFamily";
+    internal const string CodeFontKey = "Slate.CodeFontFamily";
 
     private const double SpeechRunWidthBudget = 24;
 

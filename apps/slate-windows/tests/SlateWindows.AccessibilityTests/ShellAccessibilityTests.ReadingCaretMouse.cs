@@ -73,7 +73,6 @@ public sealed partial class ShellAccessibilityTests
                 "the diagram never rendered");
 
             window.SetForeground();
-            Thread.Sleep(500);
             surface = WaitForElement(window, "ReadingSurface", TimeSpan.FromSeconds(10));
             FlaUI.Core.Patterns.ITextPattern text = surface.Patterns.Text.Pattern;
             Rectangle page = surface.BoundingRectangle;
@@ -94,15 +93,22 @@ public sealed partial class ShellAccessibilityTests
                 }
                 // Its line at the top of the view, so the line below shows too.
                 speech.ScrollIntoView(true);
-                Thread.Sleep(300);
                 FlaUI.Core.ITextRange line = speech.Clone();
                 line.ExpandToEnclosingUnit(TextUnit.Line);
-                Rectangle[] lineBoxes = line.GetBoundingRectangles();
-                if (lineBoxes.Length == 0)
-                {
-                    lineBoxes = speech.GetBoundingRectangles();
-                }
-                Rectangle[] targetBoxes = target.GetBoundingRectangles();
+                Rectangle[] lineBoxes = [];
+                Rectangle[] targetBoxes = [];
+                _ = SpinWait.SpinUntil(
+                    () =>
+                    {
+                        lineBoxes = line.GetBoundingRectangles();
+                        if (lineBoxes.Length == 0)
+                        {
+                            lineBoxes = speech.GetBoundingRectangles();
+                        }
+                        targetBoxes = target.GetBoundingRectangles();
+                        return lineBoxes.Length > 0 && targetBoxes.Length > 0;
+                    },
+                    TimeSpan.FromSeconds(5));
                 if (lineBoxes.Length == 0 || targetBoxes.Length == 0)
                 {
                     failures.Add($"{kind}: its line ({lineBoxes.Length} boxes) or the line below ({targetBoxes.Length} boxes) has no box on screen");
@@ -119,17 +125,21 @@ public sealed partial class ShellAccessibilityTests
                     targetBoxes[0].Left + (targetBoxes[0].Width / 2), targetBoxes[0].Top + (targetBoxes[0].Height / 2));
 
                 Mouse.Drag(press, release);
-                Thread.Sleep(400);
-                string selected = text.GetSelection()[0].GetText(-1) ?? string.Empty;
+                string selected = string.Empty;
+                _ = SpinWait.SpinUntil(
+                    () => (selected = text.GetSelection()[0].GetText(-1) ?? string.Empty).Length > 0,
+                    TimeSpan.FromSeconds(5));
                 if (!selected.Contains(hidden, StringComparison.Ordinal))
                 {
                     failures.Add($"{kind}: a drag from beside it selected \"{selected}\", which leaves the element out");
                 }
 
                 Mouse.Click(press);
-                Thread.Sleep(400);
-                FlaUI.Core.ITextRange caret = text.GetSelection()[0];
-                if (caret.CompareEndpoints(TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.End) <= 0)
+                // The release moves a plain click's caret past the element.
+                if (!SpinWait.SpinUntil(
+                    () => text.GetSelection()[0].CompareEndpoints(
+                        TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.End) > 0,
+                    TimeSpan.FromSeconds(5)))
                 {
                     failures.Add($"{kind}: a click beside it left the caret in its hidden speech");
                 }
