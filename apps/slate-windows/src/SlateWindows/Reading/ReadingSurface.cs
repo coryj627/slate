@@ -1760,7 +1760,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// speech. A XAML package keeps a run's exact size and colour, which RTF
     /// rounds, and the pictures, which plain XAML drops (Codex round 1), so
     /// the range goes through a package into a scratch document, every run
-    /// drawn transparent below a point is removed (the census holds that
+    /// drawn transparent below a point is emptied (the census holds that
     /// those are exactly the hidden runs), and that is saved as RTF. Null
     /// when the round trip fails, and the caller falls back to plain RTF.</summary>
     internal static string? RtfWithoutHiddenSpeech(TextRange range)
@@ -1772,17 +1772,12 @@ internal sealed class ReadingSurface : RichTextBox
             xaml.Position = 0;
             var scratch = new FlowDocument();
             new TextRange(scratch.ContentStart, scratch.ContentEnd).Load(xaml, DataFormats.XamlPackage);
+            // Emptied in place, not removed: a scratch document holds no keys,
+            // so it needs no edit of a collection, which the focus manifest
+            // would ask a witness of; an empty run writes no letter.
             foreach (Run run in RunsIn(scratch.Blocks).Where(LooksHidden).ToList())
             {
-                switch (run.Parent)
-                {
-                    case Paragraph paragraph:
-                        paragraph.Inlines.Remove(run);
-                        break;
-                    case Span span:
-                        span.Inlines.Remove(run);
-                        break;
-                }
+                run.Text = string.Empty;
             }
             using var rtf = new System.IO.MemoryStream();
             new TextRange(scratch.ContentStart, scratch.ContentEnd).Save(rtf, DataFormats.Rtf);
