@@ -134,7 +134,8 @@ public sealed class FilesPaneKeysFirstTests
     });
 
     /// <summary>D3: Import… is on, with the keys on it, while its pick is up, and a pick
-    /// that returns nothing leaves the keys on it, on.</summary>
+    /// that returns nothing leaves the keys on it, on. Nothing is importing while the pick
+    /// is up: Cancel import is off and the other verbs are on.</summary>
     [Fact]
     public void ImportStaysOnWhileItsBoxIsUp() => RunSta(() =>
     {
@@ -142,6 +143,8 @@ public sealed class FilesPaneKeysFirstTests
         using var import = new HeldImport();
         using var pane = new FilesPane(host, import: import);
         Button importButton = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.ImportCommand);
+        Button cancelImport = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.CancelImportCommand);
+        Button newNote = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.CreateNoteCommand);
         pane.TakeTheKeys(importButton);
 
         KeysFirstRecorder.AssertItStaysOn("Import…", importButton, () =>
@@ -150,6 +153,8 @@ public sealed class FilesPaneKeysFirstTests
             Assert.True(PumpedDispatcher.PumpUntil(() => import.Picks == 1, TimeSpan.FromSeconds(10)), "the press never asked for the import's sources");
             host.Settle();
             Assert.True(importButton.IsEnabled, "Import… went off while its box was up");
+            Assert.False(cancelImport.IsEnabled, "Cancel import came on while Import…'s box was up, with nothing importing");
+            Assert.True(newNote.IsEnabled, "New note went off while Import…'s box was up, with nothing importing");
             import.HandOverNothing();
             PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(10));
             host.Settle();
@@ -492,6 +497,51 @@ public sealed class FilesPaneKeysFirstTests
         host.Settle();
         Assert.True(File.Exists(Path.Combine(host.Root, "a.md")), "the cancelled trash moved a.md");
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+    });
+
+    /// <summary>The trash's Cancel, when the keys came to it from nothing: they go first to
+    /// the editor, as its restore's fallback put them after the off on main.</summary>
+    [Fact]
+    public void TheTrashsCancelLandsTheKeysInTheEditorWhenTheyCameFromNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("b.md", "# B\n"));
+        using var pane = new FilesPane(host);
+        host.Workspace.OpenPath("b.md");
+        host.Settle();
+        using var held = new ManualResetEventSlim();
+        int workers = 0;
+        pane.Sidebar.TrashWorkerStartingForTesting = token =>
+        {
+            if (Interlocked.Increment(ref workers) == 1)
+            {
+                _ = held.Wait(TimeSpan.FromSeconds(30));
+            }
+        };
+        pane.Select("a.md");
+        pane.Sidebar.DeleteCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => Volatile.Read(ref workers) == 1 && pane.Sidebar.ShowTrashProgress, TimeSpan.FromSeconds(10)), "premise: the trash never started");
+        host.Settle();
+        Button cancel = Assert.IsAssignableFrom<Button>(host.Body("CancelTrash"));
+        Keyboard.ClearFocus();
+        Assert.True(Keyboard.FocusedElement is null, $"premise: the keys are still on {Describe(Keyboard.FocusedElement)}");
+        pane.TakeTheKeys(cancel);
+
+        try
+        {
+            KeysFirstRecorder.AssertTheKeysLeaveFirst("the trash's Cancel", cancel, () =>
+            {
+                Press(cancel);
+                host.Settle();
+            });
+        }
+        finally
+        {
+            held.Set();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(pane.Sidebar.TrashCompletion, TimeSpan.FromSeconds(30));
+        host.Settle();
+        pane.AssertTheKeysAreOn(host.Body("ContentPaneBorder"), "the editor");
     });
 
     /// <summary>Rename's posted publication lets go of the renamed row and seats the new
