@@ -236,6 +236,12 @@ public sealed partial class ReadingDiagramTests
     {
         ["wide.svg"] = System.Text.Encoding.UTF8.GetBytes(
             "<svg xmlns='http://www.w3.org/2000/svg' width='900' height='200'><rect width='900' height='200' fill='teal'/></svg>"),
+        // Codex round 1: a picture far shorter than a line of text.
+        ["flat.svg"] = System.Text.Encoding.UTF8.GetBytes(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='600' height='3'><rect width='600' height='3' fill='teal'/></svg>"),
+        // A 1x1 red PNG.
+        ["pic.png"] = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="),
     };
 
     private const string EmbedNote = "Before the card.\n\n![[wide.svg]]\n\nAfter the card.\n";
@@ -478,15 +484,24 @@ public sealed partial class ReadingDiagramTests
     }
 
     /// <summary>A line of each embedded kind between two body paragraphs: a
-    /// display formula, a pending or a rendered diagram, or an embedded image
-    /// (whose card header is the line just above it).</summary>
+    /// display formula (a short one too), a pending or a rendered diagram, or
+    /// an embedded image, wide, 1x1 or 3 px tall (whose card header is the line
+    /// just above it).</summary>
     private static (StageHarness Harness, Paragraph Line) OpenEmbeddedLine(string kind, string name)
     {
         const string Before = "Before the line.\n\n";
         const string After = "\n\nAfter the line.\n";
-        if (kind == "image")
+        string? file = kind switch
         {
-            StageHarness card = StageHarness.Open(name, Before + "![[wide.svg]]" + After, hosted: true, files: EmbedImages);
+            "image" => "wide.svg",
+            "tiny image" => "pic.png",
+            "flat image" => "flat.svg",
+            _ => null,
+        };
+        name = name.Replace(' ', '-');
+        if (file is not null)
+        {
+            StageHarness card = StageHarness.Open(name, Before + $"![[{file}]]" + After, hosted: true, files: EmbedImages);
             try
             {
                 ReadingDiagramImage image = AwaitEmbedImage(card);
@@ -499,12 +514,27 @@ public sealed partial class ReadingDiagramTests
             }
         }
         StageHarness harness = StageHarness.Open(
-            name, Before + (kind == "math" ? "$$\nx^2\n$$" : StageFence) + After, hosted: true);
-        if (kind == "rendered")
+            name,
+            Before + kind switch
+            {
+                "math" => "$$\nx^2\n$$",
+                "short math" => "$$\n\\cdot\n$$",
+                "wide rendered" => "```mermaid\nflowchart LR\n"
+                    + string.Concat(Enumerable.Range(0, 30).Select(step => $"N{step} --> N{step + 1}\n")) + "```",
+                _ => StageFence,
+            } + After,
+            hosted: true);
+        if (kind.EndsWith("rendered", StringComparison.Ordinal))
         {
             harness.Land();
         }
-        Paragraph line = kind == "math"
+        if (kind == "wide rendered")
+        {
+            // Scaled down to a narrow window, the drawing is far shorter
+            // than a line of text (Codex round 1).
+            Widen(harness.Surface, 320);
+        }
+        Paragraph line = kind.EndsWith("math", StringComparison.Ordinal)
             ? harness.Surface.Document.Blocks.OfType<Paragraph>().Single(ReadingSemantics.IsMathBlock)
             : harness.DiagramParagraph();
         return (harness, line);
@@ -522,6 +552,10 @@ public sealed partial class ReadingDiagramTests
     [InlineData("pending")]
     [InlineData("rendered")]
     [InlineData("image")]
+    [InlineData("tiny image")]
+    [InlineData("flat image")]
+    [InlineData("short math")]
+    [InlineData("wide rendered")]
     public void ADownArrowOntoAnEmbeddedElementsLineDrawsTheCaretAtTheLinesHeight(string kind)
     {
         RunSta(() =>
@@ -605,6 +639,9 @@ public sealed partial class ReadingDiagramTests
     [InlineData("pending")]
     [InlineData("rendered")]
     [InlineData("image")]
+    [InlineData("tiny image")]
+    [InlineData("flat image")]
+    [InlineData("short math")]
     public void RightAndLeftAlongAnEmbeddedElementsLineStopWhereTheyDidBefore(string kind)
     {
         RunSta(() =>
@@ -706,6 +743,37 @@ public sealed partial class ReadingDiagramTests
             Assert.Equal(
                 ((string)dragged.GetData(DataFormats.UnicodeText)!).Replace("\r\n", "\n").TrimEnd('\n'),
                 pasted.Replace("\r\n", "\n").TrimEnd('\n'));
+        });
+    }
+
+    /// <summary>Codex round 1: the rich text such a copy keeps holds the
+    /// picture WPF's own rich text holds, and the image's name once.</summary>
+    [Fact]
+    public void ACopyAcrossAnEmbeddedImageKeepsItsPicture()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open(
+                "reading-embed-image-copy-picture", "Before the card.\n\n![[pic.png]]\n\nAfter the card.\n", hosted: true, files: EmbedImages);
+            _ = AwaitEmbedImage(harness);
+            ReadingSurface surface = harness.Surface;
+            surface.SelectAll();
+            using var saved = new MemoryStream();
+            new TextRange(surface.Selection.Start, surface.Selection.End).Save(saved, DataFormats.Rtf);
+            Assert.Contains(@"\pict", System.Text.Encoding.ASCII.GetString(saved.ToArray()), StringComparison.Ordinal);
+            IDataObject? copied = null;
+            DataObject.AddCopyingHandler(surface, (_, e) =>
+            {
+                copied = e.DataObject;
+                e.CancelCommand();
+            });
+
+            surface.Copy();
+
+            Assert.NotNull(copied);
+            string rtf = (string)copied!.GetData(DataFormats.Rtf)!;
+            Assert.Contains(@"\pict", rtf, StringComparison.Ordinal);
+            Assert.Equal(1, RtfText(rtf).Split("pic.png").Length - 1);
         });
     }
 
