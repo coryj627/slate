@@ -434,6 +434,48 @@ public sealed class RecoveredCanvasTests : IDisposable
         }
     });
 
+    /// <summary>Plan 47 CB-17b (#1866, CD11): the inspection's Close by Enter, with the keys
+    /// on it, on the real window: it never goes off, the sheet closes, and the keys go back to
+    /// the canvas behind it. Its command was on only while an inspection was open, so the
+    /// close turned it off with the keys on it; it is always on now: the button shows only on
+    /// an inspection, and its press closes only an inspection. Its row is exempt as always on
+    /// (CloseCanvasInspectionCommand); this fact holds its press.</summary>
+    [Fact]
+    public void TheInspectionsCloseStaysOnAsItsPressClosesTheSheet() => RunSta(() =>
+    {
+        using var shell = new ShownShell(("board.canvas", _recovered));
+        using var sidebar = new ShownShellSidebar(shell);
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        Assert.True(document.IsRecoveredReadOnly, $"premise: the canvas loads recovered, read-only ({document.State})");
+        Assert.True(shell.Land(ShellRegionKind.Editor), "premise: the canvas did not take the keys");
+        shell.Settle();
+        _ = OpenTheTextCardsSheet(shell, document);
+        Assert.True(Assert.IsType<CanvasCardEditorViewModel>(shell.Workspace.CanvasCardEditorSheet).InspectionOnly);
+        var close = Assert.IsType<Button>(shell.Body("CanvasInspectionClose"));
+        Assert.True(
+            close.Focus() && ReferenceEquals(close, Keyboard.FocusedElement),
+            $"keyboard premise: the inspection's Close could not take the keys (they are on {Keyboard.FocusedElement})");
+
+        KeysFirstRecorder.AssertItStaysOn("the inspection's Close", close, () =>
+        {
+            foreach (RoutedEvent direction in new[] { Keyboard.PreviewKeyDownEvent, Keyboard.PreviewKeyUpEvent })
+            {
+                InputManager.Current.ProcessInput(
+                    new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(shell.Shell)!, Environment.TickCount, Key.Enter)
+                    {
+                        RoutedEvent = direction,
+                    });
+            }
+
+            shell.Settle();
+        }, () => shell.Workspace.CanvasCardEditorSheet is null);
+
+        CanvasSurfaceView canvas = ShownShell.Descendants(shell.Shell).OfType<CanvasSurfaceView>().Single(view => view.IsVisible);
+        Assert.True(
+            canvas.IsKeyboardFocusWithin,
+            $"after the inspection closed the keys were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}, not on the canvas");
+    });
+
     /// <summary>#1666: the card inspection sheet takes the keys on its field
     /// as it opens, and the read-only field keeps its caret, so caret
     /// navigation reads the card's text: the field answers Down, and its

@@ -4,6 +4,8 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -104,31 +106,140 @@ public sealed class PropertiesLandingTests
         Assert.Single(changes);
     });
 
-    /// <summary>Save disables itself while its write is in flight, under the
-    /// keys, and the write's refresh then republishes every row: the keys go
-    /// to the same property's editor, and stay on it through the republish —
-    /// never to the header, the window or the note's body.</summary>
+    /// <summary>Save disables itself while its write is in flight, and the
+    /// write's refresh then republishes every row: the keys go to the same
+    /// property's editor, and stay on it through the republish — never to the
+    /// header, the window or the note's body. Plan 47 CB-17b (#1866, CD11):
+    /// they reach the editor before Save goes off, at WriteInFlight=True, so
+    /// the style's default that keeps Save off once the write lands the draft
+    /// clean finds them there too. The keys-first witness of both of Save's
+    /// triggers (PropertyRowTemplate's CommitCommand). Save by the peer's
+    /// Invoke, on the real window with the sidebar attached.</summary>
     [Fact]
     public void ASaveClickLandsOnTheSamePropertysEditor() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
         NotePropertiesViewModel properties = OpenProperties(host);
         PropertyRowViewModel title = Row(properties, "title");
         RowControl<TextBox>(host, title).Text = "Hello there";
         host.Settle();
-        ButtonBase save = ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
+        var save = (Button)ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
             .Single(button => button.IsVisible && ReferenceEquals(button.DataContext, title) && ReferenceEquals(button.Command, title.CommitCommand));
         Assert.True(save.IsEnabled && save.Focus(), "premise: Save refused the keys");
         List<IInputElement> changes = host.RecordFocusChanges();
+        bool writeInFlight = false;
+        title.PropertyChanged += (_, e) => writeInFlight |= e.PropertyName == nameof(PropertyRowViewModel.WriteInFlight) && title.WriteInFlight;
 
-        Click(save);
-        AwaitRepublished(properties, title);
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Save", save, () =>
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke)).Invoke();
+            AwaitRepublished(properties, title);
+        });
 
+        Assert.True(writeInFlight, "premise: Save's write never went in flight");
         var now = Assert.IsType<TextBox>(Keyboard.FocusedElement);
         var fresh = Assert.IsType<PropertyRowViewModel>(now.DataContext);
         Assert.Equal("title", fresh.KeyIdentity);
         Assert.Equal("Hello there", now.Text);
         Assert.All(changes, change => Assert.IsType<TextBox>(change));
+    });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): Save against a note written elsewhere meets the
+    /// conflict question, and Keep Mine sends the same write again against the disk's hash:
+    /// that write goes in flight with the keys still on Save, and they leave it for the
+    /// property's editor first, as at a first press. Save by the peer's Invoke; the window's
+    /// box is the workspace's PropertyConflictDialog seam answering Keep Mine.</summary>
+    [Fact]
+    public void KeepMineAfterAConflictLetsTheKeysLeaveSaveFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        NotePropertiesViewModel properties = OpenProperties(host);
+        WorkspaceTabViewModel tab = host.Workspace.ActiveGroup.ActiveTab!;
+        _ = host.Session.SaveText("a.md", Note + "\nWritten elsewhere.\n", tab.SavedContentHash);
+        PropertyRowViewModel before = Row(properties, "title");
+        properties.RefreshProperties();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => !properties.IsLoading
+                    && properties.Rows.FirstOrDefault(row => row.KeyIdentity == "title") is { } fresh
+                    && !ReferenceEquals(fresh, before),
+                TimeSpan.FromSeconds(30)),
+            "premise: the refresh never republished the rows");
+        host.Settle();
+        PropertyRowViewModel title = Row(properties, "title");
+        Assert.NotEqual(tab.SavedContentHash, title.ContentHash);
+        RowControl<TextBox>(host, title).Text = "Hello there";
+        host.Settle();
+        int conflicts = 0;
+        host.Workspace.PropertyConflictDialog = (_, _, keepMine, _) =>
+        {
+            conflicts++;
+            keepMine();
+        };
+        var save = (Button)ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
+            .Single(button => button.IsVisible && ReferenceEquals(button.DataContext, title) && ReferenceEquals(button.Command, title.CommitCommand));
+        Assert.True(save.IsEnabled && save.Focus(), "premise: Save refused the keys");
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Save, kept after a conflict", save, () =>
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke)).Invoke();
+            AwaitRepublished(properties, title);
+        });
+
+        Assert.Equal(1, conflicts);
+        var now = Assert.IsType<TextBox>(Keyboard.FocusedElement);
+        Assert.Equal("title", Assert.IsType<PropertyRowViewModel>(now.DataContext).KeyIdentity);
+        Assert.Equal("Hello there", now.Text);
+    });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): only Save's own press moves the keys ahead of
+    /// its write. Enter in the property's field commits with the keys left on the field (the
+    /// republish then lands them on its fresh field, as before); a confirmed Delete leaves them
+    /// on Delete, whose row goes away with the write.</summary>
+    [Fact]
+    public void EnterInTheFieldAndADeleteMoveTheKeysNowhereAtThePress() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        NotePropertiesViewModel properties = OpenProperties(host);
+        PropertyRowViewModel title = Row(properties, "title");
+        TextBox editor = RowControl<TextBox>(host, title);
+        Assert.True(editor.Focus(), "premise: the title's editor refused the keys");
+        editor.Text = "Hello there";
+        host.Settle();
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        foreach (RoutedEvent direction in new[] { Keyboard.PreviewKeyDownEvent, Keyboard.PreviewKeyUpEvent })
+        {
+            InputManager.Current.ProcessInput(
+                new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, Key.Enter)
+                {
+                    RoutedEvent = direction,
+                });
+        }
+
+        Assert.True(title.WriteInFlight, "premise: Enter in the field started no write");
+        Assert.True(changes.Count == 0, $"Enter in the field moved the keys at its press: {string.Join(" -> ", changes)}");
+        Assert.Same(editor, Keyboard.FocusedElement);
+        AwaitRepublished(properties, title);
+
+        PropertyRowViewModel done = Row(properties, "done");
+        host.Workspace.PropertyDeleteConfirmation = (_, _) => true;
+        ButtonBase delete = DeleteOf(host, done);
+        Assert.True(delete.IsEnabled && delete.Focus(), "premise: the clean row's Delete refused the keys");
+        changes.Clear();
+
+        Click(delete);
+
+        Assert.True(done.WriteInFlight, "premise: the confirmed Delete started no write");
+        Assert.True(changes.Count == 0, $"Delete moved the keys at its press: {string.Join(" -> ", changes)}");
+        Assert.Same(delete, Keyboard.FocusedElement);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !properties.IsLoading && properties.Rows.All(row => row.KeyIdentity != "done"), TimeSpan.FromSeconds(30)),
+            "the delete never republished the rows");
+        PumpedDispatcher.Drain();
     });
 
     /// <summary>Enter in a list item's editor commits the row: the keys land

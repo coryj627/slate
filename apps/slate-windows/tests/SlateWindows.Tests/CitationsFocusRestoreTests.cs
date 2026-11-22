@@ -106,6 +106,57 @@ public sealed class CitationsFocusRestoreTests
         AssertRetired(oldProvider);
     });
 
+    /// <summary>Plan 47 CB-17b (#1866, CD11): Walk through citations, by Enter with the keys on
+    /// it, on the real window: it never goes off. Its CanWalkThrough is fixed for the sheet's
+    /// life, and its press closes the sheet, whose binding then has no source and gives the
+    /// button its default; the restore then takes the keys back to the note's editor. The
+    /// stays-on witness of CitationSummaryWalkButton.</summary>
+    [Fact]
+    public void CitationSummaryWalkNeverGoesOff() => RunSta(() =>
+    {
+        using var host = new ShownShell(
+            ("library.bib", "@article{knuth1984,\n title={Literate Programming},\n"
+                + " author={Knuth, Donald E.},\n year={1984}\n}\n"),
+            ("cited.md", "# Cited\n\nA ghost [@ghostkey] and a citation [@knuth1984].\n"),
+            ("ieee.csl", File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "demo-vault", "csl", "ieee.csl"))),
+            ("slate.json", "{\"citations\":{\"bibliography\":\"library.bib\",\"cite_style\":\"ieee\"}}"));
+        using var sidebar = new ShownShellSidebar(host);
+        WorkspaceViewModel workspace = host.Workspace;
+        PumpedDispatcher.PumpUntilDrained(workspace.SeedWorkForTests);
+        workspace.OpenPath("cited.md");
+        workspace.ActiveLeaf = WorkspaceViewModel.Leaves.Single(leaf => leaf.Id == "citations");
+        workspace.IsRightPaneVisible = true;
+        SettleCitations(host);
+        Assert.True(host.Land(ShellRegionKind.Editor), "premise: the editor did not take the keys");
+        host.Settle();
+        IInputElement before = Keyboard.FocusedElement;
+
+        workspace.OpenCitationSummary();
+        SettleCitations(host);
+        CitationSummaryViewModel summary = Assert.IsType<CitationSummaryViewModel>(workspace.CitationSummary);
+        Assert.True(summary.CanWalkThrough, "premise: the summary has citations to walk");
+        Button walk = host.Shell.CitationSummaryWalkButton;
+        Assert.True(
+            ReferenceEquals(walk, Keyboard.FocusedElement),
+            $"premise: the summary did not open with the keys on Walk through citations (they are on {Keyboard.FocusedElement})");
+
+        KeysFirstRecorder.AssertItStaysOn("Walk through citations", walk, () =>
+        {
+            foreach (RoutedEvent direction in new[] { Keyboard.PreviewKeyDownEvent, Keyboard.PreviewKeyUpEvent })
+            {
+                InputManager.Current.ProcessInput(
+                    new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, Key.Enter)
+                    {
+                        RoutedEvent = direction,
+                    });
+            }
+
+            host.Settle();
+        }, () => workspace.CitationSummary is null);
+
+        Assert.Same(before, Keyboard.FocusedElement);
+    });
+
     [Fact]
     public void PublishRaisesPublishingBeforeTheRebuildAndPublishedAfter()
     {

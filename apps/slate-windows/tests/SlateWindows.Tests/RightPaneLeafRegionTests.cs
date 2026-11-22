@@ -453,32 +453,223 @@ public sealed class RightPaneLeafRegionTests
     /// action button follows — the focused button disabled under the keys
     /// and WPF's re-evaluation stranded them at the window. The selection is
     /// re-seated by identity before that re-evaluation, so the keys stay on
-    /// the enabled button and the query stays selected.</summary>
+    /// the enabled button and the query stays selected. Plan 47 CB-17b (#1866,
+    /// CD11): the button never goes off on the way either, not even for the
+    /// rebuild's moment between the Clear and the re-seat: the group stays on
+    /// while the window's republish flag is up. The real window; Pin by Enter.</summary>
     [Fact]
     public void PinFromItsButtonKeepsTheKeysOnTheButton() => RunSta(() =>
     {
-        using var host = new Host();
-        host.Initialize("queries", ("Notes.base", "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n"), ("a.md", "# A\n"));
-        string id = host.SaveQuery("All notes");
-        host.AttachWorkspaceToTheWindow();
-        host.Workspace.RefreshBaseQueries();
-        PumpedDispatcher.Drain();
-        ListBox list = host.ElementWithId<ListBox>("QueriesSavedList");
-        Assert.True(PumpedDispatcher.PumpUntil(() => list.HasItems && list.IsVisible), "premise: the saved query never listed.");
+        using var host = new ShownShell(startInteractionBackgroundWork: false, ("Notes.base", NotesBase), ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        string id = SaveQueryIn(host.Session, "All notes");
+        ListBox list = ShowTheQueries(host, "QueriesSavedList");
         list.SelectedIndex = 0;
         list.UpdateLayout();
-        Button pin = host.ElementWithId<Button>("QueriesPin");
+        Button pin = QueriesElement<Button>(host, "QueriesPin");
         Assert.True(pin.IsEnabled && pin.Focus(), "premise: the Pin button refused the keys.");
-        host.ForgetFocusAndSpeech();
+        int republished = 0;
+        host.Workspace.BaseQueriesRepublished += () => republished++;
+        int offs = 0;
+        pin.IsEnabledChanged += (_, e) => offs += e.NewValue is false ? 1 : 0;
 
-        pin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-        PumpedDispatcher.Drain();
+        List<string> offUnder = KeysFirstRecorder.DisabledWithTheKeysInside(pin, () =>
+        {
+            PressIn(host, Key.Enter);
+            Assert.True(PumpedDispatcher.PumpUntil(() => republished == 1, TimeSpan.FromSeconds(10)), "Pin's refresh never republished");
+            host.Settle();
+        });
 
+        Assert.True(offUnder.Count == 0, $"Pin went off with the keys on {string.Join(", ", offUnder)}");
+        Assert.Equal(0, offs);
         Assert.True(
             ReferenceEquals(pin, Keyboard.FocusedElement) && pin.IsEnabled,
-            $"after the refresh the keys were on {Describe(Keyboard.FocusedElement)}; order: {host.Order}");
+            $"after the refresh the keys were on {Describe(Keyboard.FocusedElement)}");
         Assert.Equal(id, Assert.IsType<SavedQuerySummary>(list.SelectedItem).Id);
     });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): Delete… for a saved query, by Enter and
+    /// confirmed in its box. Inside the box Delete… is on and holds the keys; once the query is
+    /// gone, the registry's rebuild leaves QueriesSavedList with no selection, and the keys
+    /// leave Delete… for the list's remaining row before the group that holds QueriesRun goes
+    /// off. The keys-first witness of the QueriesRun group's trigger (QueriesSavedList's
+    /// selection and the window's IsQueriesRepublishing flag).</summary>
+    [Fact]
+    public void DeletingASavedQueryLetsTheKeysLeaveItsGroupFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(startInteractionBackgroundWork: false, ("Notes.base", NotesBase), ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        string first = SaveQueryIn(host.Session, "All notes");
+        string second = SaveQueryIn(host.Session, "Every note");
+        ListBox list = ShowTheQueries(host, "QueriesSavedList");
+        list.SelectedItem = host.Workspace.SavedQueries.Single(query => query.Id == first);
+        list.UpdateLayout();
+        Button run = QueriesElement<Button>(host, "QueriesRun");
+        var group = Assert.IsType<WrapPanel>(run.Parent);
+        Button delete = group.Children.OfType<Button>().Single(button => AutomationProperties.GetAutomationId(button) == "QueriesDelete");
+        (bool On, bool Keys)? inTheBox = null;
+        host.Shell.BasesDeleteConfirmation = _ =>
+        {
+            inTheBox = (delete.IsEnabled, ReferenceEquals(delete, Keyboard.FocusedElement));
+            return true;
+        };
+        Assert.True(delete.IsEnabled && delete.Focus(), "premise: Delete… refused the keys.");
+        int republished = 0;
+        host.Workspace.BaseQueriesRepublished += () => republished++;
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Delete saved query", delete, () =>
+        {
+            PressIn(host, Key.Enter);
+            Assert.True(PumpedDispatcher.PumpUntil(() => republished == 1, TimeSpan.FromSeconds(10)), "the delete's refresh never republished");
+            host.Settle();
+        });
+
+        Assert.Equal((true, true), inTheBox);
+        Assert.False(run.IsEnabled, "premise: the group stays off with no query selected");
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem { DataContext: SavedQuerySummary summary } && summary.Id == second,
+            $"after the delete the keys were on {Describe(Keyboard.FocusedElement)}, not the remaining query's row");
+    });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): Delete… for a dashboard, by Enter and confirmed
+    /// in its box: the keys leave Delete… for QueriesDashboardsList's remaining row before the
+    /// group that holds QueriesOpenDashboard goes off. The keys-first witness of that group's
+    /// trigger.</summary>
+    [Fact]
+    public void DeletingADashboardLetsTheKeysLeaveItsGroupFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(startInteractionBackgroundWork: false, ("Notes.base", NotesBase), ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        string first = host.Session.SaveDashboard("Board", []);
+        string second = host.Session.SaveDashboard("Second board", []);
+        ListBox list = ShowTheQueries(host, "QueriesDashboardsList");
+        list.SelectedItem = host.Workspace.Dashboards.Single(dashboard => dashboard.Id == first);
+        list.UpdateLayout();
+        Button open = QueriesElement<Button>(host, "QueriesOpenDashboard");
+        var group = Assert.IsType<WrapPanel>(open.Parent);
+        Button delete = group.Children.OfType<Button>().Single(button => AutomationProperties.GetAutomationId(button) == "QueriesDeleteDashboard");
+        (bool On, bool Keys)? inTheBox = null;
+        host.Shell.BasesDeleteConfirmation = _ =>
+        {
+            inTheBox = (delete.IsEnabled, ReferenceEquals(delete, Keyboard.FocusedElement));
+            return true;
+        };
+        Assert.True(delete.IsEnabled && delete.Focus(), "premise: Delete… refused the keys.");
+        int republished = 0;
+        host.Workspace.BaseQueriesRepublished += () => republished++;
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Delete dashboard", delete, () =>
+        {
+            PressIn(host, Key.Enter);
+            Assert.True(PumpedDispatcher.PumpUntil(() => republished == 1, TimeSpan.FromSeconds(10)), "the delete's refresh never republished");
+            host.Settle();
+        });
+
+        Assert.Equal((true, true), inTheBox);
+        Assert.False(open.IsEnabled, "premise: the group stays off with no dashboard selected");
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem { DataContext: DashboardSummary summary } && summary.Id == second,
+            $"after the delete the keys were on {Describe(Keyboard.FocusedElement)}, not the remaining dashboard's row");
+    });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): a base file that leaves the registry in a
+    /// refresh (deleted outside Slate, read at the refresh's own reads,
+    /// QueriesRefreshReadForTests), with the keys on Open: QueriesBaseFilesList's selection
+    /// cannot be re-seated, and the keys leave Open for the list's remaining row before the
+    /// group that holds QueriesOpenBaseFile goes off. The keys-first witness of that group's
+    /// trigger.</summary>
+    [Fact]
+    public void ABaseFileLostInARefreshLetsTheKeysLeaveItsGroupFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(startInteractionBackgroundWork: false, ("Notes.base", NotesBase), ("Other.base", NotesBase), ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        ListBox list = ShowTheQueries(host, "QueriesBaseFilesList");
+        list.SelectedItem = host.Workspace.BaseFiles.Single(file => file.Path == "Notes.base");
+        list.UpdateLayout();
+        Button open = QueriesElement<Button>(host, "QueriesOpenBaseFile");
+        Assert.True(open.IsEnabled && open.Focus(), "premise: Open refused the keys.");
+        int republished = 0;
+        host.Workspace.BaseQueriesRepublished += () => republished++;
+        string gone = Path.Combine(host.Root, "Notes.base");
+        host.Workspace.QueriesRefreshReadForTests = () =>
+        {
+            File.Delete(gone);
+            using var cancel = new CancelToken();
+            _ = host.Session.Rescan(cancel);
+        };
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("Open base file", open, () =>
+        {
+            host.Workspace.RefreshBaseQueries();
+            Assert.True(PumpedDispatcher.PumpUntil(() => republished == 1, TimeSpan.FromSeconds(10)), "the refresh never republished");
+            host.Settle();
+        });
+
+        host.Workspace.QueriesRefreshReadForTests = null;
+        Assert.DoesNotContain(host.Workspace.BaseFiles, file => file.Path == "Notes.base");
+        Assert.False(open.IsEnabled, "premise: the group stays off with no base file selected");
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem { DataContext: BaseFileSummary summary } && summary.Path == "Other.base",
+            $"after the refresh the keys were on {Describe(Keyboard.FocusedElement)}, not the remaining base file's row");
+    });
+
+    private const string NotesBase = "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n";
+
+    /// <summary>A saved query over the vault's base, as BasesQueriesTests seeds one.</summary>
+    private static string SaveQueryIn(VaultSession session, string name)
+    {
+        ulong scratch = session.OpenBase("Notes.base");
+        string json;
+        try
+        {
+            json = session.BaseViewQueryJson(scratch, 0);
+        }
+        finally
+        {
+            session.CloseBase(scratch);
+        }
+
+        return session.SaveQuery(name, description: null, json, SavedQuerySourceSyntax.Builder);
+    }
+
+    /// <summary>The Queries leaf shown in the real window's right pane and refreshed, with
+    /// the keys in the editor's note behind it: the list named
+    /// <paramref name="list"/> shown with its rows.</summary>
+    private static ListBox ShowTheQueries(ShownShell host, string list)
+    {
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "queries");
+        host.Workspace.IsRightPaneVisible = true;
+        host.Workspace.RefreshBaseQueries();
+        host.Settle();
+        ListBox shown = QueriesElement<ListBox>(host, list);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => shown.HasItems && shown.IsVisible, TimeSpan.FromSeconds(10)),
+            $"premise: {list} never listed its rows (items {shown.Items.Count}, shown {shown.IsVisible}, saved queries {host.Workspace.SavedQueries.Count}, "
+            + $"base files {host.Workspace.BaseFiles.Count}, dashboards {host.Workspace.Dashboards.Count}, leaf {host.Workspace.ActiveLeaf.Id}, pane {host.Workspace.IsRightPaneVisible}).");
+        host.Settle();
+        return shown;
+    }
+
+    private static T QueriesElement<T>(ShownShell host, string automationId)
+        where T : FrameworkElement =>
+        ShownShell.Descendants(host.Shell).OfType<T>().First(element =>
+            AutomationProperties.GetAutomationId(element) == automationId || element.Name == automationId);
+
+    /// <summary>A key through WPF's input pipeline, down then up, to the element holding
+    /// the keys of the real window.</summary>
+    private static void PressIn(ShownShell host, Key key)
+    {
+        foreach (RoutedEvent direction in new[] { Keyboard.PreviewKeyDownEvent, Keyboard.PreviewKeyUpEvent })
+        {
+            InputManager.Current.ProcessInput(
+                new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, key)
+                {
+                    RoutedEvent = direction,
+                });
+        }
+    }
 
     public static TheoryData<string, string, Key> LeafStops()
     {
