@@ -22,10 +22,13 @@ public partial class MainWindow
 
     private void SidebarSortButton_Click(object sender, RoutedEventArgs e) => OpenSidebarSortMenu();
 
-    /// <summary>Plan 47 CB-17b (red team F2): one physical press, one step. Expand loaded
-    /// folders stays on while it runs, and a press made meanwhile says so; a held Enter's
-    /// repeats are no presses, and would say it on every repeat.</summary>
-    private void SidebarExpandLoaded_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    /// <summary>Plan 47 CB-17b (red team F2; the merge judge's minor 1): one physical press,
+    /// one step, for the Files pane's buttons that now stay on with the keys on them while
+    /// their work goes on. Expand loaded folders stays on while it runs, and a press made
+    /// meanwhile says so; Import… stays on while its box is up, and its box's default button,
+    /// Cancel, hands the keys back to it. A held Enter's repeats are no presses: they would say
+    /// the sentence, or close the box and open it again, on every repeat.</summary>
+    private void EnterRepeatPressesNothing_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Enter && e.IsRepeat)
         {

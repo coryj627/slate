@@ -1225,7 +1225,7 @@
                                             Content="&#xF164;"
                                             AutomationProperties.AutomationId="SidebarExpandLoaded"
                                             AutomationProperties.Name="Expand loaded folders"
-                                            PreviewKeyDown="SidebarExpandLoaded_PreviewKeyDown"
+                                            PreviewKeyDown="EnterRepeatPressesNothing_PreviewKeyDown"
                                             Command="{Binding ExpandLoadedCommand}" />
                                     <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
                                             Content="&#xE72C;"
@@ -1373,7 +1373,8 @@
                                             <Button Margin="0,0,4,4" Content="Add shortcut" Command="{Binding AddShortcutCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Margin="0,0,4,4" Content="Import…" Command="{Binding ImportCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Import…" Command="{Binding ImportCommand}"
+                                                    PreviewKeyDown="EnterRepeatPressesNothing_PreviewKeyDown" />
                                             <Button Margin="0,0,4,4" Content="Cancel import" Command="{Binding CancelImportCommand}" />
                                         </WrapPanel>
                                     </StackPanel>

@@ -383,10 +383,17 @@ public partial class MainWindow
         // Plan 47 CB-17b (red team F2): one physical press, one step, as the template
         // picker's and Move To's held-Enter fences have it. Preview stays on while a run
         // goes, and each press made meanwhile says so; a held Enter's repeats are no
-        // presses, and would say it on every repeat.
+        // presses, and would say it on every repeat. The fence is the sheet's buttons' and
+        // fields' (the merge judge's nit 2): in the preview grid a repeat runs no preview
+        // and goes on to the grid, whose Enter walks its rows.
         if (e.Key == Key.Enter && e.IsRepeat)
         {
-            e.Handled = true;
+            if (!(e.OriginalSource is System.Windows.Media.Visual source
+                && (ReferenceEquals(source, BulkRenamePreviewGrid) || BulkRenamePreviewGrid.IsAncestorOf(source))))
+            {
+                e.Handled = true;
+            }
+
             return;
         }
 

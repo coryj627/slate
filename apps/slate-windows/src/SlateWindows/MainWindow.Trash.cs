@@ -50,6 +50,9 @@ public partial class MainWindow
         if (e.NewFocus is not null && !ReferenceEquals(e.NewFocus, this))
         {
             _trashCancelOwnedFocus = false;
+            // The merge judge's nit 6: Cancel's own landing reads it only while the keys are
+            // on Cancel, so once they have gone to another element the window lets go of it.
+            _trashCancelCameFrom = null;
         }
     }
 

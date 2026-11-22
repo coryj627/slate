@@ -55,6 +55,7 @@ internal static class KeysFirstRecorder
     {
         Assert.True(TheKeysAreIn(root), $"{what} did not hold the keys when the act began (they were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}), so nothing about it staying on under them was measured");
         Assert.True(root.IsEnabled, $"{what} was already off when the act began");
+        Assert.False(reached(), $"{what}: reached was already true before the act, so it cannot say the act reached what used to turn the control off");
         var off = new List<string>();
         DependencyPropertyChangedEventHandler record = (_, e) =>
         {

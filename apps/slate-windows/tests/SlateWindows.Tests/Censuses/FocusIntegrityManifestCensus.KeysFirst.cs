@@ -2041,17 +2041,20 @@ public sealed partial class FocusIntegrityManifestCensus
                 }));
 
         /// <summary>A predicate that answers a constant (<c>() => true</c>, <c>() => { return
-        /// true; }</c>): as stays-on's reached it says nothing about the driver having run
-        /// (red team F7).</summary>
+        /// true; }</c>, <c>() => !false</c>, <c>() => 1 == 1</c>): its answer reads no name at
+        /// all, so as stays-on's reached it says nothing about the driver having run (red team
+        /// F7; the merge judge's nit 5).</summary>
         private static bool IsAConstant(ExpressionSyntax predicate)
         {
             static ExpressionSyntax Bare(ExpressionSyntax expression) =>
                 expression is ParenthesizedExpressionSyntax parenthesized ? Bare(parenthesized.Expression) : expression;
+            static bool ReadsNothing(ExpressionSyntax answer) =>
+                !answer.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().Any();
 
             return Bare(predicate) is LambdaExpressionSyntax lambda
                 && (lambda.ExpressionBody is { } body
-                    ? Bare(body) is LiteralExpressionSyntax
-                    : lambda.Block?.Statements is [ReturnStatementSyntax { Expression: { } returned }] && Bare(returned) is LiteralExpressionSyntax);
+                    ? ReadsNothing(body)
+                    : lambda.Block?.Statements is [ReturnStatementSyntax { Expression: { } returned }] && ReadsNothing(returned));
         }
 
         /// <summary>The runners a keys-first fact may hand its body to, each of which runs the

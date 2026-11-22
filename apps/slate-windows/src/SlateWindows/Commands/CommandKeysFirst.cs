@@ -124,20 +124,32 @@ internal static class CommandKeysFirst
         return false;
     }
 
-    private static void Deliver(List<(ICommand Command, Action<ICommand> Raise)> raises, int from)
+    /// <summary>Raises each held command. One listener's failure does not keep the commands
+    /// after it from raising; every failure is reported, the first one as itself and several
+    /// together (the merge judge's nit 4: a later failure no longer hides the first).</summary>
+    private static void Deliver(List<(ICommand Command, Action<ICommand> Raise)> raises)
     {
-        for (int index = from; index < raises.Count; index++)
+        List<Exception>? failures = null;
+        foreach ((ICommand command, Action<ICommand> raise) in raises)
         {
             try
             {
-                Raise(raises[index].Command, raises[index].Raise);
+                Raise(command, raise);
             }
-            catch
+            catch (Exception failure)
             {
-                // One listener's failure does not keep the commands after it from raising.
-                Deliver(raises, index + 1);
-                throw;
+                (failures ??= []).Add(failure);
             }
+        }
+
+        if (failures is [Exception only])
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(only).Throw();
+        }
+
+        if (failures is { Count: > 1 })
+        {
+            throw new AggregateException(failures);
         }
     }
 
@@ -180,7 +192,7 @@ internal static class CommandKeysFirst
                 t_held = null;
             }
 
-            Deliver(held.Raises, 0);
+            Deliver(held.Raises);
         }
     }
 }
