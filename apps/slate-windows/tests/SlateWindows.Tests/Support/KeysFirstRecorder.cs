@@ -44,6 +44,39 @@ internal static class KeysFirstRecorder
         Assert.True(wentOff, $"{what} never went off in the act, so nothing about the keys leaving first was measured");
     }
 
+    /// <summary>Plan 47 CB-17b: the measured form of "its own press never turns it off", for
+    /// a control that used to go off under the keys and now stays on. Runs
+    /// <paramref name="act"/> and fails unless <paramref name="root"/> holds the keys as the
+    /// act starts, never goes off in it, and <paramref name="reached"/> is true after it.
+    /// The predicate says the driver that used to turn the control off ran (the publication
+    /// applied, the run completed, the sheet closed): without it a fact that never pumped
+    /// as far as the off would pass having measured nothing.</summary>
+    internal static void AssertItStaysOn(string what, UIElement root, Action act, Func<bool> reached)
+    {
+        Assert.True(TheKeysAreIn(root), $"{what} did not hold the keys when the act began (they were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}), so nothing about it staying on under them was measured");
+        Assert.True(root.IsEnabled, $"{what} was already off when the act began");
+        var off = new List<string>();
+        DependencyPropertyChangedEventHandler record = (_, e) =>
+        {
+            if (e.NewValue is false)
+            {
+                off.Add(Keyboard.FocusedElement?.ToString() ?? "nothing");
+            }
+        };
+        root.IsEnabledChanged += record;
+        try
+        {
+            act();
+        }
+        finally
+        {
+            root.IsEnabledChanged -= record;
+        }
+
+        Assert.True(off.Count == 0, $"{what} went off in the act, with the keys on {string.Join(", ", off)}");
+        Assert.True(reached(), $"{what} stayed on, but the act never reached what used to turn it off, so nothing was measured");
+    }
+
     /// <summary>The same for a focusable content element (a Hyperlink), which holds the
     /// keys itself.</summary>
     internal static void AssertTheKeysLeaveFirst(string what, ContentElement root, Action act)
