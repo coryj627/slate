@@ -619,6 +619,12 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount, bool silent = false)
     {
+        // Plan 47 CB-17b (#1866, D4): a publication raises each command once, at its end,
+        // for the state it ends in. Its reconcile lets go of the selected row and seats the
+        // renamed or rebuilt one again, so a selection verb (Rename, Move to…) went off and
+        // on under the keys inside one publication. One that ends off moves the keys first
+        // (CommandKeysFirst). The hold ends on a throw too.
+        using IDisposable held = Commands.CommandKeysFirst.Hold();
         _settledTreeGeneration = _treeGeneration;
         // WB-6 (#1515): the selected row's place, read before anything moves
         // — the reconcile removes a row from its kept folder's or group's own

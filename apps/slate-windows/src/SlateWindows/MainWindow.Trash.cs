@@ -43,6 +43,27 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Plan 47 CB-17b (#1866, CD11): Cancel's own landing, for when it goes off under the
+    /// keys (its press sets Stopping; the trash's end hides it). The keys go back to the
+    /// element they came to Cancel from, else the scopes it was in, else the editor: where
+    /// its restore put them after the off (<see cref="TrashCancel_AvailabilityChanged"/>).
+    /// <see cref="Commands.CommandKeysFirst"/> takes it before Cancel goes off; the keys
+    /// leaving Cancel give up the restore's claim (<see cref="TrashCancel_LostKeyboardFocus"/>),
+    /// and it stands down. It runs while the keys are on Cancel, so none of the restore's
+    /// later stand-downs (a modal opened, another vault, a control chosen meanwhile) can
+    /// have happened; if nothing takes the keys, the restore is still there after the off.
+    /// </summary>
+    private bool LandWhereTrashCancelCameFrom()
+    {
+        if (!LandToken(_focusBeforeTrashCancel))
+        {
+            FocusActiveEditorPane();
+        }
+
+        return true;
+    }
+
     private void TrashCancel_AvailabilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (sender is not Button button || (button.IsVisible && button.IsEnabled)
