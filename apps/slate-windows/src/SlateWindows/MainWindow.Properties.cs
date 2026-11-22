@@ -64,11 +64,13 @@ public partial class MainWindow
         // pass one admission inside the workspace's open.
         workspace.BulkRenameOpenAdmission = TryClearTheWayForBulkRename;
         workspace.PropertyChanged += Workspace_PropertySheetChanged;
+        workspace.PropertyRowWriteStarting += Workspace_PropertyRowWriteStarting;
     }
 
     private void UnwireWorkspaceProperties(WorkspaceViewModel workspace)
     {
         workspace.PropertyChanged -= Workspace_PropertySheetChanged;
+        workspace.PropertyRowWriteStarting -= Workspace_PropertyRowWriteStarting;
         workspace.BulkRenameOpenAdmission = null;
         ObserveBulkRenameSheet(null);
     }
@@ -264,11 +266,43 @@ public partial class MainWindow
         if (_observedBulkRenameSheet is not null)
         {
             _observedBulkRenameSheet.RunPublished -= BulkRenameSheet_RunPublished;
+            _observedBulkRenameSheet.WorkStarting -= BulkRenameSheet_WorkStarting;
         }
         _observedBulkRenameSheet = sheet;
         if (sheet is not null)
         {
             sheet.RunPublished += BulkRenameSheet_RunPublished;
+            sheet.WorkStarting += BulkRenameSheet_WorkStarting;
+        }
+    }
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): an admitted apply turns Apply off with the
+    /// sheet in flight. The keys leave Apply first, through the sheet's landing, for Old
+    /// property key, where the guard put them after the off: never Close, whose press during
+    /// an apply cancels it.</summary>
+    private void BulkRenameSheet_WorkStarting()
+    {
+        if (Keyboard.FocusedElement is System.Windows.Controls.Button apply
+            && BulkRenameOverlay.IsAncestorOf(apply)
+            && System.Windows.Automation.AutomationProperties.GetAutomationId(apply) == "BulkRenameApplyButton")
+        {
+            _ = RegionFocusGuard.LandBeforeLeaving(apply);
+        }
+    }
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): a property row's write goes in flight, which
+    /// turns its Save off. When the keys are on that row's Save (its own press, or Keep Mine
+    /// after a conflict), they leave it first, through the rows' landing, for the property's
+    /// field, where they landed after the off. Enter in the field, the boolean switch (a
+    /// CheckBox that runs the same command and keeps the keys), and a delete, move
+    /// nothing.</summary>
+    private void Workspace_PropertyRowWriteStarting(PropertyRowViewModel row)
+    {
+        if (Keyboard.FocusedElement is System.Windows.Controls.Button { DataContext: var context, Command: var command } save
+            && ReferenceEquals(context, row)
+            && ReferenceEquals(command, row.CommitCommand))
+        {
+            _ = RegionFocusGuard.LandBeforeLeaving(save);
         }
     }
 

@@ -819,7 +819,19 @@ public partial class MainWindow : Window
         {
             return;
         }
-        _ = TryFocus(CanvasPromptClearMarksButton);
+
+        // Plan 47 CB-17b (#1866, CD11): never Clear All Marks, which is no landing (its press
+        // clears every mark). With no row to take the keys, the sheet holds them while it is
+        // open, as an overlay holds them while its field waits (LandInOpeningOverlay). The
+        // sheet's scope forgets the element it last held them on first: it would hand them on
+        // to it, and that can be Clear All Marks.
+        void LetGo(object sender, KeyboardFocusChangedEventArgs e) => SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
+        SetHoldsTheKeys(CanvasPromptOverlay, true, LetGo);
+        FocusManager.SetFocusedElement(CanvasPromptOverlay, null);
+        if (!CanvasPromptOverlay.IsVisible || !SelectorFocus.LandOnStop(CanvasPromptOverlay))
+        {
+            SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
+        }
     }
 
     /// <summary>The editor's and the boundaries' deferred focus requests,
