@@ -126,7 +126,7 @@ public sealed class PropertiesLandingTests
         host.Settle();
         var save = (Button)ShownShell.Descendants(host.Shell).OfType<ButtonBase>()
             .Single(button => button.IsVisible && ReferenceEquals(button.DataContext, title) && ReferenceEquals(button.Command, title.CommitCommand));
-        Assert.True(save.IsEnabled && save.Focus(), "premise: Save refused the keys");
+        Assert.True(save.IsEnabled && save.Focus(), "premise: PropertyRowTemplate's Save refused the keys");
         List<IInputElement> changes = host.RecordFocusChanges();
         bool writeInFlight = false;
         title.PropertyChanged += (_, e) => writeInFlight |= e.PropertyName == nameof(PropertyRowViewModel.WriteInFlight) && title.WriteInFlight;

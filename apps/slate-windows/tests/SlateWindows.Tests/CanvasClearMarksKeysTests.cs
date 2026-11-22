@@ -108,6 +108,19 @@ public sealed class CanvasClearMarksKeysTests
         Assert.True(
             overlay.IsKeyboardFocusWithin,
             $"the marks list opened with the keys on {Describe(Keyboard.FocusedElement)}, outside the sheet");
+
+        // Again, once the sheet has let the keys go: it is a stop only while it holds them.
+        shell.Workspace.CloseCanvasPrompt();
+        shell.Settle();
+        Assert.True(shell.Land(ShellRegionKind.Editor), "premise: the canvas did not take the keys a third time");
+        shell.Settle();
+        shell.Workspace.CanvasShowMarksCommand.Execute(null);
+        shell.Shell.CanvasPromptChoicesList.SetCurrentValue(UIElement.FocusableProperty, false);
+        shell.Settle();
+
+        Assert.True(
+            overlay.IsKeyboardFocusWithin,
+            $"the marks list opened a second time with the keys on {Describe(Keyboard.FocusedElement)}, outside the sheet");
     });
 
     /// <summary>The board open on the canvas, its first card marked, the keys on the canvas,
