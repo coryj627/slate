@@ -495,10 +495,20 @@ internal sealed partial class WorkspaceViewModel
     /// standing.</summary>
     public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
 
+    /// <summary>The inspection's Close. Plan 47 CB-17b (#1866, CD11): always on, so it never
+    /// goes off in its own press with the keys on it. Only that button reads it, and it shows
+    /// only on an inspection; its press closes only an inspection, as its old gate
+    /// did.</summary>
     public System.Windows.Input.ICommand CloseCanvasInspectionCommand =>
         _closeCanvasInspectionCommand ??= new RelayCommand(
-            _ => CloseCanvasCardEditor(),
-            _ => CanvasCardEditorSheet?.InspectionOnly == true);
+            _ =>
+            {
+                if (CanvasCardEditorSheet?.InspectionOnly == true)
+                {
+                    CloseCanvasCardEditor();
+                }
+            },
+            _ => true);
 
     private RelayCommand? _closeCanvasInspectionCommand;
 
@@ -570,10 +580,14 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>Clear All Marks. Plan 47 CB-17b (#1866, CD11; CB-17a review M1): always on.
+    /// It read the open prompt and nothing raised it, so the button was off on every open;
+    /// only that button reads it, it shows only on the marks list, and
+    /// <see cref="ClearMarksFromCanvasPrompt"/> guards itself.</summary>
     public System.Windows.Input.ICommand CanvasPromptClearMarksCommand =>
         _canvasPromptClearMarksCommand ??= new RelayCommand(
             _ => ClearMarksFromCanvasPrompt(),
-            _ => CanvasPromptSheet is CanvasMarksListPrompt);
+            _ => true);
 
     private RelayCommand? _canvasPromptClearMarksCommand;
 

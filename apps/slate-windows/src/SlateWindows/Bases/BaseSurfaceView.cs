@@ -675,7 +675,8 @@ internal sealed class BaseSurfaceView : UserControl
             return true;
         }
 
-        return (_quickFilter.IsEnabled && _quickFilter.Focus()) || _refresh.Focus();
+        // Plan 47 CB-17b: never the quick filter while a render is moving the keys off it.
+        return (_quickFilter.IsEnabled && !RegionFocusGuard.IsLeaving(_quickFilter) && _quickFilter.Focus()) || _refresh.Focus();
     }
 
     private void OnResultPublished(object? sender, EventArgs e) => RenderAll();
@@ -749,8 +750,6 @@ internal sealed class BaseSurfaceView : UserControl
             _countReadout.Text.Length > 0 ? $"Results: {_countReadout.Text}" : string.Empty);
 
         bool interactive = model.State is BaseLoadState.Ready or BaseLoadState.Degraded;
-        _quickFilter.IsEnabled = interactive;
-        _viewPicker.IsEnabled = interactive;
         // C13's disabled reason, delivered as a STATIC HINT (the
         // TaskStatusPhrase label category — commands gray out through
         // CanExecute; the hint says why, with no announcement).
@@ -801,6 +800,17 @@ internal sealed class BaseSurfaceView : UserControl
             || _warningBanners.Visibility == Visibility.Visible
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+
+        // Plan 47 CB-17b (#1866, CD11): every other write first, then the keys out of the
+        // two controls this render turns off, through the surface's landing (the grid or the
+        // list, else Refresh), then the off.
+        if (!interactive)
+        {
+            _ = RegionFocusGuard.LandBeforeLeaving([_quickFilter, _viewPicker]);
+        }
+
+        _quickFilter.IsEnabled = interactive;
+        _viewPicker.IsEnabled = interactive;
     }
 
     private bool _renderDeferredForEdit;

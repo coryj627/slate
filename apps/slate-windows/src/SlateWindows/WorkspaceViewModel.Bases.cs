@@ -1595,30 +1595,39 @@ internal sealed partial class WorkspaceViewModel
             // rebuild disabled (every action button follows the selection)
             // or removed (a row).
             BaseQueriesRepublishing?.Invoke();
-            // The list's order, which the spoken-name authority composes
-            // over too (SavedQueriesInListOrder).
-            SavedQueries.Clear();
-            Dictionary<string, SavedQuerySummary> savedById = savedQueries.ToDictionary(s => s.Id, StringComparer.Ordinal);
-            foreach ((string id, string _) in SavedQueriesInListOrder(savedQueries.Select(s => (s.Id, s.Name))))
+            // Plan 47 CB-17b (red team F4): the end is said whatever happens between, so
+            // the window's flag, which holds the three action groups on through the
+            // rebuild, always falls.
+            try
             {
-                SavedQueries.Add(savedById[id]);
+                // The list's order, which the spoken-name authority composes
+                // over too (SavedQueriesInListOrder).
+                SavedQueries.Clear();
+                Dictionary<string, SavedQuerySummary> savedById = savedQueries.ToDictionary(s => s.Id, StringComparer.Ordinal);
+                foreach ((string id, string _) in SavedQueriesInListOrder(savedQueries.Select(s => (s.Id, s.Name))))
+                {
+                    SavedQueries.Add(savedById[id]);
+                }
+                BaseFiles.Clear();
+                foreach (BaseFileSummary file in baseFiles
+                    .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
+                {
+                    BaseFiles.Add(file);
+                }
+                Dashboards.Clear();
+                Dictionary<string, DashboardSummary> dashboardById = dashboards.ToDictionary(d => d.Id, StringComparer.Ordinal);
+                foreach ((string id, string _) in DashboardsInListOrder(dashboards.Select(d => (d.Id, d.Name))))
+                {
+                    Dashboards.Add(dashboardById[id]);
+                }
+                // Pins prune to live ids (the mac rule).
+                _pinnedSavedQueryIds.RemoveWhere(id =>
+                    !savedQueries.Any(s => string.Equals(s.Id, id, StringComparison.Ordinal)));
             }
-            BaseFiles.Clear();
-            foreach (BaseFileSummary file in baseFiles
-                .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
+            finally
             {
-                BaseFiles.Add(file);
+                BaseQueriesRepublished?.Invoke();
             }
-            Dashboards.Clear();
-            Dictionary<string, DashboardSummary> dashboardById = dashboards.ToDictionary(d => d.Id, StringComparer.Ordinal);
-            foreach ((string id, string _) in DashboardsInListOrder(dashboards.Select(d => (d.Id, d.Name))))
-            {
-                Dashboards.Add(dashboardById[id]);
-            }
-            // Pins prune to live ids (the mac rule).
-            _pinnedSavedQueryIds.RemoveWhere(id =>
-                !savedQueries.Any(s => string.Equals(s.Id, id, StringComparison.Ordinal)));
-            BaseQueriesRepublished?.Invoke();
         });
     }
 

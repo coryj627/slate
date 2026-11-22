@@ -422,6 +422,12 @@ internal sealed partial class WorkspaceViewModel
         return true;
     }
 
+    /// <summary>Plan 47 CB-17b (#1866, CD11): raised as a row's set (not a delete) is
+    /// dispatched, before its WriteInFlight turns its Save off, so the window moves the keys
+    /// off that Save first when they are on it. Its first press and Keep Mine's retry both
+    /// raise it.</summary>
+    internal event Action<PropertyRowViewModel>? PropertyRowWriteStarting;
+
     /// <summary>One dispatch path for row writes: the snapshot hash,
     /// the row's own in-flight flag, and the NOTE-SCOPED write lease
     /// (contract 3 — set, delete, add, and retries mutually exclude
@@ -437,6 +443,10 @@ internal sealed partial class WorkspaceViewModel
         {
             AnnounceWriteInFlightRefusal();
             return;
+        }
+        if (!deleted)
+        {
+            PropertyRowWriteStarting?.Invoke(row);
         }
         row.WriteInFlight = true;
         PropertyDraft dispatched = PropertyDraft.Copy(row.Draft);
@@ -537,6 +547,10 @@ internal sealed partial class WorkspaceViewModel
         {
             AnnounceWriteInFlightRefusal();
             return;
+        }
+        if (!deleted)
+        {
+            PropertyRowWriteStarting?.Invoke(row);
         }
         row.WriteInFlight = true;
         PropertyDraft dispatched = PropertyDraft.Copy(row.Draft);

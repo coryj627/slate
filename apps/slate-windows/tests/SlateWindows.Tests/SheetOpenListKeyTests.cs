@@ -87,6 +87,9 @@ public sealed class SheetOpenListKeyTests
         Assert.False(combo.IsDropDownOpen, $"{name}: Enter left the list open.");
         Assert.Equal(highlighted, combo.SelectedItem);
 
+        // A second press, not the first one held: the key is let go between, as a keyboard
+        // does (plan 47 CB-17b: a held Enter's repeats are no presses in Bulk Rename).
+        OpenLists.Release(host, Key.Enter);
         OpenLists.Press(host, Key.Enter);
         sheet.AssertTheSecondEnter(actionBefore);
     });

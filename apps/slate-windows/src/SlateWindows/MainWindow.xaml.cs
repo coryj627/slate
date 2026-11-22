@@ -92,6 +92,10 @@ public partial class MainWindow : Window
         // and its window-level cancellations — the window losing activation,
         // and WPF's restore when it comes back (no one's move).
         _editorLandings = new EditorLandingSlot(Dispatcher);
+        // #1866 (CD11): keys that came back to nothing are landed. Hooked ahead of the
+        // slot's own, so its step runs while the slot still counts moves as the
+        // activation's restore and not as the reader leaving.
+        Activated += (_, _) => RestoreFocusAfterActivation();
         Activated += (_, _) => _editorLandings.WindowActivated();
         Deactivated += (_, _) => _editorLandings.WindowDeactivated();
         _windowPlacement = new WindowPlacementManager(this);
@@ -815,7 +819,19 @@ public partial class MainWindow : Window
         {
             return;
         }
-        _ = TryFocus(CanvasPromptClearMarksButton);
+
+        // Plan 47 CB-17b (#1866, CD11): never Clear All Marks, which is no landing (its press
+        // clears every mark). With no row to take the keys, the sheet holds them while it is
+        // open, as an overlay holds them while its field waits (LandInOpeningOverlay). The
+        // sheet's scope forgets the element it last held them on first: it would hand them on
+        // to it, and that can be Clear All Marks.
+        void LetGo(object sender, KeyboardFocusChangedEventArgs e) => SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
+        SetHoldsTheKeys(CanvasPromptOverlay, true, LetGo);
+        FocusManager.SetFocusedElement(CanvasPromptOverlay, null);
+        if (!CanvasPromptOverlay.IsVisible || !SelectorFocus.LandOnStop(CanvasPromptOverlay))
+        {
+            SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
+        }
     }
 
     /// <summary>The editor's and the boundaries' deferred focus requests,
@@ -1636,6 +1652,59 @@ public partial class MainWindow : Window
         token is not null
         && !ReferenceEquals(token, this)
         && (TryFocus(token) || RegionFocusGuard.LandInScopesOf(token));
+
+    /// <summary>The element that held the keys before they came to rest on nothing, by
+    /// where WPF keeps it: the focused element of the topmost sheet or overlay on screen,
+    /// else the window's own. Each sheet and overlay is a focus scope of its own, so while
+    /// one is open its element is not the window's focused element; the surfaces are
+    /// declared in paint order, so the last one on screen is the one that held the
+    /// keys.</summary>
+    private IInputElement? LastFocusedElement() =>
+        FocusManager.GetFocusedElement(FocusScopeOverlays(this).LastOrDefault(surface => surface.IsVisible) ?? this);
+
+    /// <summary>
+    /// #1866 (CD11), keys that came back to nothing are landed. A control that goes off
+    /// while the window is not active holds no keys then, so nothing moves them first
+    /// (<see cref="Commands.CommandKeysFirst"/> sees only a holder). When the reader comes
+    /// back, or a box over the window closes, WPF offers the keys to the element that had
+    /// them; one that is off refuses, and the keys rest on nothing or on the window, where
+    /// no chord has a target. One step at Input, after WPF's own restore: if the window is
+    /// active, no modal loop runs and the keys are on nothing or the window, they go to
+    /// the element that held them last (<see cref="LastFocusedElement"/>), else to the
+    /// scopes it was in, else, with no modal surface open, to the editor. An element that
+    /// never held the keys is no one's to land by: the launch landing is not this step's.
+    /// While a modal loop runs nothing is done, and the loop's end asks again
+    /// (<see cref="ModalLoopChanged"/>): a picker's own loop can deliver the activation
+    /// before it counts as over.
+    /// </summary>
+    private void RestoreFocusAfterActivation() =>
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                IInputElement? keys = Keyboard.FocusedElement;
+                if (_windowClosed
+                    || !IsActive
+                    || _modalLoops.IsModalLoopActive
+                    || (keys is not null && !ReferenceEquals(keys, this))
+                    || LastFocusedElement() is not { } last
+                    || ReferenceEquals(last, this)
+                    || !RegionFocusGuard.HeldTheKeys(last))
+                {
+                    return;
+                }
+
+                // Search topmost owns the keys, as for every other restore.
+                if (TryFocusSearchIfTopmost())
+                {
+                    return;
+                }
+
+                if (!LandToken(last) && OpenModalSurface is null)
+                {
+                    FocusActiveEditorPane();
+                }
+            },
+            DispatcherPriority.Input);
 
     private void HandleQuickSwitcherKey(KeyEventArgs e, ModifierKeys modifiers)
     {

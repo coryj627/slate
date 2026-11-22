@@ -605,6 +605,21 @@ pub enum RescanReason {
     Watcher,
 }
 
+/// The work a button started that is still running when the button is
+/// pressed again (plan 47 CB-17b, #1866, CD11). The host keeps such a
+/// button available while its work runs, so the keys stay on it, and a
+/// press made meanwhile speaks `A11yEvent::WorkStillRunning` and does
+/// nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningWork {
+    /// The bulk rename sheet's Preview: the dry run is still counting.
+    BulkRenamePreview,
+    /// The bulk rename sheet's Apply: the rename is still writing.
+    BulkRenameApply,
+    /// The Files sidebar's Expand Loaded Folders.
+    ExpandLoadedFolders,
+}
+
 /// The shell regions F6 cycling names that carry no other event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellRegion {
@@ -1130,6 +1145,14 @@ pub enum A11yEvent {
     /// prefixing it would make VoiceOver say it twice differently.
     PaletteCommandUnavailable {
         reason: String,
+    },
+    /// Plan 47 CB-17b (#1866, CD11): a press on a button whose work is
+    /// still running. The host keeps the button available so the keys stay
+    /// on it; the press starts nothing and speaks this sentence, which
+    /// names the work. At the tier of `PaletteCommandUnavailable`: both
+    /// answer a keystroke that did nothing.
+    WorkStillRunning {
+        work: RunningWork,
     },
     /// DS-10: a command replaced the palette's rows with a list of choices.
     /// The caret stays in the search field, so nothing else says the list
@@ -1961,6 +1984,7 @@ impl A11yEvent {
             | PaletteCommandFailed { .. }
             | PaletteCommandNotFound { .. }
             | PaletteCommandUnavailable { .. }
+            | WorkStillRunning { .. }
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
             | TaskToggleFailed { .. }
@@ -2447,6 +2471,12 @@ impl A11yEvent {
             },
             PaletteCommandNotFound { id } => format!("Command not found: {id}"),
             PaletteCommandUnavailable { reason } => reason.clone(),
+            WorkStillRunning { work } => match work {
+                RunningWork::BulkRenamePreview => "The preview is still running.",
+                RunningWork::BulkRenameApply => "The rename is still running.",
+                RunningWork::ExpandLoadedFolders => "Folders are still expanding.",
+            }
+            .to_owned(),
             PaletteChoicesOpened { prompt, current } => {
                 format!("{prompt}. Selected: {current}, current.")
             }
@@ -4875,6 +4905,15 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         PaletteCommandUnavailable {
             reason: "A structural operation is in progress.".into(),
+        },
+        WorkStillRunning {
+            work: RunningWork::BulkRenamePreview,
+        },
+        WorkStillRunning {
+            work: RunningWork::BulkRenameApply,
+        },
+        WorkStillRunning {
+            work: RunningWork::ExpandLoadedFolders,
         },
         PaletteChoicesOpened {
             prompt: "Select a theme".into(),
@@ -7887,6 +7926,9 @@ mod tests {
             (High, "Save failed."),
             (High, "Command not found: slate.nope"),
             (High, "A structural operation is in progress."),
+            (High, "The preview is still running."),
+            (High, "The rename is still running."),
+            (High, "Folders are still expanding."),
             (Medium, "Select a theme. Selected: Dark, current."),
             (Medium, "Selected: Dark, current"),
             (Medium, "Selected: Light"),
@@ -8593,6 +8635,51 @@ mod tests {
         );
     }
 
+    /// Plan 47 CB-17b (#1866, CD11): a press on a button whose work is still
+    /// running says which work, in one sentence, at the tier of a command
+    /// that is unavailable. Every member of `RunningWork` has its sentence
+    /// and a corpus witness.
+    #[test]
+    fn a_press_on_work_still_running_says_which_work() {
+        let sentences = [
+            (
+                RunningWork::BulkRenamePreview,
+                "The preview is still running.",
+            ),
+            (RunningWork::BulkRenameApply, "The rename is still running."),
+            (
+                RunningWork::ExpandLoadedFolders,
+                "Folders are still expanding.",
+            ),
+        ];
+        for (work, sentence) in sentences {
+            let event = A11yEvent::WorkStillRunning { work };
+            assert_eq!(event.render(), sentence, "{work:?}");
+            assert_eq!(
+                event.priority(),
+                A11yEvent::PaletteCommandUnavailable {
+                    reason: "A structural operation is in progress.".into(),
+                }
+                .priority(),
+                "{work:?}"
+            );
+            assert_eq!(event.priority(), High, "{work:?}");
+            assert!(
+                corpus().contains(&event),
+                "{work:?} has no witness in the corpus"
+            );
+        }
+        let declared = declared_variants("RunningWork");
+        assert_eq!(
+            declared,
+            sentences
+                .iter()
+                .map(|(work, _)| format!("{work:?}"))
+                .collect::<std::collections::BTreeSet<String>>(),
+            "RunningWork gained or lost a member this fact does not hold"
+        );
+    }
+
     /// DS-10: a reader can't see the check mark, so the current choice says
     /// so; and a list of themes isn't a list of commands.
     #[test]
@@ -9248,8 +9335,10 @@ mod tests {
             // plan 46 DS-7 the Files sidebar's show and hide, 232;
             // plan 46 DS-10 the palette's choices, the chosen theme and the
             // Settings sheet, 237; DS-11's accent, 238; plan 47 CB-14
-            // (#1660) the landed-unindexed toggle, TaskToggledUnindexed, 239.
-            239,
+            // (#1660) the landed-unindexed toggle, TaskToggledUnindexed, 239;
+            // plan 47 CB-17b (#1866, CD11) the press on a button whose work
+            // is still running, WorkStillRunning, 240.
+            240,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

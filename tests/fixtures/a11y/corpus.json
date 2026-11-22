@@ -955,6 +955,21 @@
     "text": "A structural operation is in progress."
   },
   {
+    "event": "WorkStillRunning { work: BulkRenamePreview }",
+    "priority": "high",
+    "text": "The preview is still running."
+  },
+  {
+    "event": "WorkStillRunning { work: BulkRenameApply }",
+    "priority": "high",
+    "text": "The rename is still running."
+  },
+  {
+    "event": "WorkStillRunning { work: ExpandLoadedFolders }",
+    "priority": "high",
+    "text": "Folders are still expanding."
+  },
+  {
     "event": "PaletteChoicesOpened { prompt: \"Select a theme\", current: \"Dark\" }",
     "priority": "medium",
     "text": "Select a theme. Selected: Dark, current."

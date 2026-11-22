@@ -391,6 +391,53 @@ public sealed partial class RescanTests
         Assert.Equal(scans, h.ScanCalls);
     });
 
+    /// <summary>Plan 47 CB-17b (#1866, D3): Import… stays on while its pick
+    /// is up (its box in the app), so its own command no longer bars a
+    /// rescan. The import's admission does: an explicit and a foreground
+    /// rescan asked inside the pick are refused, and nothing is spoken.
+    /// The other order holds too: an import asked while a rescan runs never
+    /// asks for its sources.</summary>
+    [Fact]
+    public void ARescanIsRefusedWhileAnImportIsBeingPicked() => RunSta(() =>
+    {
+        var picker = new TaskCompletionSource<IReadOnlyList<string>>();
+        int picks = 0;
+        using var h = new Harness(
+            "import-picked-refused",
+            pickImportSources: () =>
+            {
+                picks++;
+                return picker.Task;
+            },
+            files: [("alpha.md", "# Alpha\n")]);
+        int scans = h.ScanCalls;
+        h.Sidebar.ImportCommand.Execute(null);
+        Assert.Equal(1, picks);
+        Assert.True(h.Sidebar.ImportCommand.CanExecute(null), "premise: Import… is off while its pick is up");
+        h.Write("late.md", "# Late\n");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+
+        Assert.Equal(scans, h.ScanCalls);
+        Assert.Empty(h.Events);
+        picker.SetResult([]);
+        h.Context.Await(h.Sidebar.ImportCompletion, "the import settling");
+        Assert.False(h.Sidebar.IsImporting);
+        Assert.Equal(scans, h.ScanCalls);
+
+        h.ParkAfterCall = h.ScanCalls + 1;
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
+        h.Sidebar.ImportCommand.Execute(null);
+        Assert.Equal(1, picks);
+        Assert.False(h.Sidebar.IsImporting);
+        h.Release.Set();
+        h.Context.Await(run);
+        h.Context.Await(h.Lifecycle.RescanCompletion);
+        Assert.Equal(1, picks);
+    });
+
     /// <summary>A request joined to a running rescan is never dropped, and
     /// an import requested meanwhile never starts (codex PR 7 round 4,
     /// finding 2 — this fact used to start one and assert the overlap): the
