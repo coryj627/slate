@@ -611,17 +611,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ClearFilterCommand = new RelayCommand(_ => InThePane(ClearFilter), _ => IsFilterActive);
         ToggleTagsCommand = new RelayCommand(_ => InThePane(() => ShowTags = !ShowTags), _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => InThePane(() => IsDualPaneEnabled = !IsDualPaneEnabled), _ => true);
-        AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
-        RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
+        AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImportRunning && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
+        RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImportRunning && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
         // W5-4 F1/F2: the creates are auto-named and selection-
         // independent — the MutationName text-box flow retired for
         // these verbs.
-        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting && !IsTrashing);
-        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting && !IsTrashing);
-        CreateCanvasCommand = new RelayCommand(_ => CreateCanvas(), _ => !IsImporting && !IsTrashing);
+        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImportRunning && !IsTrashing);
+        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImportRunning && !IsTrashing);
+        CreateCanvasCommand = new RelayCommand(_ => CreateCanvas(), _ => !IsImportRunning && !IsTrashing);
         RenameCommand = new RelayCommand(
             _ => TryRenameSelected(),
-            _ => !IsImporting && !IsTrashing
+            _ => !IsImportRunning && !IsTrashing
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }
                 && MutationName.Length > 0);
         // Red team: placeholders and group headers are selectable rows
@@ -629,11 +629,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // a spurious failure; the guard matches every sibling verb.
         DeleteCommand = new AsyncRelayCommand(
             _ => _trashCompletion = DeleteSelectedAsync(),
-            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null
+            _ => !IsImportRunning && !IsTrashing && StructuralMutationBlocked is null
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false },
             () => StructuralMutationBlocked);
-        CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
-        DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
+        CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImportRunning && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
+        DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImportRunning && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         // Plan 47 CB-15a: Copy link, Pin and Unpin take the sibling verbs'
         // guard too. On a date-group header Copy link spoke core's refusal of
         // the empty path, and Pin wrote the empty path into the pins. Copy
@@ -645,7 +645,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // folder so the canonical DuplicateFilesOnly refusal can speak.
         DuplicateCommand = new RelayCommand(
             _ => DuplicateSelected(),
-            _ => !IsImporting && !IsTrashing && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+            _ => !IsImportRunning && !IsTrashing && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         CopyPathCommand = new RelayCommand(
             _ => CopyPathSelected(),
             _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
@@ -656,7 +656,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // selection — the verb is live with either.
         MoveToCommand = new RelayCommand(
             _ => OpenMoveTo(),
-            _ => !IsImporting && !IsTrashing
+            _ => !IsImportRunning && !IsTrashing
                 && (BatchSelectionCount > 0
                     || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
         PinCommand = new RelayCommand(
@@ -672,26 +672,41 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => CanOpenSelected());
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => CanOpenSelected());
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
-        BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && MoveDestination.Length > 0);
+        BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImportRunning && !IsTrashing && BatchSelectionCount > 0 && MoveDestination.Length > 0);
         BatchTrashCommand = new AsyncRelayCommand(
             _ => _trashCompletion = BatchTrashAsync(),
-            _ => !IsImporting && !IsTrashing && StructuralMutationBlocked is null && BatchSelectionCount > 0,
+            _ => !IsImportRunning && !IsTrashing && StructuralMutationBlocked is null && BatchSelectionCount > 0,
             () => StructuralMutationBlocked);
+        // Plan 47 CB-17b (#1866, D3): Import… admits while it executes, so it is on while
+        // its box is up and the box's close hands the keys back to it; the running import
+        // turns it off, and a press while one is admitted starts nothing (StartImport).
         ImportCommand = new AsyncRelayCommand(
-            _ => _importCompletion = ImportAsync(),
-            () => !IsImporting && !IsTrashing && StructuralMutationBlocked is null,
-            () => StructuralMutationBlocked);
-        CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
+            _ => StartImport(),
+            () => !IsImportRunning && !IsTrashing && StructuralMutationBlocked is null,
+            () => StructuralMutationBlocked,
+            admitWhileExecuting: true);
+        CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImportRunning);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => InThePane(ClearRecents), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => InThePane(CollapseAll), _ => true);
+        // Plan 47 CB-17b (#1866; the owner's answer to Call 4, "Stay, and speak on a
+        // press"): Expand loaded folders stays on while it runs, the keys on it. A press
+        // while it runs starts no second run and only says so, in core's words; the palette
+        // row and the menu row run this command, so they say the same.
         ExpandLoadedCommand = new AsyncRelayCommand(
             _ =>
             {
+                if (IsExpandingLoaded)
+                {
+                    _announce(new A11yEvent.WorkStillRunning(RunningWork.ExpandLoadedFolders));
+                    return Task.CompletedTask;
+                }
+
                 FilesPaneNeeded?.Invoke();
                 return _expandLoadedCompletion = ExpandLoadedAsync();
             },
-            () => true);
+            () => true,
+            admitWhileExecuting: true);
         HistoryBackCommand = new RelayCommand(_ => History(-1), _ => _historyIndex > 0);
         HistoryForwardCommand = new RelayCommand(_ => History(1), _ => _historyIndex >= 0 && _historyIndex < _history.Count - 1);
         if (journalReplay is not null)
