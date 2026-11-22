@@ -267,19 +267,29 @@ public sealed partial class ReadingDiagramTests
     /// image leaves the name's run room on their line. A tab in the name
     /// (an alias typed with one, Codex round 2) would advance to the
     /// paragraph's tab stop, past that room, so hidden speech holds a space
-    /// for it.</summary>
+    /// for it; glyphs wider than their em (Codex round 3: a three-em dash,
+    /// a per-ten-thousand sign) get the room they take.</summary>
     [Theory]
     [InlineData(600, "")]
     [InlineData(320, "")]
     [InlineData(600, "left\tright")]
     [InlineData(320, "left\tright")]
     [InlineData(500, "a\t\t\tb")]
-    public void AnEmbeddedImagesLineReadsItsName(double width, string alias)
+    [InlineData(600, "three-em dashes")]
+    [InlineData(320, "three-em dashes")]
+    [InlineData(500, "per-ten-thousand signs")]
+    public void AnEmbeddedImagesLineReadsItsName(double width, string aliasCase)
     {
+        string alias = aliasCase switch
+        {
+            "three-em dashes" => new string('\u2E3B', 100),
+            "per-ten-thousand signs" => new string('\u2031', 100),
+            _ => aliasCase,
+        };
         RunSta(() =>
         {
             using var harness = StageHarness.Open(
-                $"reading-embed-image-line-{width}-{alias.Length}",
+                $"reading-embed-image-line-{width}-{aliasCase.Length}",
                 "Before the card.\n\n![[wide.svg" + (alias.Length > 0 ? "|" + alias : string.Empty) + "]]\n\nAfter the card.\n",
                 hosted: true,
                 files: EmbedImages);
