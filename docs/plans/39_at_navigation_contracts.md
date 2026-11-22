@@ -129,6 +129,19 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   block's MathCAT speech (the spike's shape a1h, recorded on #1595), and
   the source is spoken only on request, by core's `MathSourceSpoken`.
 
+- **A-11 (2026-11-22, plan 47 CB-20, #1708; CD12, adopted as recommended
+  on 2026-11-16, and the owner's answer to its second step, "Before the
+  source"):** the diagram's twin of A-10's line reading. Line reading and
+  caret re-entry speak a rendered diagram's core description, a hidden run
+  beside the element on its line, and a pending diagram's "Diagram,
+  rendering" on a line of its own above its source; a failed diagram's line
+  reads its source, never its description (CD12(a)). Find skips the hidden
+  runs and a copy carries the fenced source or what is shown (CD12(c)). An
+  embedded image's line reads its card's name, and a thematic break is no
+  longer "unavailable". No chord and no help line change; Tab still reads a
+  diagram's source, which CB-20b moves to a chord (CD12(d)). Census:
+  `ReadingEmbeddedElementCensus`.
+
 ## Review record
 
 Contract/map round 1 reviewed fixed remote `88ec8440` against `541f7ceb`.
