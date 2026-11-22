@@ -237,6 +237,174 @@ public sealed class SheetOpeningTests
             $"once the picker opened by {press} on its launcher row had closed, the keys rested on {Describe(Keyboard.FocusedElement)}, not on that row");
     });
 
+    /// <summary>A sheet whose first stop cannot take the keys in the turn it opens still
+    /// takes them out of what held them: the sheet itself holds them, so a key or text
+    /// delivered next reaches the sheet and nothing under it, and what held them is off. Once
+    /// the stop can take them, the queued landing gives it the keys, and the sheet is no
+    /// stop again. The keys start on the empty pane's Quick Open… row for each sheet that can
+    /// open over it; on the canvas for the three canvas sheets; in the template picker for
+    /// the template flow, which opens only from it.</summary>
+    [Theory]
+    [InlineData(nameof(WorkspaceViewModel.AddPropertySheet))]
+    [InlineData(nameof(WorkspaceViewModel.BulkRenameSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CitationDetails))]
+    [InlineData(nameof(WorkspaceViewModel.CitationSummary))]
+    [InlineData(nameof(WorkspaceViewModel.FilesCiting))]
+    [InlineData(nameof(WorkspaceViewModel.DashboardEditorSheet))]
+    [InlineData(nameof(WorkspaceViewModel.BaseQueryBuilderSheet))]
+    [InlineData(nameof(WorkspaceViewModel.TemplatePickerSheet))]
+    [InlineData(nameof(WorkspaceViewModel.TemplateFlowSheet))]
+    [InlineData(nameof(FilesSidebarViewModel.MoveToSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasCardEditorSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasCardPickerSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasPromptSheet))]
+    [InlineData(nameof(VaultLifecycleViewModel.SettingsSheet))]
+    public void ALateLandingTakesTheKeysOutOfWhatIsUnderTheSheet(string sheetToken) => RunSta(() =>
+    {
+        Sheet sheet = SheetOf(sheetToken);
+        using var bench = new Bench();
+        UIElement holder = bench.TakeTheKeysUnder(sheet);
+        FrameworkElement overlay = bench.Overlay(sheet);
+        int reached = 0;
+        void Reached(object sender, RoutedEventArgs e) => reached++;
+        holder.PreviewKeyDown += Reached;
+        holder.PreviewTextInput += Reached;
+
+        IInputElement? inTheTurn;
+        using (RefuseTheKeysInside(overlay))
+        {
+            inTheTurn = bench.OpenAndReadTheKeysInThatTurn(sheet);
+            Assert.True(
+                ReferenceEquals(overlay, inTheTurn),
+                $"in the turn {sheet.Token} opened, with its stops refusing the keys, they were on {Describe(inTheTurn)}, not on the sheet itself");
+            Assert.False(KeysFirstRecorder.TheKeysAreIn(holder), $"the keys stayed on {Describe(holder)} under {sheet.Token}");
+            Assert.False(KeyboardNavigation.GetIsTabStop(overlay), $"{sheet.Token} holding the keys is a Tab stop");
+
+            Press(bench.Host, Key.A);
+            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, Keyboard.FocusedElement, "a"));
+            Assert.Equal(0, reached);
+            if (holder is Button row)
+            {
+                Assert.False(row.IsEnabled, $"{Describe(row)} stayed on under {sheet.Token}");
+                var invoke = (IInvokeProvider)new ButtonAutomationPeer(row).GetPattern(PatternInterface.Invoke);
+                _ = Assert.Throws<ElementNotEnabledException>(invoke.Invoke);
+            }
+        }
+
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(sheet.Surface, bench.Shell.OpenModalSurface);
+        Assert.Equal(0, reached);
+        Assert.False(overlay.Focusable, $"{sheet.Token} stayed a stop once its landing took the keys");
+        Assert.True(
+            Keyboard.FocusedElement is UIElement landed && !ReferenceEquals(landed, overlay) && KeysFirstRecorder.TheKeysAreIn(overlay),
+            $"once its stops could take the keys, {sheet.Token}'s queued landing left them on {Describe(Keyboard.FocusedElement)}");
+        IInputElement settled = Keyboard.FocusedElement;
+        bench.Host.Settle();
+        Assert.Same(settled, Keyboard.FocusedElement);
+    });
+
+    /// <summary>Escape closes a sheet whose stops could not take the keys in the turn it
+    /// opened: the sheet itself holds them, so the key reaches the sheet's own route.</summary>
+    [Theory]
+    [InlineData(nameof(WorkspaceViewModel.AddPropertySheet))]
+    [InlineData(nameof(WorkspaceViewModel.BulkRenameSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CitationDetails))]
+    [InlineData(nameof(WorkspaceViewModel.CitationSummary))]
+    [InlineData(nameof(WorkspaceViewModel.FilesCiting))]
+    [InlineData(nameof(WorkspaceViewModel.DashboardEditorSheet))]
+    [InlineData(nameof(WorkspaceViewModel.BaseQueryBuilderSheet))]
+    [InlineData(nameof(WorkspaceViewModel.TemplatePickerSheet))]
+    [InlineData(nameof(WorkspaceViewModel.TemplateFlowSheet))]
+    [InlineData(nameof(FilesSidebarViewModel.MoveToSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasCardEditorSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasCardPickerSheet))]
+    [InlineData(nameof(WorkspaceViewModel.CanvasPromptSheet))]
+    [InlineData(nameof(VaultLifecycleViewModel.SettingsSheet))]
+    public void EscapeBeforeALateLandingStillClosesTheSheet(string sheetToken) => RunSta(() =>
+    {
+        Sheet sheet = SheetOf(sheetToken);
+        using var bench = new Bench();
+        _ = bench.TakeTheKeysUnder(sheet);
+        FrameworkElement overlay = bench.Overlay(sheet);
+        using (RefuseTheKeysInside(overlay))
+        {
+            IInputElement? inTheTurn = bench.OpenAndReadTheKeysInThatTurn(sheet);
+            Assert.True(
+                ReferenceEquals(overlay, inTheTurn),
+                $"in the turn {sheet.Token} opened, with its stops refusing the keys, they were on {Describe(inTheTurn)}, not on the sheet itself");
+
+            Press(bench.Host, Key.Escape);
+        }
+
+        bench.Host.Settle();
+        Assert.NotEqual(sheet.Surface, bench.Shell.OpenModalSurface);
+        Assert.False(overlay.Focusable, $"{sheet.Token} stayed a stop once it closed");
+    });
+
+    /// <summary>A sheet that opens beneath another surface leaves the keys where the
+    /// surface above it put them and is no stop: the card editor of a new card arriving
+    /// after Settings opened (#1666). It takes them on its field once Settings closes.</summary>
+    [Fact]
+    public void ASheetThatOpensBeneathAnotherLeavesTheKeysAlone() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Board);
+        bench.SelectTheCard("alpha");
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        bench.Host.Lifecycle.OpenSettingsCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.Settings, bench.Shell.OpenModalSurface);
+        IInputElement inSettings = Keyboard.FocusedElement;
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.SettingsOverlay), $"premise: Settings holds the keys (they are on {Describe(inSettings)})");
+        FrameworkElement editor = bench.Shell.CanvasCardEditorOverlay;
+
+        IInputElement? inTheTurn = bench.OpenAndReadTheKeysInThatTurn(SheetOf(nameof(WorkspaceViewModel.CanvasCardEditorSheet)), awaitedSurface: ModalSurface.Settings);
+        Assert.NotNull(bench.Workspace.CanvasCardEditorSheet);
+        Assert.Equal(ModalSurface.Settings, bench.Shell.OpenModalSurface);
+        Assert.Same(inSettings, inTheTurn);
+        Assert.False(editor.Focusable, "the card editor beneath Settings became a stop");
+        bench.Host.Settle();
+        Assert.Same(inSettings, Keyboard.FocusedElement);
+
+        bench.Host.Lifecycle.CloseSettings();
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.CanvasCardEditor, bench.Shell.OpenModalSurface);
+        Assert.Same(bench.Shell.CanvasCardEditorTextBox, Keyboard.FocusedElement);
+    });
+
+    /// <summary>The template picker opened by Enter on its launcher row opens loading and is
+    /// filled later in the same call: its Cancel never holds the keys on the way, so a
+    /// reader hears the list, not "Cancel, button" first.</summary>
+    [Fact]
+    public void TheTemplatePickerNeverLandsOnCancelWhileItFills() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"), ("Templates/Meeting.md", "# Meeting\n"));
+        host.Settle();
+        Button row = LauncherRow(host, "EmptyPaneNewFromTemplate");
+        host.Shell.Activate();
+        host.Settle();
+        TakeTheKeys(row);
+        Button cancel = host.Shell.TemplatePickerCancelButton;
+        int onCancel = 0;
+        void Counted(object sender, KeyboardFocusChangedEventArgs e) => onCancel++;
+        cancel.GotKeyboardFocus += Counted;
+
+        Press(host, Key.Enter);
+        host.Settle();
+        host.Settle();
+
+        TemplatePickerViewModel picker = Assert.IsType<TemplatePickerViewModel>(host.Workspace.TemplatePickerSheet);
+        Assert.Equal(TemplatePickerState.Available, picker.State);
+        Assert.Equal(0, onCancel);
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem item && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), host.Shell.TemplatePickerList),
+            $"with the picker filled the keys are on {Describe(Keyboard.FocusedElement)}, not on a row of its list");
+    });
+
     /// <summary>Every member of <see cref="ModalSurface"/> is one of the three overlays or
     /// has an opener, and every sheet has its rows in the theories above. The opener map has
     /// no wildcard arm, so a fifteenth sheet without an opener is a build warning (CS8509)
@@ -256,6 +424,8 @@ public sealed class SheetOpeningTests
         Assert.Equal(every, RowsOf(nameof(NothingHoldingTheKeysGoesOffAsASheetOpens), row => row[1] is false));
         Assert.Equal(every, RowsOf(nameof(NothingHoldingTheKeysGoesOffAsASheetOpens), row => row[1] is true));
         Assert.Equal(every, RowsOf(nameof(ASheetTakesTheKeysInTheTurnItOpens), _ => true));
+        Assert.Equal(every, RowsOf(nameof(ALateLandingTakesTheKeysOutOfWhatIsUnderTheSheet), _ => true));
+        Assert.Equal(every, RowsOf(nameof(EscapeBeforeALateLandingStillClosesTheSheet), _ => true));
         Assert.Equal(
             sheets.Where(sheet => sheet.NotOverAnEmptyPane is null).Select(sheet => sheet.Token).Order(StringComparer.Ordinal),
             RowsOf(nameof(NoLauncherRowHoldingTheKeysGoesOffAsASheetOpens), _ => true));
@@ -561,13 +731,16 @@ public sealed class SheetOpeningTests
         /// sheet opened in: when the call returns, for a sheet the call itself opens; when
         /// the dispatcher operation that opened it ends, for one shown in a later turn (Files
         /// Citing). No queued landing has run by then.</summary>
-        public IInputElement? OpenAndReadTheKeysInThatTurn(Sheet sheet)
+        public IInputElement? OpenAndReadTheKeysInThatTurn(Sheet sheet, ModalSurface? awaitedSurface = null)
         {
             IInputElement? inTheTurn = null;
             bool read = false;
+            bool Opened() => awaitedSurface is null
+                ? Shell.OpenModalSurface == sheet.Surface
+                : Shell.OpenModalSurface == awaitedSurface && IsOpen(sheet);
             void TurnEnded(object? sender, DispatcherHookEventArgs e)
             {
-                if (!read && Shell.OpenModalSurface == sheet.Surface)
+                if (!read && Opened())
                 {
                     read = true;
                     inTheTurn = Keyboard.FocusedElement;
@@ -579,7 +752,7 @@ public sealed class SheetOpeningTests
             try
             {
                 sheet.Open(this);
-                if (!read && Shell.OpenModalSurface == sheet.Surface)
+                if (!read && Opened())
                 {
                     read = true;
                     inTheTurn = Keyboard.FocusedElement;
@@ -595,6 +768,44 @@ public sealed class SheetOpeningTests
             }
 
             return inTheTurn;
+        }
+
+        /// <summary>Whether <paramref name="sheet"/>'s property is set, open or beneath
+        /// another surface.</summary>
+        public bool IsOpen(Sheet sheet) =>
+            (typeof(WorkspaceViewModel).GetProperty(sheet.Token)?.GetValue(Workspace)
+                ?? typeof(VaultLifecycleViewModel).GetProperty(sheet.Token)?.GetValue(Host.Lifecycle)
+                ?? (Sidebar is null ? null : typeof(FilesSidebarViewModel).GetProperty(sheet.Token)?.GetValue(Sidebar))) is not null;
+
+        /// <summary>The keys put where they are as <paramref name="sheet"/> opens, with its
+        /// route run up to the call that opens it: on the empty pane's Quick Open… row for a
+        /// sheet that can open over it, else in the editor of its tab (the canvas for the
+        /// three canvas sheets) or, for the template flow, in the template picker its route
+        /// opens. Returns what holds them.</summary>
+        public UIElement TakeTheKeysUnder(Sheet sheet)
+        {
+            if (sheet.NotOverAnEmptyPane is null && sheet.Approach is null)
+            {
+                sheet.Prepare(this);
+                Button row = LauncherRow(Host, "EmptyPaneQuickOpen");
+                Assert.True(row.IsVisible, "premise: no tab is open, so the empty pane shows its launcher");
+                Shell.Activate();
+                Host.Settle();
+                TakeTheKeys(row);
+                return row;
+            }
+
+            OpenTheTab(sheet.Tab);
+            sheet.Prepare(this);
+            Shell.Activate();
+            Host.Settle();
+            Assert.True(Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+            Host.Settle();
+            sheet.Approach?.Invoke(this);
+            Assert.True(
+                Keyboard.FocusedElement is UIElement { IsEnabled: true, IsVisible: true },
+                $"keyboard premise: before {sheet.Token} opened the keys were on {Describe(Keyboard.FocusedElement)}");
+            return (UIElement)Keyboard.FocusedElement;
         }
 
         public void AssertTheSheetHasTheKeys(Sheet sheet)
@@ -637,6 +848,28 @@ public sealed class SheetOpeningTests
         Assert.Single(ShownShell.Descendants(host.Shell).OfType<StackPanel>(), panel => panel.Name == "EmptyPaneLauncher")
             .Children.OfType<Button>(),
         button => AutomationProperties.GetAutomationId(button) == id);
+
+    /// <summary>Every element inside <paramref name="overlay"/> refuses the keys until the
+    /// result is disposed (its preview of the move is handled, which WPF reads as a refusal);
+    /// the overlay itself may still take them.</summary>
+    private static IDisposable RefuseTheKeysInside(FrameworkElement overlay)
+    {
+        void Refuse(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (!ReferenceEquals(e.NewFocus, overlay))
+            {
+                e.Handled = true;
+            }
+        }
+
+        overlay.PreviewGotKeyboardFocus += Refuse;
+        return new Undo(() => overlay.PreviewGotKeyboardFocus -= Refuse);
+    }
+
+    private sealed class Undo(Action undo) : IDisposable
+    {
+        public void Dispose() => undo();
+    }
 
     private static void TakeTheKeys(UIElement element) => Assert.True(
         element.Focus() && ReferenceEquals(element, Keyboard.FocusedElement),
