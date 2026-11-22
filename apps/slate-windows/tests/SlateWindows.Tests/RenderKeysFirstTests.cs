@@ -92,6 +92,40 @@ public sealed class RenderKeysFirstTests
             $"after the reload the keys were on {Describe(Keyboard.FocusedElement)}, not in the base's grid");
     });
 
+    /// <summary>The keys in the quick filter of a base with no rows, through a reload: with no
+    /// grid or list to land on, the surface's landing passes over the quick filter the render
+    /// is moving them off, for Refresh.</summary>
+    [Fact]
+    public void TheQuickFilterOfABaseWithNoRowsLetsTheKeysGoToRefreshFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(
+            ("Notes.base", "filters: 'file.ext == \"zzz\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n"),
+            ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        host.Workspace.OpenPath("Notes.base");
+        BaseDocumentViewModel document = host.Workspace.ActiveGroup.ActiveTab?.Base
+            ?? throw new Xunit.Sdk.XunitException("premise: the base's tab has no document");
+        Assert.True(PumpedDispatcher.PumpUntil(() => document.State == BaseLoadState.Ready, TimeSpan.FromSeconds(30)), "premise: the base never loaded");
+        host.Settle();
+        BaseSurfaceView surface = ShownShell.Descendants(host.Shell).OfType<BaseSurfaceView>().Single(view => view.IsVisible);
+        Assert.False(surface.GridForTests.IsVisible || surface.ListForTests.IsVisible, "premise: the base shows rows");
+        TextBox quickFilter = surface.QuickFilterForTests;
+        Assert.True(
+            quickFilter.Focus() && ReferenceEquals(quickFilter, Keyboard.FocusedElement),
+            $"keyboard premise: the quick filter could not take the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the quick filter of a base with no rows", quickFilter, () =>
+        {
+            document.Load();
+            Assert.True(PumpedDispatcher.PumpUntil(() => document.State == BaseLoadState.Ready, TimeSpan.FromSeconds(30)), "the reload never ended");
+            host.Settle();
+        });
+
+        Assert.True(
+            ReferenceEquals(surface.RefreshForTests, Keyboard.FocusedElement),
+            $"after the reload the keys were on {Describe(Keyboard.FocusedElement)}, not on Refresh");
+    });
+
     /// <summary>The keys on the Connections leaf's depth control as its anchor note's tab
     /// closes: they leave it before it goes off, and stay out of the leaf's controls the
     /// render turns off. The keys-first witness of ConnectionsLeafView's _depth.</summary>

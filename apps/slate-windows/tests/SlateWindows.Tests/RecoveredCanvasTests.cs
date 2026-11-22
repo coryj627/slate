@@ -386,8 +386,12 @@ public sealed class RecoveredCanvasTests : IDisposable
         }
     });
 
+    /// <summary>A button bound to the inspection's Close before any inspection opens closes the
+    /// inspection, by the peer's Invoke. Plan 47 CB-17b (#1866, CD11): the command is always on
+    /// (it was on only while an inspection was open, so the close turned it off in its own
+    /// press); its press with no inspection open closes nothing.</summary>
     [Fact]
-    public void AlreadyBoundCloseButtonEnablesWhenInspectionOpensAndClosesIt() => RunSta(() =>
+    public void AlreadyBoundCloseButtonIsOnAndClosesTheInspection() => RunSta(() =>
     {
         using var workspace = new WorkspaceViewModel(
             _session, _fixture.Root, () => [], _ => { },
@@ -410,7 +414,9 @@ public sealed class RecoveredCanvasTests : IDisposable
             window.UpdateLayout();
             PumpDispatcher();
             Assert.Null(workspace.CanvasCardEditorSheet);
-            Assert.False(close.IsEnabled);
+            Assert.True(close.IsEnabled);
+            close.Command.Execute(null);
+            Assert.Null(workspace.CanvasCardEditorSheet);
             workspace.OpenPath("board.canvas");
             CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
                 Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab).Canvas);
@@ -425,7 +431,7 @@ public sealed class RecoveredCanvasTests : IDisposable
             invoke.Invoke();
             PumpDispatcher();
             Assert.Null(workspace.CanvasCardEditorSheet);
-            Assert.False(close.IsEnabled);
+            Assert.True(close.IsEnabled);
             Assert.Equal(_recovered, File.ReadAllText(CanvasPath));
         }
         finally
@@ -474,6 +480,27 @@ public sealed class RecoveredCanvasTests : IDisposable
         Assert.True(
             canvas.IsKeyboardFocusWithin,
             $"after the inspection closed the keys were on {Keyboard.FocusedElement?.ToString() ?? "nothing"}, not on the canvas");
+    });
+
+    /// <summary>Plan 47 CB-17b (#1866, CD11): the inspection's Close, always on now, closes
+    /// only an inspection, as its old gate let it: run while a card's editing sheet is open,
+    /// it leaves that sheet and its draft as they are.</summary>
+    [Fact]
+    public void TheInspectionsCloseLeavesAnEditableCardsSheetOpen() => RunSta(() =>
+    {
+        JsonNode source = JsonNode.Parse(_recovered)!;
+        source["edges"] = new JsonArray();
+        using var shell = new ShownShell(("board.canvas", source.ToJsonString()));
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        Assert.False(document.IsReadOnly, $"premise: the repaired canvas is editable ({document.State})");
+        _ = OpenTheTextCardsSheet(shell, document);
+        CanvasCardEditorViewModel sheet = Assert.IsType<CanvasCardEditorViewModel>(shell.Workspace.CanvasCardEditorSheet);
+        Assert.False(sheet.InspectionOnly, "premise: the card's sheet edits");
+
+        shell.Workspace.CloseCanvasInspectionCommand.Execute(null);
+        shell.Settle();
+
+        Assert.Same(sheet, shell.Workspace.CanvasCardEditorSheet);
     });
 
     /// <summary>#1666: the card inspection sheet takes the keys on its field

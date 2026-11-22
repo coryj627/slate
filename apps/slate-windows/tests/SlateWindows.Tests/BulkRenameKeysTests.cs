@@ -161,6 +161,48 @@ public sealed class BulkRenameKeysTests
         Assert.Contains("state: draft", host.Read("a.md"), StringComparison.Ordinal);
     });
 
+    /// <summary>An Apply refused at its press (a note's header draft is unsaved) says why, and
+    /// leaves the keys on Apply, which stays on: only an admitted apply moves them.</summary>
+    [Fact]
+    public void ARefusedApplyLeavesTheKeysOnApply() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        FrameworkElement overlay = OpenBulkRename(host);
+        BulkRenameViewModel sheet = host.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        int published = 0;
+        sheet.RunPublished += () => published++;
+        sheet.Preview();
+        Assert.True(PumpedDispatcher.PumpUntil(() => published == 1 && !sheet.WorkInFlight, TimeSpan.FromSeconds(30)), "premise: the preview never published");
+        NotePropertiesViewModel properties = host.Workspace.ActiveGroup.ActiveTab?.Properties
+            ?? throw new Xunit.Sdk.XunitException("premise: the note's tab has no Properties header");
+        properties.IsExpanded = true;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !properties.IsLoading && properties.Rows.Any(row => row.KeyIdentity == "status"), TimeSpan.FromSeconds(30)),
+            "premise: the header never listed the note's property");
+        properties.Rows.Single(row => row.KeyIdentity == "status").EditorText = "unsaved";
+        host.Settle();
+        Assert.True(properties.AnyRowDirty, "premise: the header's draft is not dirty");
+        Button apply = ButtonOf(overlay, "BulkRenameApplyButton");
+        Assert.True(
+            sheet.CanApply && apply.Focus() && ReferenceEquals(apply, Keyboard.FocusedElement),
+            $"keyboard premise: Apply could not take the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        int heard = host.Announced.Count;
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        Press(host, Key.Enter);
+        host.Settle();
+
+        Assert.False(sheet.WorkInFlight, "the refused apply went in flight");
+        Assert.Contains(host.Announced.Skip(heard), line => line is A11yEvent.HostComposed { Text: var text } && text == PropertyPhrase.BulkRenameDirtyDraftsReason);
+        Assert.True(changes.Count == 0, $"the refused apply moved the keys: {string.Join(" -> ", changes.Select(Describe))}");
+        Assert.True(
+            ReferenceEquals(apply, Keyboard.FocusedElement) && apply.IsEnabled,
+            $"after the refusal the keys were on {Describe(Keyboard.FocusedElement)}, not on Apply, on");
+    });
+
     /// <summary>The real Bulk Rename sheet over a note, opened from the editor, holding the
     /// keys.</summary>
     private static FrameworkElement OpenBulkRename(ShownShell host)
