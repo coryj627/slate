@@ -287,11 +287,14 @@ public sealed partial class SheetOpeningTests
         Assert.Equal(ModalSurface.DashboardEditor, bench.Shell.OpenModalSurface);
         Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.DashboardEditorOverlay), $"premise: the dashboard editor holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
 
+        List<string> outside = LandingsOutside(bench.Shell, bench.Shell.FilesCitingOverlay, out Action stop);
         bench.Workspace.CloseDashboardEditor();
         bench.Host.Settle();
         bench.Host.Settle();
+        stop();
 
         Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
+        Assert.True(outside.Count == 0, $"as the dashboard editor closed over Files Citing the keys went to {string.Join(", ", outside)}, behind it");
         Assert.True(
             ReferenceEquals(bench.Shell.FilesCitingCloseButton, Keyboard.FocusedElement),
             $"once the dashboard editor closed over Files Citing the keys rested on {Describe(Keyboard.FocusedElement)}, not on its Close");
@@ -330,11 +333,14 @@ public sealed partial class SheetOpeningTests
         Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
         Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.FilesCitingOverlay), $"premise: Files Citing holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
 
+        List<string> outside = LandingsOutside(bench.Shell, bench.Shell.CitationDetailsOverlay, out Action stop);
         Press(bench.Host, Key.Escape);
         bench.Host.Settle();
         bench.Host.Settle();
+        stop();
 
         Assert.Equal(ModalSurface.CitationDetails, bench.Shell.OpenModalSurface);
+        Assert.True(outside.Count == 0, $"as Files Citing closed over the details sheet the keys went to {string.Join(", ", outside)}, behind it");
         Assert.True(
             KeysFirstRecorder.TheKeysAreIn(bench.Shell.CitationDetailsOverlay),
             $"once Files Citing closed over the details sheet the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
@@ -399,6 +405,49 @@ public sealed partial class SheetOpeningTests
             ReferenceEquals(close, Keyboard.FocusedElement),
             $"the fallback landing moved the keys from the Close the reader chose to {Describe(Keyboard.FocusedElement)}");
     });
+
+    /// <summary>The menu stays on while it holds the keys, by one trigger, last in its style,
+    /// whose condition reads no surface (D10). Every surface lands in the turn it opens, so
+    /// in the orders these facts can arrange the landing runs before the menu's triggers hear
+    /// the surface open, and the menu goes off only once the keys have left it. WPF orders a
+    /// binding's listener against the window's handler by when each subscribed, which no fact
+    /// chooses, and #1690 measured the menu's trigger first; this pins the trigger that holds
+    /// it on in that order: there, last, setting IsEnabled True.</summary>
+    [Fact]
+    public void TheMenusLastTriggerKeepsItOnWhileItHoldsTheKeys()
+    {
+        System.Xml.Linq.XDocument document = System.Xml.Linq.XDocument.Load(
+            System.IO.Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        System.Xml.Linq.XElement menu = Assert.Single(document.Descendants(), element => element.Name.LocalName == "Menu");
+        System.Xml.Linq.XElement triggers = menu.Descendants().First(element => element.Name.LocalName == "Style.Triggers");
+        System.Xml.Linq.XElement last = triggers.Elements().Last();
+
+        Assert.Equal("DataTrigger", last.Name.LocalName);
+        Assert.Equal("{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}", (string?)last.Attribute("Binding"));
+        Assert.Equal("True", (string?)last.Attribute("Value"));
+        System.Xml.Linq.XElement setter = Assert.Single(last.Elements(), element => element.Name.LocalName == "Setter");
+        Assert.Equal("IsEnabled", (string?)setter.Attribute("Property"));
+        Assert.Equal("True", (string?)setter.Attribute("Value"));
+    }
+
+    /// <summary>Records each element outside <paramref name="surface"/> that takes the
+    /// keys in <paramref name="window"/> until <paramref name="stop"/> is called.</summary>
+    private static List<string> LandingsOutside(Window window, FrameworkElement surface, out Action stop)
+    {
+        List<string> outside = [];
+        void Landed(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (e.NewFocus is DependencyObject element && !ReferenceEquals(element, window) && !IsIn(surface, e.NewFocus))
+            {
+                outside.Add(Describe(element));
+            }
+        }
+
+        var handler = new KeyboardFocusChangedEventHandler(Landed);
+        window.AddHandler(Keyboard.GotKeyboardFocusEvent, handler, handledEventsToo: true);
+        stop = () => window.RemoveHandler(Keyboard.GotKeyboardFocusEvent, handler);
+        return outside;
+    }
 
     /// <summary>Text typed where the keys are, as the keyboard's text arrives.</summary>
     private static void Type(UIElement expected, string text)
