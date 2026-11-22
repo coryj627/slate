@@ -24,7 +24,7 @@ namespace SlateWindows.Tests;
 /// change lands: a sheet takes the keys in the turn it opens, and the menu and the launcher
 /// stay on while they hold the keys.
 /// </summary>
-public sealed class SheetOpeningTests
+public sealed partial class SheetOpeningTests
 {
     private const string Note = "a.md";
     private const string Board = "board.canvas";
@@ -37,7 +37,10 @@ public sealed class SheetOpeningTests
     /// <summary>The menu, with the keys on its bar and on an item of its open Slate menu, as
     /// each sheet opens over it: the menu goes off only once the keys have left it. The menu
     /// cases skip where the desktop refuses a menu the keys (#1680). The template flow opens
-    /// only from the template picker, so its act opens the picker first.</summary>
+    /// only from the template picker, so its act opens the picker first, and its rows
+    /// measure the menu going off as the picker opens: the flow opens over the picker, with
+    /// the menu already off and the keys in the picker, so the flow's own trigger never
+    /// fires under them (red team F11).</summary>
     [Theory]
     [InlineData(nameof(WorkspaceViewModel.AddPropertySheet), false)]
     [InlineData(nameof(WorkspaceViewModel.BulkRenameSheet), false)]
@@ -270,25 +273,23 @@ public sealed class SheetOpeningTests
         holder.PreviewKeyDown += Reached;
         holder.PreviewTextInput += Reached;
 
-        IInputElement? inTheTurn;
-        using (RefuseTheKeysInside(overlay))
-        {
-            inTheTurn = bench.OpenAndReadTheKeysInThatTurn(sheet);
-            Assert.True(
-                ReferenceEquals(overlay, inTheTurn),
-                $"in the turn {sheet.Token} opened, with its stops refusing the keys, they were on {Describe(inTheTurn)}, not on the sheet itself");
-            Assert.False(KeysFirstRecorder.TheKeysAreIn(holder), $"the keys stayed on {Describe(holder)} under {sheet.Token}");
-            Assert.False(KeyboardNavigation.GetIsTabStop(overlay), $"{sheet.Token} holding the keys is a Tab stop");
+        // The refusal ends as the keys are read at the end of the opening turn, so the
+        // queued landing runs as it would in the app.
+        IInputElement? inTheTurn = bench.OpenAndReadTheKeysInThatTurn(sheet, endAtTheRead: RefuseTheKeysInside(overlay));
+        Assert.True(
+            ReferenceEquals(overlay, inTheTurn),
+            $"in the turn {sheet.Token} opened, with its stops refusing the keys, they were on {Describe(inTheTurn)}, not on the sheet itself");
+        Assert.False(KeysFirstRecorder.TheKeysAreIn(holder), $"the keys stayed on {Describe(holder)} under {sheet.Token}");
+        Assert.False(KeyboardNavigation.GetIsTabStop(overlay), $"{sheet.Token} holding the keys is a Tab stop");
 
-            Press(bench.Host, Key.A);
-            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, Keyboard.FocusedElement, "a"));
-            Assert.Equal(0, reached);
-            if (holder is Button row)
-            {
-                Assert.False(row.IsEnabled, $"{Describe(row)} stayed on under {sheet.Token}");
-                var invoke = (IInvokeProvider)new ButtonAutomationPeer(row).GetPattern(PatternInterface.Invoke);
-                _ = Assert.Throws<ElementNotEnabledException>(invoke.Invoke);
-            }
+        Press(bench.Host, Key.A);
+        TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, Keyboard.FocusedElement, "a"));
+        Assert.Equal(0, reached);
+        if (holder is Button row)
+        {
+            Assert.False(row.IsEnabled, $"{Describe(row)} stayed on under {sheet.Token}");
+            var invoke = (IInvokeProvider)new ButtonAutomationPeer(row).GetPattern(PatternInterface.Invoke);
+            _ = Assert.Throws<ElementNotEnabledException>(invoke.Invoke);
         }
 
         bench.Host.Settle();
@@ -730,33 +731,35 @@ public sealed class SheetOpeningTests
         /// <summary>The opening call made, and what held the keys at the end of the turn the
         /// sheet opened in: when the call returns, for a sheet the call itself opens; when
         /// the dispatcher operation that opened it ends, for one shown in a later turn (Files
-        /// Citing). No queued landing has run by then.</summary>
-        public IInputElement? OpenAndReadTheKeysInThatTurn(Sheet sheet, ModalSurface? awaitedSurface = null)
+        /// Citing). No queued landing has run by then. <paramref name="awaitedSurface"/> is
+        /// the surface topmost once it has opened, for a sheet that opens beneath another;
+        /// <paramref name="endAtTheRead"/> is disposed as the keys are read (a refusal that
+        /// must not outlast the turn, so the queued landing runs as in the app).</summary>
+        public IInputElement? OpenAndReadTheKeysInThatTurn(Sheet sheet, ModalSurface? awaitedSurface = null, IDisposable? endAtTheRead = null)
         {
             IInputElement? inTheTurn = null;
             bool read = false;
             bool Opened() => awaitedSurface is null
                 ? Shell.OpenModalSurface == sheet.Surface
                 : Shell.OpenModalSurface == awaitedSurface && IsOpen(sheet);
-            void TurnEnded(object? sender, DispatcherHookEventArgs e)
+            void Read()
             {
                 if (!read && Opened())
                 {
                     read = true;
                     inTheTurn = Keyboard.FocusedElement;
+                    endAtTheRead?.Dispose();
                 }
             }
+
+            void TurnEnded(object? sender, DispatcherHookEventArgs e) => Read();
 
             DispatcherHooks hooks = Dispatcher.CurrentDispatcher.Hooks;
             hooks.OperationCompleted += TurnEnded;
             try
             {
                 sheet.Open(this);
-                if (!read && Opened())
-                {
-                    read = true;
-                    inTheTurn = Keyboard.FocusedElement;
-                }
+                Read();
 
                 Assert.True(
                     PumpedDispatcher.PumpUntil(() => read, TimeSpan.FromSeconds(15)),
