@@ -36,10 +36,13 @@
 //     witness: keys-first, stays-on, always on or not focusable, never a
 //     free-text exemption (CB-17a's merge judge, m3).
 //
-// The press class's limit: another driver can still turn such a control off
-// under the keys (a refresh's or a rescan's deselect, an in-place change of
-// item, a find bar's mode switch). This census does not judge other drivers
-// (#1955).
+// The press class's limit: a control bound to a RelayCommand, an
+// AsyncRelayCommand or a ReasonedCommand has its keys moved first whoever
+// turns it off (CommandKeysFirst, CB-17b). For an IsEnabled trigger, binding
+// or write, and a button that runs a Click handler, another driver can still
+// turn such a control off under the keys (a refresh's or a rescan's deselect,
+// an in-place change of item, a find bar's mode switch). This census does not
+// judge other drivers (#1955).
 
 using System.Text.RegularExpressions;
 using System.Windows.Controls;
@@ -2015,7 +2018,8 @@ public sealed partial class FocusIntegrityManifestCensus
             && method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
                 call.Expression is MemberAccessExpressionSyntax access
                 && access.Name.Identifier.ValueText == recorder
-                && (arguments is not { } count || call.ArgumentList.Arguments.Count == count)
+                && (arguments is not { } count
+                    || (call.ArgumentList.Arguments.Count == count && !IsAConstant(call.ArgumentList.Arguments[count - 1].Expression)))
                 && access.Expression switch
                 {
                     IdentifierNameSyntax { Identifier.ValueText: "KeysFirstRecorder" } => true,
@@ -2031,6 +2035,20 @@ public sealed partial class FocusIntegrityManifestCensus
                     } && IsARunner(runner),
                     _ => true,
                 }));
+
+        /// <summary>A predicate that answers a constant (<c>() => true</c>, <c>() => { return
+        /// true; }</c>): as stays-on's reached it says nothing about the driver having run
+        /// (red team F7).</summary>
+        private static bool IsAConstant(ExpressionSyntax predicate)
+        {
+            static ExpressionSyntax Bare(ExpressionSyntax expression) =>
+                expression is ParenthesizedExpressionSyntax parenthesized ? Bare(parenthesized.Expression) : expression;
+
+            return Bare(predicate) is LambdaExpressionSyntax lambda
+                && (lambda.ExpressionBody is { } body
+                    ? Bare(body) is LiteralExpressionSyntax
+                    : lambda.Block?.Statements is [ReturnStatementSyntax { Expression: { } returned }] && Bare(returned) is LiteralExpressionSyntax);
+        }
 
         /// <summary>The runners a keys-first fact may hand its body to, each of which runs the
         /// lambda before it returns: RunSta (every keys-first witness today: the four

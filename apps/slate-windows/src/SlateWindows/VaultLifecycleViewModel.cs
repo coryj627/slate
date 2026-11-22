@@ -2766,11 +2766,35 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
             return;
         }
 
+        // Plan 47 CB-17b (red team F3): the press's off and the work's synchronous part are
+        // one raise, for the state the press ends in. Work that ends inside the press (a
+        // completed or a faulted task) turned the command off and on in one turn; raised
+        // apart, the off moved the keys off its button (CommandKeysFirst), where WPF had
+        // left them before.
+        Task running;
         _isExecuting = true;
-        RaiseCanExecuteChanged();
+        using (Commands.CommandKeysFirst.Hold())
+        {
+            RaiseCanExecuteChanged();
+            try
+            {
+                running = _execute(parameter);
+            }
+            catch (Exception exception)
+            {
+                running = Task.FromException(exception);
+            }
+
+            if (running.IsCompleted)
+            {
+                _isExecuting = false;
+                RaiseCanExecuteChanged();
+            }
+        }
+
         try
         {
-            await _execute(parameter);
+            await running;
         }
         catch (Exception exception)
         {
@@ -2778,8 +2802,11 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
         }
         finally
         {
-            _isExecuting = false;
-            RaiseCanExecuteChanged();
+            if (_isExecuting)
+            {
+                _isExecuting = false;
+                RaiseCanExecuteChanged();
+            }
         }
     }
 

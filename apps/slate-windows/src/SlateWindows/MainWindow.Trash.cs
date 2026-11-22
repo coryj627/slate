@@ -14,6 +14,12 @@ public partial class MainWindow
     private FilesSidebarViewModel? _trashCancelSidebar;
     private bool _trashCancelOwnedFocus;
 
+    /// <summary>Plan 47 CB-17b (red team F1): the element the keys came to Cancel from, for
+    /// Cancel's own landing. Only Cancel taking the keys sets it: the restore's copy is
+    /// cleared as soon as Cancel is hidden, which the trash does before it turns Cancel off
+    /// when it asks to confirm.</summary>
+    private IInputElement? _trashCancelCameFrom;
+
     private void TrashFallback_KeyDown(object sender, KeyEventArgs e)
     {
         // This bubbling fallback runs only after the focused control declines
@@ -31,6 +37,7 @@ public partial class MainWindow
     private void TrashCancel_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         _focusBeforeTrashCancel = e.OldFocus;
+        _trashCancelCameFrom = e.OldFocus;
         _trashCancelSidebar = _viewModel.FileSidebar;
         _trashCancelOwnedFocus = true;
     }
@@ -53,10 +60,11 @@ public partial class MainWindow
     /// and it stands down. It runs while the keys are on Cancel, so none of the restore's
     /// later stand-downs (a modal opened, another vault, a control chosen meanwhile) can
     /// have happened; if nothing takes the keys, the restore is still there after the off.
+    /// It reads <see cref="_trashCancelCameFrom"/>, which a hide does not clear (red team F1).
     /// </summary>
     private bool LandWhereTrashCancelCameFrom()
     {
-        if (!LandToken(_focusBeforeTrashCancel))
+        if (!LandToken(_trashCancelCameFrom))
         {
             FocusActiveEditorPane();
         }

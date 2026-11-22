@@ -1091,9 +1091,11 @@ public sealed partial class FocusIntegrityManifestCensus
                 + "every construction of every property of that name), 'exempt: its own press never turns it off: <why>', 'exempt: "
                 + "never fires: <why> (Class.Method)', or 'dated: 2026-11-21; CB-17b (CD11): <mechanism>' for a key in DatedBaseline, "
                 + "whose count only falls. A row CB-17b ended (EndedByCb17b) takes only keys-first, stays-on, always on or not "
-                + "focusable. The press exemption's limit: another driver (a refresh's or a rescan's deselect, an "
-                + "in-place change of item, a find bar's mode switch) can still turn such a control off under the keys, and this "
-                + "census does not judge other drivers (#1955). A menu row is no command site: its menu gives the keys back before "
+                + "focusable. The press exemption's limit: a command-bound control has its keys moved first whoever turns it off "
+                + "(CommandKeysFirst, CB-17b); for an IsEnabled trigger, binding or write, and a Click button, another driver (a "
+                + "refresh's or a rescan's deselect, an in-place change of item, a find bar's mode switch) can still turn such a "
+                + "control off under the keys, and this census does not judge other drivers (#1955). A menu row is no command site: "
+                + "its menu gives the keys back before "
                 + "its command runs (MenuRowCommandTests). FocusIntegrityManifestCensus scrapes the sites and judges each witness; "
                 + "SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
             ["sites"] = new JsonObject(sites.OrderBy(entry => entry.Key, StringComparer.Ordinal)

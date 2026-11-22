@@ -31,6 +31,12 @@ namespace SlateWindows.Commands;
 /// keys.
 /// </para>
 /// <para>
+/// A raise moves the keys at once. A command that refuses and admits again within one turn
+/// would move them on the refusal, where WPF, looking later, left them; such a change raises
+/// inside <see cref="Hold"/>, as a Files publication and an <see cref="AsyncRelayCommand"/>'s
+/// press do, so the button is raised once, for the state the turn ends in.
+/// </para>
+/// <para>
 /// Only an STA thread that has a dispatcher is asked, and both are looked for before any
 /// <see cref="Keyboard"/> member is read: reading one gives the asking thread an input
 /// manager, and a worker's completion raises too.

@@ -1225,6 +1225,7 @@
                                             Content="&#xF164;"
                                             AutomationProperties.AutomationId="SidebarExpandLoaded"
                                             AutomationProperties.Name="Expand loaded folders"
+                                            PreviewKeyDown="SidebarExpandLoaded_PreviewKeyDown"
                                             Command="{Binding ExpandLoadedCommand}" />
                                     <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
                                             Content="&#xE72C;"

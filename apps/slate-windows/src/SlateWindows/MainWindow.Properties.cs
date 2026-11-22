@@ -380,6 +380,16 @@ public partial class MainWindow
             return;
         }
 
+        // Plan 47 CB-17b (red team F2): one physical press, one step, as the template
+        // picker's and Move To's held-Enter fences have it. Preview stays on while a run
+        // goes, and each press made meanwhile says so; a held Enter's repeats are no
+        // presses, and would say it on every repeat.
+        if (e.Key == Key.Enter && e.IsRepeat)
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.Escape)
         {
             // Cancels in-flight core work through the CancelToken
