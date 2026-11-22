@@ -106,11 +106,52 @@ public sealed class BulkRenameKeysTests
         Assert.True(overlay.IsKeyboardFocusWithin, $"the keys left the sheet, for {Describe(Keyboard.FocusedElement)}");
     });
 
+    /// <summary>One physical press, one step (red team F2): Enter held on Preview starts one
+    /// run, and its repeats press nothing, so they say nothing; a second press while the run
+    /// is held says "The preview is still running." once. The same in Old property key, where
+    /// a repeat also reached the preview.</summary>
+    [Theory]
+    [InlineData("BulkRenamePreviewButton")]
+    [InlineData("BulkRenameOldKey")]
+    public void AHeldEnterStartsOneRunAndItsRepeatsSayNothing(string holder) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", Note));
+        using var sidebar = new ShownShellSidebar(host);
+        FrameworkElement overlay = OpenBulkRename(host);
+        BulkRenameViewModel sheet = host.Workspace.BulkRenameSheet!;
+        sheet.OldKey = "status";
+        sheet.NewKey = "state";
+        host.Settle();
+        UIElement keys = holder == "BulkRenameOldKey" ? host.Shell.BulkRenameOldKeyTextBox : ButtonOf(overlay, holder);
+        Assert.True(
+            keys.Focus() && ReferenceEquals(keys, Keyboard.FocusedElement),
+            $"keyboard premise: {holder} could not take the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        int published = 0;
+        sheet.RunPublished += () => published++;
+        int heard = host.Announced.Count;
+        int runsBefore = sheet.RequestIdForTests;
+        using var held = new HeldWork(hook => sheet.PreviewHookForTests = hook);
+
+        HeldKeys.Hold(host.Shell, Key.Enter, repeats: 6);
+        held.WaitUntilEntered();
+        int afterTheHold = host.Announced.Count;
+        Press(host, Key.Enter);
+        int runsAfterTheSecondPress = sheet.RequestIdForTests;
+        held.Release();
+        Assert.True(PumpedDispatcher.PumpUntil(() => published == 1 && !sheet.WorkInFlight, TimeSpan.FromSeconds(30)), "the preview never published");
+        held.AssertHeldUntilReleased();
+
+        Assert.Equal(runsBefore + 1, runsAfterTheSecondPress);
+        Assert.DoesNotContain(host.Announced.Skip(heard).Take(afterTheHold - heard), line => line is A11yEvent.WorkStillRunning);
+        Assert.Single(host.Announced.Skip(heard).OfType<A11yEvent.WorkStillRunning>());
+        Assert.True(ReferenceEquals(keys, Keyboard.FocusedElement), $"the keys left {holder} for {Describe(Keyboard.FocusedElement)}");
+    });
+
     /// <summary>Apply by Enter, its worker held: the keys go to Old property key before Apply
-    /// goes off, and stay in the sheet through the publish. A held Enter (the key repeating)
-    /// reaches Old property key, where it says "The rename is still running." and starts
-    /// nothing; it never reaches Close, whose press would cancel the apply. The keys-first
-    /// witness of BulkRenameApplyButton.</summary>
+    /// goes off, and stay in the sheet through the publish. A second Enter reaches Old
+    /// property key, where it says "The rename is still running." and starts nothing; it
+    /// never reaches Close, whose press would cancel the apply. The keys-first witness of
+    /// BulkRenameApplyButton.</summary>
     [Fact]
     public void ApplyLetsTheKeysGoToOldPropertyKeyBeforeItGoesOff() => RunSta(() =>
     {

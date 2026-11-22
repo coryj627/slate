@@ -532,6 +532,45 @@ public sealed class CommandKeysFirstTests
         Assert.Same(title, now.DataContext);
     });
 
+    /// <summary>Red team F3: an AsyncRelayCommand whose work ends inside its own press (a
+    /// completed or a faulted task) turned off and on again in that one turn. WPF left the
+    /// keys on its button then, since the button was on again before WPF looked; the off
+    /// must not move them now. The press's state is raised once, at its end.</summary>
+    [Theory]
+    [InlineData("completes")]
+    [InlineData("faults")]
+    public void AnAsyncCommandWhoseWorkEndsInItsOwnPressKeepsTheKeysOnItsButton(string ending) => RunSta(() =>
+    {
+        using var stage = new Stage();
+        int ran = 0;
+        var command = new AsyncRelayCommand(
+            _ =>
+            {
+                ran++;
+                return ending == "faults" ? throw new InvalidOperationException("the work failed at once") : Task.CompletedTask;
+            },
+            () => true);
+        int raised = 0;
+        command.CanExecuteChanged += (_, _) => raised++;
+        var button = new Button { Content = "Act", Command = command };
+        var group = new Expander { Header = "Actions", IsExpanded = true, Focusable = true, Content = Panel(button) };
+        stage.Content.Children.Add(group);
+        stage.Settle();
+        TakeTheKeys(button);
+
+        List<string> off = KeysFirstRecorder.DisabledWithTheKeysInside(button, () =>
+        {
+            command.Execute(null);
+            stage.Settle();
+        });
+
+        Assert.Equal(1, ran);
+        Assert.Empty(off);
+        Assert.True(button.IsEnabled, "the button stayed off after its work ended");
+        Assert.True(ReferenceEquals(button, Keyboard.FocusedElement), $"the keys left the button for {Keyboard.FocusedElement}");
+        Assert.True(raised <= 1, $"the press raised its state {raised} times");
+    });
+
     private static StackPanel Panel(params UIElement[] children)
     {
         var panel = new StackPanel();

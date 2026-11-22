@@ -544,6 +544,62 @@ public sealed class FilesPaneKeysFirstTests
         pane.AssertTheKeysAreOn(host.Body("ContentPaneBorder"), "the editor");
     });
 
+    /// <summary>The trash's Cancel when its staging ends on a folder that holds items: the
+    /// trash asks to confirm, which hides Cancel and then turns it off. The keys still go
+    /// first to the element they came to Cancel from (red team F1: the hide had already
+    /// let go of it, and they went to the editor).</summary>
+    [Fact]
+    public void TheTrashsCancelHiddenForItsConfirmationLandsTheKeysWhereTheyCameFromFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("docs/inner.md", "# Inner\n"));
+        using var pane = new FilesPane(host);
+        using var held = new ManualResetEventSlim();
+        int workers = 0;
+        pane.Sidebar.TrashWorkerStartingForTesting = token =>
+        {
+            if (Interlocked.Increment(ref workers) == 1)
+            {
+                _ = held.Wait(TimeSpan.FromSeconds(30));
+            }
+        };
+        IInputElement? atTheQuestion = null;
+        int asked = 0;
+        pane.Sidebar.ConfirmRecycle = _ =>
+        {
+            asked++;
+            atTheQuestion = Keyboard.FocusedElement;
+            return false;
+        };
+        pane.Select("docs");
+        pane.Sidebar.DeleteCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => Volatile.Read(ref workers) == 1 && pane.Sidebar.ShowTrashProgress, TimeSpan.FromSeconds(10)), "premise: the trash never started");
+        host.Settle();
+        Button cancel = Assert.IsAssignableFrom<Button>(host.Body("CancelTrash"));
+        var filter = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
+        pane.TakeTheKeys(filter);
+        pane.TakeTheKeys(cancel);
+
+        try
+        {
+            KeysFirstRecorder.AssertTheKeysLeaveFirst("the trash's Cancel", cancel, () =>
+            {
+                held.Set();
+                Assert.True(PumpedDispatcher.PumpUntil(() => asked > 0, TimeSpan.FromSeconds(30)), "premise: the trash never asked to confirm");
+                host.Settle();
+            });
+        }
+        finally
+        {
+            held.Set();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(pane.Sidebar.TrashCompletion, TimeSpan.FromSeconds(30));
+        host.Settle();
+        Assert.True(Directory.Exists(Path.Combine(host.Root, "docs")), "the unconfirmed trash moved docs");
+        Assert.True(ReferenceEquals(atTheQuestion, filter), $"at the question the keys were on {Describe(atTheQuestion)}, not the filter field they came to Cancel from");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+    });
+
     /// <summary>Rename's posted publication lets go of the renamed row and seats the new
     /// one in the same turn: Rename stays on throughout, the keys on it.</summary>
     [Fact]
@@ -635,6 +691,44 @@ public sealed class FilesPaneKeysFirstTests
         Assert.Equal<A11yEvent>([new A11yEvent.WorkStillRunning(RunningWork.ExpandLoadedFolders)], secondPress);
         Assert.Equal(1, tree.Held);
         Assert.True(pane.Node("docs").IsExpanded, "the run did not expand the folder");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, expand), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Expand loaded folders");
+    });
+
+    /// <summary>One physical press, one step (red team F2): Enter held on Expand loaded
+    /// folders starts one run, and its repeats press nothing, so they say nothing; a second
+    /// press while the run goes on says "Folders are still expanding." once.</summary>
+    [Fact]
+    public void AHeldEnterOnExpandLoadedStartsOneRunAndItsRepeatsSayNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("docs/inner.md", "# Inner\n"));
+        var tree = new HeldTreeWorker();
+        using var pane = new FilesPane(host, treeWorker: tree.Run);
+        Button expand = Assert.IsAssignableFrom<Button>(host.Body("SidebarExpandLoaded"));
+        pane.TakeTheKeys(expand);
+        tree.Hold = true;
+        int heard = pane.Said.Count;
+        int afterTheHold;
+
+        try
+        {
+            HeldKeys.Hold(host.Shell, Key.Enter, repeats: 6);
+            Assert.True(PumpedDispatcher.PumpUntil(() => tree.Held == 1, TimeSpan.FromSeconds(10)), "the held Enter never started a run");
+            host.Settle();
+            afterTheHold = pane.Said.Count;
+            Press(expand);
+            host.Settle();
+            tree.Release();
+            PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ExpandLoadedCompletion, TimeSpan.FromSeconds(30));
+            host.Settle();
+        }
+        finally
+        {
+            tree.Release();
+        }
+
+        Assert.DoesNotContain(pane.Said.Skip(heard).Take(afterTheHold - heard), line => line is A11yEvent.WorkStillRunning);
+        Assert.Equal<A11yEvent>([new A11yEvent.WorkStillRunning(RunningWork.ExpandLoadedFolders)], [.. pane.Said.Skip(heard).OfType<A11yEvent.WorkStillRunning>()]);
+        Assert.Equal(1, tree.Held);
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, expand), $"the keys are on {Describe(Keyboard.FocusedElement)}, not Expand loaded folders");
     });
 

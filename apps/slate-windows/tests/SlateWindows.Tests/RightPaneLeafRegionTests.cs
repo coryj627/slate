@@ -488,6 +488,47 @@ public sealed class RightPaneLeafRegionTests
         Assert.Equal(id, Assert.IsType<SavedQuerySummary>(list.SelectedItem).Id);
     });
 
+    /// <summary>Plan 47 CB-17b (red team F4): a registry republish that throws between its
+    /// two notices still says it ended, so the window's IsQueriesRepublishing flag falls and
+    /// a group whose list lost its selection goes off, rather than staying on with nothing
+    /// selected until the next republish.</summary>
+    [Fact]
+    public void ARepublishThatThrowsStillLowersTheQueriesFlag() => RunSta(() =>
+    {
+        using var host = new ShownShell(startInteractionBackgroundWork: false, ("Notes.base", NotesBase), ("a.md", "# A\n"));
+        using var sidebar = new ShownShellSidebar(host);
+        string id = SaveQueryIn(host.Session, "All notes");
+        ListBox list = ShowTheQueries(host, "QueriesSavedList");
+        list.SelectedItem = host.Workspace.SavedQueries.Single(query => query.Id == id);
+        list.UpdateLayout();
+        Button run = QueriesElement<Button>(host, "QueriesRun");
+        Assert.True(run.IsEnabled, "premise: Run is off with a query selected");
+        bool thrown = false;
+        NotifyCollectionChangedEventHandler fault = (_, e) =>
+        {
+            if (!thrown && e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                thrown = true;
+                throw new InvalidOperationException("a listener failed in the middle of the republish");
+            }
+        };
+        host.Workspace.SavedQueries.CollectionChanged += fault;
+        try
+        {
+            _ = Assert.Throws<InvalidOperationException>(host.Workspace.RefreshBaseQueries);
+        }
+        finally
+        {
+            host.Workspace.SavedQueries.CollectionChanged -= fault;
+        }
+
+        host.Settle();
+        Assert.True(thrown, "premise: the republish never cleared the saved queries");
+        Assert.False(host.Shell.IsQueriesRepublishing, "the window's flag stayed up after a republish that threw");
+        Assert.Null(list.SelectedItem);
+        Assert.False(run.IsEnabled, "the saved queries' group stayed on with no query selected");
+    });
+
     /// <summary>Plan 47 CB-17b (#1866, CD11): Delete… for a saved query, by Enter and
     /// confirmed in its box. Inside the box Delete… is on and holds the keys; once the query is
     /// gone, the registry's rebuild leaves QueriesSavedList with no selection, and the keys
