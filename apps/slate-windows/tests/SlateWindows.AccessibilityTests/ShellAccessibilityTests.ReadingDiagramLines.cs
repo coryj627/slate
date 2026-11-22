@@ -63,6 +63,9 @@ public sealed partial class ShellAccessibilityTests
             WaitForMenuItem(window, "EditorMenu", "EditorToggleReadingModeMenuItem", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
             _ = WaitForElement(window, "ReadingSurface", TimeSpan.FromSeconds(10));
+            // R-4: the runtime item-name census at this journey's
+            // representative state (the reading view, diagrams pending).
+            AssertItemNamesAreSpeakable(process, "reading-diagram-lines");
 
             AutomationElement[] Diagrams() => window.FindAllDescendants(cf => cf.ByLocalizedControlType("diagram"));
             Assert.True(

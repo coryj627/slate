@@ -9,6 +9,7 @@ using System.Windows.Automation.Text;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using SlateWindows.Reading;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -227,6 +228,99 @@ public sealed partial class ReadingDiagramTests
             {
                 Assert.Contains("A --> B", index, StringComparison.Ordinal);
             }
+        });
+    }
+
+    private static readonly IReadOnlyDictionary<string, byte[]> EmbedImages = new Dictionary<string, byte[]>
+    {
+        ["wide.svg"] = System.Text.Encoding.UTF8.GetBytes(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='900' height='200'><rect width='900' height='200' fill='teal'/></svg>"),
+    };
+
+    private const string EmbedNote = "Before the card.\n\n![[wide.svg]]\n\nAfter the card.\n";
+
+    private static ReadingDiagramImage AwaitEmbedImage(StageHarness harness)
+    {
+        ReadingDiagramImage? image = null;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => (image = harness.Surface.Document.Blocks.OfType<Section>()
+                    .SelectMany(section => section.Blocks.OfType<Paragraph>())
+                    .SelectMany(paragraph => paragraph.Inlines.OfType<InlineUIContainer>())
+                    .Select(container => container.Child)
+                    .OfType<ReadingDiagramImage>()
+                    .FirstOrDefault(candidate => candidate.Source is not null)) is not null,
+                UnhurriedSvgDecodes.LandingWait(1)),
+            "the embedded image never showed in its paragraph");
+        return image!;
+    }
+
+    /// <summary>The owner's answer to CB-20's Call 4, "Fix it in CB-20": an
+    /// embedded image's line reads its card's name, at any width, since the
+    /// image leaves the name's run room on their line.</summary>
+    [Theory]
+    [InlineData(600)]
+    [InlineData(320)]
+    public void AnEmbeddedImagesLineReadsItsName(double width)
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open($"reading-embed-image-line-{width}", EmbedNote, hosted: true, files: EmbedImages);
+            ReadingDiagramImage image = AwaitEmbedImage(harness);
+            Widen(harness.Surface, width);
+            var container = (InlineUIContainer)image.Parent;
+            var paragraph = (Paragraph)container.Parent;
+            string name = ReadingSemantics.EmbedNameOf((Section)paragraph.Parent);
+            Assert.Equal("Embedded image: wide.svg", name);
+            Assert.True(image.ActualWidth > 100, "premise: the image was not drawn wide");
+
+            Assert.Equal(name, Words(LineAt(harness.Surface, container.ElementStart)));
+            Run run = Assert.Single(HiddenRuns(paragraph));
+            Assert.Equal(
+                0,
+                run.ContentStart.GetLineStartPosition(0)!.CompareTo(container.ElementStart.GetLineStartPosition(0)));
+            Assert.Null(UIElementAutomationPeer.CreatePeerForElement(image));
+        });
+    }
+
+    /// <summary>Call 4's run is hidden speech like the diagram's: find counts
+    /// the card's name once, on its header, and a copy carries it once.</summary>
+    [Fact]
+    public void AnEmbeddedImagesNameIsFoundAndCopiedOnce()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open("reading-embed-image-find", EmbedNote, hosted: true, files: EmbedImages);
+            ReadingDiagramImage image = AwaitEmbedImage(harness);
+            FlowDocument document = harness.Surface.Document;
+            Assert.Equal(2, new TextRange(document.ContentStart, document.ContentEnd).Text.Split("wide.svg").Length - 1);
+
+            string index = ReadingTextIndex.Build(document).Text.Text;
+            Assert.Equal(1, index.Split("wide.svg").Length - 1);
+            string copied = CopyOf(harness.Surface, document.ContentStart, document.ContentEnd);
+            Assert.Equal(1, copied.Split("wide.svg").Length - 1);
+            Assert.Contains("After the card.", copied, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>Hidden speech is one line, or its run breaks its line in two
+    /// and the element reads alone on the second. Core's rendered
+    /// descriptions are one line today; this holds the host to it.</summary>
+    [Fact]
+    public void ARenderedDescriptionReadsAsOneLine()
+    {
+        RunSta(() =>
+        {
+            (List<(ReadingBlock, ReadingBlockInlines)> model, DiagramBlock rendered) = RenderedFlowchart();
+            ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+                model,
+                new ReadingListBuildContext(),
+                Array.Empty<CodeBlock>(),
+                Array.Empty<MathBlock>(),
+                [rendered with { StructuredDescription = "Flowchart\nwith 1 step." }]);
+            Paragraph paragraph = built.Document.Blocks.OfType<Paragraph>().Single(ReadingSemantics.IsDiagramBlock);
+            Run run = Assert.Single(HiddenRuns(paragraph));
+            Assert.Equal("Flowchart with 1 step.", run.Text);
         });
     }
 

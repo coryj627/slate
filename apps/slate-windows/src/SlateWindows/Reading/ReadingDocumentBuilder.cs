@@ -374,7 +374,10 @@ internal static class ReadingDocumentBuilder
                 return TableBlock(block);
 
             case ReadingBlockKind.ThematicBreak:
-                return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
+                // #1708 (CB-20, the lead's ruling on Call 3): WPF's Separator is
+                // disabled by its metadata, and NVDA said "separator, unavailable"
+                // for a rule. Enabled in its initializer, it still takes no keys.
+                return new BlockUIContainer(new Separator { IsEnabled = true, Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
                 return MathBlockElement(block, mathBlocks, context);
@@ -682,11 +685,22 @@ internal static class ReadingDocumentBuilder
     /// role). A long speech gets a smaller size, down to 0.01 (WPF's
     /// floor is between 0.001 and 0.01), so the run stays a sliver of its
     /// line.</summary>
-    private static Run SpeechRun(string speech) => new(speech)
+    private static Run SpeechRun(string speech)
     {
-        Foreground = Brushes.Transparent,
-        FontSize = SpeechRunFontSize(speech),
-    };
+        var run = new Run(speech)
+        {
+            Foreground = Brushes.Transparent,
+            FontSize = SpeechRunFontSize(speech),
+        };
+        // #1708: one mark for every run in range for line reading only, so
+        // find skips it and a copy leaves it out.
+        ReadingSemantics.MarkHiddenSpeech(run);
+        return run;
+    }
+
+    /// <summary>#1708: hidden speech is one line, or its run would break
+    /// its line in two and the element would read alone on the second.</summary>
+    private static string OneLine(string speech) => speech.ReplaceLineEndings(" ");
 
     /// <summary>The width a speech run's whole line may give it.</summary>
     /// <summary>The body's size and line height (DS-3). The line height is a paragraph
@@ -994,6 +1008,9 @@ internal static class ReadingDocumentBuilder
         ReadingListBuildContext context)
     {
         string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
+        // #1708: the fenced source a rendered diagram's copy carries, kept on
+        // every diagram paragraph so a completion in place has it.
+        string fence = block.Source.TrimEnd('\n', '\r');
 
         // WB-20 (#1317): a fence the last diagram stage landed builds
         // complete, in that outcome's shape, with no decode here; a fence
@@ -1028,6 +1045,7 @@ internal static class ReadingDocumentBuilder
             case DiagramOutcome.Rendered rendered:
                 {
                     var paragraph = new Paragraph();
+                    ReadingSemantics.MarkDiagramFence(paragraph, fence);
                     ApplyRenderedShape(
                         paragraph,
                         new ReadingDiagramElement(rendered.Description, artifact!.Source),
@@ -1037,6 +1055,7 @@ internal static class ReadingDocumentBuilder
             case DiagramOutcome.Failed failed:
                 {
                     var paragraph = new Paragraph();
+                    ReadingSemantics.MarkDiagramFence(paragraph, fence);
                     ApplyFailureShape(
                         paragraph,
                         new ReadingDiagramElement(failed.Description, artifact!.Source),
@@ -1051,14 +1070,21 @@ internal static class ReadingDocumentBuilder
         // precedent.
         Paragraph sourceParagraph = MonospaceParagraph(fallbackSource);
         ReadingSemantics.MarkDiagramBlock(sourceParagraph, fallbackSource);
+        ReadingSemantics.MarkDiagramFence(sourceParagraph, fence);
         if (context.DiagramsPending)
         {
             // Pending (WB-20): the source stays IN the text range, where caret
             // reading and the TextPattern reach it, and a zero-size focusable
             // placeholder is named "Diagram, rendering" (WD11) until the stage
-            // completes it in place — the math coverage-gap shape.
-            sourceParagraph.Inlines.Add(new InlineUIContainer(
+            // completes it in place — the math coverage-gap shape. #1708
+            // (CB-20; the owner's answer to Call 1, "Before the source"): the
+            // name, as a hidden run, and the placeholder stand on a line of
+            // their own above the source, so line reading speaks the name.
+            Inline source = sourceParagraph.Inlines.FirstInline;
+            sourceParagraph.Inlines.InsertBefore(source, SpeechRun(PendingDiagramName));
+            sourceParagraph.Inlines.InsertBefore(source, new InlineUIContainer(
                 new ReadingDiagramElement(PendingDiagramName, fallbackSource)));
+            sourceParagraph.Inlines.InsertBefore(source, new LineBreak());
             string key = block.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ReadingSemantics.MarkDiagramPending(sourceParagraph, key);
             context.PendingDiagrams.Add(new PendingFence(key, block, fallbackSource));
@@ -1207,6 +1233,16 @@ internal static class ReadingDocumentBuilder
         paragraph.ClearValue(Block.PaddingProperty);
         paragraph.ClearValue(Block.BackgroundProperty);
         paragraph.ClearValue(TextElement.FontFamilyProperty);
+        // #1708 (CB-20): the description in range before the element, on its
+        // line, so line reading speaks it (#1595's shape for math); the
+        // element leaves the run room there. A copy carries the fence.
+        string speech = OneLine(rendered.Description);
+        paragraph.Inlines.InsertBefore(container, SpeechRun(speech));
+        element.LineReserve = SpeechRunReserve(speech);
+        if (ReadingSemantics.DiagramFenceOf(paragraph) is { } fence)
+        {
+            ReadingSemantics.MarkCopyText(paragraph, fence);
+        }
         ReadingSemantics.MarkDiagramBlock(paragraph, rendered.Landing);
     }
 
@@ -1223,6 +1259,10 @@ internal static class ReadingDocumentBuilder
         string source)
     {
         element.Complete(failed.Description, null);
+        // #1708: a failed diagram shows its text, so a copy carries it as
+        // shown, and the zero-size element needs no room on its line.
+        element.LineReserve = 0;
+        ReadingSemantics.ClearCopyText(paragraph);
         InlineUIContainer container = ContainerOf(paragraph, element);
         foreach (Inline inline in paragraph.Inlines.ToList())
         {
@@ -1536,7 +1576,7 @@ internal static class ReadingDocumentBuilder
                     + "budget. Open the source note to view it."));
                 break;
             case EmbedResolution.Image image:
-                AppendEmbedImage(section, image, key, context, artifact?.ImageDecode);
+                AppendEmbedImage(section, image, key, headerName, context, artifact?.ImageDecode);
                 break;
             case EmbedResolution.Unresolved:
                 // The header name IS the mac unresolved string; the
@@ -1781,6 +1821,7 @@ internal static class ReadingDocumentBuilder
         Section section,
         EmbedResolution.Image image,
         string key,
+        string name,
         ReadingListBuildContext context,
         ReadingEmbedImageDecode? decodedOffTheDispatcher)
     {
@@ -1864,7 +1905,17 @@ internal static class ReadingDocumentBuilder
             StretchDirection = StretchDirection.DownOnly,
             MaxHeight = 600,
         };
-        section.Blocks.Add(new BlockUIContainer(visual));
+        // #1708 (CB-20; the owner's answer to Call 4, "Fix it in CB-20"): an
+        // image alone in a block read "blank" in line reading. Its line holds
+        // its name, core's title for it (the card header's), as a hidden run
+        // before the image, which leaves the run room on their line. Centred
+        // with no margin, where the block put it (measured against main).
+        string speech = OneLine(name);
+        visual.LineReserve = SpeechRunReserve(speech);
+        var paragraph = new Paragraph { Margin = new Thickness(0), TextAlignment = TextAlignment.Center };
+        paragraph.Inlines.Add(SpeechRun(speech));
+        paragraph.Inlines.Add(new InlineUIContainer(visual));
+        section.Blocks.Add(paragraph);
     }
 
     private static Paragraph InlineParagraph(
@@ -2089,15 +2140,6 @@ internal static class ReadingDocumentBuilder
                     ReadingLandmarkKind.Table,
                     Insertion(table.ContentStart),
                     text: FirstCellText(table)));
-                break;
-
-            case BlockUIContainer container when ReadingSemantics.IsEmbed(container):
-                landmarks.Add(new ReadingLandmark(
-                    ReadingLandmarkKind.Embed,
-                    Insertion(container.ContentStart),
-                    text: container.Child is System.Windows.UIElement child
-                        ? AutomationProperties.GetName(child) ?? string.Empty
-                        : string.Empty));
                 break;
 
             case Section section when ReadingSemantics.IsEmbedSection(section):

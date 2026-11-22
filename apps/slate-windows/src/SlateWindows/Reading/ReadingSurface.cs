@@ -477,8 +477,26 @@ internal sealed class ReadingSurface : RichTextBox
         /// character.</summary>
         Outside,
         InSource,
+
+        /// <summary>At or before the placeholder's container: on its line,
+        /// the pending name's run included (#1708).</summary>
         AtContainerStart,
+
+        /// <summary>After the placeholder's container and before the
+        /// source.</summary>
         AtContainerEnd,
+    }
+
+    /// <summary>The shape a completion leaves a pending diagram paragraph
+    /// in.</summary>
+    private enum DiagramShape
+    {
+        Rendered,
+        Failed,
+
+        /// <summary>No artifact: the source, and the placeholder only while
+        /// the reader is on it.</summary>
+        Source,
     }
 
     /// <summary>
@@ -503,14 +521,19 @@ internal sealed class ReadingSurface : RichTextBox
                 Paragraph? paragraph = Document.Blocks.OfType<Paragraph>().FirstOrDefault(
                     candidate => string.Equals(
                         ReadingSemantics.PendingDiagramKeyOf(candidate), key, StringComparison.Ordinal));
-                if (paragraph?.Inlines.LastInline is not InlineUIContainer
-                    {
-                        Child: ReadingDiagramElement element,
-                    } container)
+                // #1708 (CB-20; the owner's answer to Call 1, "Before the
+                // source"): the pending shape is the name's hidden run, the
+                // placeholder's container, a line break and the source run.
+                if (paragraph?.Inlines.OfType<InlineUIContainer>().FirstOrDefault(
+                        candidate => candidate.Child is ReadingDiagramElement) is not
+                        {
+                            Child: ReadingDiagramElement element,
+                        } container)
                 {
                     continue;
                 }
-                Run? source = paragraph.Inlines.FirstInline as Run;
+                Run? source = paragraph.Inlines.OfType<Run>().FirstOrDefault(
+                    run => !ReadingSemantics.IsHiddenSpeech(run));
                 string sourceText = source?.Text ?? string.Empty;
 
                 DiagramAnchor caret = RecordDiagramAnchor(CaretPosition, paragraph, source, container);
@@ -519,22 +542,32 @@ internal sealed class ReadingSurface : RichTextBox
 
                 Run? remappedSource = null;
                 bool keptContainer = true;
-                bool rendered = false;
+                DiagramShape shape = DiagramShape.Source;
                 switch (outcome)
                 {
                     case DiagramOutcome.Rendered done:
                         ReadingDocumentBuilder.ApplyRenderedShape(paragraph, element, done);
-                        rendered = true;
+                        shape = DiagramShape.Rendered;
                         break;
                     case DiagramOutcome.Failed failed:
                         remappedSource = ReadingDocumentBuilder.ApplyFailureShape(
                             paragraph, element, failed, sourceText);
+                        shape = DiagramShape.Failed;
                         break;
                     default:
                         // No artifact: main's unmatched shape — the source run
                         // alone — unless the reader is on the placeholder,
                         // which then keeps focus, named by the source until
-                        // the next projection rebuilds the paragraph.
+                        // the next projection rebuilds the paragraph. #1708: the
+                        // name's run and its line break go either way; a kept
+                        // placeholder stays where it stood, first, since an
+                        // element moved in the tree loses the keys.
+                        foreach (Inline spare in paragraph.Inlines
+                                     .Where(inline => inline is LineBreak || inline is Run run && ReadingSemantics.IsHiddenSpeech(run))
+                                     .ToList())
+                        {
+                            paragraph.Inlines.Remove(spare);
+                        }
                         if (element.IsKeyboardFocusWithin
                             || ReferenceEquals(
                                 System.Windows.Input.FocusManager.GetFocusedElement(
@@ -560,11 +593,11 @@ internal sealed class ReadingSurface : RichTextBox
                 try
                 {
                     TextPointer? newCaret = RestoreDiagramAnchor(
-                        caret, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                        caret, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: false);
                     TextPointer? newStart = RestoreDiagramAnchor(
-                        start, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                        start, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: false);
                     TextPointer? newEnd = RestoreDiagramAnchor(
-                        end, rendered, remappedSource, keptContainer ? container : null, atEnd: true);
+                        end, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: true);
                     if (collapsed)
                     {
                         if (newCaret is not null)
@@ -619,47 +652,62 @@ internal sealed class ReadingSurface : RichTextBox
         {
             return new DiagramAnchor(DiagramAnchorKind.Outside, 0, pointer);
         }
-        if (pointer.CompareTo(container.ElementStart) == 0)
+        // #1708: the source follows the placeholder's line, so a pointer is
+        // placed against the source first, then against the container.
+        if (source is not null
+            && pointer.CompareTo(source.ContentStart) >= 0
+            && pointer.CompareTo(source.ContentEnd) <= 0)
         {
-            return new DiagramAnchor(DiagramAnchorKind.AtContainerStart, 0, null);
+            int offset = Math.Clamp(
+                source.ContentStart.GetOffsetToPosition(pointer), 0, source.Text.Length);
+            return new DiagramAnchor(DiagramAnchorKind.InSource, offset, null);
         }
-        if (pointer.CompareTo(container.ElementStart) > 0)
-        {
-            return new DiagramAnchor(DiagramAnchorKind.AtContainerEnd, 0, null);
-        }
-        if (source is null)
-        {
-            return new DiagramAnchor(DiagramAnchorKind.AtContainerStart, 0, null);
-        }
-        int offset = Math.Clamp(
-            source.ContentStart.GetOffsetToPosition(pointer), 0, source.Text.Length);
-        return new DiagramAnchor(DiagramAnchorKind.InSource, offset, null);
+        return pointer.CompareTo(container.ElementStart) <= 0
+            ? new DiagramAnchor(DiagramAnchorKind.AtContainerStart, 0, null)
+            : new DiagramAnchor(DiagramAnchorKind.AtContainerEnd, 0, null);
     }
 
     private static TextPointer? RestoreDiagramAnchor(
         DiagramAnchor anchor,
-        bool rendered,
+        DiagramShape shape,
+        Paragraph paragraph,
         Run? source,
         InlineUIContainer? container,
         bool atEnd)
     {
-        switch (anchor.Kind)
+        if (anchor.Kind == DiagramAnchorKind.Outside)
         {
-            case DiagramAnchorKind.Outside:
-                return null;
-            case DiagramAnchorKind.InSource when rendered && container is not null:
-                // The diagram replaced the source: the caret sits before it,
-                // and a selection that reached into the source covers it.
-                return atEnd ? container.ElementEnd : container.ElementStart;
-            case DiagramAnchorKind.InSource when source is not null:
-                return source.ContentStart.GetPositionAtOffset(
-                    Math.Min(anchor.Offset, source.Text.Length)) ?? source.ContentEnd;
-            case DiagramAnchorKind.AtContainerStart when container is not null:
-                return container.ElementStart;
-            case DiagramAnchorKind.AtContainerEnd when container is not null:
-                return container.ElementEnd;
+            return null;
+        }
+        TextPointer InSource(Run run) =>
+            run.ContentStart.GetPositionAtOffset(Math.Min(anchor.Offset, run.Text.Length)) ?? run.ContentEnd;
+        switch (shape)
+        {
+            case DiagramShape.Rendered when container is not null:
+                // The diagram replaced the source and the placeholder's line.
+                // #1708 (CB-20, the lead's ruling on Call 11): its line opens
+                // with the description's hidden run, and WPF moves a pointer at
+                // the container back to that run's end, so a caret or a
+                // selection's start goes to the diagram's start, where its
+                // landmark is, and a selection's end covers the diagram.
+                return atEnd ? container.ElementEnd : paragraph.ContentStart;
+            case DiagramShape.Failed:
+                return anchor.Kind switch
+                {
+                    DiagramAnchorKind.InSource when source is not null => InSource(source),
+                    // After the placeholder: where the source began.
+                    DiagramAnchorKind.AtContainerEnd when source is not null => source.ContentStart,
+                    // At the placeholder: the top, where the name stood.
+                    _ => paragraph.ContentStart,
+                };
             default:
-                return source?.ContentEnd ?? container?.ElementStart;
+                return anchor.Kind switch
+                {
+                    DiagramAnchorKind.InSource when source is not null => InSource(source),
+                    DiagramAnchorKind.AtContainerStart when container is not null => container.ElementStart,
+                    DiagramAnchorKind.AtContainerEnd when container is not null => container.ElementEnd,
+                    _ => source?.ContentStart ?? paragraph.ContentStart,
+                };
         }
     }
 
@@ -1547,6 +1595,11 @@ internal sealed class ReadingSurface : RichTextBox
         {
             e.DataObject.SetData(DataFormats.UnicodeText, text);
             e.DataObject.SetData(DataFormats.Text, text);
+            // #1708 (CB-20, the lead's ruling on Call 12): WPF's RTF of the
+            // range carries the hidden runs as transparent text at a sliver
+            // of a point, so a drag whose copy changed the text carries RTF
+            // of that same text.
+            e.DataObject.SetData(DataFormats.Rtf, PlainTextRtf(text));
             return;
         }
         e.CancelCommand();
@@ -1561,42 +1614,112 @@ internal sealed class ReadingSurface : RichTextBox
         }
     }
 
-    /// <summary>The text a copy of [start, end] puts on the clipboard,
-    /// or null when the range reaches no math paragraph's speech.</summary>
+    /// <summary>The text a copy of [start, end] puts on the clipboard, or
+    /// null when the range reaches neither a paragraph with copy text nor a
+    /// hidden run, so WPF's own copy stands. A paragraph with copy text (a
+    /// formula, a rendered diagram) is replaced whole by its fenced source;
+    /// a hidden run anywhere else (#1708: a pending diagram's name, an
+    /// embedded image's name) is left out, so the rest copies as shown.</summary>
     internal string? CopyTextOf(TextPointer start, TextPointer end)
     {
-        var text = new System.Text.StringBuilder();
-        TextPointer cursor = start;
-        bool substituted = false;
-        foreach (Block block in Document.Blocks)
-        {
-            if (block.ContentStart.CompareTo(end) >= 0)
-            {
-                break;
-            }
-            if (block is not Paragraph paragraph
-                || ReadingSemantics.CopyTextOf(paragraph) is not { } fencedSource
-                || paragraph.ContentEnd.CompareTo(start) <= 0)
-            {
-                continue;
-            }
-            if (cursor.CompareTo(paragraph.ContentStart) < 0)
-            {
-                text.Append(new TextRange(cursor, paragraph.ContentStart).Text);
-            }
-            text.Append(fencedSource);
-            cursor = paragraph.ContentEnd.CompareTo(end) < 0 ? paragraph.ContentEnd : end;
-            substituted = true;
-        }
-        if (!substituted)
+        var changes = new List<(TextPointer From, TextPointer To, string Text)>();
+        CollectCopyChanges(Document.Blocks, start, end, changes);
+        if (changes.Count == 0)
         {
             return null;
+        }
+        var text = new System.Text.StringBuilder();
+        TextPointer cursor = start;
+        foreach ((TextPointer from, TextPointer to, string replacement) in changes)
+        {
+            if (cursor.CompareTo(from) < 0)
+            {
+                text.Append(new TextRange(cursor, from).Text);
+            }
+            text.Append(replacement);
+            cursor = to.CompareTo(end) < 0 ? to : end;
         }
         if (cursor.CompareTo(end) < 0)
         {
             text.Append(new TextRange(cursor, end).Text);
         }
         return text.ToString();
+    }
+
+    /// <summary>The parts of [start, end] a copy changes, in document
+    /// order, through lists, sections and tables.</summary>
+    private static void CollectCopyChanges(
+        IEnumerable<Block> blocks,
+        TextPointer start,
+        TextPointer end,
+        List<(TextPointer From, TextPointer To, string Text)> changes)
+    {
+        foreach (Block block in blocks)
+        {
+            if (block.ContentStart.CompareTo(end) >= 0)
+            {
+                return;
+            }
+            if (block.ContentEnd.CompareTo(start) <= 0)
+            {
+                continue;
+            }
+            switch (block)
+            {
+                case Paragraph paragraph when ReadingSemantics.CopyTextOf(paragraph) is { } fencedSource:
+                    changes.Add((paragraph.ContentStart, paragraph.ContentEnd, fencedSource));
+                    break;
+                case Paragraph paragraph:
+                    foreach (Run hidden in paragraph.Inlines.OfType<Run>().Where(ReadingSemantics.IsHiddenSpeech))
+                    {
+                        if (hidden.ElementEnd.CompareTo(start) > 0 && hidden.ElementStart.CompareTo(end) < 0)
+                        {
+                            changes.Add((hidden.ElementStart, hidden.ElementEnd, string.Empty));
+                        }
+                    }
+                    break;
+                case Section section:
+                    CollectCopyChanges(section.Blocks, start, end, changes);
+                    break;
+                case System.Windows.Documents.List list:
+                    CollectCopyChanges(list.ListItems.SelectMany(item => item.Blocks), start, end, changes);
+                    break;
+                case Table table:
+                    CollectCopyChanges(
+                        table.RowGroups.SelectMany(group => group.Rows).SelectMany(row => row.Cells).SelectMany(cell => cell.Blocks),
+                        start,
+                        end,
+                        changes);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>#1708: RTF holding <paramref name="text"/> and nothing
+    /// else: braces and backslashes escaped, a line break as a paragraph,
+    /// and any character past ASCII as its UTF-16 unit.</summary>
+    internal static string PlainTextRtf(string text)
+    {
+        var rtf = new System.Text.StringBuilder(@"{\rtf1\ansi ");
+        foreach (char character in text.ReplaceLineEndings("\n"))
+        {
+            switch (character)
+            {
+                case '\\' or '{' or '}':
+                    rtf.Append('\\').Append(character);
+                    break;
+                case '\n':
+                    rtf.Append(@"\par ");
+                    break;
+                case < (char)0x80:
+                    rtf.Append(character);
+                    break;
+                default:
+                    rtf.Append(@"\u").Append((short)character).Append('?');
+                    break;
+            }
+        }
+        return rtf.Append('}').ToString();
     }
 
     private static ReadingMathElement? MathElementOf(Paragraph paragraph) =>

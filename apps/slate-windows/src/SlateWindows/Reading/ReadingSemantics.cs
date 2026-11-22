@@ -134,9 +134,6 @@ internal static class ReadingSemantics
     public static string? TableSourceOf(System.Windows.Documents.Table table) =>
         table.GetValue(TableSourceProperty) as string;
 
-    public static void MarkEmbed(BlockUIContainer container) =>
-        container.SetValue(MarkerProperty, Marker.Embed);
-
     /// <summary>Embed card (W3-5): the marker carries the mac-shaped
     /// header name so the landmark walk announces content, not a
     /// cache key.</summary>
@@ -228,9 +225,6 @@ internal static class ReadingSemantics
 
     public static bool IsList(System.Windows.Documents.List list) =>
         Equals(list.GetValue(MarkerProperty), Marker.List);
-
-    public static bool IsEmbed(BlockUIContainer container) =>
-        Equals(container.GetValue(MarkerProperty), Marker.Embed);
 
     /// <summary>The code block's Copy button — distinguished by marker,
     /// not Tag shape, so the click router never guesses (embed-card

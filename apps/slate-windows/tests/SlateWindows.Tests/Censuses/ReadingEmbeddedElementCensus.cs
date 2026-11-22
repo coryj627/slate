@@ -34,13 +34,14 @@ public sealed class ReadingEmbeddedElementCensus
 {
     /// <summary>One of each block kind core makes, and every element the
     /// reading view builds: drawn math, a WPF-Math coverage gap, a rendered
-    /// diagram, an unsupported one, a task, a rule, a PNG and an SVG embed.</summary>
+    /// diagram, an unsupported one, a task, a rule, a PNG embed, a small SVG
+    /// embed and one wide enough to fill a line.</summary>
     internal const string Note =
         "# Census\n\nA paragraph with a [[elsewhere]] link.\n\n- [ ] a task to do\n\n> A quote.\n\n"
         + "```rust\nfn f() {}\n```\n\n$$\\nabla^2 f$$\n\n$$\\mathbb{R}$$\n\n"
         + "```mermaid\nflowchart LR\nA --> B\nB --> C\n```\n\n```mermaid\nweirdDiagram\nstuff\n```\n\n"
         + "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n---\n\n<div>html</div>\n\n"
-        + "![[pic.png]]\n\n![[pic.svg]]\n\nThe end.\n";
+        + "![[pic.png]]\n\n![[pic.svg]]\n\n![[wide.svg]]\n\nThe end.\n";
 
     private static readonly IReadOnlyDictionary<string, byte[]> Files = new Dictionary<string, byte[]>
     {
@@ -48,6 +49,10 @@ public sealed class ReadingEmbeddedElementCensus
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="),
         ["pic.svg"] = System.Text.Encoding.UTF8.GetBytes(
             "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><rect width='40' height='20' fill='teal'/></svg>"),
+        // Wide enough to fill a line, so a missing line reserve drops it
+        // below its name.
+        ["wide.svg"] = System.Text.Encoding.UTF8.GetBytes(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='900' height='200'><rect width='900' height='200' fill='teal'/></svg>"),
     };
 
     /// <summary>The closed table: a kind of embedded element, told apart by
@@ -401,9 +406,9 @@ public sealed class ReadingEmbeddedElementCensus
     private static void AwaitImages(ReadingSurface surface) =>
         Assert.True(
             PumpedDispatcher.PumpUntil(
-                () => Containers(surface.Document).Count(entry => entry.Child is ReadingDiagramImage { Source: not null }) == 2,
+                () => Containers(surface.Document).Count(entry => entry.Child is ReadingDiagramImage { Source: not null }) == 3,
                 UnhurriedSvgDecodes.LandingWait(2)),
-            "the census note's two embedded images never showed");
+            "the census note's three embedded images never showed");
 
     private static string LineAt(ReadingSurface surface, TextPointer at)
     {
