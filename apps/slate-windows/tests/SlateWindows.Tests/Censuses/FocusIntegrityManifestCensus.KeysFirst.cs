@@ -766,7 +766,7 @@ public sealed partial class FocusIntegrityManifestCensus
         Assert.Null(judge.Judge(pressed, "stays-on: PlantedTests.Stays"));
         Assert.Null(judge.Judge(sheet, "stays-on: PlantedTests.TheSheet"));
         Assert.Null(judge.Judge(pressed, "stays-on: PlantedTests.Dispatched"));
-        Assert.Contains("reached", judge.Judge(pressed, "stays-on: PlantedTests.NoReached") ?? "a call with no reached was taken", StringComparison.Ordinal);
+        Assert.Contains("reached", judge.Judge(pressed, "stays-on: PlantedTests.NoReached") ?? "a call with three arguments was taken", StringComparison.Ordinal);
         Assert.Contains("AssertItStaysOn", judge.Judge(pressed, "stays-on: PlantedTests.Leaves") ?? "a keys-first call witnessed stays-on", StringComparison.Ordinal);
         Assert.Contains("AssertTheKeysLeaveFirst", judge.Judge(pressed, "keys-first: PlantedTests.Stays") ?? "a stays-on call witnessed keys-first", StringComparison.Ordinal);
         Assert.Contains("does not name the site", judge.Judge(pressed, "stays-on: PlantedTests.NoName"), StringComparison.Ordinal);
