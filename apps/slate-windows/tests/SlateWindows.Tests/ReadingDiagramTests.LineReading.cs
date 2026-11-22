@@ -264,24 +264,34 @@ public sealed partial class ReadingDiagramTests
 
     /// <summary>The owner's answer to CB-20's Call 4, "Fix it in CB-20": an
     /// embedded image's line reads its card's name, at any width, since the
-    /// image leaves the name's run room on their line.</summary>
+    /// image leaves the name's run room on their line. A tab in the name
+    /// (an alias typed with one, Codex round 2) would advance to the
+    /// paragraph's tab stop, past that room, so hidden speech holds a space
+    /// for it.</summary>
     [Theory]
-    [InlineData(600)]
-    [InlineData(320)]
-    public void AnEmbeddedImagesLineReadsItsName(double width)
+    [InlineData(600, "")]
+    [InlineData(320, "")]
+    [InlineData(600, "left\tright")]
+    [InlineData(320, "left\tright")]
+    [InlineData(500, "a\t\t\tb")]
+    public void AnEmbeddedImagesLineReadsItsName(double width, string alias)
     {
         RunSta(() =>
         {
-            using var harness = StageHarness.Open($"reading-embed-image-line-{width}", EmbedNote, hosted: true, files: EmbedImages);
+            using var harness = StageHarness.Open(
+                $"reading-embed-image-line-{width}-{alias.Length}",
+                "Before the card.\n\n![[wide.svg" + (alias.Length > 0 ? "|" + alias : string.Empty) + "]]\n\nAfter the card.\n",
+                hosted: true,
+                files: EmbedImages);
             ReadingDiagramImage image = AwaitEmbedImage(harness);
             Widen(harness.Surface, width);
             var container = (InlineUIContainer)image.Parent;
             var paragraph = (Paragraph)container.Parent;
             string name = ReadingSemantics.EmbedNameOf((Section)paragraph.Parent);
-            Assert.Equal("Embedded image: wide.svg", name);
+            Assert.Equal("Embedded image: " + (alias.Length > 0 ? alias : "wide.svg"), name);
             Assert.True(image.ActualWidth > 100, "premise: the image was not drawn wide");
 
-            Assert.Equal(name, Words(LineAt(harness.Surface, container.ElementStart)));
+            Assert.Equal(name.Replace('\t', ' '), Words(LineAt(harness.Surface, container.ElementStart)));
             Run run = Assert.Single(HiddenRuns(paragraph));
             Assert.Equal(
                 0,
