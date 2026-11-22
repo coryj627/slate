@@ -188,6 +188,35 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    /// <summary>Codex round 7: only a plain click is moved on release. A
+    /// press that selected while the button was down (a drag out and back
+    /// onto where it was pressed) leaves the caret where it was
+    /// released.</summary>
+    [Fact]
+    public void ADragOutAndBackLeavesTheCaretWhereItWasReleased()
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine("rendered", "reading-caret-drag-back");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                surface.CaretPosition = PositionAtText(surface.Document, "Before the line.");
+                Run hidden = Assert.Single(HiddenRuns(line));
+                TextPointer below = PositionAtText(surface.Document, "After the line.").GetPositionAtOffset(5)!;
+
+                PressMouse(surface);
+                surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                surface.Selection.Select(hidden.ContentStart, below);
+                surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                ReleaseMouse(surface);
+
+                Assert.Equal(0, surface.CaretPosition.CompareTo(hidden.ContentStart));
+            }
+        });
+    }
+
     /// <summary>The merge judge's M1, the keyboard twin: a Shift move that
     /// collapses a selection back onto its anchor in hidden speech leaves the
     /// caret on that anchor, where the reader put it.</summary>

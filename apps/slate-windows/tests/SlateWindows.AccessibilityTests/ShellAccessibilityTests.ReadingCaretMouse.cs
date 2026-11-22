@@ -152,6 +152,35 @@ public sealed partial class ShellAccessibilityTests
                 }
             }
 
+            // Codex round 7, on the image's line: Home puts the caret on the
+            // speech's start along the line, Shift+Down anchors a selection
+            // there, and a Shift-click back on the anchor collapses it. The
+            // caret stays on its anchor; only a plain click is moved.
+            FlaUI.Core.ITextRange? image = text.DocumentRange.FindText("Embedded image: box.svg", true, false);
+            Rectangle[] imageBoxes = image?.GetBoundingRectangles() ?? [];
+            if (image is null || imageBoxes.Length == 0)
+            {
+                failures.Add("image: its speech has no box for the Shift-click");
+            }
+            else
+            {
+                var anchorPoint = new Point(imageBoxes[0].Left - 12, imageBoxes[0].Top + (imageBoxes[0].Height / 2));
+                Mouse.Click(anchorPoint);
+                Keyboard.Type(FlaUI.Core.WindowsAPI.VirtualKeyShort.HOME);
+                Keyboard.TypeSimultaneously(FlaUI.Core.WindowsAPI.VirtualKeyShort.SHIFT, FlaUI.Core.WindowsAPI.VirtualKeyShort.DOWN);
+                using (Keyboard.Pressing(FlaUI.Core.WindowsAPI.VirtualKeyShort.SHIFT))
+                {
+                    Mouse.Click(anchorPoint);
+                }
+                if (SpinWait.SpinUntil(
+                    () => text.GetSelection()[0].CompareEndpoints(
+                        TextPatternRangeEndpoint.Start, image, TextPatternRangeEndpoint.Start) != 0,
+                    TimeSpan.FromSeconds(2)))
+                {
+                    failures.Add("image: a Shift-click back onto the selection's anchor moved the caret off it");
+                }
+            }
+
             Assert.True(failures.Count == 0, string.Join("\n", failures));
         }
         finally
