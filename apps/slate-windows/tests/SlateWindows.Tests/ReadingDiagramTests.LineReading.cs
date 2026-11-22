@@ -8,6 +8,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Automation.Text;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
@@ -389,19 +390,21 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
-    /// <summary>The lead's ruling on CB-20's Call 11: an anchor that was in a
-    /// pending diagram's source, or at its placeholder, lands at the rendered
-    /// diagram's start, where its landmark is, so the line reads the
-    /// description and the previous-diagram chord moves on from it. A failed
-    /// landing keeps a source anchor on its character and puts one at the
-    /// placeholder at the paragraph's start, where the name stood.</summary>
+    /// <summary>The lead's ruling on CB-20's Call 11, with the diff red
+    /// team's B1: a caret that was in a pending diagram's source, or at its
+    /// placeholder, lands just after the rendered diagram, where its landmark
+    /// is and where the caret is drawn at the line's height, so the line
+    /// reads the description and the previous-diagram chord moves on from it.
+    /// A failed landing keeps a source anchor on its character and puts one
+    /// at the placeholder at the paragraph's start, where the name
+    /// stood.</summary>
     [Theory]
     [InlineData("rendered", "the name")]
     [InlineData("rendered", "just after the placeholder")]
     [InlineData("rendered", "the source")]
     [InlineData("failed", "the name")]
     [InlineData("failed", "just after the placeholder")]
-    public void ALandedDiagramPutsTheCaretAtItsStart(string outcome, string where)
+    public void ALandedDiagramPutsTheCaretWhereItsLandmarkIs(string outcome, string where)
     {
         RunSta(() =>
         {
@@ -418,26 +421,218 @@ public sealed partial class ReadingDiagramTests
                 "just after the placeholder" => container.ElementEnd,
                 _ => PositionAtText(harness.Surface.Document, "flowchart LR").GetPositionAtOffset(5)!,
             };
+            // On the name's line first, so the caret reaches the name as Left
+            // would bring it there, along its line.
+            harness.Surface.Selection.Select(container.ElementEnd, container.ElementEnd);
+            harness.Surface.CaretPosition = container.ElementEnd;
             harness.Surface.Selection.Select(caret, caret);
             harness.Surface.CaretPosition = caret;
+            Assert.Equal(0, harness.Surface.CaretPosition.CompareTo(caret));
 
             harness.Land();
 
             TextPointer landed = harness.Surface.CaretPosition;
-            if (outcome == "failed" && where == "just after the placeholder")
-            {
-                // The source's start: the failure shape's source run.
-                Assert.Equal("weirdDiagram", Words(LineAt(harness.Surface, landed)));
-                return;
-            }
-            Assert.Equal(0, landed.CompareTo(DiagramStart(harness)));
             ReadingLandmark landmark = Assert.Single(
                 harness.Surface.LandmarksForTests,
                 candidate => candidate.Kind == ReadingLandmarkKind.Diagram);
-            Assert.True(landmark.Position.CompareTo(landed) >= 0, "the previous-diagram chord would land on this diagram again");
-            if (outcome == "rendered")
+            if (outcome == "failed")
             {
-                Assert.Equal("Flowchart with 2 steps.", Words(LineAt(harness.Surface, landed)));
+                if (where == "just after the placeholder")
+                {
+                    // The source's start: the failure shape's source run.
+                    Assert.Equal("weirdDiagram", Words(LineAt(harness.Surface, landed)));
+                    return;
+                }
+                Assert.Equal(0, landed.CompareTo(DiagramStart(harness)));
+                Assert.True(landmark.Position.CompareTo(landed) >= 0, "the previous-diagram chord would land on this diagram again");
+                return;
+            }
+            Assert.Equal(0, landed.CompareTo(ContainerOf(harness.Placeholder()).ElementEnd));
+            Assert.Equal(0, landmark.Position.CompareTo(landed));
+            Assert.Equal("Flowchart with 2 steps.", Words(LineAt(harness.Surface, landed)));
+        });
+    }
+
+    /// <summary>The drawn caret's height as WPF lays it out: the selection's
+    /// caret element, read by reflection, since WPF exposes no other.</summary>
+    private static double CaretHeight(ReadingSurface surface)
+    {
+        surface.UpdateLayout();
+        PumpedDispatcher.Drain();
+        const System.Reflection.BindingFlags Hidden =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        object caret = typeof(TextSelection).GetProperty("CaretElement", Hidden)!.GetValue(surface.Selection)
+            ?? throw new Xunit.Sdk.XunitException("the selection drew no caret");
+        return (double)caret.GetType().GetField("_height", Hidden)!.GetValue(caret)!;
+    }
+
+    /// <summary>A key as the surface sees it: its PreviewKeyDown, the editing
+    /// command WPF binds it to, then its PreviewKeyUp.</summary>
+    private static void Press(ReadingSurface surface, Key key, RoutedUICommand move)
+    {
+        PresentationSource source = PresentationSource.FromVisual(surface)!;
+        surface.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        move.Execute(null, surface);
+        surface.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = Keyboard.PreviewKeyUpEvent });
+        PumpedDispatcher.Drain();
+    }
+
+    /// <summary>A line of each embedded kind between two body paragraphs: a
+    /// display formula, a pending or a rendered diagram, or an embedded image
+    /// (whose card header is the line just above it).</summary>
+    private static (StageHarness Harness, Paragraph Line) OpenEmbeddedLine(string kind, string name)
+    {
+        const string Before = "Before the line.\n\n";
+        const string After = "\n\nAfter the line.\n";
+        if (kind == "image")
+        {
+            StageHarness card = StageHarness.Open(name, Before + "![[wide.svg]]" + After, hosted: true, files: EmbedImages);
+            try
+            {
+                ReadingDiagramImage image = AwaitEmbedImage(card);
+                return (card, (Paragraph)((InlineUIContainer)image.Parent).Parent);
+            }
+            catch
+            {
+                card.Dispose();
+                throw;
+            }
+        }
+        StageHarness harness = StageHarness.Open(
+            name, Before + (kind == "math" ? "$$\nx^2\n$$" : StageFence) + After, hosted: true);
+        if (kind == "rendered")
+        {
+            harness.Land();
+        }
+        Paragraph line = kind == "math"
+            ? harness.Surface.Document.Blocks.OfType<Paragraph>().Single(ReadingSemantics.IsMathBlock)
+            : harness.DiagramParagraph();
+        return (harness, line);
+    }
+
+    /// <summary>The diff red team's B1: WPF draws a caret beside a run as
+    /// tall as the run's font, and an embedded element's hidden speech is a
+    /// sliver of a point, so Down onto its line drew a caret of 0.13 px where
+    /// a body line's is 15.96 (measured). The caret now rests just after the
+    /// element, on the same line, as tall as its paragraph's own text (a
+    /// pending diagram's source, or else a body line), from the start or the
+    /// end of the line above.</summary>
+    [Theory]
+    [InlineData("math")]
+    [InlineData("pending")]
+    [InlineData("rendered")]
+    [InlineData("image")]
+    public void ADownArrowOntoAnEmbeddedElementsLineDrawsTheCaretAtTheLinesHeight(string kind)
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine(kind, $"reading-caret-down-{kind}");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                TextPointer body = line.Inlines.OfType<Run>().FirstOrDefault(run => !ReadingSemantics.IsHiddenSpeech(run)) is { } text
+                    ? text.ContentStart
+                    : PositionAtText(surface.Document, "After the line.");
+                surface.Selection.Select(body, body);
+                surface.CaretPosition = body;
+                double bodyHeight = CaretHeight(surface);
+                Assert.True(bodyHeight > 10, $"the reference caret is {bodyHeight:F2} px tall");
+                Paragraph above = Assert.IsType<Paragraph>(line.PreviousBlock);
+                foreach (TextPointer from in new[]
+                {
+                    above.ContentStart.GetInsertionPosition(LogicalDirection.Forward),
+                    above.ContentEnd.GetInsertionPosition(LogicalDirection.Backward),
+                })
+                {
+                    surface.Selection.Select(from, from);
+                    surface.CaretPosition = from;
+                    PumpedDispatcher.Drain();
+
+                    EditingCommands.MoveDownByLine.Execute(null, surface);
+                    PumpedDispatcher.Drain();
+
+                    TextPointer caret = surface.CaretPosition;
+                    Assert.Same(line, caret.Paragraph);
+                    Assert.Null(ReadingDocumentBuilder.VisibleCaretPast(caret));
+                    double height = CaretHeight(surface);
+                    Assert.True(
+                        Math.Abs(height - bodyHeight) <= 1,
+                        $"Down from offset {above.ContentStart.GetOffsetToPosition(from)} of the line above drew a caret {height:F2} px tall "
+                            + $"at offset {line.ContentStart.GetOffsetToPosition(caret)} of the line, gravity {caret.LogicalDirection}, "
+                            + $"where its paragraph's text draws {bodyHeight:F2}");
+                }
+            }
+        });
+    }
+
+    /// <summary>The lead's condition on B1's fix: no caret stop is added or
+    /// taken away. Right from the line above visits the hidden speech's every
+    /// letter, then the element's end, and Left visits them back, as before
+    /// the fix: a key that moves along the line leaves the caret where it put
+    /// it.</summary>
+    [Theory]
+    [InlineData("math")]
+    [InlineData("pending")]
+    [InlineData("rendered")]
+    [InlineData("image")]
+    public void RightAndLeftAlongAnEmbeddedElementsLineStopWhereTheyDidBefore(string kind)
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine(kind, $"reading-caret-along-{kind}");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                Run hidden = Assert.Single(HiddenRuns(line));
+                InlineUIContainer container = line.Inlines.OfType<InlineUIContainer>().First();
+                TextPointer lineStart = line.ContentStart.GetInsertionPosition(LogicalDirection.Forward).GetLineStartPosition(0)!;
+                bool OnTheLine(TextPointer caret) =>
+                    caret.Paragraph == line && caret.GetLineStartPosition(0)?.CompareTo(lineStart) == 0;
+                string Stop(TextPointer caret) =>
+                    caret.CompareTo(container.ElementEnd) >= 0 ? "after the element"
+                    : caret.CompareTo(hidden.ContentStart) >= 0 && caret.CompareTo(hidden.ContentEnd) <= 0
+                        ? $"letter {hidden.ContentStart.GetOffsetToPosition(caret)}"
+                    : caret.CompareTo(hidden.ContentStart) < 0 ? "letter 0"
+                    : $"letter {hidden.Text.Length}";
+                List<string> stops = Enumerable.Range(0, hidden.Text.Length + 1)
+                    .Select(letter => $"letter {letter}")
+                    .Append("after the element")
+                    .ToList();
+
+                Paragraph above = Assert.IsType<Paragraph>(line.PreviousBlock);
+                TextPointer end = above.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+                surface.Selection.Select(end, end);
+                surface.CaretPosition = end;
+                var right = new List<string>();
+                for (int press = 0; press < 200; press++)
+                {
+                    Press(surface, Key.Right, EditingCommands.MoveRightByCharacter);
+                    if (!OnTheLine(surface.CaretPosition))
+                    {
+                        break;
+                    }
+                    right.Add(Stop(surface.CaretPosition));
+                }
+                var left = new List<string>();
+                for (int press = 0; press < 200; press++)
+                {
+                    Press(surface, Key.Left, EditingCommands.MoveLeftByCharacter);
+                    if (!OnTheLine(surface.CaretPosition))
+                    {
+                        if (left.Count > 0)
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    left.Add(Stop(surface.CaretPosition));
+                }
+
+                Assert.Equal(stops, right);
+                stops.Reverse();
+                Assert.Equal(stops, left);
             }
         });
     }

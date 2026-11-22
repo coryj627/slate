@@ -447,14 +447,17 @@ public sealed partial class ReadingDiagramTests
     {
         RunSta(() =>
         {
-            // (a) The caret inside the pending source, Rendered: before the diagram.
+            // (a) The caret inside the pending source, Rendered: after the diagram.
             using (var harness = StageHarness.Open("reading-diagram-remap-a", StageNote, hosted: true))
             {
                 harness.Surface.CaretPosition =
                     PositionAtText(harness.Surface.Document, "flowchart LR").GetPositionAtOffset(5)!;
                 harness.Land();
-                // #1708: at the diagram's start, before its description's run.
-                Assert.Equal(0, harness.Surface.CaretPosition.CompareTo(DiagramStart(harness)));
+                // #1708 (CB-20, B1): just after the diagram, where its landmark
+                // is and where the caret is drawn at the line's height.
+                Assert.Equal(
+                    0,
+                    harness.Surface.CaretPosition.CompareTo(((InlineUIContainer)harness.Placeholder().Parent).ElementEnd));
             }
 
             // (b) A selection from the paragraph before into the source,

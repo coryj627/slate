@@ -702,6 +702,10 @@ internal static class ReadingDocumentBuilder
     /// its line in two and the element would read alone on the second.</summary>
     private static string OneLine(string speech) => speech.ReplaceLineEndings(" ");
 
+    /// <summary>#1708: where a caret at or inside hidden speech is drawn at its
+    /// line's height. Not built yet: answers null.</summary>
+    internal static TextPointer? VisibleCaretPast(TextPointer caret) => null;
+
     /// <summary>The width a speech run's whole line may give it.</summary>
     /// <summary>The body's size and line height (DS-3). The line height is a paragraph
     /// style, not a document value, because <c>Block.LineHeight</c> inherits, and would
