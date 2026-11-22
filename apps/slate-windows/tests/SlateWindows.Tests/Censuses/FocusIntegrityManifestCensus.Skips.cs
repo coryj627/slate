@@ -28,6 +28,7 @@ public sealed partial class FocusIntegrityManifestCensus
     [InlineData("keys-first: PlantedTests.SkipsThroughALocalFunction", "Pressed", "can skip", "PlantedTests.SkipsThroughALocalFunction.Steady")]
     [InlineData("keys-first: PlantedTests.SkipsThroughAConstructor", "Pressed", "can skip", "new Bench")]
     [InlineData("keys-first: PlantedTests.SkipsThroughAProvidersRow", "Pressed", "can skip", "PlantedTests.Rows")]
+    [InlineData("keys-first: PlantedTests.SkipsThroughAValueNamedLikeAType", "Pressed", "can skip", "Gate.Check")]
     [InlineData("keys-first: PlantedTests.HasASkippedRow", "Pressed", "skipped or explicit row", "InlineData")]
     [InlineData("keys-first: PlantedTests.HasAnExplicitRow", "Pressed", "skipped or explicit row", "InlineData")]
     [InlineData("stays-on: PlantedTests.StaysOnButSkips", "Pressed", "can skip", "Desk.Check")]
@@ -136,6 +137,15 @@ public sealed partial class FocusIntegrityManifestCensus
             [MemberData(nameof(Rows))]
             public void SkipsThroughAProvidersRow(int row) => RunSta(() => { var button = host.Pressed; KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", button, () => button.Command.Execute(row)); });
 
+            [Fact]
+            public void SkipsThroughAValueNamedLikeAType() => RunSta(() =>
+            {
+                var button = host.Pressed;
+                var Calm = new Gate();
+                Calm.Check(button);
+                KeysFirstRecorder.AssertTheKeysLeaveFirst("Pressed", button, () => button.Command.Execute(null));
+            });
+
             [Theory]
             [InlineData(1)]
             [InlineData(2, Skip = "the second row needs a desktop")]
@@ -191,6 +201,18 @@ public sealed partial class FocusIntegrityManifestCensus
             internal static void Check(Button button) => Assert.SkipUnless(button.IsVisible, "this desktop shows nothing");
         }
 
+        internal static class Calm
+        {
+            internal static void Check(Button button)
+            {
+            }
+        }
+
+        internal sealed class Gate
+        {
+            internal void Check(Button button) => Assert.Skip("this desktop shows nothing");
+        }
+
         internal static class KeysFirstRecorder
         {
             internal static void TakeTheMenuKeys(UIElement item)
@@ -236,9 +258,11 @@ public sealed partial class FocusIntegrityManifestCensus
     /// type of this project, within the enclosing type's chain when it has no receiver, to the
     /// local functions of its member first, and otherwise to every member of that name that C#
     /// lets it reach as it is written: through an instance, an instance member or an extension
-    /// method; through a type or a static import, a static member; a private member only from
-    /// inside its own type. The fact starts the walk with its class's construction and
-    /// disposal and its data providers.
+    /// method; through a type or a static import, a static member; a private member, or one
+    /// inside a private type, only from inside that type. A qualifier is a type only when its
+    /// last name is a type of this project and its first is no local, parameter, field or
+    /// property; anything else is read as a value. The fact starts the walk with its class's
+    /// construction and disposal and its data providers.
     /// </summary>
     internal sealed class SkipReach
     {
@@ -479,22 +503,18 @@ public sealed partial class FocusIntegrityManifestCensus
         }
 
         /// <summary>How a name reaches a member of another type: through an instance, through a
-        /// type of this project, through a type this project does not declare (only an
-        /// extension method of this project can be reached so), or unqualified, by a static
-        /// import.</summary>
+        /// type of this project, or unqualified, by a static import.</summary>
         private enum Access
         {
             Instance,
             Type,
-            Foreign,
             Imported,
         }
 
         /// <summary>What a member access's qualifier is: a type of this project (with its
-        /// name), a type it does not declare, or a value. A qualifier whose first name is a
-        /// local, a parameter, or a field or property of the types around it is a value; else
-        /// its last name is a type of this project, or, written as capitalised names, a type
-        /// this project does not declare.</summary>
+        /// name), or anything else, read as a value. A qualifier whose first name is a local, a
+        /// parameter, or a field or property of the types around it is a value, even where a
+        /// type of this project has its name.</summary>
         private (Access Access, string? Type) Qualifier(ExpressionSyntax owner, SyntaxNode at)
         {
             ExpressionSyntax first = owner;
@@ -503,18 +523,10 @@ public sealed partial class FocusIntegrityManifestCensus
                 first = inner;
             }
 
-            if (first is not SimpleNameSyntax { Identifier.ValueText: var leading } || IsAValue(leading, at))
-            {
-                return (Access.Instance, null);
-            }
-
-            if (LastName(owner) is { } last && _types.ContainsKey(last))
-            {
-                return (Access.Type, last);
-            }
-
-            bool named = owner.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().All(segment => char.IsUpper(segment.Identifier.ValueText[0]));
-            return named ? (Access.Foreign, null) : (Access.Instance, null);
+            return first is SimpleNameSyntax { Identifier.ValueText: var leading } && !IsAValue(leading, at)
+                && LastName(owner) is { } last && _types.ContainsKey(last)
+                ? (Access.Type, last)
+                : (Access.Instance, null);
         }
 
         /// <summary>Whether <paramref name="name"/>, where <paramref name="at"/> is, is a
@@ -572,9 +584,9 @@ public sealed partial class FocusIntegrityManifestCensus
 
         /// <summary>Every member of this project named <paramref name="name"/> that C# lets
         /// <paramref name="at"/> reach the way it is written: through an instance only an
-        /// instance member or an extension method, through a type this project does not
-        /// declare only an extension method, through a type or a static import only a static
-        /// member, and a private member only from inside its own type.</summary>
+        /// instance member or an extension method, through a type or a static import only a
+        /// static member, and a private member, or one inside a private type, only from inside
+        /// that type.</summary>
         private IEnumerable<SyntaxNode> All(string name, SyntaxNode at, Access access) =>
             (_members.GetValueOrDefault(name) ?? []).Where(member =>
             {
@@ -589,7 +601,6 @@ public sealed partial class FocusIntegrityManifestCensus
                 bool reachable = access switch
                 {
                     Access.Instance => !isStatic || extension,
-                    Access.Foreign => extension,
                     Access.Type => isStatic,
                     _ => isStatic && !extension,
                 };
