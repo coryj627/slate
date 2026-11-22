@@ -245,6 +245,12 @@ public sealed partial class ReadingDiagramTests
             // fresh build does.
             ReadingSemantics.CopyTextOf(paragraph) ?? "-",
             ReadingSemantics.PendingDiagramKeyOf(paragraph) ?? "-",
+            // #1708: a placeholder's height is bound while it renders; a
+            // completed element's is its drawing's, as in a fresh build.
+            string.Join(
+                ",",
+                paragraph.Inlines.OfType<InlineUIContainer>()
+                    .Select(container => container.Child.ReadLocalValue(FrameworkElement.HeightProperty).GetType().Name)),
             // The local value: the inherited one is the containing
             // document's, and the surface's differs from the builder's.
             paragraph.ReadLocalValue(Block.TextAlignmentProperty));

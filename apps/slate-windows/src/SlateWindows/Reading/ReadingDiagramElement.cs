@@ -79,6 +79,9 @@ internal sealed class ReadingDiagramElement : ContentControl
         string old = Description;
         Description = description;
         AutomationProperties.SetName(this, description);
+        // #1708: a placeholder is as tall as a caret in its source's text
+        // while it renders; completed, its drawing (or nothing) sizes it.
+        ClearValue(HeightProperty);
         if (visual is not null)
         {
             Content = new ReadingDiagramImage
@@ -172,6 +175,23 @@ internal static class ReadingLineReserve
         double width = Math.Max(0, constraint.Width - reserve);
         Size desired = measure(new Size(width, constraint.Height));
         return new Size(Math.Min(desired.Width, width), desired.Height);
+    }
+
+    /// <summary>#1708 (the diff red team's B1): how tall WPF draws a caret in
+    /// text of a size and family, the size times the family's line spacing.
+    /// A caret beside an embedded element is drawn no taller than the
+    /// element, so a pending placeholder is this tall.</summary>
+    internal static readonly System.Windows.Data.IMultiValueConverter TextCaretHeight = new TextCaretHeightConverter();
+
+    private sealed class TextCaretHeightConverter : System.Windows.Data.IMultiValueConverter
+    {
+        public object Convert(object[] values, Type targetType, object parameter, System.Globalization.CultureInfo culture) =>
+            values is [double size, System.Windows.Media.FontFamily family]
+                ? size * family.LineSpacing
+                : DependencyProperty.UnsetValue;
+
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, System.Globalization.CultureInfo culture) =>
+            throw new NotSupportedException();
     }
 }
 

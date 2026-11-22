@@ -593,7 +593,7 @@ internal sealed class ReadingSurface : RichTextBox
                 try
                 {
                     TextPointer? newCaret = RestoreDiagramAnchor(
-                        caret, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: false);
+                        caret, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: true);
                     TextPointer? newStart = RestoreDiagramAnchor(
                         start, shape, paragraph, remappedSource, keptContainer ? container : null, atEnd: false);
                     TextPointer? newEnd = RestoreDiagramAnchor(
@@ -687,9 +687,11 @@ internal sealed class ReadingSurface : RichTextBox
                 // The diagram replaced the source and the placeholder's line.
                 // #1708 (CB-20, the lead's ruling on Call 11): its line opens
                 // with the description's hidden run, and WPF moves a pointer at
-                // the container back to that run's end, so a caret or a
-                // selection's start goes to the diagram's start, where its
-                // landmark is, and a selection's end covers the diagram.
+                // the container back to that run's end, so a selection's start
+                // goes to the diagram's start and its end covers the diagram;
+                // the caret (asked for as an end) rests just after the diagram,
+                // where its landmark is and where it is drawn at the line's
+                // height.
                 return atEnd ? container.ElementEnd : paragraph.ContentStart;
             case DiagramShape.Failed:
                 return anchor.Kind switch
@@ -1580,6 +1582,77 @@ internal sealed class ReadingSurface : RichTextBox
             e.CancelCommand();
         }
     }
+
+    /// <summary>#1708: the caret was last moved along its line by a key
+    /// (Left, Right, Home, End), so it stays where the key put it, hidden
+    /// speech included. Ctrl+Home and Ctrl+End move across lines.</summary>
+    private bool _caretMovedAlongItsLine;
+
+    /// <summary>#1708: where the caret was at the last selection change.</summary>
+    private TextPointer? _caretBefore;
+
+    protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
+    {
+        _caretMovedAlongItsLine = e.Key is System.Windows.Input.Key.Left or System.Windows.Input.Key.Right
+            || (e.Key is System.Windows.Input.Key.Home or System.Windows.Input.Key.End
+                && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0);
+        base.OnPreviewKeyDown(e);
+    }
+
+    protected override void OnPreviewKeyUp(System.Windows.Input.KeyEventArgs e)
+    {
+        // A key that moved nothing leaves no flag for a later move.
+        _caretMovedAlongItsLine = false;
+        base.OnPreviewKeyUp(e);
+    }
+
+    protected override void OnPreviewMouseDown(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _caretMovedAlongItsLine = false;
+        base.OnPreviewMouseDown(e);
+    }
+
+    /// <summary>
+    /// #1708 (CB-20): a caret that arrives at or inside hidden speech from
+    /// another line (Up, Down, a page, a click, a landing) moves just after
+    /// the element the speech stands for, on the same line, where it is drawn
+    /// at the line's height and not as the sliver of a point the speech is.
+    /// A move along the line (Left, Right, Home, End, or a caret set on the
+    /// same line) stays, so the speech's letters are still caret stops, as a
+    /// formula's have been since #1595. No stop is added or taken away.
+    /// </summary>
+    protected override void OnSelectionChanged(RoutedEventArgs e)
+    {
+        base.OnSelectionChanged(e);
+        TextPointer? before = _caretBefore;
+        bool alongItsLine = _caretMovedAlongItsLine;
+        _caretMovedAlongItsLine = false;
+        TextPointer caret = CaretPosition;
+        _caretBefore = caret;
+        // Caret state is repairable UI state (ApplyBuiltDocument's rule): a
+        // layout that cannot answer leaves the caret where WPF put it.
+        try
+        {
+            if (!Selection.IsEmpty || alongItsLine || (before is not null && OnOneLine(before, caret)))
+            {
+                return;
+            }
+            if (ReadingDocumentBuilder.VisibleCaretPast(caret) is { } visible)
+            {
+                CaretPosition = visible;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static bool OnOneLine(TextPointer first, TextPointer second) =>
+        first.Paragraph is { } paragraph
+        && ReferenceEquals(paragraph, second.Paragraph)
+        && first.GetLineStartPosition(0) is { } line
+        && second.GetLineStartPosition(0) is { } other
+        && line.CompareTo(other) == 0;
 
     private void OnCopying(object sender, DataObjectCopyingEventArgs e)
     {

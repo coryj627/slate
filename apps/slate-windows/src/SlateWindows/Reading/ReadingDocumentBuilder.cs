@@ -703,8 +703,44 @@ internal static class ReadingDocumentBuilder
     private static string OneLine(string speech) => speech.ReplaceLineEndings(" ");
 
     /// <summary>#1708: where a caret at or inside hidden speech is drawn at its
-    /// line's height. Not built yet: answers null.</summary>
-    internal static TextPointer? VisibleCaretPast(TextPointer caret) => null;
+    /// line's height: just after the element the speech stands for, on the
+    /// same line. WPF draws a caret beside a run as tall as that run's font,
+    /// and hidden speech is a sliver of a point (0.13 px where a body line's
+    /// caret is 15.96, measured); just after the element it is the line's.
+    /// Null when the caret is not there.</summary>
+    internal static TextPointer? VisibleCaretPast(TextPointer caret)
+    {
+        if (caret.Paragraph is not { } paragraph)
+        {
+            return null;
+        }
+        Run? speech = null;
+        foreach (Inline inline in paragraph.Inlines)
+        {
+            if (inline is Run run && ReadingSemantics.IsHiddenSpeech(run))
+            {
+                speech ??= run;
+                continue;
+            }
+            if (speech is not null && inline is InlineUIContainer container)
+            {
+                if (caret.CompareTo(speech.ElementStart) >= 0 && caret.CompareTo(container.ElementStart) <= 0)
+                {
+                    return container.ElementEnd;
+                }
+            }
+            speech = null;
+        }
+        return null;
+    }
+
+    /// <summary>#1708: where a chord lands on a block: its start, or, where
+    /// that is hidden speech, just after the block's element.</summary>
+    private static TextPointer Landing(Paragraph paragraph)
+    {
+        TextPointer start = Insertion(paragraph.ContentStart);
+        return VisibleCaretPast(start) ?? start;
+    }
 
     /// <summary>The width a speech run's whole line may give it.</summary>
     /// <summary>The body's size and line height (DS-3). The line height is a paragraph
@@ -1086,8 +1122,17 @@ internal static class ReadingDocumentBuilder
             // their own above the source, so line reading speaks the name.
             Inline source = sourceParagraph.Inlines.FirstInline;
             sourceParagraph.Inlines.InsertBefore(source, SpeechRun(PendingDiagramName));
-            sourceParagraph.Inlines.InsertBefore(source, new InlineUIContainer(
-                new ReadingDiagramElement(PendingDiagramName, fallbackSource)));
+            var placeholder = new ReadingDiagramElement(PendingDiagramName, fallbackSource);
+            // As tall as a caret in the source's text, with no width, so a
+            // caret just after it is drawn as tall as on the lines below,
+            // where an empty one draws a sliver of a point (#1708, the diff
+            // red team's B1). A control in flow content does not inherit the
+            // text's size, so it is bound to the source's.
+            var caretHeight = new System.Windows.Data.MultiBinding { Converter = ReadingLineReserve.TextCaretHeight };
+            caretHeight.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontSize)) { Source = source });
+            caretHeight.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontFamily)) { Source = source });
+            placeholder.SetBinding(FrameworkElement.HeightProperty, caretHeight);
+            sourceParagraph.Inlines.InsertBefore(source, new InlineUIContainer(placeholder));
             sourceParagraph.Inlines.InsertBefore(source, new LineBreak());
             string key = block.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ReadingSemantics.MarkDiagramPending(sourceParagraph, key);
@@ -2112,14 +2157,14 @@ internal static class ReadingDocumentBuilder
                 {
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Math,
-                        Insertion(paragraph.ContentStart),
+                        Landing(paragraph),
                         text: ReadingSemantics.MathSpeechOf(paragraph)));
                 }
                 else if (ReadingSemantics.IsDiagramBlock(paragraph))
                 {
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Diagram,
-                        Insertion(paragraph.ContentStart),
+                        Landing(paragraph),
                         text: ReadingSemantics.DiagramDescriptionOf(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
