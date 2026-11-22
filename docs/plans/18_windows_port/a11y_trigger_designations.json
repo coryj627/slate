@@ -185,6 +185,11 @@
         "reason": "The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "WorkStillRunning": {
+        "reason": "Plan 47 CB-17b (#1866, CD11): core declares the event ahead of its Windows call sites (the bulk rename sheet's Preview and Apply, and Expand Loaded Folders), which the same chunk adds. This entry goes when the first one lands.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
       }
     },
     "Mac": {
@@ -220,6 +225,11 @@
       },
       "TaskToggledUnindexed": {
         "reason": "Plan 47 CB-14 (#1660, CD8): the Mac's adoption is owed on #1954; until then performToggleCurrentTask posts taskToggleFailed on this error with its own copy of the save sentence.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "WorkStillRunning": {
+        "reason": "Plan 47 CB-17b (#1866, CD11): the buttons that stay available while their work runs are Windows only. The Mac's bulk rename sheet turns Preview and Apply off while a rename is in flight, and its Expand Loaded Folders starts over on a second press.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
