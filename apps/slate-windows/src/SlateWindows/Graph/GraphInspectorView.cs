@@ -366,14 +366,22 @@ internal sealed class GraphInspectorView : UserControl
     private void RenderGate()
     {
         bool effective = Model?.IsGraphEffective == true;
-        foreach (FrameworkElement section in SectionsForTests)
-        {
-            section.IsEnabled = effective;
-        }
         _inactive.Visibility = effective ? Visibility.Collapsed : Visibility.Visible;
         bool writable = Model?.IsWritable ?? true;
         _readOnly.Text = writable ? string.Empty : GraphPhrase.InspectorReadOnlyPrefix + Model?.LoadFailure;
         _readOnly.Visibility = writable ? Visibility.Collapsed : Visibility.Visible;
+        // Plan 47 CB-17b (#1866, CD11): the notices first, then the keys out of all four
+        // sections at once, through the leaf's landing, so none lands on another section
+        // this gate turns off, then the off.
+        if (!effective)
+        {
+            _ = RegionFocusGuard.LandBeforeLeaving(SectionsForTests);
+        }
+
+        foreach (FrameworkElement section in SectionsForTests)
+        {
+            section.IsEnabled = effective;
+        }
     }
 
     private void RenderFilters()

@@ -2688,7 +2688,8 @@ internal sealed class RelayCommand : ICommand
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => _canExecute(parameter);
     public void Execute(object? parameter) => _execute(parameter);
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() =>
+        Commands.CommandKeysFirst.Raise(this, static self => ((RelayCommand)self).CanExecuteChanged?.Invoke(self, EventArgs.Empty));
 }
 
 /// <summary>WB-9: what a hosted fact supplies to the shipped window's vault
@@ -2765,11 +2766,35 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
             return;
         }
 
+        // Plan 47 CB-17b (red team F3): the press's off and the work's synchronous part are
+        // one raise, for the state the press ends in. Work that ends inside the press (a
+        // completed or a faulted task) turned the command off and on in one turn; raised
+        // apart, the off moved the keys off its button (CommandKeysFirst), where WPF had
+        // left them before.
+        Task running;
         _isExecuting = true;
-        RaiseCanExecuteChanged();
+        using (Commands.CommandKeysFirst.Hold())
+        {
+            RaiseCanExecuteChanged();
+            try
+            {
+                running = _execute(parameter);
+            }
+            catch (Exception exception)
+            {
+                running = Task.FromException(exception);
+            }
+
+            if (running.IsCompleted)
+            {
+                _isExecuting = false;
+                RaiseCanExecuteChanged();
+            }
+        }
+
         try
         {
-            await _execute(parameter);
+            await running;
         }
         catch (Exception exception)
         {
@@ -2777,12 +2802,16 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
         }
         finally
         {
-            _isExecuting = false;
-            RaiseCanExecuteChanged();
+            if (_isExecuting)
+            {
+                _isExecuting = false;
+                RaiseCanExecuteChanged();
+            }
         }
     }
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() =>
+        Commands.CommandKeysFirst.Raise(this, static self => ((AsyncRelayCommand)self).CanExecuteChanged?.Invoke(self, EventArgs.Empty));
 }
 
 internal sealed class UiProgressListener : ScanProgressListener

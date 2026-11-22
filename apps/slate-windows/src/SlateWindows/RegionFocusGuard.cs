@@ -55,6 +55,15 @@ namespace SlateWindows;
 /// landing of their own — a <see cref="LandingTreeView"/>, a list with a
 /// publication keeper — keep handling their hand-overs.
 /// </para>
+/// <para>
+/// <b>Before the holder goes (#1866, CD11).</b> The guard above lands the keys
+/// after their holder went off, and a screen reader has by then said
+/// "unavailable" of it. A caller that knows a control is about to go off asks
+/// first (<see cref="LandBeforeLeaving(UIElement)"/>), and the keys go to the
+/// same place before the off. A request to hand the keys to the window while a
+/// live element in a sheet holds them is declined (<see cref="Guarded"/>), so a
+/// press on a sheet's button never puts them behind the sheet.
+/// </para>
 /// </remarks>
 internal static class RegionFocusGuard
 {
@@ -66,6 +75,11 @@ internal static class RegionFocusGuard
     /// <summary>The list or tree whose row took the keys, recorded as it
     /// took them: stranded keys come back to the rows they were in.</summary>
     private static readonly ConditionalWeakTable<IInputElement, ItemsControl> RowsAtFocus = new();
+
+    /// <summary>The set a running <see cref="LandBeforeLeaving(IReadOnlyCollection{UIElement})"/>
+    /// is moving the keys out of; null outside one.</summary>
+    [ThreadStatic]
+    private static IReadOnlyCollection<UIElement>? _leaving;
 
     private static bool _registered;
 
@@ -163,6 +177,11 @@ internal static class RegionFocusGuard
             typeof(UIElement), Keyboard.PreviewLostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(Asked), handledEventsToo: true);
     }
 
+    /// <summary>Whether <paramref name="element"/> ever took the keys in a window: the
+    /// guard recorded its scopes then, so keys that should be on it can be landed in
+    /// them (<see cref="LandInScopesOf"/>).</summary>
+    internal static bool HeldTheKeys(IInputElement element) => ScopesAtFocus.TryGetValue(element, out _);
+
     /// <summary>The scopes around <paramref name="element"/>, innermost
     /// first.</summary>
     internal static UIElement[] ScopesOf(DependencyObject element)
@@ -215,12 +234,30 @@ internal static class RegionFocusGuard
 
     private static void Guarded(object sender, KeyboardFocusChangedEventArgs e)
     {
+        if (_landing || e.Handled)
+        {
+            return;
+        }
+
+        // #1866 (CD11), a sheet keeps the keys. Every sheet and overlay is a focus scope,
+        // and WPF's ButtonBase, when it loses the mouse capture that Space down or a click
+        // took, asks for the keys to go back to the main focus scope: a request aimed at
+        // the window, which hands them to its own focused element, behind the open sheet.
+        // It is declined while the holder can still hold them. A class handler on Window
+        // runs ahead of FrameworkElement's hand-on. A holder that went away is stranded and
+        // is landed below; a closing sheet is not live, so its close restores as before;
+        // the menu owns no landing, so it still gives the keys back.
+        if (e.NewFocus is Window && e.OldFocus is { } holder && ASheetHoldsTheKeys(holder))
+        {
+            e.Handled = true;
+            _directRequest = null;
+            return;
+        }
+
         // The holder may be a content element — a reading view's Hyperlink
         // takes the keys by Tab — as well as a visual (PR 4b codex round 2,
         // F1: Ctrl+W on a pane's last tab, the keys on a link).
-        if (_landing
-            || e.Handled
-            || e.OldFocus is not IInputElement old
+        if (e.OldFocus is not IInputElement old
             || !IsStranded(old)
             || e.NewFocus is not UIElement proposed
             || !ScopesAtFocus.TryGetValue(old, out UIElement[]? scopes)
@@ -336,6 +373,152 @@ internal static class RegionFocusGuard
         ScopesAtFocus.TryGetValue(old, out UIElement[]? scopes)
             ? Land(old, proposed: null, scopes)
             : old is UIElement element && StrandedLandings.TryGetValue(element, out Func<bool>? own) && own() && Landed(old);
+
+    /// <summary>
+    /// #1866 (CD11), keys first: moves the keys off <paramref name="leaving"/> BEFORE its
+    /// caller turns it off, so it never goes off with the keys on it (NVDA says
+    /// "unavailable" of a focused control that does). They go where WPF or the guard puts
+    /// them today, after the off:
+    /// <list type="number">
+    /// <item><description>the landing of the element holding the keys, if it has one
+    /// (<see cref="SetStrandedLanding"/>);</description></item>
+    /// <item><description>else the ONE nearest focusable, shown, enabled ancestor, which is
+    /// what WPF's hand-up proposes, taken only if it is a stop by the guard's own rule
+    /// (<see cref="IsAStop"/>): the Expander around the Files pane's actions. If it is no
+    /// stop (a tab control, the window), no ancestor farther up is tried;</description></item>
+    /// <item><description>else the landings of the scopes around it, innermost
+    /// first.</description></item>
+    /// </list>
+    /// </summary>
+    /// <returns>Whether the keys are now on a live element outside
+    /// <paramref name="leaving"/>. False when they were not on it or inside it to begin
+    /// with, and when nothing took them: the caller turns the element off all the same, and
+    /// the guard lands the keys after, as before.</returns>
+    internal static bool LandBeforeLeaving(UIElement leaving) => LandBeforeLeaving([leaving]);
+
+    /// <summary><see cref="LandBeforeLeaving(UIElement)"/> for a set of elements that go
+    /// off together (a render that turns off several controls): the keys are moved if they
+    /// are on any member or inside one, and no landing picks a member or anything inside
+    /// one (<see cref="IsLeaving"/>). While it runs, <see cref="Holder"/> is the element
+    /// that holds the keys.</summary>
+    internal static bool LandBeforeLeaving(IReadOnlyCollection<UIElement> leaving)
+    {
+        if (Keyboard.FocusedElement is not { } holder
+            || holder is not DependencyObject keys
+            || MemberAround(keys, leaving) is not { } member)
+        {
+            return false;
+        }
+
+        Register();
+        bool outerLanding = _landing;
+        IInputElement? outerHolder = _holder;
+        IReadOnlyCollection<UIElement>? outerLeaving = _leaving;
+        _landing = true;
+        _holder = holder;
+        _leaving = leaving;
+        try
+        {
+            if (holder is UIElement element
+                && StrandedLandings.TryGetValue(element, out Func<bool>? own)
+                && own()
+                && LandedOutsideTheLeaving())
+            {
+                return true;
+            }
+
+            if (!ReferenceEquals(member, holder)
+                && StrandedLandings.TryGetValue(member, out Func<bool>? members)
+                && members()
+                && LandedOutsideTheLeaving())
+            {
+                return true;
+            }
+
+            UIElement[] scopes = ScopesOf(member);
+            if (HandUpFrom(member) is { } above
+                && IsAStop(above, scopes)
+                && SelectorFocus.LandOnStop(above)
+                && LandedOutsideTheLeaving())
+            {
+                return true;
+            }
+
+            foreach (UIElement scope in scopes)
+            {
+                if (IsLive(scope)
+                    && Landings.TryGetValue(scope, out Func<bool>? land)
+                    && land()
+                    && LandedOutsideTheLeaving())
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            _landing = outerLanding;
+            _holder = outerHolder;
+            _leaving = outerLeaving;
+        }
+    }
+
+    /// <summary>Whether <paramref name="element"/> is in the set a running
+    /// <see cref="LandBeforeLeaving(IReadOnlyCollection{UIElement})"/> is leaving, or inside
+    /// one of its members. A landing that walks for a stop passes over every such element:
+    /// it is still on and would take the keys, and is about to go off. False outside
+    /// one.</summary>
+    internal static bool IsLeaving(DependencyObject element) =>
+        _leaving is { } leaving && MemberAround(element, leaving) is not null;
+
+    /// <summary>The member of <paramref name="leaving"/> that
+    /// <paramref name="element"/> is, or lies inside.</summary>
+    private static UIElement? MemberAround(DependencyObject element, IReadOnlyCollection<UIElement> leaving)
+    {
+        for (DependencyObject? current = element; current is not null; current = ParentOf(current))
+        {
+            if (current is not UIElement visual)
+            {
+                continue;
+            }
+
+            foreach (UIElement member in leaving)
+            {
+                if (ReferenceEquals(member, visual))
+                {
+                    return member;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The element WPF's re-evaluation would hand the keys of
+    /// <paramref name="member"/> to once it is off: the nearest ancestor that can take
+    /// them.</summary>
+    private static UIElement? HandUpFrom(UIElement member)
+    {
+        for (DependencyObject? current = ParentOf(member); current is not null; current = ParentOf(current))
+        {
+            if (current is UIElement { Focusable: true, IsVisible: true, IsEnabled: true } above && !IsLeaving(above))
+            {
+                return above;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The keys are on a live element that is no member of the leaving set and
+    /// inside none.</summary>
+    private static bool LandedOutsideTheLeaving() =>
+        Keyboard.FocusedElement is { } now
+        && now is not Window
+        && !IsStranded(now)
+        && !(now is DependencyObject element && IsLeaving(element));
 
     /// <summary>Lands the keys stranded on <paramref name="old"/>; true when
     /// they are now on a live element other than it.</summary>
@@ -456,6 +639,17 @@ internal static class RegionFocusGuard
 
     private static bool IsLive(UIElement scope) =>
         scope.IsVisible && scope.IsEnabled && PresentationSource.FromVisual(scope) is not null;
+
+    /// <summary>Whether <paramref name="holder"/> can still hold the keys (in the tree,
+    /// shown, enabled, focusable) and its focus scope is a live element, other than a
+    /// window, that owns a guard landing: one of the window's sheets or overlays
+    /// (<c>RegionGuardCensus</c> holds every focus scope but the menu to a landing).</summary>
+    private static bool ASheetHoldsTheKeys(IInputElement holder) =>
+        !IsStranded(holder)
+        && holder is DependencyObject element
+        && FocusManager.GetFocusScope(element) is UIElement scope and not Window
+        && IsLive(scope)
+        && Landings.TryGetValue(scope, out _);
 
     /// <summary>Whether <paramref name="proposed"/> is a stop the keys may
     /// rest on: anything but the window, a scroll viewer, a tab control

@@ -697,20 +697,30 @@ internal sealed class ConnectionsLeafView : UserControl
         {
             _toolbar.Title = ConnectionsPhrase.Title;
             _summary.Visibility = Visibility.Collapsed;
-            _depth.IsEnabled = false;
             ShowState(ConnectionsPhrase.NoNote, ConnectionsPhrase.NoNote);
+            // Plan 47 CB-17b (#1866, CD11): the render's other writes first, then the keys
+            // off the depth control, through the leaf's landing, then the off.
+            _ = RegionFocusGuard.LandBeforeLeaving(_depth);
+            _depth.IsEnabled = false;
             return;
         }
         SyncDepthControl(model);
         ConnectionsPublication publication = model.Publication;
         _toolbar.Title = model.Root is { } root ? System.IO.Path.GetFileName(root) : ConnectionsPhrase.Title;
-        _depth.IsEnabled = model.Root is not null;
         if (model.Root is null || publication.State == ConnectionsLoadState.NoNote)
         {
             _summary.Visibility = Visibility.Collapsed;
             ShowState(ConnectionsPhrase.NoNote, ConnectionsPhrase.NoNote);
+            if (model.Root is null)
+            {
+                // Plan 47 CB-17b: as above, with no note to set a depth for.
+                _ = RegionFocusGuard.LandBeforeLeaving(_depth);
+            }
+
+            _depth.IsEnabled = model.Root is not null;
             return;
         }
+        _depth.IsEnabled = true;
         if (model.IsStale || publication.State == ConnectionsLoadState.Loading)
         {
             _summary.Visibility = Visibility.Collapsed;

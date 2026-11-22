@@ -70,6 +70,10 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     private CancelToken? _inFlightCancel;
     private int _requestId;
 
+    /// <summary>Plan 47 CB-17b: the run that holds the sheet while it is in flight, which a
+    /// press on Preview meanwhile names.</summary>
+    private RunningWork _running = RunningWork.BulkRenamePreview;
+
     /// <param name="requestApply">Plan 47 CB-9b: takes each apply the sheet
     /// asks for. The workspace admits it into the chains of the notes the
     /// armed preview listed, starts its worker at its turn
@@ -129,10 +133,10 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         get => _workInFlight;
         private set
         {
-            // In-flight state gates BOTH commands (adversarial
-            // round 2): the buttons must disable the moment a run
-            // starts, so a Preview can never supersede an in-flight
-            // Apply.
+            // In-flight state gates Apply (adversarial round 2). Preview
+            // stays on (plan 47 CB-17b, the owner's answer to Call 4):
+            // RunPreview refuses while a run is in flight, so a Preview
+            // can never supersede an in-flight Apply.
             if (SetField(ref _workInFlight, value))
             {
                 OnPropertyChanged(nameof(CanApply));
@@ -177,8 +181,12 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         && string.Equals(_armedOldKey, _oldKey.Trim(), StringComparison.Ordinal)
         && string.Equals(_armedNewKey, _newKey.Trim(), StringComparison.Ordinal);
 
+    /// <summary>Whether both keys are filled. Plan 47 CB-17b (#1866, the owner's answer to
+    /// Call 4, "Stay, and speak on a press"): a run in flight does not turn Preview off, so
+    /// the keys stay on it; a press meanwhile is refused with core's sentence
+    /// (<see cref="RunPreview"/>).</summary>
     public bool CanPreview =>
-        !_workInFlight && (_oldKey.Trim().Length > 0 || _oldKeyType.Kind == PropertyKeyType.Null) && _newKey.Trim().Length > 0;
+        (_oldKey.Trim().Length > 0 || _oldKeyType.Kind == PropertyKeyType.Null) && _newKey.Trim().Length > 0;
 
     private void Disarm()
     {
@@ -209,9 +217,13 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             AnnounceDirtyDrafts();
             return false;
         }
+        // Plan 47 CB-17b (#1866, CD11): admitted, the apply turns Apply off with the sheet
+        // in flight; the window moves the keys off it first.
+        WorkStarting?.Invoke();
         int requestId = Interlocked.Increment(ref _requestId);
         var cancel = new CancelToken();
         _inFlightCancel = cancel;
+        _running = RunningWork.BulkRenameApply;
         WorkInFlight = true;
         ProgressText = PropertyPhrase.BulkRenameApplyProgress;
         ErrorText = null;
@@ -246,6 +258,11 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     /// on it instead of per-row collection churn.</summary>
     internal event Action? RunPublished;
 
+    /// <summary>Plan 47 CB-17b (#1866, CD11): raised once an apply is admitted, before the
+    /// sheet goes in flight and Apply goes off with it, so the window moves the keys off Apply
+    /// first. A refused press raises nothing and leaves the keys where they are.</summary>
+    internal event Action? WorkStarting;
+
     /// <summary>Raised when the sheet may actually be released — the
     /// workspace shuts it down and nulls the reference here.</summary>
     internal event Action? CloseSettled;
@@ -272,10 +289,13 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     {
         if (_workInFlight)
         {
-            // Runtime guard behind the disabled buttons (adversarial
-            // round 2): runs are strictly serialized — a superseding
-            // request must never stale-discard an in-flight apply's
-            // terminal report.
+            // Runs are strictly serialized (adversarial round 2) — a
+            // superseding request must never stale-discard an in-flight
+            // apply's terminal report. Plan 47 CB-17b (#1866, the owner's
+            // answer to Call 4): Preview stays on through a run, so this
+            // refusal is a press's whole answer, in core's words for the
+            // run that holds the sheet.
+            _announce(new A11yEvent.WorkStillRunning(_running));
             return;
         }
         string oldKey = _oldKey.Trim();
@@ -284,6 +304,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         int requestId = Interlocked.Increment(ref _requestId);
         var cancel = new CancelToken();
         _inFlightCancel = cancel;
+        _running = RunningWork.BulkRenamePreview;
         WorkInFlight = true;
         ProgressText = PropertyPhrase.BulkRenamePreviewProgress;
         ErrorText = null;

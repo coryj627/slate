@@ -41,6 +41,24 @@ internal sealed class ShownShell : IDisposable
     public ShownShell(
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? dirtyCloseDecision,
         params (string Path, string Text)[] notes)
+        : this(dirtyCloseDecision, startInteractionBackgroundWork: true, notes)
+    {
+    }
+
+    /// <summary>Plan 47 CB-17b: with the workspace's interaction work run inline, for a fact
+    /// on the Queries leaf. The registry refresh hands its publication to
+    /// <c>Application.Current</c>'s dispatcher, which no test host has, so on the pool it
+    /// would rebuild the leaf's lists off the window's thread; inline it publishes in the
+    /// caller's turn, as RightPaneLeafRegionTests' own host runs it.</summary>
+    public ShownShell(bool startInteractionBackgroundWork, params (string Path, string Text)[] notes)
+        : this(null, startInteractionBackgroundWork, notes)
+    {
+    }
+
+    private ShownShell(
+        Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? dirtyCloseDecision,
+        bool startInteractionBackgroundWork,
+        (string Path, string Text)[] notes)
     {
         Assert.Null(Application.Current);
         // #1832: the app's window thread always has the dispatcher's context, and every
@@ -69,7 +87,7 @@ internal sealed class ShownShell : IDisposable
         }
 
         Workspace = new WorkspaceViewModel(
-            _session, _fixture.Root, Array.Empty<string>, Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: true);
+            _session, _fixture.Root, Array.Empty<string>, Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: startInteractionBackgroundWork);
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
         System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
