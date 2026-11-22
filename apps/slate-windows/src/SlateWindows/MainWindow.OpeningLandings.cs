@@ -94,35 +94,86 @@ public partial class MainWindow
     }
 
     /// <summary>Forgets the openings of surfaces that have closed, and lands the topmost
-    /// one if it opened beneath the surface that has just closed.</summary>
+    /// one if it opened beneath the surface that has just closed. When a surface closes over
+    /// one that had the keys before it, the one left on top is checked once the closing
+    /// surface's own restore and WPF's hand-up have run: a closer with no restore leaves the
+    /// keys to WPF, which can hand them to the window's element beneath it (red team on the
+    /// diff, F1).</summary>
     private void LandAnOpeningThatWaited()
     {
-        foreach (ModalSurface closed in _openingLandings.Where(entry => !entry.Value.StillOpen()).Select(entry => entry.Key).ToList())
+        List<ModalSurface> closed = [.. _openingLandings.Where(entry => !entry.Value.StillOpen()).Select(entry => entry.Key)];
+        foreach (ModalSurface surface in closed)
         {
-            _ = _openingLandings.Remove(closed);
+            _ = _openingLandings.Remove(surface);
         }
 
-        if (OpenModalSurface is { } top && _openingLandings.TryGetValue(top, out OpeningLanding? opening) && opening.Awaiting)
+        if (OpenModalSurface is not { } top || !_openingLandings.TryGetValue(top, out OpeningLanding? opening))
+        {
+            return;
+        }
+
+        if (opening.Awaiting)
         {
             TryLandOpening(top);
         }
+        else if (closed.Count > 0)
+        {
+            _ = Dispatcher.InvokeAsync(() => LandTheTopmostOpeningAgain(), DispatcherPriority.Background);
+        }
     }
 
-    /// <summary>Red team F4: the topmost surface that does not hold the keys takes them by
-    /// its opening landing when the window comes back or a box over it closes: one presented
-    /// while the window was away, or one that held the keys itself as it went.</summary>
+    /// <summary>Red team F4: the topmost surface whose stops do not hold the keys takes them
+    /// when the window comes back or a box over it closes: one presented while the window
+    /// was away, or one that held the keys itself as it went. The element its scope held
+    /// last lands first, when it held the keys and is still a stop, so the reader keeps their
+    /// place (red team on the diff, F4); else its opening landing. Says whether the keys are
+    /// in the surface now; false when nothing was to be done.</summary>
     private bool LandTheTopmostOpeningAgain()
     {
-        if (OpenModalSurface is not { } top
+        if (!IsActive
+            || OpenModalSurface is not { } top
             || !_openingLandings.TryGetValue(top, out OpeningLanding? opening)
             || !opening.StillOpen()
-            || opening.Surface.IsKeyboardFocusWithin)
+            || KeysAreOnAStopIn(opening.Surface))
         {
             return false;
         }
 
         opening.Awaiting = false;
+        if (FocusManager.GetFocusedElement(opening.Surface) is DependencyObject last and IInputElement token
+            && !ReferenceEquals(last, opening.Surface)
+            && IsWithin(last, opening.Surface)
+            && RegionFocusGuard.HeldTheKeys(token)
+            && LandToken(token)
+            && KeysAreOnAStopIn(opening.Surface))
+        {
+            return true;
+        }
+
         opening.LandNow();
+        return opening.Surface.IsKeyboardFocusWithin;
+    }
+
+    /// <summary>Plan 47 CB-17b PR 2 (red team on the diff, F1): a closing sheet's restore
+    /// never lands beneath the topmost surface still open. A token inside that surface lands
+    /// as it is (a citation sheet's return into the details sheet under it); one outside it
+    /// gives way to the surface's own landing, which runs only if its stops do not hold the
+    /// keys. Says whether the restore is to stand down.</summary>
+    private bool RestoreGivesWayToTheTopmost(IInputElement? token)
+    {
+        if (OpenModalSurface is not { } top
+            || !_openingLandings.TryGetValue(top, out OpeningLanding? opening)
+            || !opening.StillOpen())
+        {
+            return false;
+        }
+
+        if (token is DependencyObject target && IsWithin(target, opening.Surface))
+        {
+            return false;
+        }
+
+        _ = LandTheTopmostOpeningAgain();
         return true;
     }
 
@@ -137,6 +188,8 @@ public partial class MainWindow
         BringUpToDate(surface, stop);
         if (!surface.IsKeyboardFocusWithin)
         {
+            // A hold its keys left without passing through it, or one it closed in, ends.
+            SetHoldsTheKeys(surface, false);
             FocusManager.SetFocusedElement(surface, null);
         }
 
@@ -237,12 +290,12 @@ public partial class MainWindow
     }
 
     /// <summary>A surface holding the keys lets them go once they leave it, for a stop
-    /// inside it or because it closed. A loss to nothing while it is on screen (the window
-    /// went away) keeps it a stop, so the window's return can give them back to it (red team
-    /// F4).</summary>
+    /// inside it, because it closed, or because the window went away: the window's return
+    /// lands the topmost surface again (<see cref="LandTheTopmostOpeningAgain"/>), so a hold
+    /// is never kept for it, and never outlives its keys (red team on the diff, F6).</summary>
     private void SurfaceLetsTheKeysGo(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (sender is FrameworkElement surface && !(e.NewFocus is null && surface.IsVisible))
+        if (sender is FrameworkElement surface)
         {
             SetHoldsTheKeys(surface, false);
         }

@@ -255,6 +255,13 @@ public partial class MainWindow
                     return;
                 }
 
+                // Plan 47 CB-17b PR 2: never beneath the topmost surface still open
+                // (a sheet presented over another and closed).
+                if (RestoreGivesWayToTheTopmost(token))
+                {
+                    return;
+                }
+
                 // R-5 (#1247; codex round 4): a list, tree or grid token
                 // restores onto its row or cell, never the bare container —
                 // and a DEAD token (a Queries row the save's refresh rebuilt,

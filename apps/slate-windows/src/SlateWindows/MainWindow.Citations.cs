@@ -692,6 +692,13 @@ public partial class MainWindow
                     return;
                 }
 
+                // Plan 47 CB-17b PR 2: never beneath the topmost surface still open
+                // (a sheet presented over another and closed).
+                if (RestoreGivesWayToTheTopmost(target))
+                {
+                    return;
+                }
+
                 if (LandToken(target))
                 {
                     return;

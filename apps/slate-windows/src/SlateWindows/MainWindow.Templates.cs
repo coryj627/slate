@@ -250,8 +250,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Focus per picker state (T3): the first row when rows
-    /// exist, Try Again when empty/failed, Cancel while loading.</summary>
     /// <summary>Plan 47 CB-17b: the template picker's landing in the turn it opens or its
     /// state changes: the selected row when it is filled, Try Again when it is empty or
     /// failed, and nothing while it loads, so the sheet holds the keys rather than its
@@ -278,6 +276,8 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>Focus per picker state (T3): the first row when rows
+    /// exist, Try Again when empty/failed, Cancel while loading.</summary>
     private void FocusTemplatePicker()
     {
         TemplatePickerViewModel? picker = _viewModel.Workspace?.TemplatePickerSheet;

@@ -250,6 +250,13 @@ public partial class MainWindow
                     return;
                 }
 
+                // Plan 47 CB-17b PR 2: never beneath the topmost surface still open
+                // (a sheet presented over another and closed).
+                if (RestoreGivesWayToTheTopmost(previous))
+                {
+                    return;
+                }
+
                 // Red team after round 11: a failed restore was a bare
                 // ignored Focus() — the one census member with no miss
                 // fallback, stranding focus on the window root when

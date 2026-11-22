@@ -6,7 +6,11 @@
 // desktop where it skips. Such a witness is refused, unless its row is one of the menu's
 // seventeen, written with the marker, whose facts skip where a desktop refuses a menu the
 // keys (#1680). "Can skip" is read in this project's source, from the fact, by following
-// calls by name through every helper at any depth.
+// calls by name through every helper at any depth. Its limits (the red team on PR 2's
+// diff, F9): it indexes methods, properties and constructors, so a skip reached through a
+// field holding a delegate, an indexer, an operator, an event handler, an aliased Assert,
+// or a class or collection fixture that xunit constructs reads as no skip. No witness
+// uses one today, and OnlyTheMenusTwoWitnessesCanSkip measures the project.
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;

@@ -29,6 +29,7 @@ public sealed partial class SheetOpeningTests
     [InlineData("PaletteField")]
     [InlineData("StatusBar")]
     [InlineData("MenuBar")]
+    [InlineData("OpenMenuItem")]
     public void ASheetTakesTheKeysFromWhereverTheyAreInTheWindow(string holder) => RunSta(() =>
     {
         Sheet sheet = SheetOf(holder is "PaletteField"
@@ -47,6 +48,16 @@ public sealed partial class SheetOpeningTests
                 break;
             case "StatusBar":
                 Assert.True(bench.Host.Land(ShellRegionKind.StatusBar), $"keyboard premise: the status bar refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+                bench.Host.Settle();
+                break;
+            case "OpenMenuItem":
+                // The red team on PR 2's diff, F10: an item of the open Slate menu, in its popup.
+                MenuItem top = bench.Shell.MainMenu.Items.OfType<MenuItem>().First();
+                top.IsSubmenuOpen = true;
+                bench.Host.Settle();
+                MenuItem item = top.Items.OfType<MenuItem>().FirstOrDefault(candidate => candidate.IsEnabled && candidate.IsVisible)
+                    ?? KeysFirstRecorder.SkipWhereTheDesktopRefusesTheMenu("no item of the open menu is on screen");
+                KeysFirstRecorder.TakeTheMenuKeys(item);
                 bench.Host.Settle();
                 break;
             default:
@@ -244,6 +255,149 @@ public sealed partial class SheetOpeningTests
 
         Assert.Equal(ModalSurface.TemplateFlow, bench.Shell.OpenModalSurface);
         Assert.Equal("xy", name.Text);
+    });
+
+    /// <summary>The red team on PR 2's diff, F1: Files Citing presented beneath the dashboard
+    /// editor waits; when the editor closes, Files Citing lands its Close, and the editor's
+    /// own restore, whose token is the editor's text behind both, gives way to it: the keys
+    /// rest in Files Citing, and Escape closes it.</summary>
+    [Fact]
+    public void ASheetClosedOverAWaitingSheetNeverRestoresBeneathIt() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.LoadTheBibliography();
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        Assert.True(bench.Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        bench.Host.Settle();
+
+        using var held = new HeldWork(hook => bench.Workspace.FilesCitingInterleaveForTests = hook);
+        bench.Workspace.OpenFilesCiting("knuth1984");
+        held.WaitUntilEntered();
+        bench.Workspace.OpenDashboardEditor(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.DashboardEditor, bench.Shell.OpenModalSurface);
+        held.Release();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => bench.Workspace.FilesCiting is not null, TimeSpan.FromSeconds(15)),
+            "Files Citing never presented");
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.DashboardEditor, bench.Shell.OpenModalSurface);
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.DashboardEditorOverlay), $"premise: the dashboard editor holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        bench.Workspace.CloseDashboardEditor();
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
+        Assert.True(
+            ReferenceEquals(bench.Shell.FilesCitingCloseButton, Keyboard.FocusedElement),
+            $"once the dashboard editor closed over Files Citing the keys rested on {Describe(Keyboard.FocusedElement)}, not on its Close");
+        Press(bench.Host, Key.Escape);
+        bench.Host.Settle();
+        Assert.Null(bench.Workspace.FilesCiting);
+    });
+
+    /// <summary>The red team on PR 2's diff, F1: Files Citing presented over the citation
+    /// details sheet takes the keys; closed, its restore, whose token is outside the details
+    /// sheet, gives way to the details sheet, which is still open.</summary>
+    [Fact]
+    public void ACitationSheetClosedOverTheDetailsSheetLandsBackInIt() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.LoadTheBibliography();
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        Assert.True(bench.Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        bench.Host.Settle();
+
+        using var held = new HeldWork(hook => bench.Workspace.FilesCitingInterleaveForTests = hook);
+        bench.Workspace.OpenFilesCiting("knuth1984");
+        held.WaitUntilEntered();
+        bench.Workspace.OpenEntryDetails(bench.Workspace.Bibliography.Entries[0].Entry);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.CitationDetails, bench.Shell.OpenModalSurface);
+        held.Release();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => bench.Workspace.FilesCiting is not null, TimeSpan.FromSeconds(15)),
+            "Files Citing never presented");
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.FilesCitingOverlay), $"premise: Files Citing holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        Press(bench.Host, Key.Escape);
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Equal(ModalSurface.CitationDetails, bench.Shell.OpenModalSurface);
+        Assert.True(
+            KeysFirstRecorder.TheKeysAreIn(bench.Shell.CitationDetailsOverlay),
+            $"once Files Citing closed over the details sheet the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
+    });
+
+    /// <summary>The red team on PR 2's diff, F2 and F4: when the window comes back with the
+    /// keys outside the open sheet (WPF gives them to the window's own focused element, under
+    /// the sheet), they go back to the stop the reader left in the sheet, not to its first
+    /// stop.</summary>
+    [Fact]
+    public void TheWindowsReturnPutsTheReaderBackOnTheStopTheyLeftInTheSheet() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        Assert.True(bench.Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        bench.Host.Settle();
+        var editor = ShownShell.Descendants(bench.Shell.WorkspaceRoot).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(area => area.IsVisible);
+        bench.Host.Lifecycle.OpenSettingsCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Button close = bench.Shell.SettingsCloseButton;
+        TakeTheKeys(close);
+        TakeTheKeys(editor);
+        bench.Host.Settle();
+
+        WindowActivation.GoAway(bench.Shell);
+        WindowActivation.ComeBack(bench.Shell);
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Equal(ModalSurface.Settings, bench.Shell.OpenModalSurface);
+        Assert.True(
+            ReferenceEquals(close, Keyboard.FocusedElement),
+            $"the window came back with Settings open; the keys are on {Describe(Keyboard.FocusedElement)}, not on the Close the reader left");
+    });
+
+    /// <summary>A sheet whose stops refused the keys in its opening turn holds them; a stop
+    /// the reader moves them to before the fallback runs keeps them: the fallback runs only
+    /// while no stop inside the sheet has the keys.</summary>
+    [Fact]
+    public void AFallbackLandingLeavesTheKeysOnAStopTheReaderMovedTo() => RunSta(() =>
+    {
+        Sheet sheet = SheetOf(nameof(VaultLifecycleViewModel.SettingsSheet));
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        Assert.True(bench.Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        bench.Host.Settle();
+        FrameworkElement overlay = bench.Overlay(sheet);
+
+        IInputElement? inTheTurn = bench.OpenAndReadTheKeysInThatTurn(sheet, endAtTheRead: RefuseTheKeysInside(overlay));
+        Assert.True(ReferenceEquals(overlay, inTheTurn), $"premise: in the turn Settings opened the keys were on {Describe(inTheTurn)}, not on Settings itself");
+        Button close = bench.Shell.SettingsCloseButton;
+        TakeTheKeys(close);
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.True(
+            ReferenceEquals(close, Keyboard.FocusedElement),
+            $"the fallback landing moved the keys from the Close the reader chose to {Describe(Keyboard.FocusedElement)}");
     });
 
     /// <summary>Text typed where the keys are, as the keyboard's text arrives.</summary>

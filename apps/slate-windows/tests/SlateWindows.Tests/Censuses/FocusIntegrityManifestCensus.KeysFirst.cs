@@ -1086,6 +1086,15 @@ public sealed partial class FocusIntegrityManifestCensus
         string[] then = [.. EndedByCb17b.Values, .. GoneWithCb17b.Keys];
         Assert.Equal(47, then.Length);
         Assert.Equal(47, then.Distinct(StringComparer.Ordinal).Count());
+
+        // Red team on PR 2's diff, F8: the 47 are the keys CB-17a dated, not any 47 sites
+        // that can turn a control off. Sorted and joined by line feeds, their text hashes to
+        // what main ad40500d's frozen table and dated rows held, so a row swapped for
+        // another site, which would free its key for a free-text exemption, is refused.
+        Assert.Equal(
+            "2749c3533c7494f9682ce7645a7ab5231dd7519cc87bbfaf69290bcc698de4fc",
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(string.Join('\n', then.Order(StringComparer.Ordinal))))));
         Assert.All(EndedByCb17b.Keys.Concat(GoneWithCb17b.Keys), key => Assert.True(IsDisableSite(key), $"{key} can turn no control off"));
         Assert.Equal(
             ["QueriesOpenBaseFile", "QueriesOpenDashboard", "QueriesRun"],
