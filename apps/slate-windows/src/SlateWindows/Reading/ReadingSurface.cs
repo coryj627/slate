@@ -1611,6 +1611,11 @@ internal sealed class ReadingSurface : RichTextBox
     /// caret is left there until the button is released.</summary>
     private bool _pointerHeld;
 
+    /// <summary>#1708 (Codex round 6): counts presses, keys, caret
+    /// restores and releases, so what a release posts runs only when no
+    /// newer input superseded it.</summary>
+    private int _caretInputs;
+
     /// <summary>#1708 (the merge judge's m2): a republish or a rebind is
     /// putting the reader back where they were, hidden letter included.</summary>
     private bool _restoringCaret;
@@ -1619,6 +1624,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// reader, exactly, a hidden letter included.</summary>
     private void RestoreCaret(TextPointer position)
     {
+        _caretInputs++;
         _restoringCaret = true;
         try
         {
@@ -1634,6 +1640,7 @@ internal sealed class ReadingSurface : RichTextBox
     {
         // A key while the button is down ends the press's hold.
         _pointerHeld = false;
+        _caretInputs++;
         _caretMovedAlongItsLine = e.Key is System.Windows.Input.Key.Left or System.Windows.Input.Key.Right
             || (e.Key is System.Windows.Input.Key.Home or System.Windows.Input.Key.End
                 && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0);
@@ -1651,6 +1658,7 @@ internal sealed class ReadingSurface : RichTextBox
     {
         _caretMovedAlongItsLine = false;
         _pointerHeld = true;
+        _caretInputs++;
         base.OnPreviewMouseDown(e);
     }
 
@@ -1672,12 +1680,18 @@ internal sealed class ReadingSurface : RichTextBox
         _pointerHeld = false;
         // After WPF's own release has settled the selection: a plain click
         // in hidden speech rests just after the element; a drag keeps its
-        // selection.
+        // selection. Only this release's caret is moved: a newer press, key
+        // or restore, or a caret set anywhere else since, supersedes it.
+        int release = ++_caretInputs;
+        TextPointer released = CaretPosition;
         _ = Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Input,
             () =>
             {
-                if (Selection.IsEmpty)
+                if (release == _caretInputs
+                    && !_pointerHeld
+                    && Selection.IsEmpty
+                    && CaretPosition.CompareTo(released) == 0)
                 {
                     MoveCaretPastHiddenSpeech(CaretPosition);
                 }
