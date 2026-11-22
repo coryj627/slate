@@ -65,7 +65,7 @@ internal sealed class ReadingDiagramElement : ContentControl
     private double _lineReserve;
 
     protected override Size MeasureOverride(Size constraint) =>
-        ReadingLineReserve.Measure(constraint, _lineReserve, base.MeasureOverride);
+        ReadingLineReserve.Measure(constraint, ReadingLineReserve.For(this, _lineReserve), base.MeasureOverride);
 
     /// <summary>Completes this element in place (WB-20, #1317): the name
     /// becomes <paramref name="description"/> and, when the render produced
@@ -155,7 +155,7 @@ internal sealed class ReadingDiagramImage : Image
     private double _lineReserve;
 
     protected override Size MeasureOverride(Size constraint) =>
-        ReadingLineReserve.Measure(constraint, _lineReserve, base.MeasureOverride);
+        ReadingLineReserve.Measure(constraint, ReadingLineReserve.For(this, _lineReserve), base.MeasureOverride);
 
     protected override AutomationPeer? OnCreateAutomationPeer() => null;
 }
@@ -166,6 +166,34 @@ internal sealed class ReadingDiagramImage : Image
 /// where line reading reads only the role or a blank.</summary>
 internal static class ReadingLineReserve
 {
+    /// <summary>What the room adds to the run's own width.</summary>
+    private const double Margin = 4;
+
+    /// <summary>#1708 (Codex round 3): the room <paramref name="element"/>
+    /// leaves the hidden speech run just before it, the run's width as WPF
+    /// lays it out (fallback fonts and glyphs wider than their em included,
+    /// a three-em dash among them) plus a margin, and never less than
+    /// <paramref name="reserve"/>, the builder's estimate. An element with no
+    /// such run keeps <paramref name="reserve"/>.</summary>
+    internal static double For(FrameworkElement element, double reserve)
+    {
+        if (element.Parent is not System.Windows.Documents.InlineUIContainer { PreviousInline: System.Windows.Documents.Run run }
+            || !ReadingSemantics.IsHiddenSpeech(run)
+            || run.Text.Length == 0)
+        {
+            return reserve;
+        }
+        var text = new System.Windows.Media.FormattedText(
+            run.Text,
+            System.Globalization.CultureInfo.CurrentUICulture,
+            run.FlowDirection,
+            new System.Windows.Media.Typeface(run.FontFamily, run.FontStyle, run.FontWeight, run.FontStretch),
+            run.FontSize,
+            System.Windows.Media.Brushes.Transparent,
+            System.Windows.Media.VisualTreeHelper.GetDpi(element).PixelsPerDip);
+        return Math.Max(reserve, text.WidthIncludingTrailingWhitespace + Margin);
+    }
+
     internal static Size Measure(Size constraint, double reserve, Func<Size, Size> measure)
     {
         if (reserve <= 0 || double.IsInfinity(constraint.Width))

@@ -816,9 +816,10 @@ internal static class ReadingDocumentBuilder
     private static double SpeechRunFontSize(string speech) =>
         Math.Clamp(SpeechRunWidthBudget / Math.Max(1, speech.Length), 0.01, 0.1);
 
-    /// <summary>An upper bound on the speech run's width, which the
-    /// element leaves free on their line: a speech glyph's advance stays
-    /// within its em, plus a margin.</summary>
+    /// <summary>The builder's estimate of the speech run's width, which the
+    /// element leaves free on their line: an em for each character, plus a
+    /// margin. A glyph wider than its em gets the room it takes when the
+    /// element is measured (<see cref="ReadingLineReserve.For"/>).</summary>
     private static double SpeechRunReserve(string speech) =>
         (speech.Length * SpeechRunFontSize(speech)) + 4;
 
