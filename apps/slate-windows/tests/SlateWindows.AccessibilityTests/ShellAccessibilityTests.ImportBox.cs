@@ -87,6 +87,8 @@ public sealed partial class ShellAccessibilityTests
 
             AssertEventuallyFocused(import, "the keys did not come back to Import… after its box was cancelled.");
             Assert.True(import.IsEnabled, "Import… was off after its box was cancelled.");
+            AssertAxeClean(process, "import-box-cancelled");
+            AssertEventuallyFocused(import, "the scan moved the keys off Import….");
 
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(
