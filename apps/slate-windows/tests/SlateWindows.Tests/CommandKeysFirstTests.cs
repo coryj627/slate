@@ -233,19 +233,19 @@ public sealed class CommandKeysFirstTests
         Assert.Same(stage.Home, Keyboard.FocusedElement);
     });
 
-    /// <summary>A command raised from a thread with no dispatcher (a worker's completion)
-    /// raises as before and makes the thread no dispatcher: no <see cref="Keyboard"/> member
-    /// is read there, since reading one gives the thread an input manager.</summary>
+    /// <summary>A command raised from a thread with no dispatcher raises as before and makes
+    /// the thread no dispatcher: no <see cref="Keyboard"/> member is read there, since
+    /// reading one gives the thread a dispatcher and an input manager. The thread here is
+    /// STA, so the dispatcher is the only thing that tells it from one that holds keys; a
+    /// worker's completion, which is neither, is the same case.</summary>
     [Fact]
     public void ARaiseOnAThreadWithNoDispatcherTouchesNothing()
     {
         int raised = 0;
         bool dispatcherBefore = true;
         bool dispatcherAfter = true;
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
+        StaThread.Run(
+            () =>
             {
                 var command = new RelayCommand(_ => { }, _ => false);
                 command.CanExecuteChanged += (_, _) => raised++;
@@ -257,19 +257,32 @@ public sealed class CommandKeysFirstTests
                 }
 
                 dispatcherAfter = Dispatcher.FromThread(Thread.CurrentThread) is not null;
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "the raise never returned");
+            },
+            TimeSpan.FromSeconds(60),
+            "the raise never returned");
 
-        Assert.Null(failure);
         Assert.Equal(2, raised);
         Assert.False(dispatcherBefore, "premise: the thread had a dispatcher before the raise");
-        Assert.False(dispatcherAfter, "the raise gave a worker thread a dispatcher");
+        Assert.False(dispatcherAfter, "the raise gave a thread with no dispatcher one");
+    }
+
+    /// <summary>The runner's own threads are not STA, and production code that captures
+    /// <see cref="Dispatcher.CurrentDispatcher"/> gives one a dispatcher when a plain fact
+    /// builds a view model there. Such a thread hosts no window and cannot have an input
+    /// manager (WPF refuses to make one off an STA thread), so the raise asks nothing of
+    /// the keys there.</summary>
+    [Fact]
+    public void ARaiseOnAThreadThatIsNotStaTouchesNothingThoughItHasADispatcher()
+    {
+        Assert.NotEqual(ApartmentState.STA, Thread.CurrentThread.GetApartmentState());
+        _ = Dispatcher.CurrentDispatcher;
+        int raised = 0;
+        var command = new RelayCommand(_ => { }, _ => false);
+        command.CanExecuteChanged += (_, _) => raised++;
+
+        command.RaiseCanExecuteChanged();
+
+        Assert.Equal(1, raised);
     }
 
     /// <summary>On a thread with a dispatcher and no window nothing holds the keys, and

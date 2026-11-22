@@ -119,6 +119,110 @@ public sealed class KeysComeBackTests
         Assert.Empty(changes);
     });
 
+    /// <summary>Keys that are on a live element when the window's step runs are never
+    /// taken: something else, the reader or a route, has placed them since. They are put
+    /// on the menu bar here, a focus scope of its own, so the window's own focused element
+    /// is still the button and a step that did not look would hand them back to it.</summary>
+    [Fact]
+    public void KeysPlacedSinceTheWindowCameBackAreNeverTaken() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "---\nstatus: draft\n---\n# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.Shell.Activate();
+        host.Settle();
+        var region = (FrameworkElement)host.Shell.FindName("ContentPaneBorder");
+        Button button = ShownShell.Descendants(region).OfType<Button>()
+            .First(candidate => AutomationProperties.GetAutomationId(candidate) == "PropertiesAddButton" && candidate.IsVisible);
+        TakeTheKeys(button);
+        host.Settle();
+
+        WindowActivation.GoAway(host.Shell);
+        WindowActivation.ComeBack(host.Shell);
+        MenuItem placed = host.Shell.MainMenu.Items.OfType<MenuItem>().First();
+        KeysFirstRecorder.TakeTheMenuKeys(placed);
+        List<IInputElement> changes = host.RecordFocusChanges();
+        host.Settle();
+
+        Assert.Same(placed, Keyboard.FocusedElement);
+        Assert.Empty(changes);
+    });
+
+    /// <summary>A window whose focused element never held the keys is left alone: at
+    /// launch the window's first landing is its own route's, and this step neither lands
+    /// in the editor ahead of it nor speaks the pane.</summary>
+    [Fact]
+    public void AWindowWhoseFocusedElementNeverHeldTheKeysIsLeftAlone() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "---\nstatus: draft\n---\n# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        var region = (FrameworkElement)host.Shell.FindName("ContentPaneBorder");
+        Button button = ShownShell.Descendants(region).OfType<Button>()
+            .First(candidate => AutomationProperties.GetAutomationId(candidate) == "PropertiesAddButton" && candidate.IsVisible);
+        // The keys on nothing, with nothing for WPF to hand them back to, and the window's
+        // focused element one that is off and never held them.
+        Keyboard.ClearFocus();
+        button.SetCurrentValue(UIElement.IsEnabledProperty, false);
+        FocusManager.SetFocusedElement(host.Shell, button);
+        host.Settle();
+        Assert.Same(button, FocusManager.GetFocusedElement(host.Shell));
+        Assert.False(RegionFocusGuard.HeldTheKeys(button), "premise: the button has held the keys");
+        Assert.True(Keyboard.FocusedElement is null or Window, $"premise: the keys are on {Describe(Keyboard.FocusedElement)}");
+        host.Announced.Clear();
+
+        WindowActivation.ComeBack(host.Shell);
+        host.Settle();
+
+        Assert.True(
+            Keyboard.FocusedElement is null or Window,
+            $"the window landed the keys on {Describe(Keyboard.FocusedElement)} by an element that never held them");
+        Assert.DoesNotContain(host.Announced, line => line is uniffi.slate_uniffi.A11yEvent.EditorPaneFocused);
+    });
+
+    /// <summary>While a modal loop runs over the window (a box of its own, a picker), the
+    /// box owns the keys and nothing is landed beneath it. The activation that follows the
+    /// loop's end lands them.</summary>
+    [Fact]
+    public void NothingIsLandedUnderAModalLoopAndTheNextActivationLands() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "---\nstatus: draft\n---\n# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.Shell.Activate();
+        host.Settle();
+        var region = (FrameworkElement)host.Shell.FindName("ContentPaneBorder");
+        Button button = ShownShell.Descendants(region).OfType<Button>()
+            .First(candidate => AutomationProperties.GetAutomationId(candidate) == "PropertiesAddButton" && candidate.IsVisible);
+        TakeTheKeys(button);
+        host.Settle();
+
+        WindowActivation.GoAway(host.Shell);
+        button.SetCurrentValue(UIElement.IsEnabledProperty, false);
+        host.Settle();
+        System.Windows.Interop.ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Shell.ModalLoops.IsModalLoopActive, "premise: the window does not see the modal loop");
+            WindowActivation.ComeBack(host.Shell);
+            host.Settle();
+
+            Assert.True(
+                Keyboard.FocusedElement is null or Window,
+                $"under a modal loop the keys were landed on {Describe(Keyboard.FocusedElement)}");
+        }
+        finally
+        {
+            System.Windows.Interop.ComponentDispatcher.PopModal();
+        }
+
+        WindowActivation.GoAway(host.Shell);
+        WindowActivation.ComeBack(host.Shell);
+        host.Settle();
+
+        AssertTheKeysAreOnALiveElementIn(region, "the editor region");
+    });
+
     private static void AssertTheKeysAreOnALiveElementIn(FrameworkElement region, string what)
     {
         IInputElement? keys = Keyboard.FocusedElement;

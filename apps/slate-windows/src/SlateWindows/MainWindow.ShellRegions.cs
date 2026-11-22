@@ -842,7 +842,9 @@ public partial class MainWindow : IShellRegionHost
     /// gives way to a populated list that follows it (the owner's S5, the
     /// sweep's G14: a note whose tasks are all done landed on the empty
     /// "Open tasks" list, its rows one list below); with nothing populated
-    /// after it, the empty list is the stop (AR-6).
+    /// after it, the empty list is the stop (AR-6). A control that is about
+    /// to go off, and everything inside one, is passed over (#1866:
+    /// <see cref="RegionFocusGuard.IsLeaving"/>).
     /// </summary>
     private static UIElement? FirstFocusable(DependencyObject root)
     {
@@ -850,7 +852,8 @@ public partial class MainWindow : IShellRegionHost
         foreach (DependencyObject candidate in FindVisualDescendants<DependencyObject>(root))
         {
             if (candidate is not UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
-                || candidate is Border)
+                || candidate is Border
+                || RegionFocusGuard.IsLeaving(element))
             {
                 continue;
             }
