@@ -385,8 +385,10 @@ public partial class MainWindow
         // goes, and each press made meanwhile says so; a held Enter's repeats are no
         // presses, and would say it on every repeat. The fence is the sheet's buttons' and
         // fields' (the merge judge's nit 2): in the preview grid a repeat runs no preview
-        // and goes on to the grid, whose Enter walks its rows.
-        if (e.Key == Key.Enter && e.IsRepeat)
+        // and goes on to the grid, whose Enter walks its rows. A repeat is the keyboard's
+        // (HeldKey, Codex round 2): WPF's own guess ends when another key is let go, Shift
+        // during a held Shift+Enter, while Enter is still held.
+        if (e.Key == Key.Enter && HeldKey.IsRepeating(e))
         {
             if (!(e.OriginalSource is System.Windows.Media.Visual source
                 && (ReferenceEquals(source, BulkRenamePreviewGrid) || BulkRenamePreviewGrid.IsAncestorOf(source))))

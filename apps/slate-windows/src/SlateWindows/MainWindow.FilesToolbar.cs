@@ -27,10 +27,12 @@ public partial class MainWindow
     /// their work goes on. Expand loaded folders stays on while it runs, and a press made
     /// meanwhile says so; Import… stays on while its box is up, and its box's default button,
     /// Cancel, hands the keys back to it. A held Enter's repeats are no presses: they would say
-    /// the sentence, or close the box and open it again, on every repeat.</summary>
+    /// the sentence, or close the box and open it again, on every repeat. A repeat is the
+    /// keyboard's (<see cref="HeldKey"/>, Codex round 2): the box takes the key-up of the
+    /// press that opened it, and WPF's own guess would call the next new press a repeat.</summary>
     private void EnterRepeatPressesNothing_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == System.Windows.Input.Key.Enter && e.IsRepeat)
+        if (e.Key == System.Windows.Input.Key.Enter && HeldKey.IsRepeating(e))
         {
             e.Handled = true;
         }
