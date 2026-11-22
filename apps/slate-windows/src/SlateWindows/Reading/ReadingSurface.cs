@@ -1575,7 +1575,7 @@ internal sealed class ReadingSurface : RichTextBox
                 break;
             }
             if (block is not Paragraph paragraph
-                || ReadingSemantics.MathCopyTextOf(paragraph) is not { } fencedSource
+                || ReadingSemantics.CopyTextOf(paragraph) is not { } fencedSource
                 || paragraph.ContentEnd.CompareTo(start) <= 0)
             {
                 continue;

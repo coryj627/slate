@@ -34,10 +34,20 @@ internal static class ReadingSemantics
             "ReadingMathSpeech", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
-    private static readonly DependencyProperty MathCopyTextProperty =
+    private static readonly DependencyProperty CopyTextProperty =
         DependencyProperty.RegisterAttached(
-            "ReadingMathCopyText", typeof(string), typeof(ReadingSemantics),
+            "ReadingCopyText", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
+
+    private static readonly DependencyProperty DiagramFenceProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingDiagramFence", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty HiddenSpeechProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingHiddenSpeech", typeof(bool), typeof(ReadingSemantics),
+            new PropertyMetadata(false));
 
     private static readonly DependencyProperty DiagramDescriptionProperty =
         DependencyProperty.RegisterAttached(
@@ -243,17 +253,40 @@ internal static class ReadingSemantics
     public static string MathSpeechOf(Paragraph paragraph) =>
         paragraph.GetValue(MathSpeechProperty) as string ?? string.Empty;
 
-    /// <summary>#1595: a math paragraph whose text range is its speech
-    /// (the plan 45 XB-9 shape) carries the fenced source a copy puts in
-    /// the speech's place.</summary>
-    public static void MarkMathCopyText(Paragraph paragraph, string fencedSource) =>
-        paragraph.SetValue(MathCopyTextProperty, fencedSource);
+    /// <summary>#1595 and #1708: a paragraph whose text range is speech for
+    /// an object it holds (a drawn formula, a rendered diagram) carries the
+    /// fenced source a copy puts in that speech's place.</summary>
+    public static void MarkCopyText(Paragraph paragraph, string fencedSource) =>
+        paragraph.SetValue(CopyTextProperty, fencedSource);
 
-    /// <summary>The fenced source a copy substitutes for this math
-    /// paragraph's speech; null when its range already holds the source
-    /// (a block with no core artifact).</summary>
-    public static string? MathCopyTextOf(Paragraph paragraph) =>
-        paragraph.GetValue(MathCopyTextProperty) as string;
+    /// <summary>The fenced source a copy substitutes for this paragraph;
+    /// null when its range already holds what it shows (a math block with
+    /// no core artifact, a pending or failed diagram).</summary>
+    public static string? CopyTextOf(Paragraph paragraph) =>
+        paragraph.GetValue(CopyTextProperty) as string;
+
+    public static void ClearCopyText(Paragraph paragraph) =>
+        paragraph.ClearValue(CopyTextProperty);
+
+    /// <summary>#1708: every diagram paragraph, in every state, carries its
+    /// block's fenced source, so a completion in place, which has only the
+    /// outcome, can give the rendered shape its copy text. Never read by a
+    /// copy itself: a pending or failed paragraph copies what it shows.</summary>
+    public static void MarkDiagramFence(Paragraph paragraph, string fencedSource) =>
+        paragraph.SetValue(DiagramFenceProperty, fencedSource);
+
+    public static string? DiagramFenceOf(Paragraph paragraph) =>
+        paragraph.GetValue(DiagramFenceProperty) as string;
+
+    /// <summary>#1595 and #1708: a run in the text range for line reading
+    /// only: a formula's speech, a rendered diagram's description, a pending
+    /// diagram's name, an embedded image's name. It is drawn transparent at a
+    /// sliver of a point; find skips it and a copy leaves it out.</summary>
+    public static void MarkHiddenSpeech(Run run) =>
+        run.SetValue(HiddenSpeechProperty, true);
+
+    public static bool IsHiddenSpeech(Run run) =>
+        (bool)run.GetValue(HiddenSpeechProperty);
 
     /// <summary>Diagram block (W3-3): the marker carries the canonical
     /// structured description so the landmark walk and the caret

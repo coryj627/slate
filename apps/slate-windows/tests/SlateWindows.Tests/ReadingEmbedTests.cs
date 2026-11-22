@@ -172,8 +172,11 @@ public sealed class ReadingEmbedTests
             // Never upscale (owner call, field pass 3 2026-07-31):
             // natural size, downscale-only — the G26 divergence from
             // mac's scale-to-column-width.
+            // #1708 (CB-20): an embed card's image stands after its name's
+            // hidden run, in a paragraph.
             var images = AllBlocks(surface.Document.Blocks)
-                .OfType<System.Windows.Documents.BlockUIContainer>()
+                .OfType<System.Windows.Documents.Paragraph>()
+                .SelectMany(paragraph => paragraph.Inlines.OfType<System.Windows.Documents.InlineUIContainer>())
                 .Select(container => container.Child)
                 .OfType<ReadingDiagramImage>()
                 .ToList();

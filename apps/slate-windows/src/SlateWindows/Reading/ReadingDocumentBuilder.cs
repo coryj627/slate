@@ -671,7 +671,7 @@ internal static class ReadingDocumentBuilder
             paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
         }
         ReadingSemantics.MarkMathBlock(paragraph, speech);
-        ReadingSemantics.MarkMathCopyText(paragraph, fallbackSource);
+        ReadingSemantics.MarkCopyText(paragraph, fallbackSource);
         return paragraph;
     }
 

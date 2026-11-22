@@ -42,6 +42,31 @@ internal sealed class ReadingDiagramElement : ContentControl
     /// placeholder's "Diagram, rendering" until the stage completes it.</summary>
     public string Description { get; private set; }
 
+    /// <summary>#1708: the width the description run before this element can
+    /// take on their shared line (the math element's rule, #1595). WPF
+    /// measures an embedded element against the whole line, so a drawing
+    /// that fills it drops to a line of its own, where line reading reads
+    /// only the role. The content is measured that much narrower. Settable,
+    /// and measured again when set, because the stage completes this element
+    /// in place after it was first measured.</summary>
+    public double LineReserve
+    {
+        get => _lineReserve;
+        set
+        {
+            if (_lineReserve != value)
+            {
+                _lineReserve = value;
+                InvalidateMeasure();
+            }
+        }
+    }
+
+    private double _lineReserve;
+
+    protected override Size MeasureOverride(Size constraint) =>
+        ReadingLineReserve.Measure(constraint, _lineReserve, base.MeasureOverride);
+
     /// <summary>Completes this element in place (WB-20, #1317): the name
     /// becomes <paramref name="description"/> and, when the render produced
     /// one, the frozen <paramref name="visual"/> becomes its content. The
@@ -103,11 +128,51 @@ internal sealed class ReadingDiagramElement : ContentControl
 /// The rendered diagram's Image with NO automation peer — the exact
 /// analog of mac's <c>accessibilityHidden(true)</c> on the SwiftUI
 /// Image: AT never announces "image"; the containing element's Name
-/// (the structured description) is the entire announcement.
+/// (the structured description) is the entire announcement. An embed
+/// card's image is one too, after the hidden run of its name (#1708).
 /// </summary>
 internal sealed class ReadingDiagramImage : Image
 {
+    /// <summary>#1708: the width the name run before an embed card's image
+    /// takes on their shared line; 0 inside a diagram element, whose own
+    /// reserve already narrows it.</summary>
+    public double LineReserve
+    {
+        get => _lineReserve;
+        set
+        {
+            if (_lineReserve != value)
+            {
+                _lineReserve = value;
+                InvalidateMeasure();
+            }
+        }
+    }
+
+    private double _lineReserve;
+
+    protected override Size MeasureOverride(Size constraint) =>
+        ReadingLineReserve.Measure(constraint, _lineReserve, base.MeasureOverride);
+
     protected override AutomationPeer? OnCreateAutomationPeer() => null;
+}
+
+/// <summary>#1595 and #1708: an element after a hidden speech run is
+/// measured narrower by the run's width, or WPF, which measures an embedded
+/// element against the whole line, drops a wide one to a line of its own,
+/// where line reading reads only the role or a blank.</summary>
+internal static class ReadingLineReserve
+{
+    internal static Size Measure(Size constraint, double reserve, Func<Size, Size> measure)
+    {
+        if (reserve <= 0 || double.IsInfinity(constraint.Width))
+        {
+            return measure(constraint);
+        }
+        double width = Math.Max(0, constraint.Width - reserve);
+        Size desired = measure(new Size(width, constraint.Height));
+        return new Size(Math.Min(desired.Width, width), desired.Height);
+    }
 }
 
 /// <summary>

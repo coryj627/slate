@@ -67,7 +67,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 FlowDocument document = reading.Document!;
                 Assert.True(
                     BlocksOf(document.Blocks).Any(
-                        block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } }),
+                        PlacesADecodedImage),
                     "the decoded image was not placed: "
                     + new TextRange(document.ContentStart, document.ContentEnd).Text
                     + " / " + reading.LastTerminalFailureForTests);
@@ -130,7 +130,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 ParkedSvgDecodes.AssertSaid(CardSentences(document, "slow.svg", "ok.svg"), TooLongToDecode, string.Empty);
                 Assert.Single(
                     BlocksOf(document.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
                 Assert.Equal(new[] { small }, bodies);
             }
             finally
@@ -307,7 +307,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                     Assert.Equal(1, decodes.RunsOf(b));
                     Assert.Single(
                         BlocksOf(document.Blocks),
-                        block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                        PlacesADecodedImage);
                 }
                 finally
                 {
@@ -505,7 +505,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 Assert.Equal(new[] { string.Empty }, CardSentences(document, "pic.svg"));
                 Assert.Single(
                     BlocksOf(document.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
             }
             finally
             {
@@ -693,7 +693,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 Assert.Equal(["a.svg"], decoded);
                 Assert.Single(
                     BlocksOf(document.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
                 Assert.Equal(
                     2,
                     System.Text.RegularExpressions.Regex.Matches(
@@ -740,7 +740,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 Assert.Empty(rasters);
                 Assert.Single(
                     BlocksOf(document.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
                 Assert.Contains("over this note's embedded-image budget", TextOf(document), StringComparison.Ordinal);
             });
         }
@@ -788,7 +788,7 @@ public sealed class ReadingSvgEmbedDecodeTests
                 Assert.Empty(decoded);
                 Assert.Single(
                     BlocksOf(document.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
             });
         }
         finally
@@ -837,14 +837,14 @@ public sealed class ReadingSvgEmbedDecodeTests
                 ReadingContentViewModel reading = Assert.IsType<ReadingContentViewModel>(tab.Reading);
                 Assert.DoesNotContain(
                     BlocksOf(reading.Document!.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
 
                 reserveFirst = false;
                 reading.Refresh();
 
                 Assert.Single(
                     BlocksOf(reading.Document!.Blocks),
-                    block => block is BlockUIContainer { Child: ReadingDiagramImage { Source: not null } });
+                    PlacesADecodedImage);
             }
             finally
             {
@@ -876,6 +876,13 @@ public sealed class ReadingSvgEmbedDecodeTests
             }
         }
     }
+
+    /// <summary>A block that places a decoded embed image: since #1708
+    /// (CB-20), a paragraph of the image's name as a hidden run and the image
+    /// in its container.</summary>
+    private static bool PlacesADecodedImage(Block block) =>
+        block is Paragraph paragraph
+        && paragraph.Inlines.OfType<InlineUIContainer>().Any(container => container.Child is ReadingDiagramImage { Source: not null });
 
     private static VaultSession Scanned(string root)
     {

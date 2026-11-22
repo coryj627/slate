@@ -416,7 +416,7 @@ public sealed class ReadingFindSurfaceTests
             "Words before.\n\n$$\\nabla^2 f$$\n",
             live: "Words before.\n\n$$\\alpha^2 f$$\n");
         Paragraph math = Assert.Single(harness.Surface.Document.Blocks.OfType<Paragraph>(), ReadingSemantics.IsMathBlock);
-        Assert.Null(ReadingSemantics.MathCopyTextOf(math));
+        Assert.Null(ReadingSemantics.CopyTextOf(math));
 
         (int offset, int length) = Assert.Single(harness.Matches("alpha"));
         Assert.Null(harness.Find.UnitAt(offset));

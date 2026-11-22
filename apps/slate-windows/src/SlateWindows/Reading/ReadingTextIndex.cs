@@ -219,7 +219,7 @@ internal sealed class ReadingTextIndex
     /// <summary>A math block whose range is its speech (#1595's shape: it
     /// carries the fenced source a copy substitutes).</summary>
     private static bool SpeaksInPlaceOfSource(Paragraph paragraph) =>
-        ReadingSemantics.IsMathBlock(paragraph) && ReadingSemantics.MathCopyTextOf(paragraph) is not null;
+        ReadingSemantics.IsMathBlock(paragraph) && ReadingSemantics.CopyTextOf(paragraph) is not null;
 
     private int FirstEndingAfter(int offset)
     {
