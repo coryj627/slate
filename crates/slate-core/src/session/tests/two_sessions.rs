@@ -427,3 +427,125 @@ fn a_two_sessions_reading_whose_cache_fell_fails_without_a_second_reading() {
         assert!(why.contains("100 -> 80"), "{why}");
     }
 }
+// --- #1917: every connection core opens is configured -------------------
+
+/// How many of forty statements offered to `conn`'s statement cache it
+/// keeps. rusqlite has no getter for the capacity.
+fn statement_cache_keeps(conn: &Connection) -> usize {
+    conn.flush_prepared_statement_cache();
+    for statement in 0..40 {
+        drop(
+            conn.prepare_cached(&format!(
+                "SELECT {statement} /* statement cache capacity */"
+            ))
+            .unwrap(),
+        );
+    }
+    let kept = super::common::cached_statements(conn)
+        .iter()
+        .filter(|statement| statement.sql.contains("statement cache capacity"))
+        .count();
+    conn.flush_prepared_statement_cache();
+    kept
+}
+
+/// What #1917 asks of a connection, as the connection itself reports it.
+#[derive(Debug, PartialEq, Eq)]
+struct Configured {
+    /// The query planner stability guarantee: the planner looks at no bound
+    /// value, so no statement is compiled again when its bindings change.
+    one_plan_per_statement: bool,
+    statement_cache_keeps: usize,
+    /// `LIKE` ignores ASCII case, so it can use an index only where the
+    /// index's collation is NOCASE, and core has none
+    /// (`no_like_can_use_an_index_prefix`).
+    like_ignores_case: bool,
+}
+
+fn read_configuration(conn: &Connection) -> Configured {
+    Configured {
+        one_plan_per_statement: conn
+            .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG)
+            .unwrap(),
+        statement_cache_keeps: statement_cache_keeps(conn),
+        like_ignores_case: conn
+            .query_row("SELECT 'a' LIKE 'A'", [], |row| row.get(0))
+            .unwrap(),
+    }
+}
+
+/// Core opens four kinds of connection that a fact can hold, and each is
+/// configured where it is opened (`db::open_connection`,
+/// `db::open_in_memory`). Migrations have no connection of their own: they
+/// run on the session's, straight after it opens.
+///
+/// Four more are opened by product code that no fact can hold: the
+/// env-gated second connections of the save path, the repair path and the
+/// two task reads, each a local that lives for a statement or two. They
+/// open exactly as the second connection here does, and
+/// `product_code_opens_a_connection_only_through_db` holds that they have
+/// no other way to.
+///
+/// Which branch of the open this proves depends on where it runs: a
+/// session's cache opens by its anchored path, which takes the VFS branch
+/// on macOS alone and the plain one on Linux and Windows. No CI lane runs
+/// this on macOS, so the VFS branch is not held here: the type the open
+/// returns (`db.rs`, `Unconfigured`) and
+/// `db::connection_census::the_open_has_one_exit_through_configure` hold it.
+#[test]
+fn every_connection_core_opens_is_configured() {
+    const AS_CORE_CONFIGURES: Configured = Configured {
+        one_plan_per_statement: true,
+        statement_cache_keeps: 32,
+        like_ignores_case: true,
+    };
+    // The control: what SQLite and rusqlite give a connection nobody
+    // configured, so "configured" above is core's doing.
+    assert_eq!(
+        read_configuration(&Connection::open_in_memory().unwrap()),
+        Configured {
+            one_plan_per_statement: false,
+            statement_cache_keeps: 16,
+            like_ignores_case: true,
+        }
+    );
+
+    let (_tmp, session) = scanned_vault(5);
+    session.open_worker_connection_for_tests();
+    let mut read = Vec::new();
+    {
+        let conn = session.conn.lock().unwrap();
+        read.push((
+            "the session's connection, on which the migrations ran",
+            read_configuration(&conn),
+        ));
+        let second = crate::db::open_connection(std::path::Path::new(
+            conn.path().expect("a session's cache is a file"),
+        ))
+        .unwrap();
+        read.push((
+            "a second connection, opened as product code's test seams open theirs",
+            read_configuration(&second),
+        ));
+    }
+    {
+        let worker = session.worker_conn.lock().unwrap();
+        read.push((
+            "the compactor's connection",
+            read_configuration(worker.as_ref().expect("the compactor's connection is open")),
+        ));
+    }
+    read.push((
+        "an in-memory connection",
+        read_configuration(&crate::db::open_in_memory(64).unwrap()),
+    ));
+
+    let wrong: Vec<_> = read
+        .iter()
+        .filter(|(_, configured)| *configured != AS_CORE_CONFIGURES)
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "connections core opened without its configuration: {wrong:#?}"
+    );
+}

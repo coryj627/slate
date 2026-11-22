@@ -2068,3 +2068,65 @@ fn the_rescans_graph_queries_honour_a_cancel_token() {
     let snapshot = session.graph_snapshot(GraphFilter::default()).unwrap();
     assert_eq!(snapshot.nodes.len(), 3);
 }
+#[test]
+fn a_graph_replay_prepares_its_reads_once() {
+    // #1917: while the graph is live, a scan reads a new file's inbound
+    // rows and replays each re-resolved source's linkset, both through
+    // cached joins on a bound path that SQLite 3.54 compiled again for
+    // every file and every source.
+    use super::common::cached_statement;
+    const NOTES: usize = 40;
+    let (tmp, session) = make_vault(|p| {
+        for note in 0..NOTES {
+            p.write_file(
+                &format!("s{note:02}.md"),
+                format!("links [[t{note:02}]]\n").as_bytes(),
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.with_graph(|_| ()).unwrap();
+
+    // Every dangling link gains its target; the rescan heals each source.
+    for note in 0..NOTES {
+        std::fs::write(
+            tmp.path().join(format!("t{note:02}.md")),
+            format!("# Target {note}\n"),
+        )
+        .unwrap();
+    }
+    let rescan = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(rescan.files_indexed, NOTES as u64);
+    assert!(
+        session.graph_is_built(),
+        "the graph stayed live through the rescan"
+    );
+
+    let conn = session.conn.lock().unwrap();
+    for (what, statement) in [
+        (
+            "a source's linkset",
+            "SELECT links.target_path, links.target_raw, links.is_embed, links.is_external FROM links JOIN files",
+        ),
+        (
+            "a new file's inbound rows",
+            "SELECT files.path, links.target_raw, links.is_embed FROM links JOIN files",
+        ),
+    ] {
+        let cached = cached_statement(&conn, statement)
+            .unwrap_or_else(|| panic!("{what}: not in the statement cache"));
+        assert!(
+            cached.runs >= NOTES as i32,
+            "{what}: the cached statement ran {} times for {NOTES} notes",
+            cached.runs
+        );
+        assert!(
+            cached.reprepares <= 2,
+            "{what}: re-prepared {} times for {NOTES} notes",
+            cached.reprepares
+        );
+    }
+}

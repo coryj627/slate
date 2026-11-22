@@ -444,3 +444,304 @@ pub(super) fn make_vault_with_deniable_reads(
     .unwrap();
     (tmp, provider, session)
 }
+
+// --- Prepared statements: what is cached, and what is compiled again -------
+
+/// `sql` with every run of whitespace as one space, so a statement is named
+/// the same however its source is indented.
+pub(super) fn flat_sql(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One statement still prepared on a connection, with SQLite's own counters
+/// for it. Once no caller holds a statement, the ones still prepared are the
+/// statement cache's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CachedStatement {
+    /// Its SQL, whitespace flattened.
+    pub(super) sql: String,
+    /// `SQLITE_STMTSTATUS_RUN`: how often this statement object has run.
+    pub(super) runs: i32,
+    /// `SQLITE_STMTSTATUS_REPREPARE`: how often SQLite compiled it again.
+    pub(super) reprepares: i32,
+}
+
+/// Every statement still prepared on `conn`.
+pub(super) fn cached_statements(conn: &rusqlite::Connection) -> Vec<CachedStatement> {
+    let mut found = Vec::new();
+    // SAFETY: the handle is `conn`'s own and outlives the walk, which only
+    // reads each statement's SQL and counters and finalizes none of them.
+    unsafe {
+        let db = conn.handle();
+        let mut stmt = rusqlite::ffi::sqlite3_next_stmt(db, std::ptr::null_mut());
+        while !stmt.is_null() {
+            let sql = rusqlite::ffi::sqlite3_sql(stmt);
+            if !sql.is_null() {
+                found.push(CachedStatement {
+                    sql: flat_sql(&std::ffi::CStr::from_ptr(sql).to_string_lossy()),
+                    runs: rusqlite::ffi::sqlite3_stmt_status(
+                        stmt,
+                        rusqlite::ffi::SQLITE_STMTSTATUS_RUN,
+                        0,
+                    ),
+                    reprepares: rusqlite::ffi::sqlite3_stmt_status(
+                        stmt,
+                        rusqlite::ffi::SQLITE_STMTSTATUS_REPREPARE,
+                        0,
+                    ),
+                });
+            }
+            stmt = rusqlite::ffi::sqlite3_next_stmt(db, stmt);
+        }
+    }
+    found
+}
+
+/// Every statement still prepared on `conn` that SQLite has re-prepared
+/// more than `limit` times, with its SQL.
+pub(super) fn statements_reprepared_more_than(
+    conn: &rusqlite::Connection,
+    limit: i32,
+) -> Vec<(String, i32)> {
+    cached_statements(conn)
+        .into_iter()
+        .filter(|statement| statement.reprepares > limit)
+        .map(|statement| (statement.sql, statement.reprepares))
+        .collect()
+}
+
+/// The one statement still prepared on `conn` whose SQL holds `needle`
+/// (whitespace flattened on both sides), or `None` when no statement does:
+/// a `query_row` leaves nothing behind, and the cache may have dropped it.
+///
+/// Panics when two statements match. The needle has to name one statement:
+/// several of core's statements share long stretches, and a second match of
+/// a whole SQL text means a duplicate was prepared while the cached one was
+/// out.
+pub(super) fn cached_statement(
+    conn: &rusqlite::Connection,
+    needle: &str,
+) -> Option<CachedStatement> {
+    let needle = flat_sql(needle);
+    let mut matching: Vec<CachedStatement> = cached_statements(conn)
+        .into_iter()
+        .filter(|statement| statement.sql.contains(&needle))
+        .collect();
+    assert!(
+        matching.len() <= 1,
+        "{needle:?} names more than one statement on the connection: {matching:#?}"
+    );
+    matching.pop()
+}
+
+/// What SQLite did with one SQL text while [`counting_statements`] watched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct StatementCount {
+    /// Finished runs.
+    pub(super) runs: u64,
+    /// Statement objects built for it while the counter watched. A statement
+    /// the cache keeps is built once; one a site prepares per call, or one the
+    /// cache dropped, is built again.
+    pub(super) objects: u64,
+    /// `SQLITE_STMTSTATUS_REPREPARE`, summed over its objects.
+    pub(super) reprepares: u64,
+    /// `SQLITE_STMTSTATUS_VM_STEP`, summed over its runs.
+    pub(super) vm_steps: u64,
+}
+
+/// [`counting_statements`]'s reading: a count for each SQL text that ran,
+/// whitespace flattened.
+#[derive(Debug, Default)]
+pub(super) struct StatementCounts(pub(super) std::collections::BTreeMap<String, StatementCount>);
+
+impl StatementCounts {
+    /// Every SQL text that ran and holds `needle`.
+    pub(super) fn matching(&self, needle: &str) -> Vec<(&str, StatementCount)> {
+        let needle = flat_sql(needle);
+        self.0
+            .iter()
+            .filter(|(sql, _)| sql.contains(&needle))
+            .map(|(sql, count)| (sql.as_str(), *count))
+            .collect()
+    }
+
+    /// The one SQL text that ran and holds `needle`. Panics when none or
+    /// more than one does, so a needle that stopped naming one statement
+    /// fails the fact that uses it.
+    pub(super) fn only(&self, needle: &str) -> (&str, StatementCount) {
+        let matching = self.matching(needle);
+        assert!(
+            matching.len() == 1,
+            "{needle:?} names {} of the statements that ran: {:#?}",
+            matching.len(),
+            matching
+        );
+        matching[0]
+    }
+}
+
+#[derive(Default)]
+struct StatementCounter {
+    by_sql: std::collections::BTreeMap<String, StatementCount>,
+    /// Each statement object's counters at its last finished run (runs,
+    /// re-prepares, VM steps), by its address and SQL, so a run adds only
+    /// what it did and a new object at an old address is told apart.
+    last: std::collections::HashMap<(usize, String), (i32, i32, i32)>,
+}
+
+/// # Safety
+/// Called by SQLite with the statement that finished and the context
+/// pointer [`counting_statements`] registered, which outlives the hook.
+unsafe extern "C" fn count_finished_statement(
+    event: std::ffi::c_uint,
+    context: *mut std::ffi::c_void,
+    statement: *mut std::ffi::c_void,
+    _elapsed: *mut std::ffi::c_void,
+) -> std::ffi::c_int {
+    if event != rusqlite::ffi::SQLITE_TRACE_PROFILE {
+        return 0;
+    }
+    // SAFETY: see the function's contract; the statement is alive for the
+    // length of this call, and only its SQL and counters are read.
+    unsafe {
+        let stmt = statement.cast::<rusqlite::ffi::sqlite3_stmt>();
+        let sql = rusqlite::ffi::sqlite3_sql(stmt);
+        if sql.is_null() {
+            return 0;
+        }
+        let sql = flat_sql(&std::ffi::CStr::from_ptr(sql).to_string_lossy());
+        let status = |counter| rusqlite::ffi::sqlite3_stmt_status(stmt, counter, 0);
+        let runs = status(rusqlite::ffi::SQLITE_STMTSTATUS_RUN);
+        let reprepares = status(rusqlite::ffi::SQLITE_STMTSTATUS_REPREPARE);
+        let vm_steps = status(rusqlite::ffi::SQLITE_STMTSTATUS_VM_STEP);
+        let counter = &*context.cast::<Mutex<StatementCounter>>();
+        let mut counter = counter.lock().expect("statement counter mutex");
+        // An object's counters only grow, and a re-prepare carries them
+        // over. A statement at this address with this SQL that was not seen
+        // before, or whose run counter has not grown, or whose VM steps
+        // have gone down, is a statement object built since: its counters
+        // start from zero. (A first run does not always read 1: a statement
+        // that fires a trigger counts the trigger's program too. So a new
+        // object at an old one's address can still pass for the old one,
+        // when its first run reads more runs and more steps than the old
+        // one's last: the count of objects built is a floor.)
+        let key = (stmt as usize, sql.clone());
+        let built = counter
+            .last
+            .get(&key)
+            .is_none_or(|&(last_runs, _, last_vm_steps)| {
+                runs <= last_runs || vm_steps < last_vm_steps
+            });
+        let (last_reprepares, last_vm_steps) = if built {
+            (0, 0)
+        } else {
+            let (_, last_reprepares, last_vm_steps) = counter.last[&key];
+            (last_reprepares, last_vm_steps)
+        };
+        counter.last.insert(key, (runs, reprepares, vm_steps));
+        let count = counter.by_sql.entry(sql).or_default();
+        count.runs += 1;
+        count.objects += u64::from(built);
+        count.reprepares += u64::try_from(reprepares - last_reprepares).unwrap_or(0);
+        count.vm_steps += u64::try_from(vm_steps - last_vm_steps).unwrap_or(0);
+    }
+    0
+}
+
+/// Runs `run` and says what SQLite did with every statement that finished on
+/// `session`'s connection meanwhile: its runs, the statement objects built
+/// for it, its re-prepares and its VM steps, for each SQL text.
+///
+/// Unlike a walk of the connection ([`cached_statements`]), this sees a
+/// statement no cache ever held and loses nothing when the cache drops one.
+/// It reads SQLite's own counters through a profile hook
+/// (`sqlite3_trace_v2`); nothing here reads the SQL.
+pub(super) fn counting_statements<R>(
+    session: &VaultSession,
+    run: impl FnOnce() -> R,
+) -> (R, StatementCounts) {
+    let counter = Box::new(Mutex::new(StatementCounter::default()));
+    {
+        let conn = session.conn.lock().expect("session connection mutex");
+        // SAFETY: the handle is `conn`'s own. The walk reads counters only.
+        // The context pointer is the box above, which lives until the hook
+        // is removed below.
+        unsafe {
+            let db = conn.handle();
+            let mut seeded = counter.lock().expect("statement counter mutex");
+            let mut stmt = rusqlite::ffi::sqlite3_next_stmt(db, std::ptr::null_mut());
+            while !stmt.is_null() {
+                let sql = rusqlite::ffi::sqlite3_sql(stmt);
+                if !sql.is_null() {
+                    let status = |counter| rusqlite::ffi::sqlite3_stmt_status(stmt, counter, 0);
+                    seeded.last.insert(
+                        (
+                            stmt as usize,
+                            flat_sql(&std::ffi::CStr::from_ptr(sql).to_string_lossy()),
+                        ),
+                        (
+                            status(rusqlite::ffi::SQLITE_STMTSTATUS_RUN),
+                            status(rusqlite::ffi::SQLITE_STMTSTATUS_REPREPARE),
+                            status(rusqlite::ffi::SQLITE_STMTSTATUS_VM_STEP),
+                        ),
+                    );
+                }
+                stmt = rusqlite::ffi::sqlite3_next_stmt(db, stmt);
+            }
+            drop(seeded);
+            rusqlite::ffi::sqlite3_trace_v2(
+                db,
+                rusqlite::ffi::SQLITE_TRACE_PROFILE,
+                Some(count_finished_statement),
+                std::ptr::from_ref::<Mutex<StatementCounter>>(&counter)
+                    .cast_mut()
+                    .cast(),
+            );
+        }
+    }
+    // Removes the hook when `run` returns or unwinds, before `counter` goes:
+    // a failed fact must not leave SQLite calling into freed memory.
+    struct Unhook<'a>(&'a VaultSession);
+    impl Drop for Unhook<'_> {
+        fn drop(&mut self) {
+            let conn = self
+                .0
+                .conn
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // SAFETY: removes the hook registered above.
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(conn.handle(), 0, None, std::ptr::null_mut());
+            }
+        }
+    }
+    let unhook = Unhook(session);
+    let result = run();
+    drop(unhook);
+    let counter = counter
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (result, StatementCounts(counter.by_sql))
+}
+/// `notes` scanned notes, `n00.md` onward, for the facts that count
+/// statements: each has a title, a status, two tags, two headings, a task,
+/// an inline field, a link to the next note, an embed of the one after, and
+/// a link to a note that does not exist.
+pub(super) fn make_counted_vault(notes: usize) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|p| {
+        for note in 0..notes {
+            let body = format!(
+                "---\ntitle: Title {note}\nstatus: open\ntags: [alpha, t{}]\n---\n# Note {note}\n\n\
+                 ## Part A\n\nBody word{note} #inline links [[n{:02}]] and embeds ![[n{:02}]] \
+                 and [[missing{note:02}]].\n\n- [ ] task {note}\n\n## Part B\n\nextra:: {note}\n",
+                note % 7,
+                (note + 1) % notes,
+                (note + 2) % notes,
+            );
+            p.write_file(&format!("n{note:02}.md"), body.as_bytes())
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}

@@ -40,6 +40,11 @@ pub(crate) mod anchored;
 #[path = "db/anchored_windows.rs"]
 pub(crate) mod anchored;
 
+/// #1917: product code opens a connection only here, and binds no pattern
+/// whose plan a configured connection gives up.
+#[cfg(test)]
+mod connection_census;
+
 /// Errors produced by the database layer.
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -267,7 +272,7 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
         ))]
         let path = anchored::display_path(path);
         log::debug!(
-            "the cache database at {} did not open: {error}",
+            "the cache database at {} did not open or could not be configured: {error}",
             path.display()
         );
     })?;
@@ -276,14 +281,131 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
     Ok(conn)
 }
 
-/// A bare connection to `path`, with the VFS the path needs (plan 43 PR 22a,
-/// #940): a session's anchored cache path (`/.slate-fd/<token>/...`, from
-/// `CacheDir::sqlite_path`) opens through the unix VFS variant the
-/// descriptor hook expects (`anchored::VFS`); every other path through the
-/// default, as before. The compaction worker's connection and the facts'
-/// second connections open here too, so every connection to an anchored
-/// cache resolves through the held `.slate`.
+/// A connection to `path`, with the VFS the path needs (plan 43 PR 22a,
+/// #940) and core's configuration ([`configure_connection`], #1917). The
+/// compaction worker's connection and the facts' second connections open
+/// here too, so every connection to an anchored cache resolves through the
+/// held `.slate`, and every connection core opens is configured alike.
+///
+/// It has one exit on purpose. The open has two branches: a session's
+/// cache takes the first on macOS, where `anchored::VFS` names a VFS, and
+/// the second on Linux and Windows. No CI lane runs core's tests on macOS,
+/// so a configuration made inside one branch would pass every fact on every
+/// lane and leave the other platforms' sessions without it. Two things hold
+/// the shape where no run can: [`Unconfigured`], which makes an open that
+/// skips the configuration fail to compile on every target, and
+/// `db::connection_census::the_open_has_one_exit_through_configure`, which
+/// reads this file.
 pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
+    configure_connection(open_unconfigured(path)?)
+}
+
+use configured::{Unconfigured, configure_connection};
+
+/// Core's configuration of a connection, and the type that keeps an open
+/// from going round it (#1917).
+mod configured {
+    use rusqlite::Connection;
+
+    /// How many prepared statements a connection keeps for reuse.
+    /// rusqlite's default is 16, and a rescan that mixes changed notes with
+    /// unchanged ones runs 17 cached statements: at 16 the cache dropped 15
+    /// of them, and the scan built them again, each time it moved between a
+    /// changed note and an unchanged one (#1917). 32 holds that path with
+    /// room, for about 330 KB more statement memory on a connection that
+    /// has run everything.
+    const STATEMENT_CACHE_CAPACITY: usize = 32;
+
+    /// A connection SQLite has opened and core has not configured.
+    ///
+    /// The connection inside is private to this module, and
+    /// [`configure_connection`] is the only function that gives it up. So
+    /// an open made through `open_unconfigured` cannot hand out a
+    /// `Connection` that went round the configuration: with
+    /// `open_connection` returning what `open_unconfigured` gave it, or
+    /// with a branch of that open returning a connection it configured for
+    /// itself, the crate does not compile (`error[E0308]: mismatched
+    /// types`, seen on Windows for the plain branch and for the anchored
+    /// one, which Windows compiles and macOS alone runs).
+    ///
+    /// The type binds those opens and no others. A `Connection::open`
+    /// written anywhere else in the crate compiles and returns a connection
+    /// nobody configured. What catches that one is the text census,
+    /// `db::connection_census::product_code_opens_a_connection_only_through_db`.
+    pub(super) struct Unconfigured(Connection);
+
+    impl Unconfigured {
+        /// A connection as SQLite opened it.
+        pub(super) fn opened(conn: Connection) -> Self {
+            Self(conn)
+        }
+    }
+
+    /// The configuration every connection core opens runs under (#1917).
+    ///
+    /// The query planner stability guarantee: SQLite picks a statement's
+    /// plan from its SQL and the schema, never from the values bound to it.
+    /// Without it SQLite 3.54 marks a bound equality in a statement with
+    /// more than one source or an `ORDER BY` (and a bound `LIMIT`) as worth
+    /// a second look, and a marked statement is compiled again on every use
+    /// once the statement cache has cleared its bindings. 38 of core's SQL
+    /// literals were: four of them for every row of a bases view, and the
+    /// link panels' reads and the file summary on every call.
+    ///
+    /// What the guarantee gives up is every use the planner makes of a
+    /// bound value. None changes a result; each can change a plan. SQLite
+    /// 3.54.1 has five (the numbers are lines of its `sqlite3.c`), and the
+    /// guards are facts in `db::connection_census` and in this file's
+    /// tests:
+    ///
+    /// 1. An index prefix search for a bound `LIKE` or `GLOB` pattern
+    ///    (`isLikeOrGlob`, 167914). Guarded:
+    ///    `no_product_statement_binds_a_glob_pattern` refuses a bound `GLOB`
+    ///    and the pragma that makes `LIKE` case-sensitive, and
+    ///    `no_like_can_use_an_index_prefix` holds that no index key is
+    ///    NOCASE.
+    /// 2. A partial index, or an index on an expression, that a bound value
+    ///    would have matched where the index holds a literal
+    ///    (`exprCompareVariable`, 119504). Not guarded for product
+    ///    statements. The schema's partial indexes are pinned
+    ///    (`the_schemas_partial_indexes_are_the_ones_pinned`), so a new one
+    ///    is read by its author. No product statement leans on one today, by
+    ///    the value-bound plan comparisons made for #1917 (183 literals under
+    ///    11 value patterns before the change; 84 statements driven with the
+    ///    setting off and on after it).
+    /// 3. STAT4 sample probes for a bound value (`stat4ValueFromExpr`,
+    ///    87237). Not guarded. No product code runs `ANALYZE`, so there are
+    ///    no samples to probe.
+    /// 4. A bound `LIMIT`'s value in the row estimate and in the cost of a
+    ///    sort (`computeLimitRegisters`, 152150; `whereSortingCost`, 175288).
+    ///    Not guarded. Over the statements driven with the setting off and
+    ///    on for #1917 (59, then 84), it moved at most 4 VM steps a run and
+    ///    no plan.
+    /// 5. The lower selectivity guess for an unindexed `column = ?` whose
+    ///    bound value is -1, 0 or 1 (`whereLoopOutputAdjust`, 172802). Not
+    ///    guarded. It weighs one estimate against another; the same runs
+    ///    showed no plan move.
+    ///
+    /// No `cfg` in here: whichever branch opened the connection, it is
+    /// configured the same way.
+    pub(super) fn configure_connection(conn: Unconfigured) -> rusqlite::Result<Connection> {
+        let Unconfigured(conn) = conn;
+        conn.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+            true,
+        )?;
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+        Ok(conn)
+    }
+}
+
+/// A bare connection to `path`: a session's anchored cache path
+/// (`/.slate-fd/<token>/...`, from `CacheDir::sqlite_path`) opens through
+/// the unix VFS variant the descriptor hook expects where there is one
+/// (`anchored::VFS`, macOS); every other path, and every path on Linux and
+/// Windows, through the default, as before. Only [`open_connection`] calls
+/// it.
+fn open_unconfigured(path: &Path) -> rusqlite::Result<Unconfigured> {
     #[cfg(any(
         all(
             any(target_os = "macos", target_os = "linux"),
@@ -294,9 +416,10 @@ pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(vfs) = anchored::VFS
         && anchored::is_synthetic(path)
     {
-        return Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs);
+        return Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs)
+            .map(Unconfigured::opened);
     }
-    Connection::open(sqlite_open_path(path))
+    Connection::open(sqlite_open_path(path)).map(Unconfigured::opened)
 }
 
 /// The spelling SQLite opens `path` by.
@@ -325,7 +448,7 @@ pub(crate) fn sqlite_open_path(path: &Path) -> std::borrow::Cow<'_, Path> {
 /// Open an in-memory database for tests.
 #[cfg(test)]
 pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
-    let conn = Connection::open_in_memory()?;
+    let conn = configure_connection(Unconfigured::opened(Connection::open_in_memory()?))?;
     register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
@@ -2289,5 +2412,345 @@ mod tests {
                 "{key:?}: the heal must read {index}: {plan:?}"
             );
         }
+    }
+
+    /// Every key column of an index on `conn`'s main schema whose collation
+    /// is NOCASE, as `table.index(column)`, and how many indexes were read.
+    /// SQLite reports the collation; nothing here reads a migration's text.
+    fn nocase_index_keys(conn: &Connection) -> (Vec<String>, usize) {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut nocase = Vec::new();
+        let mut indexes_read = 0;
+        for table in tables {
+            let indexes: Vec<String> = conn
+                .prepare("SELECT name FROM pragma_index_list(?1)")
+                .unwrap()
+                .query_map([&table], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            for index in indexes {
+                indexes_read += 1;
+                let keys: Vec<(Option<String>, Option<String>)> = conn
+                    .prepare("SELECT name, coll FROM pragma_index_xinfo(?1) WHERE key = 1")
+                    .unwrap()
+                    .query_map([&index], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                for (column, collation) in keys {
+                    if collation.is_some_and(|collation| collation.eq_ignore_ascii_case("NOCASE")) {
+                        nocase.push(format!(
+                            "{table}.{index}({})",
+                            column.unwrap_or_else(|| "an expression".to_string())
+                        ));
+                    }
+                }
+            }
+        }
+        (nocase, indexes_read)
+    }
+
+    /// The plan SQLite picks for `sql` once `value` is bound to its one
+    /// parameter: binding expires a statement whose plan looks at the value,
+    /// so the step compiles it again with the value in hand.
+    fn plan_once_bound(conn: &Connection, sql: &str, value: impl rusqlite::ToSql) -> String {
+        let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        explain.raw_bind_parameter(1, value).unwrap();
+        let mut rows = explain.raw_query();
+        let mut plan = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            plan.push(row.get::<_, String>(3).unwrap());
+        }
+        plan.join(" / ")
+    }
+
+    fn like_ignores_case(conn: &Connection) -> bool {
+        conn.query_row("SELECT 'a' LIKE 'A'", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// #1917: core's connections run under the query planner stability
+    /// guarantee. Of the five uses of a bound value it gives up
+    /// (`configure_connection` lists them), this holds the first for
+    /// `LIKE`: an index prefix search for a bound pattern. A `LIKE` can
+    /// take one only
+    /// when its case rule matches its index's collation: a case-sensitive
+    /// `LIKE` on a BINARY index (the pragma, which
+    /// `no_product_statement_binds_a_glob_pattern` refuses and
+    /// `every_connection_core_opens_is_configured` reads off every
+    /// connection), or the default `LIKE` on a NOCASE index, which this
+    /// holds the schema has none of. So no `LIKE` in core, however its SQL
+    /// is put together, has a plan the guarantee could take away.
+    #[test]
+    fn no_like_can_use_an_index_prefix() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let (nocase, indexes_read) = nocase_index_keys(&conn);
+        assert!(
+            indexes_read >= 40,
+            "the walk must see the schema's indexes: {indexes_read}"
+        );
+        assert!(
+            nocase.is_empty(),
+            "an index with a NOCASE key lets `LIKE ?` search a prefix of it, which a connection \
+             core opens will not do (#1917); index the folded key instead, as the fold indexes \
+             do: {nocase:?}"
+        );
+        assert!(like_ignores_case(&conn));
+    }
+
+    /// The planted cases for `no_like_can_use_an_index_prefix`, and SQLite's
+    /// own word on what the guarantee gives up. If a later SQLite changes
+    /// that, the last part moves and the two guards want another look.
+    #[test]
+    fn the_guards_see_each_way_a_bound_prefix_search_could_come_back() {
+        const SCHEMA: &str =
+            "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
+             CREATE TABLE people (name TEXT COLLATE NOCASE);
+             CREATE INDEX people_name ON people(name);";
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch.execute_batch(SCHEMA).unwrap();
+
+        // The index walk sees a NOCASE key, and only that one.
+        assert_eq!(
+            nocase_index_keys(&scratch).0,
+            vec!["people.people_name(name)".to_string()]
+        );
+
+        // The LIKE probe sees the pragma.
+        let case_sensitive = Connection::open_in_memory().unwrap();
+        assert!(like_ignores_case(&case_sensitive));
+        case_sensitive
+            .pragma_update(None, "case_sensitive_like", true)
+            .unwrap();
+        assert!(!like_ignores_case(&case_sensitive));
+
+        // What the guarantee gives up, as SQLite plans it: without it a
+        // bound prefix searches the index, with it the same statement scans.
+        let guaranteed = Connection::open_in_memory().unwrap();
+        guaranteed.execute_batch(SCHEMA).unwrap();
+        guaranteed
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .unwrap();
+        for (sql, pattern) in [
+            ("SELECT COUNT(*) FROM files WHERE path GLOB ?1", "notes/a*"),
+            ("SELECT COUNT(*) FROM people WHERE name LIKE ?1", "ab%"),
+        ] {
+            let free = plan_once_bound(&scratch, sql, pattern);
+            assert!(
+                free.contains("SEARCH"),
+                "without the guarantee a bound prefix searches the index: {sql}: {free}"
+            );
+            let held = plan_once_bound(&guaranteed, sql, pattern);
+            assert!(
+                held.contains("SCAN") && !held.contains("SEARCH"),
+                "with the guarantee the same statement scans: {sql}: {held}"
+            );
+        }
+    }
+
+    /// SQLite's own word on the second thing the guarantee gives up that a
+    /// statement could lean on: a partial index whose condition a bound
+    /// value would have met. Nothing refuses such a statement (three
+    /// attempts at reading SQL as text for it each left a gap, and it is a
+    /// #1955 line); `the_schemas_partial_indexes_are_the_ones_pinned` makes
+    /// the author of a new partial index read this.
+    ///
+    /// What SQLite 3.54.1 does, by its source and by the plans below. A
+    /// parameter stands in for a literal only as one side of an operator
+    /// (`sqlite3ExprCompare`, sqlite3.c:119559). The members of a list are
+    /// compared with no bound value in hand (`sqlite3ExprListCompare`,
+    /// 119661), so no bound value proves `IN (0, 2)` or `BETWEEN`, with the
+    /// guarantee or without. A list of one constant is not a list: the
+    /// parser writes `x IN (0)` as `x = +0` (185558), and a bound value
+    /// proves that. If a later SQLite changes any of this, this test moves.
+    #[test]
+    fn the_guarantee_gives_up_a_partial_index_whose_condition_is_bound() {
+        // (the index's condition, the statement's term with ?1 for the
+        // literal, whether the statement uses the index without the
+        // guarantee, and with it)
+        let planted = [
+            (
+                "target_path IS NULL AND is_external = 0",
+                "target_path IS NULL AND is_external = ?1",
+                true,
+                false,
+            ),
+            ("is_external IN (0)", "is_external = ?1", true, false),
+            (
+                "is_external IN (0, 2)",
+                "is_external IN (?1, 2)",
+                false,
+                false,
+            ),
+            (
+                "is_external BETWEEN 0 AND 2",
+                "is_external BETWEEN ?1 AND 2",
+                false,
+                false,
+            ),
+        ];
+        for (condition, term, without, with) in planted {
+            let schema = format!(
+                "CREATE TABLE links (
+                     target_raw TEXT, target_path TEXT, is_external INTEGER NOT NULL
+                 );
+                 CREATE INDEX links_unresolved ON links(target_raw) WHERE {condition};"
+            );
+            let bound = format!("SELECT COUNT(*) FROM links WHERE target_raw = 'a' AND {term}");
+            let free = Connection::open_in_memory().unwrap();
+            free.execute_batch(&schema).unwrap();
+            let guaranteed = Connection::open_in_memory().unwrap();
+            guaranteed.execute_batch(&schema).unwrap();
+            guaranteed
+                .set_db_config(
+                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                    true,
+                )
+                .unwrap();
+
+            let plan = plan_once_bound(&free, &bound, 0_i64);
+            assert_eq!(
+                plan.contains("links_unresolved"),
+                without,
+                "without the guarantee, {condition} against `{term}` with 0 bound: {plan}"
+            );
+            let plan = plan_once_bound(&guaranteed, &bound, 0_i64);
+            assert_eq!(
+                plan.contains("links_unresolved"),
+                with,
+                "with the guarantee, {condition} against `{term}` with 0 bound: {plan}"
+            );
+            // The condition written as the index has it keeps the index
+            // either way.
+            let literal =
+                format!("SELECT COUNT(*) FROM links WHERE target_raw = ?1 AND {condition}");
+            for conn in [&free, &guaranteed] {
+                let plan = plan_once_bound(conn, &literal, "a");
+                assert!(plan.contains("links_unresolved"), "{condition}: {plan}");
+            }
+        }
+    }
+
+    /// Every partial index of `conn`'s main schema, by SQLite's own word
+    /// (`PRAGMA index_list` marks them), as `(name, SQL)`, sorted by name.
+    /// The SQL is `sqlite_master`'s text with every run of whitespace, line
+    /// ends among them, made one space. Nothing else is changed and nothing
+    /// is parsed.
+    fn partial_indexes(conn: &Connection) -> Vec<(String, String)> {
+        conn.prepare(
+            "SELECT l.name, (SELECT m.sql FROM sqlite_master m
+                             WHERE m.type = 'index' AND m.name = l.name)
+             FROM sqlite_master t, pragma_index_list(t.name) l
+             WHERE t.type = 'table' AND l.\"partial\" = 1
+             ORDER BY l.name",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            let sql: Option<String> = row.get(1)?;
+            Ok((
+                row.get(0)?,
+                sql.unwrap_or_default()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// The schema's partial indexes and the SQL each was made with.
+    const PARTIAL_INDEXES: [(&str, &str); 5] = [
+        (
+            "files_oplog_name_unique",
+            "CREATE UNIQUE INDEX files_oplog_name_unique ON files(oplog_name) WHERE oplog_name IS \
+             NOT NULL",
+        ),
+        (
+            "idx_links_target_name_fold",
+            "CREATE INDEX idx_links_target_name_fold ON \
+             links(slate_tree_sort_key(slate_link_target_name(target_raw))) WHERE target_path IS \
+             NULL AND is_external = 0",
+        ),
+        (
+            "idx_links_target_path_fold",
+            "CREATE INDEX idx_links_target_path_fold ON \
+             links(slate_tree_sort_key(slate_link_target_path(target_raw))) WHERE target_path IS \
+             NULL AND is_external = 0",
+        ),
+        (
+            "idx_properties_key_norm",
+            "CREATE INDEX idx_properties_key_norm ON properties(key, value_text_norm) WHERE \
+             value_kind NOT IN ('list', 'tag_list')",
+        ),
+        (
+            "idx_tasks_priority",
+            "CREATE INDEX idx_tasks_priority ON tasks(priority) WHERE priority IS NOT NULL",
+        ),
+    ];
+
+    /// #1917: under the query planner stability guarantee a statement that
+    /// binds a value where a partial index's condition holds a literal does
+    /// not use that index (the second of the five uses `configure_connection`
+    /// lists). No fact refuses such a statement. This pin is what stands in
+    /// its place: it parses nothing, it lists what SQLite calls partial, and
+    /// it fails when a partial index is added, dropped or given another
+    /// condition, so the author reads the message below. No product
+    /// statement leans on a bound value for one today, by the value-bound
+    /// plan comparisons made for #1917 (183 literals under 11 value patterns
+    /// before the change; 84 statements driven with the setting off and on
+    /// after it).
+    #[test]
+    fn the_schemas_partial_indexes_are_the_ones_pinned() {
+        // The walk sees a planted partial index, and only that one.
+        let scratch = Connection::open_in_memory().unwrap();
+        scratch
+            .execute_batch(
+                "CREATE TABLE t (a, b);
+                 CREATE INDEX plain ON t(a);
+                 CREATE INDEX on_an_expression ON t(lower(a));
+                 CREATE INDEX planted ON t(a)
+                 WHERE b =   -1;",
+            )
+            .unwrap();
+        assert_eq!(
+            partial_indexes(&scratch),
+            [(
+                "planted".to_string(),
+                "CREATE INDEX planted ON t(a) WHERE b = -1".to_string()
+            )]
+        );
+
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        let found = partial_indexes(&conn);
+        let pinned: Vec<(String, String)> = PARTIAL_INDEXES
+            .iter()
+            .map(|(name, sql)| (name.to_string(), sql.to_string()))
+            .collect();
+        assert_eq!(
+            found, pinned,
+            "the schema's partial indexes are not the ones pinned (left: the schema; right: \
+             the pin). Core's connections run under the query planner stability guarantee \
+             (#1917): a statement that binds a value where a partial index's condition holds a \
+             literal does not use the index, and scans with the same rows. Nothing checks \
+             product statements for that. Before pinning the new text, read the statements \
+             that query this table, and compare their plans with a value bound, the guarantee \
+             off and on (`the_guarantee_gives_up_a_partial_index_whose_condition_is_bound` \
+             shows how). A statement that should use the index writes the literal the \
+             condition has."
+        );
     }
 }

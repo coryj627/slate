@@ -2099,3 +2099,46 @@ fn a_resolve_embed_cancelled_during_its_last_read_is_still_cancelled() {
         );
     }
 }
+#[test]
+fn a_notes_link_reads_are_prepared_once() {
+    // #1917: opening a note reads its links through six cached joins (the
+    // panels' five and the bundle's one). Each was compiled again every
+    // time it came back out of the statement cache: six compiles a note.
+    const NOTES: usize = 40;
+    let (_tmp, session) = make_counted_vault(NOTES);
+    for note in 0..NOTES {
+        let path = format!("n{note:02}.md");
+        session
+            .note_link_panels(&path, Paging::first(50), 50, 50)
+            .unwrap();
+        session.note_load_bundle(&path, Paging::first(50)).unwrap();
+    }
+
+    let conn = session.conn.lock().unwrap();
+    let reprepared = statements_reprepared_more_than(&conn, 2);
+    assert!(
+        reprepared.is_empty(),
+        "statements re-prepared per note over {NOTES} notes: {reprepared:#?}"
+    );
+    let link_reads: Vec<CachedStatement> = cached_statements(&conn)
+        .into_iter()
+        .filter(|statement| {
+            statement
+                .sql
+                .contains("FROM links JOIN files ON files.id = links.source_file_id")
+        })
+        .collect();
+    assert_eq!(
+        link_reads.len(),
+        6,
+        "outgoing links, the two bounded reads, their two counts and the backlinks: {link_reads:#?}"
+    );
+    for read in &link_reads {
+        assert!(
+            read.runs >= NOTES as i32,
+            "ran {} times for {NOTES} notes: {}",
+            read.runs,
+            read.sql
+        );
+    }
+}

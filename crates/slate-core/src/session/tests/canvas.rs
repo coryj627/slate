@@ -1548,3 +1548,93 @@ fn a_board_whose_size_is_the_sentinel_keeps_its_rows_across_a_scan() {
         .unwrap();
     assert_eq!(title, "Renamed Log");
 }
+#[test]
+fn a_canvas_pass_prepares_its_title_lookup_once() {
+    // #1917: a file card shows its note's `title:`. The lookup ran through
+    // `query_row`, a fresh prepare for every card, on every open and on
+    // every scan (the canvas pass asks every card again, whether or not a
+    // board changed). It is now in the statement cache and runs from it.
+    //
+    // The count is read after each step, so nothing here depends on the
+    // statement surviving anything between them. The rescan below must
+    // stay on the fast path (nothing changed): a slow-path rescan takes
+    // enough other statements from the cache to drop this one.
+    const CARDS: usize = 40;
+    const TITLE_LOOKUP: &str = "p.key = 'title' AND p.value_kind = 'text'";
+    let (_tmp, session) = make_vault(|p| {
+        let mut nodes = Vec::new();
+        for card in 0..CARDS {
+            p.write_file(
+                &format!("n{card:02}.md"),
+                format!("---\ntitle: Title {card}\n---\n# Body\n").as_bytes(),
+            )
+            .unwrap();
+            nodes.push(format!(
+                r#"{{"id":"c{card}","type":"file","file":"n{card:02}.md","x":{},"y":0,"width":250,"height":60}}"#,
+                card * 300
+            ));
+        }
+        // A card whose note is not in the vault.
+        nodes.push(
+            r#"{"id":"gone","type":"file","file":"gone.md","x":0,"y":200,"width":250,"height":60}"#
+                .to_string(),
+        );
+        p.write_file(
+            "board.canvas",
+            format!(r#"{{"nodes":[{}],"edges":[]}}"#, nodes.join(",")).as_bytes(),
+        )
+        .unwrap();
+    });
+    let runs_of_the_lookup = |step: &str| -> i32 {
+        let conn = session.conn.lock().unwrap();
+        let cached = cached_statement(&conn, TITLE_LOOKUP).unwrap_or_else(|| {
+            panic!("after {step}, the title lookup is not in the statement cache")
+        });
+        assert!(
+            cached.reprepares <= 2,
+            "after {step}, the title lookup was re-prepared {} times",
+            cached.reprepares
+        );
+        cached.runs
+    };
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let after_scan = runs_of_the_lookup("the first scan");
+    assert!(
+        after_scan >= CARDS as i32,
+        "{after_scan} runs for {CARDS} cards"
+    );
+
+    let info = session.open_canvas("board.canvas").unwrap();
+    let after_open = runs_of_the_lookup("open_canvas");
+    assert!(
+        after_open - after_scan >= CARDS as i32,
+        "open_canvas ran the cached lookup {} times for {CARDS} cards",
+        after_open - after_scan
+    );
+    let outline = session.canvas_outline(info.handle).unwrap();
+    let title_of = |node: &str| {
+        outline
+            .iter()
+            .find(|row| row.node_id == node)
+            .map(|row| row.title.clone())
+    };
+    assert_eq!(title_of("c7").as_deref(), Some("Title 7"));
+    assert_eq!(
+        title_of("gone").as_deref(),
+        Some("gone"),
+        "a card whose note the index lacks keeps its file name"
+    );
+    session.close_canvas(info.handle);
+
+    let rescan = session
+        .rescan_with_progress(&CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(rescan.files_indexed, 0, "the rescan stays on the fast path");
+    let after_rescan = runs_of_the_lookup("a rescan with nothing changed");
+    assert!(
+        after_rescan - after_open >= CARDS as i32,
+        "the rescan's canvas pass ran the cached lookup {} times for {CARDS} cards",
+        after_rescan - after_open
+    );
+}
