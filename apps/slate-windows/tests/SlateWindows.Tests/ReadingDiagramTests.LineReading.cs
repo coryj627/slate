@@ -566,6 +566,35 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    /// <summary>A Right that moves nothing (at the document's end) leaves no
+    /// mark on the move after it: a caret a UIA client then sets on hidden
+    /// speech, from another line, still rests just after the element.</summary>
+    [Fact]
+    public void AnArrowThatMovesNothingLeavesNoMarkOnTheNextMove()
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine("math", "reading-caret-no-move");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                TextPointer end = surface.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+                surface.Selection.Select(end, end);
+                surface.CaretPosition = end;
+                Press(surface, Key.Right, EditingCommands.MoveRightByCharacter);
+                Assert.Equal(0, surface.CaretPosition.CompareTo(end));
+
+                TextPointer hidden = Assert.Single(HiddenRuns(line)).ContentStart;
+                surface.Selection.Select(hidden, hidden);
+                PumpedDispatcher.Drain();
+
+                Assert.Null(ReadingDocumentBuilder.VisibleCaretPast(surface.CaretPosition));
+                Assert.Same(line, surface.CaretPosition.Paragraph);
+            }
+        });
+    }
+
     /// <summary>The lead's condition on B1's fix: no caret stop is added or
     /// taken away. Right from the line above visits the hidden speech's every
     /// letter, then the element's end, and Left visits them back, as before
