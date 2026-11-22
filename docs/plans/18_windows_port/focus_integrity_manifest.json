@@ -447,7 +447,6 @@
     "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when (style default)": "keys-first: PropertiesLandingTests.ASaveClickLandsOnTheSamePropertysEditor",
     "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate CommitCommand IsEnabled when WriteInFlight=True": "keys-first: PropertiesLandingTests.ASaveClickLandsOnTheSamePropertysEditor",
     "xaml-trigger WorkspaceTemplates.xaml PropertyRowTemplate DeleteCommand IsEnabled when IsDirty=True": "exempt: its own press never turns it off: Delete is off while the draft is dirty, which only the row's editor makes, never Delete's press (WorkspaceTemplates.xaml:654-673)",
-    "xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True": "keys-first: SheetOpeningTests.NoLauncherRowHoldingTheKeysGoesOffAsASheetOpens",
     "xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSurfaceOpen=True & IsKeyboardFocusWithin=False": "keys-first: EmptyPaneLauncherTests.AnActionGoesOffOnlyAfterThePaletteTakesTheKeys",
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandle Visibility": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandleVertical Visibility": "guard: ContentPaneBorder",

@@ -85,8 +85,6 @@ public sealed partial class FocusIntegrityManifestCensus
         ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.FilesCiting=True",
         ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplateFlowSheet=True",
         ["xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True"] = "xaml-trigger MainWindow.xaml MainMenu IsEnabled when Workspace.TemplatePickerSheet=True",
-        ["xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"] =
-            "xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True",
         ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _quickFilter IsEnabled",
         ["ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled"] = "ui-state SlateWindows.Bases.BaseSurfaceView.RenderChrome _viewPicker IsEnabled",
         ["ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled"] = "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled",
@@ -129,7 +127,12 @@ public sealed partial class FocusIntegrityManifestCensus
     /// <summary>Plan 47 CB-17b (red team F10): the keys CB-17b deleted with their trigger,
     /// each with why it is gone. A key here fails the census if the scrape finds it again or
     /// the manifest lists it.</summary>
-    internal static readonly IReadOnlyDictionary<string, string> GoneWithCb17b = new Dictionary<string, string>(StringComparer.Ordinal);
+    internal static readonly IReadOnlyDictionary<string, string> GoneWithCb17b = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"] =
+            "its trigger is deleted with IsModalSheetOpen (CB-17b D10): a launcher row goes off under a sheet only by the "
+            + "modal-surface trigger, once the keys have left it",
+    };
 
     /// <summary>Plan 47 CB-17b (CB-17a's merge judge, m1): how a row is written whose
     /// keys-first fact can skip at run time, where a desktop refuses a menu the keys (#1680).
@@ -1100,10 +1103,10 @@ public sealed partial class FocusIntegrityManifestCensus
                 .Select(key => key.Split(" when ")[1].Split('.')[0])
                 .Order(StringComparer.Ordinal));
 
-        // The launcher's sheet key is ended here until its trigger is deleted (D10).
-        Assert.True(
-            EndedByCb17b.ContainsKey("xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"),
-            "the launcher's sheet key is not among the rows CB-17b ended");
+        // Red team F10: the gone set is the launcher's sheet key alone, deleted with its trigger (D10).
+        Assert.Equal(
+            ["xaml-trigger WorkspaceTemplates.xaml Style:Slate.LauncherRowStyle IsEnabled when IsModalSheetOpen=True"],
+            GoneWithCb17b.Keys);
     }
 
     /// <summary>A witness fact is one xunit runs, and its source is the method that carries
