@@ -263,6 +263,211 @@ public sealed class RegionFocusGuardTests
         Assert.Same(host.Home, Keyboard.FocusedElement);
     });
 
+    /// <summary>#1866 (CD11), a sheet keeps the keys: a request to move the keys onto the
+    /// window, made while a live element inside a sheet holds them, is declined. WPF's
+    /// button asks exactly that when it loses the mouse capture a Space press or a click
+    /// took, and the window handed the keys on to the element behind the open sheet.</summary>
+    [Fact]
+    public void ARequestToTheWindowFromALiveElementInASheetIsDeclined() => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.Second.Focus());
+        host.FocusChanges.Clear();
+
+        // What ButtonBase asks when a button outside the main focus scope loses the capture.
+        _ = Keyboard.Focus(null);
+
+        Assert.Same(host.Second, Keyboard.FocusedElement);
+
+        // And the window asked by name.
+        _ = host.Window.Focus();
+
+        Assert.Same(host.Second, Keyboard.FocusedElement);
+        Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>The rule is for a holder that can still hold the keys. One that went off or
+    /// left the screen inside a sheet is stranded: a request to the window made from it (a
+    /// pressed button that goes off loses the capture too) is the guard's to land, at once,
+    /// through the sheet's landing as before, and is not declined to leave the keys on a
+    /// control that is off.</summary>
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("collapse")]
+    public void AStrandedElementInASheetStillLandsThroughIt(string departure) => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.Second.Focus());
+        host.FocusChanges.Clear();
+
+        if (departure == "disable")
+        {
+            host.Second.IsEnabled = false;
+        }
+        else
+        {
+            host.Second.Visibility = Visibility.Collapsed;
+        }
+
+        _ = Keyboard.Focus(null);
+
+        Assert.Same(host.First, Keyboard.FocusedElement);
+        PumpedDispatcher.Drain();
+        Assert.Same(host.First, Keyboard.FocusedElement);
+        Assert.Equal([host.First], host.FocusChanges);
+    });
+
+    /// <summary>The same with no request made: WPF's own re-evaluation hands a stranded
+    /// element's keys up to its sheet, a focus scope, and the sheet's landing takes
+    /// them.</summary>
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("collapse")]
+    public void AStrandedElementInASheetIsLandedByTheReEvaluation(string departure) => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.Second.Focus());
+        host.FocusChanges.Clear();
+
+        if (departure == "disable")
+        {
+            host.Second.IsEnabled = false;
+        }
+        else
+        {
+            host.Second.Visibility = Visibility.Collapsed;
+        }
+
+        PumpedDispatcher.Drain();
+
+        Assert.Same(host.First, Keyboard.FocusedElement);
+        Assert.Equal([host.First], host.FocusChanges);
+    });
+
+    /// <summary>A sheet that is itself closing is not live, so the request to the window
+    /// goes through: its close returns the keys as before.</summary>
+    [Fact]
+    public void ARequestToTheWindowFromAClosedSheetIsNotDeclined() => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.Second.Focus());
+        host.Sheet.Visibility = Visibility.Collapsed;
+
+        _ = Keyboard.Focus(null);
+
+        Assert.Same(host.Outside, Keyboard.FocusedElement);
+    });
+
+    /// <summary>The menu is a focus scope that owns no landing: it still gives the keys back
+    /// to the window's focused element when it lets them go.</summary>
+    [Fact]
+    public void ARequestToTheWindowFromAMenuItemIsNotDeclined() => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        _ = host.Window.Activate();
+        PumpedDispatcher.Drain();
+        Assert.True(host.Outside.Focus());
+        KeysFirstRecorder.TakeTheMenuKeys(host.MenuItem);
+
+        _ = Keyboard.Focus(null);
+        PumpedDispatcher.Drain();
+
+        if (ReferenceEquals(host.MenuItem, Keyboard.FocusedElement) && !host.Window.IsActive)
+        {
+            // In menu mode WPF moves the keys only inside the active window.
+            _ = KeysFirstRecorder.SkipWhereTheDesktopRefusesTheMenu("the window holding the menu is not the active one");
+        }
+
+        Assert.Same(host.Outside, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A request to the window that a guard landing makes is not declined: the rule
+    /// stands aside while a landing runs, as the guard's own does.</summary>
+    [Fact]
+    public void ARequestToTheWindowMadeByALandingIsNotDeclined() => RunSta(() =>
+    {
+        using var host = new SheetHost();
+        Assert.True(host.Outside.Focus());
+        Assert.True(host.First.Focus());
+        IInputElement token = host.First;
+        Assert.True(host.Second.Focus());
+        host.Landing = () =>
+        {
+            _ = Keyboard.Focus(null);
+            return true;
+        };
+
+        Assert.True(RegionFocusGuard.LandInScopesOf(token));
+
+        Assert.Same(host.Outside, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A window with a sheet in it, as the shell's fourteen sheets and three
+    /// overlays are: a focus scope that owns a guard landing, with nothing focusable above
+    /// it but the window. Beside it a menu, a focus scope with no landing, and a button in
+    /// the window's own focus scope, which is where the window hands the keys on.</summary>
+    private sealed class SheetHost : IDisposable
+    {
+        public SheetHost()
+        {
+            RegionFocusGuard.Register();
+            First = new Button { Content = "First" };
+            Second = new Button { Content = "Second" };
+            var stops = new StackPanel();
+            stops.Children.Add(First);
+            stops.Children.Add(Second);
+            Sheet = new Border { Child = stops };
+            FocusManager.SetIsFocusScope(Sheet, true);
+            Landing = () => First.Focus();
+            RegionFocusGuard.SetLanding(Sheet, () => Landing());
+            MenuItem = new MenuItem { Header = "File" };
+            MenuItem.Items.Add(new MenuItem { Header = "Open" });
+            var menu = new Menu();
+            menu.Items.Add(MenuItem);
+            Outside = new Button { Content = "Outside" };
+            var root = new DockPanel();
+            DockPanel.SetDock(menu, Dock.Top);
+            DockPanel.SetDock(Outside, Dock.Top);
+            root.Children.Add(menu);
+            root.Children.Add(Outside);
+            root.Children.Add(Sheet);
+            Window = new Window
+            {
+                Content = root,
+                Width = 500,
+                Height = 400,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                ShowActivated = false,
+            };
+            Window.Show();
+            Window.UpdateLayout();
+            Keyboard.AddGotKeyboardFocusHandler(Window, (_, e) => FocusChanges.Add(e.NewFocus));
+        }
+
+        public Window Window { get; }
+
+        public Border Sheet { get; }
+
+        public Button First { get; }
+
+        public Button Second { get; }
+
+        public Button Outside { get; }
+
+        public MenuItem MenuItem { get; }
+
+        public Func<bool> Landing { get; set; }
+
+        public List<IInputElement> FocusChanges { get; } = [];
+
+        public void Dispose() => Window.Close();
+    }
+
     private sealed class Host : IDisposable
     {
         private readonly List<IInputElement?> _stranded = [];

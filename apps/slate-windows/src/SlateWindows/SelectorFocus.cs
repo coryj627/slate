@@ -429,6 +429,12 @@ internal static class SelectorFocus
         for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
         {
             DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (RegionFocusGuard.IsLeaving(child))
+            {
+                // #1866: about to go off, with everything inside it.
+                continue;
+            }
+
             if (child is UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element)
             {
                 return element;

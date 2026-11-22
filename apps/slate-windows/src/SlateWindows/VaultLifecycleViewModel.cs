@@ -2688,7 +2688,8 @@ internal sealed class RelayCommand : ICommand
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => _canExecute(parameter);
     public void Execute(object? parameter) => _execute(parameter);
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() =>
+        Commands.CommandKeysFirst.Raise(this, static self => ((RelayCommand)self).CanExecuteChanged?.Invoke(self, EventArgs.Empty));
 }
 
 /// <summary>WB-9: what a hosted fact supplies to the shipped window's vault
@@ -2782,7 +2783,8 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
         }
     }
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() =>
+        Commands.CommandKeysFirst.Raise(this, static self => ((AsyncRelayCommand)self).CanExecuteChanged?.Invoke(self, EventArgs.Empty));
 }
 
 internal sealed class UiProgressListener : ScanProgressListener
