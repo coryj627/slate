@@ -668,6 +668,7 @@ internal static class ReadingDocumentBuilder
         };
         paragraph.Inlines.Add(SpeechRun(speech));
         paragraph.Inlines.Add(new InlineUIContainer(element));
+        element.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
         if (visual is null)
         {
             paragraph.Padding = new Thickness(8);
@@ -740,6 +741,21 @@ internal static class ReadingDocumentBuilder
     {
         TextPointer start = Insertion(paragraph.ContentStart);
         return VisibleCaretPast(start) ?? start;
+    }
+
+    /// <summary>#1708 (B1, Codex round 1): a binding to how tall a caret is
+    /// drawn in <paramref name="text"/>'s own text. WPF draws a caret just
+    /// after an embedded element no taller than the element, so an element
+    /// after hidden speech is at least this tall (a 1x1 image, a flat one, a
+    /// wide diagram scaled down to a narrow window, a short formula) and a
+    /// pending placeholder is exactly this tall. A control in flow content
+    /// does not inherit the text's size, so it is bound to it.</summary>
+    private static System.Windows.Data.MultiBinding CaretHeightOf(TextElement text)
+    {
+        var height = new System.Windows.Data.MultiBinding { Converter = ReadingLineReserve.TextCaretHeight };
+        height.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontSize)) { Source = text });
+        height.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontFamily)) { Source = text });
+        return height;
     }
 
     /// <summary>The width a speech run's whole line may give it.</summary>
@@ -1126,12 +1142,8 @@ internal static class ReadingDocumentBuilder
             // As tall as a caret in the source's text, with no width, so a
             // caret just after it is drawn as tall as on the lines below,
             // where an empty one draws a sliver of a point (#1708, the diff
-            // red team's B1). A control in flow content does not inherit the
-            // text's size, so it is bound to the source's.
-            var caretHeight = new System.Windows.Data.MultiBinding { Converter = ReadingLineReserve.TextCaretHeight };
-            caretHeight.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontSize)) { Source = source });
-            caretHeight.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontFamily)) { Source = source });
-            placeholder.SetBinding(FrameworkElement.HeightProperty, caretHeight);
+            // red team's B1).
+            placeholder.SetBinding(FrameworkElement.HeightProperty, CaretHeightOf(source));
             sourceParagraph.Inlines.InsertBefore(source, new InlineUIContainer(placeholder));
             sourceParagraph.Inlines.InsertBefore(source, new LineBreak());
             string key = block.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1288,6 +1300,7 @@ internal static class ReadingDocumentBuilder
         string speech = OneLine(rendered.Description);
         paragraph.Inlines.InsertBefore(container, SpeechRun(speech));
         element.LineReserve = SpeechRunReserve(speech);
+        element.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
         if (ReadingSemantics.DiagramFenceOf(paragraph) is { } fence)
         {
             ReadingSemantics.MarkCopyText(paragraph, fence);
@@ -1311,6 +1324,7 @@ internal static class ReadingDocumentBuilder
         // #1708: a failed diagram shows its text, so a copy carries it as
         // shown, and the zero-size element needs no room on its line.
         element.LineReserve = 0;
+        element.ClearValue(FrameworkElement.MinHeightProperty);
         ReadingSemantics.ClearCopyText(paragraph);
         InlineUIContainer container = ContainerOf(paragraph, element);
         foreach (Inline inline in paragraph.Inlines.ToList())
@@ -1964,6 +1978,7 @@ internal static class ReadingDocumentBuilder
         var paragraph = new Paragraph { Margin = new Thickness(0), TextAlignment = TextAlignment.Center };
         paragraph.Inlines.Add(SpeechRun(speech));
         paragraph.Inlines.Add(new InlineUIContainer(visual));
+        visual.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
         section.Blocks.Add(paragraph);
     }
 

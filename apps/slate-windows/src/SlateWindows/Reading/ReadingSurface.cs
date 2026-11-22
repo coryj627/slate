@@ -1757,8 +1757,9 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     /// <summary>#1708: RTF of <paramref name="range"/> without its hidden
-    /// speech. XAML keeps a run's exact size and colour, which RTF rounds,
-    /// so the range goes through XAML into a scratch document, every run
+    /// speech. A XAML package keeps a run's exact size and colour, which RTF
+    /// rounds, and the pictures, which plain XAML drops (Codex round 1), so
+    /// the range goes through a package into a scratch document, every run
     /// drawn transparent below a point is removed (the census holds that
     /// those are exactly the hidden runs), and that is saved as RTF. Null
     /// when the round trip fails, and the caller falls back to plain RTF.</summary>
@@ -1767,10 +1768,10 @@ internal sealed class ReadingSurface : RichTextBox
         try
         {
             using var xaml = new System.IO.MemoryStream();
-            range.Save(xaml, DataFormats.Xaml);
+            range.Save(xaml, DataFormats.XamlPackage);
             xaml.Position = 0;
             var scratch = new FlowDocument();
-            new TextRange(scratch.ContentStart, scratch.ContentEnd).Load(xaml, DataFormats.Xaml);
+            new TextRange(scratch.ContentStart, scratch.ContentEnd).Load(xaml, DataFormats.XamlPackage);
             foreach (Run run in RunsIn(scratch.Blocks).Where(LooksHidden).ToList())
             {
                 switch (run.Parent)
