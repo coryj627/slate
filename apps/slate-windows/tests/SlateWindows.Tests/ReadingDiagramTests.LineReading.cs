@@ -48,7 +48,7 @@ public sealed partial class ReadingDiagramTests
 
     /// <summary>A Line's words: the object's space, U+FFFC and the break
     /// trimmed.</summary>
-    private static string Words(string line) => line.Trim(' ', '￼', '\r', '\n');
+    private static string Words(string line) => line.Trim(' ', '\uFFFC', '\r', '\n');
 
     private static void Widen(ReadingSurface surface, double width)
     {
@@ -475,13 +475,148 @@ public sealed partial class ReadingDiagramTests
 
             surface.RaiseEvent(new DataObjectCopyingEventArgs(dragged, isDragDrop: true));
 
-            string rtf = (string)dragged.GetData(DataFormats.Rtf);
+            string rtf = (string)dragged.GetData(DataFormats.Rtf)!;
             string pasted = RtfText(rtf);
             Assert.DoesNotContain(hidden, pasted, StringComparison.Ordinal);
             Assert.Contains("After the diagram.", pasted, StringComparison.Ordinal);
             Assert.Equal(
-                ((string)dragged.GetData(DataFormats.UnicodeText)).Replace("\r\n", "\n").TrimEnd('\n'),
+                ((string)dragged.GetData(DataFormats.UnicodeText)!).Replace("\r\n", "\n").TrimEnd('\n'),
                 pasted.Replace("\r\n", "\n").TrimEnd('\n'));
+        });
+    }
+
+    /// <summary>The spec red team's M1: a copy that only leaves hidden runs
+    /// out keeps WPF's rich text, without the runs, so a paste into a rich
+    /// editor keeps its formatting and never carries the image's name
+    /// twice.</summary>
+    [Fact]
+    public void ACopyAcrossAnEmbeddedImageKeepsItsRichTextWithoutItsName()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open(
+                "reading-embed-image-copy-rtf", "**Bold** before the card.\n\n" + EmbedNote, hosted: true, files: EmbedImages);
+            _ = AwaitEmbedImage(harness);
+            ReadingSurface surface = harness.Surface;
+            var written = new List<string>();
+            ReadingSurface.PlainTextClipboardForTests = written.Add;
+            try
+            {
+                surface.SelectAll();
+                IDataObject? copied = null;
+                bool cancelled = false;
+                DataObject.AddCopyingHandler(surface, (_, e) =>
+                {
+                    copied = e.DataObject;
+                    cancelled = e.CommandCancelled;
+                    e.CancelCommand();
+                });
+                surface.Copy();
+
+                Assert.NotNull(copied);
+                Assert.False(cancelled, "the copy put plain text alone on the clipboard");
+                Assert.Empty(written);
+                string rtf = (string)copied!.GetData(DataFormats.Rtf)!;
+                string text = RtfText(rtf);
+                Assert.Contains("Bold before the card.", text, StringComparison.Ordinal);
+                Assert.Contains("After the card.", text, StringComparison.Ordinal);
+                Assert.Equal(1, text.Split("wide.svg").Length - 1);
+                Assert.Contains(@"\b", rtf, StringComparison.Ordinal);
+                Assert.Equal(1, ((string)copied.GetData(DataFormats.UnicodeText)!).Split("wide.svg").Length - 1);
+            }
+            finally
+            {
+                ReadingSurface.PlainTextClipboardForTests = null;
+            }
+        });
+    }
+
+    /// <summary>The spec red team: a selection of hidden letters alone
+    /// shows nothing, so a copy of it leaves the clipboard as it was.</summary>
+    [Fact]
+    public void ACopyOfOnlyHiddenTextLeavesTheClipboardAlone()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open("reading-embed-image-copy-hidden", EmbedNote, hosted: true, files: EmbedImages);
+            ReadingDiagramImage image = AwaitEmbedImage(harness);
+            var paragraph = (Paragraph)((InlineUIContainer)image.Parent).Parent;
+            Run name = Assert.Single(HiddenRuns(paragraph));
+            var written = new List<string>();
+            ReadingSurface.PlainTextClipboardForTests = written.Add;
+            try
+            {
+                harness.Surface.Selection.Select(
+                    name.ContentStart.GetPositionAtOffset(2)!, name.ContentStart.GetPositionAtOffset(8)!);
+                IDataObject? copied = null;
+                bool cancelled = false;
+                DataObject.AddCopyingHandler(harness.Surface, (_, e) =>
+                {
+                    copied = e.DataObject;
+                    cancelled = e.CommandCancelled;
+                    e.CancelCommand();
+                });
+                harness.Surface.Copy();
+
+                Assert.True(cancelled, "a copy of hidden letters alone went ahead");
+                Assert.Empty(written);
+            }
+            finally
+            {
+                ReadingSurface.PlainTextClipboardForTests = null;
+            }
+        });
+    }
+
+    /// <summary>A drag that reaches no hidden run is WPF's own: its rich
+    /// text is left as it was built.</summary>
+    [Fact]
+    public void ADragThatReachesNoHiddenTextKeepsWpfsRichText()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open("reading-drag-plain", StageNote, hosted: true);
+            ReadingSurface surface = harness.Surface;
+            Paragraph after = surface.Document.Blocks.OfType<Paragraph>().Single(p => new TextRange(p.ContentStart, p.ContentEnd).Text == "After the diagram.");
+            surface.Selection.Select(after.ContentStart, after.ContentEnd);
+            using var saved = new MemoryStream();
+            new TextRange(surface.Selection.Start, surface.Selection.End).Save(saved, DataFormats.Rtf);
+            string before = ShippedFontNames.InRtfFontTable(System.Text.Encoding.ASCII.GetString(saved.ToArray()));
+            var dragged = new DataObject(DataFormats.Rtf, before);
+
+            surface.RaiseEvent(new DataObjectCopyingEventArgs(dragged, isDragDrop: true));
+
+            Assert.Equal(before, (string)dragged.GetData(DataFormats.Rtf)!);
+        });
+    }
+
+    /// <summary>The RTF a drag carries when its copy changed the text holds
+    /// that text exactly: braces (a mermaid decision node), backslashes, a
+    /// literal control word, accents and a character past the BMP.</summary>
+    [Fact]
+    public void PlainTextRtfHoldsItsTextExactly()
+    {
+        RunSta(() =>
+        {
+            string text = "A{Decision} --> B\\C\r\nsecond \\par line, caf\u00e9 and \U0001D465\tend";
+            Assert.Equal(
+                text.ReplaceLineEndings("\n"),
+                RtfText(ReadingSurface.PlainTextRtf(text)).ReplaceLineEndings("\n").TrimEnd('\n'));
+        });
+    }
+
+    /// <summary>An embedded image's line reads its card's name, so Enter there
+    /// does what Enter on the card's header does.</summary>
+    [Fact]
+    public void EnterOnAnEmbeddedImagesLineActivatesItsCard()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open("reading-embed-image-enter", EmbedNote, hosted: true, files: EmbedImages);
+            ReadingDiagramImage image = AwaitEmbedImage(harness);
+            var container = (InlineUIContainer)image.Parent;
+            harness.Surface.CaretPosition = container.ElementEnd;
+            Assert.True(harness.Surface.TryActivateAtCaret(), "Enter on the image's line did nothing");
         });
     }
 

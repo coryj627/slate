@@ -877,12 +877,17 @@ public sealed class ReadingSvgEmbedDecodeTests
         }
     }
 
-    /// <summary>A block that places a decoded embed image: since #1708
-    /// (CB-20), a paragraph of the image's name as a hidden run and the image
-    /// in its container.</summary>
-    private static bool PlacesADecodedImage(Block block) =>
-        block is Paragraph paragraph
-        && paragraph.Inlines.OfType<InlineUIContainer>().Any(container => container.Child is ReadingDiagramImage { Source: not null });
+    /// <summary>A block that places a decoded embed image, in whatever
+    /// container: since #1708 (CB-20) a paragraph of the image's name as a
+    /// hidden run and the image, before it a block of its own. Either shape
+    /// counts, so a check that no image was placed stays a real one.</summary>
+    private static bool PlacesADecodedImage(Block block) => block switch
+    {
+        BlockUIContainer { Child: ReadingDiagramImage { Source: not null } } => true,
+        Paragraph paragraph => paragraph.Inlines.OfType<InlineUIContainer>()
+            .Any(container => container.Child is ReadingDiagramImage { Source: not null }),
+        _ => false,
+    };
 
     private static VaultSession Scanned(string root)
     {

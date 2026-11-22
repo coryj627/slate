@@ -150,7 +150,7 @@ public sealed partial class ShellAccessibilityTests
     {
         FlaUI.Core.ITextRange range = text.RangeFromChild(element);
         range.ExpandToEnclosingUnit(TextUnit.Line);
-        return (range.GetText(-1) ?? string.Empty).Trim(' ', '￼', '\r', '\n');
+        return (range.GetText(-1) ?? string.Empty).Trim(' ', '\uFFFC', '\r', '\n');
     }
 
     /// <summary>#1708, for the RangeFromChild census: a math or diagram
@@ -158,10 +158,19 @@ public sealed partial class ShellAccessibilityTests
     /// reads.</summary>
     private static string? LineReadsTheName(FlaUI.Core.Patterns.ITextPattern text, string kind, AutomationElement element)
     {
-        string name = element.Properties.Name.ValueOrDefault ?? string.Empty;
-        string line = EnclosingLineOf(text, element);
-        return name.Length > 0 && line.Contains(name, StringComparison.Ordinal)
-            ? null
-            : $"{kind}: its enclosing Line reads \"{line}\", not its name \"{name}\"";
+        try
+        {
+            string name = element.Properties.Name.ValueOrDefault ?? string.Empty;
+            string line = EnclosingLineOf(text, element);
+            return name.Length > 0 && line.Contains(name, StringComparison.Ordinal)
+                ? null
+                : $"{kind}: its enclosing Line reads \"{line}\", not its name \"{name}\"";
+        }
+        catch (Exception exception)
+        {
+            // Collected like ProbeRangeFromChild's failures, so the census
+            // reports every kind.
+            return $"{kind}: its enclosing Line: {exception.GetType().Name}: {exception.Message}";
+        }
     }
 }

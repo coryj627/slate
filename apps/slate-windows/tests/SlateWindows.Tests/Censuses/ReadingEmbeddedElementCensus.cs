@@ -244,6 +244,8 @@ public sealed class ReadingEmbeddedElementCensus
                 internal static Block Initializer() => new BlockUIContainer { Child = new Border() };
                 internal static void Assigned(BlockUIContainer block) => block.Child = new TextBox();
                 internal static Block Derived() => new PlantedBlock(new Slider());
+                internal static Paragraph CollectionInitializer() => new Paragraph { Inlines = { new Expander() } };
+                internal static void CoalesceAssigned(BlockUIContainer block) => block.Child ??= new ComboBox();
             }
             """);
         CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
@@ -252,6 +254,8 @@ public sealed class ReadingEmbeddedElementCensus
             new[]
             {
                 "Planted.Assigned places TextBox",
+                "Planted.CoalesceAssigned places ComboBox",
+                "Planted.CollectionInitializer places Expander",
                 "Planted.Derived places Slider",
                 "Planted.Explicit places CheckBox",
                 "Planted.Implicit places Image",
@@ -263,10 +267,12 @@ public sealed class ReadingEmbeddedElementCensus
 
     /// <summary>The sites in <paramref name="trees"/>, bound: an object
     /// creation of a flow container (or a type derived from one) that is
-    /// given its element, a call that binds to <c>InlineCollection.Add(UIElement)</c>,
-    /// and an assignment to a flow container's <c>Child</c>, in an
-    /// initializer or after. XAML flow content is outside it; the shell
-    /// declares none.</summary>
+    /// given its element, a call that binds to <c>InlineCollection.Add(UIElement)</c>
+    /// (a collection initializer's included), and an assignment to a flow
+    /// container's <c>Child</c> (plain, compound or in an initializer), over
+    /// every operation the trees hold. A TextBlock's inlines are an
+    /// InlineCollection too, so a UIElement added there is a site as well.
+    /// XAML flow content is outside it; the shell declares none.</summary>
     private static List<Site> SitesIn(CSharpCompilation compilation, IEnumerable<SyntaxTree> trees)
     {
         INamedTypeSymbol inline = compilation.GetTypeByMetadataName("System.Windows.Documents.InlineUIContainer")!;
@@ -294,9 +300,19 @@ public sealed class ReadingEmbeddedElementCensus
         foreach (SyntaxTree tree in trees)
         {
             SemanticModel model = compilation.GetSemanticModel(tree);
-            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+            // Every operation of every tree, from its roots: an implicit
+            // call (a collection initializer's Add) has no node of its own,
+            // so asking each node for its operation would miss it.
+            var seen = new HashSet<IOperation>();
+            IEnumerable<IOperation> operations = tree.GetRoot().DescendantNodes()
+                .Select(node => model.GetOperation(node))
+                .Where(operation => operation is { Parent: null })
+                .SelectMany(root => root!.DescendantsAndSelf())
+                .Where(seen.Add);
+            foreach (IOperation operation in operations)
             {
-                string? placed = model.GetOperation(node) switch
+                SyntaxNode node = operation.Syntax;
+                string? placed = operation switch
                 {
                     IObjectCreationOperation creation when IsContainer(creation.Type) && creation.Arguments.Length > 0 =>
                         PlacedBy(creation.Arguments[0].Value),
@@ -304,7 +320,7 @@ public sealed class ReadingEmbeddedElementCensus
                         && call.TargetMethod.Parameters.Length == 1
                         && SymbolEqualityComparer.Default.Equals(call.TargetMethod.Parameters[0].Type, element) =>
                         PlacedBy(call.Arguments[0].Value),
-                    ISimpleAssignmentOperation { Target: IPropertyReferenceOperation { Property.Name: "Child" } property } assignment
+                    IAssignmentOperation { Target: IPropertyReferenceOperation { Property.Name: "Child" } property } assignment
                         when IsContainer(property.Property.ContainingType) =>
                         PlacedBy(assignment.Value),
                     _ => null,
@@ -421,7 +437,7 @@ public sealed class ReadingEmbeddedElementCensus
         return line.GetText(-1);
     }
 
-    private static string Words(string line) => line.Trim(' ', '￼', '\r', '\n');
+    private static string Words(string line) => line.Trim(' ', '\uFFFC', '\r', '\n');
 
     private static IEnumerable<(TextElement Container, UIElement Child, Paragraph? Host)> Containers(FlowDocument document) =>
         Blocks(document.Blocks).SelectMany(Containers);

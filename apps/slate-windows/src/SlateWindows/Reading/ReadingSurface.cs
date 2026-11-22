@@ -1421,7 +1421,8 @@ internal sealed class ReadingSurface : RichTextBox
         // the Jump button's own key handling never fires for it. A
         // core-resolved destination navigates directly; only cards
         // without one fall back to the record match.
-        if (CaretPosition?.Paragraph is { } embedParagraph
+        if (CaretPosition?.Paragraph is { } caretParagraph
+            && EmbedHeaderFor(caretParagraph) is { } embedParagraph
             && ReadingSemantics.EmbedHeaderKeyOf(embedParagraph) is { } embedKey
             && _model is { } embedModel)
         {
@@ -1587,8 +1588,30 @@ internal sealed class ReadingSurface : RichTextBox
             e.DataObject.SetData(DataFormats.Rtf, ShippedFontNames.InRtfFontTable(rtf));
         }
 
-        if (CopyTextOf(Selection.Start, Selection.End) is not { } text)
+        if (CopyOf(Selection.Start, Selection.End) is not { } copy)
         {
+            return;
+        }
+        string text = copy.Text;
+        if (text.Length == 0)
+        {
+            // #1708: the selection holds only hidden speech, which shows
+            // nothing, so there is nothing to copy; the clipboard keeps
+            // what it held.
+            e.CancelCommand();
+            return;
+        }
+        if (!copy.Substituted)
+        {
+            // #1708 (CB-20): only hidden runs were left out (a pending
+            // diagram's name, an embedded image's name), so WPF's formats
+            // stand, each without them: its rich text is made again from
+            // the range with those runs removed.
+            e.DataObject.SetData(DataFormats.UnicodeText, text);
+            e.DataObject.SetData(DataFormats.Text, text);
+            e.DataObject.SetData(
+                DataFormats.Rtf,
+                RtfWithoutHiddenSpeech(new TextRange(Selection.Start, Selection.End)) ?? PlainTextRtf(text));
             return;
         }
         if (e.IsDragDrop)
@@ -1605,6 +1628,11 @@ internal sealed class ReadingSurface : RichTextBox
         e.CancelCommand();
         try
         {
+            if (PlainTextClipboardForTests is { } seam)
+            {
+                seam(text);
+                return;
+            }
             Clipboard.SetDataObject(new DataObject(DataFormats.UnicodeText, text), copy: true);
         }
         catch (System.Runtime.InteropServices.ExternalException)
@@ -1620,7 +1648,16 @@ internal sealed class ReadingSurface : RichTextBox
     /// formula, a rendered diagram) is replaced whole by its fenced source;
     /// a hidden run anywhere else (#1708: a pending diagram's name, an
     /// embedded image's name) is left out, so the rest copies as shown.</summary>
-    internal string? CopyTextOf(TextPointer start, TextPointer end)
+    internal string? CopyTextOf(TextPointer start, TextPointer end) => CopyOf(start, end)?.Text;
+
+    /// <summary>Test seam: where a copy that changed the text puts its plain
+    /// text, in place of the clipboard. Null in production.</summary>
+    internal static Action<string>? PlainTextClipboardForTests;
+
+    /// <summary>A copy's text, and whether a fenced source took a
+    /// paragraph's place (when only hidden runs were left out, WPF's rich
+    /// text can stand without them).</summary>
+    private (string Text, bool Substituted)? CopyOf(TextPointer start, TextPointer end)
     {
         var changes = new List<(TextPointer From, TextPointer To, string Text)>();
         CollectCopyChanges(Document.Blocks, start, end, changes);
@@ -1643,7 +1680,85 @@ internal sealed class ReadingSurface : RichTextBox
         {
             text.Append(new TextRange(cursor, end).Text);
         }
-        return text.ToString();
+        return (text.ToString(), changes.Any(change => change.Text.Length > 0));
+    }
+
+    /// <summary>#1708: RTF of <paramref name="range"/> without its hidden
+    /// speech. XAML keeps a run's exact size and colour, which RTF rounds,
+    /// so the range goes through XAML into a scratch document, every run
+    /// drawn transparent below a point is removed (the census holds that
+    /// those are exactly the hidden runs), and that is saved as RTF. Null
+    /// when the round trip fails, and the caller falls back to plain RTF.</summary>
+    internal static string? RtfWithoutHiddenSpeech(TextRange range)
+    {
+        try
+        {
+            using var xaml = new System.IO.MemoryStream();
+            range.Save(xaml, DataFormats.Xaml);
+            xaml.Position = 0;
+            var scratch = new FlowDocument();
+            new TextRange(scratch.ContentStart, scratch.ContentEnd).Load(xaml, DataFormats.Xaml);
+            foreach (Run run in RunsIn(scratch.Blocks).Where(LooksHidden).ToList())
+            {
+                switch (run.Parent)
+                {
+                    case Paragraph paragraph:
+                        paragraph.Inlines.Remove(run);
+                        break;
+                    case Span span:
+                        span.Inlines.Remove(run);
+                        break;
+                }
+            }
+            using var rtf = new System.IO.MemoryStream();
+            new TextRange(scratch.ContentStart, scratch.ContentEnd).Save(rtf, DataFormats.Rtf);
+            return ShippedFontNames.InRtfFontTable(System.Text.Encoding.ASCII.GetString(rtf.ToArray()));
+        }
+        catch (Exception failure) when (failure is ArgumentException or InvalidOperationException or System.IO.IOException
+            or System.Xml.XmlException or System.Windows.Markup.XamlParseException)
+        {
+            return null;
+        }
+    }
+
+    private static bool LooksHidden(Run run) =>
+        run.Foreground is System.Windows.Media.SolidColorBrush { Color.A: 0 } && run.FontSize < 1;
+
+    private static IEnumerable<Run> RunsIn(IEnumerable<Block> blocks)
+    {
+        foreach (Block block in blocks)
+        {
+            IEnumerable<Run> runs = block switch
+            {
+                Paragraph paragraph => InlineRuns(paragraph.Inlines),
+                Section section => RunsIn(section.Blocks),
+                System.Windows.Documents.List list => RunsIn(list.ListItems.SelectMany(item => item.Blocks)),
+                Table table => RunsIn(table.RowGroups.SelectMany(group => group.Rows).SelectMany(row => row.Cells).SelectMany(cell => cell.Blocks)),
+                _ => [],
+            };
+            foreach (Run run in runs)
+            {
+                yield return run;
+            }
+        }
+    }
+
+    private static IEnumerable<Run> InlineRuns(IEnumerable<Inline> inlines)
+    {
+        foreach (Inline inline in inlines)
+        {
+            if (inline is Run run)
+            {
+                yield return run;
+            }
+            else if (inline is Span span)
+            {
+                foreach (Run inner in InlineRuns(span.Inlines))
+                {
+                    yield return inner;
+                }
+            }
+        }
     }
 
     /// <summary>The parts of [start, end] a copy changes, in document
@@ -1720,6 +1835,22 @@ internal sealed class ReadingSurface : RichTextBox
             }
         }
         return rtf.Append('}').ToString();
+    }
+
+    /// <summary>The embed card header Enter activates from <paramref name="paragraph"/>:
+    /// the header itself, or, for an embedded image's line, which reads the
+    /// card's name since #1708, its card's header.</summary>
+    private static Paragraph? EmbedHeaderFor(Paragraph paragraph)
+    {
+        if (ReadingSemantics.EmbedHeaderKeyOf(paragraph) is not null)
+        {
+            return paragraph;
+        }
+        return paragraph.Parent is Section section
+            && ReadingSemantics.IsEmbedSection(section)
+            && paragraph.Inlines.OfType<InlineUIContainer>().Any(container => container.Child is ReadingDiagramImage)
+                ? section.Blocks.OfType<Paragraph>().FirstOrDefault(header => ReadingSemantics.EmbedHeaderKeyOf(header) is not null)
+                : null;
     }
 
     private static ReadingMathElement? MathElementOf(Paragraph paragraph) =>
