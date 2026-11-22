@@ -1022,8 +1022,12 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (ReferenceEquals(_moveToSheet, value)) { return; }
             CancelMoveToLoading();
-            _moveToSheet?.Retire();
+            // Plan 47 CB-17b (#1866, D5): the sheet closes before its picker is retired, so
+            // its Cancel has left the screen, and its command binding with it, before the
+            // retired picker turns that command off; it never goes off under the keys.
+            MoveToPickerViewModel? retiring = _moveToSheet;
             SetField(ref _moveToSheet, value);
+            retiring?.Retire();
         }
     }
 

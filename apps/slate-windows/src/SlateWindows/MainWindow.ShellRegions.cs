@@ -948,6 +948,12 @@ public partial class MainWindow : IShellRegionHost
         // appended — where the reading continues — else the list's last
         // row, else the leaf's landing.
         RegionFocusGuard.SetStrandedLanding(PanelReviewLoadMore, LandAfterLoadMore);
+
+        // Plan 47 CB-17b (#1866): the trash's Cancel goes off in its own press, and the
+        // keys, moved first, go back to the element they came to it from
+        // (LandWhereTrashCancelCameFrom), as its restore put them after the off.
+        RegionFocusGuard.SetStrandedLanding(
+            ElementWithAutomationId<Button>(ShellStatusBar, "CancelTrash"), LandWhereTrashCancelCameFrom);
     }
 
     /// <summary>A region whose landing is synchronous — never held, so its
