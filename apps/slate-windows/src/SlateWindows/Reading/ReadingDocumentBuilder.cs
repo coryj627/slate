@@ -688,7 +688,7 @@ internal static class ReadingDocumentBuilder
     /// line.</summary>
     private static Run SpeechRun(string speech)
     {
-        var run = new Run(speech)
+        var run = new Run(OneLine(speech))
         {
             Foreground = Brushes.Transparent,
             FontSize = SpeechRunFontSize(speech),
@@ -700,8 +700,17 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>#1708: hidden speech is one line, or its run would break
-    /// its line in two and the element would read alone on the second.</summary>
-    private static string OneLine(string speech) => speech.ReplaceLineEndings(" ");
+    /// its line in two and the element would read alone on the second. A
+    /// tab or another control character is a space too (Codex round 2): a
+    /// tab advances to the paragraph's tab stop whatever the run's size, past
+    /// the room the element leaves the run (<see cref="SpeechRunReserve"/>).</summary>
+    private static string OneLine(string speech)
+    {
+        string line = speech.ReplaceLineEndings(" ");
+        return line.Any(char.IsControl)
+            ? string.Concat(line.Select(character => char.IsControl(character) ? ' ' : character))
+            : line;
+    }
 
     /// <summary>#1708: where a caret at or inside hidden speech is drawn at its
     /// line's height: just after the element the speech stands for, on the
