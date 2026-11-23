@@ -77,49 +77,25 @@ public sealed partial class ShellAccessibilityTests
             FlaUI.Core.Patterns.ITextPattern text = surface.Patterns.Text.Pattern;
             Rectangle page = surface.BoundingRectangle;
             var failures = new List<string>();
-            foreach ((string kind, string hidden, string below) in new[]
+            foreach ((string kind, string hidden) in new[]
             {
-                ("image", "Embedded image: box.svg", "After the image."),
-                ("formula", "x squared", "After the formula."),
-                ("diagram", "Flowchart with 2 steps.", "After the diagram."),
+                ("image", "Embedded image: box.svg"),
+                ("formula", "x squared"),
+                ("diagram", "Flowchart with 2 steps."),
             })
             {
                 FlaUI.Core.ITextRange? speech = text.DocumentRange.FindText(hidden, true, false);
-                FlaUI.Core.ITextRange? target = text.DocumentRange.FindText(below, false, false);
-                if (speech is null || target is null)
+                if (speech is null)
                 {
-                    failures.Add($"{kind}: \"{hidden}\" or \"{below}\" is not in the document");
+                    failures.Add($"{kind}: \"{hidden}\" is not in the document");
                     continue;
                 }
-                // Its line at the top of the view, so the line below shows too.
-                speech.ScrollIntoView(true);
-                Rectangle[] speechBoxes = [];
-                Rectangle[] targetBoxes = [];
-                _ = SpinWait.SpinUntil(
-                    () =>
-                    {
-                        speechBoxes = speech.GetBoundingRectangles();
-                        targetBoxes = target.GetBoundingRectangles();
-                        return speechBoxes.Length > 0 && targetBoxes.Length > 0;
-                    },
-                    TimeSpan.FromSeconds(5));
-                if (speechBoxes.Length == 0 || targetBoxes.Length == 0)
+                if (PointsBeside(speech, page) is not { } points)
                 {
-                    failures.Add($"{kind}: its speech ({speechBoxes.Length} boxes) or the line below ({targetBoxes.Length} boxes) has no box on screen");
+                    failures.Add($"{kind}: its line has no margin on screen to press in");
                     continue;
                 }
-                // The hidden speech's box spans its line's height, at the line's
-                // left: to its left, at its middle, is the margin of that line (a
-                // Line range's box can reach into the line above).
-                Rectangle box = speechBoxes[0];
-                var press = new Point(box.Left - 12, box.Top + (box.Height / 2));
-                if (press.X <= page.Left + 2)
-                {
-                    failures.Add($"{kind}: its line leaves no margin to press in ({box} in {page})");
-                    continue;
-                }
-                var release = new Point(
-                    targetBoxes[0].Left + (targetBoxes[0].Width / 2), targetBoxes[0].Top + (targetBoxes[0].Height / 2));
+                (Point press, Point release, Rectangle box) = points;
 
                 Mouse.Drag(press, release);
                 string selected = string.Empty;
@@ -157,14 +133,13 @@ public sealed partial class ShellAccessibilityTests
             // there, and a Shift-click back on the anchor collapses it. The
             // caret stays on its anchor; only a plain click is moved.
             FlaUI.Core.ITextRange? image = text.DocumentRange.FindText("Embedded image: box.svg", true, false);
-            Rectangle[] imageBoxes = image?.GetBoundingRectangles() ?? [];
-            if (image is null || imageBoxes.Length == 0)
+            if (image is null || PointsBeside(image, page) is not { } imagePoints)
             {
-                failures.Add("image: its speech has no box for the Shift-click");
+                failures.Add("image: its line has no margin on screen for the Shift-click");
             }
             else
             {
-                var anchorPoint = new Point(imageBoxes[0].Left - 12, imageBoxes[0].Top + (imageBoxes[0].Height / 2));
+                Point anchorPoint = imagePoints.Press;
                 Mouse.Click(anchorPoint);
                 Keyboard.Type(FlaUI.Core.WindowsAPI.VirtualKeyShort.HOME);
                 Keyboard.TypeSimultaneously(FlaUI.Core.WindowsAPI.VirtualKeyShort.SHIFT, FlaUI.Core.WindowsAPI.VirtualKeyShort.DOWN);
@@ -206,5 +181,32 @@ public sealed partial class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>#1708 (the merge judge's M1): where to press beside an
+    /// element's line and where to drag to past the element, on the screen.
+    /// The hidden speech's box spans its line's height at the line's left;
+    /// scrolled to the view's bottom, the line's lower part shows even when a
+    /// tall diagram is taller than the view. The press is to the speech's
+    /// left near that part's bottom, and the drag ends in the same line's
+    /// right margin. Null when the line shows no margin.</summary>
+    private static (Point Press, Point Release, Rectangle Box)? PointsBeside(FlaUI.Core.ITextRange speech, Rectangle page)
+    {
+        speech.ScrollIntoView(false);
+        Rectangle[] boxes = [];
+        _ = SpinWait.SpinUntil(() => (boxes = speech.GetBoundingRectangles()).Length > 0, TimeSpan.FromSeconds(5));
+        if (boxes.Length == 0)
+        {
+            return null;
+        }
+        Rectangle box = boxes[0];
+        int top = Math.Max(box.Top, page.Top);
+        int bottom = Math.Min(box.Bottom, page.Bottom);
+        if (bottom - top < 4 || box.Left - 12 <= page.Left + 2)
+        {
+            return null;
+        }
+        int y = bottom - Math.Min(10, (bottom - top) / 2);
+        return (new Point(box.Left - 12, y), new Point(page.Right - 40, y), box);
     }
 }
