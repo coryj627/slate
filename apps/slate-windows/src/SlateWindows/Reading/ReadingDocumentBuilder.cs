@@ -374,7 +374,10 @@ internal static class ReadingDocumentBuilder
                 return TableBlock(block);
 
             case ReadingBlockKind.ThematicBreak:
-                return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
+                // #1708 (CB-20, the lead's ruling on Call 3): WPF's Separator is
+                // disabled by its metadata, and NVDA said "separator, unavailable"
+                // for a rule. Enabled in its initializer, it still takes no keys.
+                return new BlockUIContainer(new Separator { IsEnabled = true, Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
                 return MathBlockElement(block, mathBlocks, context);
@@ -665,13 +668,14 @@ internal static class ReadingDocumentBuilder
         };
         paragraph.Inlines.Add(SpeechRun(speech));
         paragraph.Inlines.Add(new InlineUIContainer(element));
+        element.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
         if (visual is null)
         {
             paragraph.Padding = new Thickness(8);
             paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
         }
         ReadingSemantics.MarkMathBlock(paragraph, speech);
-        ReadingSemantics.MarkMathCopyText(paragraph, fallbackSource);
+        ReadingSemantics.MarkCopyText(paragraph, fallbackSource);
         return paragraph;
     }
 
@@ -682,11 +686,86 @@ internal static class ReadingDocumentBuilder
     /// role). A long speech gets a smaller size, down to 0.01 (WPF's
     /// floor is between 0.001 and 0.01), so the run stays a sliver of its
     /// line.</summary>
-    private static Run SpeechRun(string speech) => new(speech)
+    private static Run SpeechRun(string speech)
     {
-        Foreground = Brushes.Transparent,
-        FontSize = SpeechRunFontSize(speech),
-    };
+        var run = new Run(OneLine(speech))
+        {
+            Foreground = Brushes.Transparent,
+            FontSize = SpeechRunFontSize(speech),
+        };
+        // #1708: one mark for every run in range for line reading only, so
+        // find skips it and a copy leaves it out.
+        ReadingSemantics.MarkHiddenSpeech(run);
+        return run;
+    }
+
+    /// <summary>#1708: hidden speech is one line, or its run would break
+    /// its line in two and the element would read alone on the second. A
+    /// tab or another control character is a space too (Codex round 2): a
+    /// tab advances to the paragraph's tab stop whatever the run's size, past
+    /// the room the element leaves the run (<see cref="SpeechRunReserve"/>).</summary>
+    private static string OneLine(string speech)
+    {
+        string line = speech.ReplaceLineEndings(" ");
+        return line.Any(char.IsControl)
+            ? string.Concat(line.Select(character => char.IsControl(character) ? ' ' : character))
+            : line;
+    }
+
+    /// <summary>#1708: where a caret at or inside hidden speech is drawn at its
+    /// line's height: just after the element the speech stands for, on the
+    /// same line. WPF draws a caret beside a run as tall as that run's font,
+    /// and hidden speech is a sliver of a point (0.13 px where a body line's
+    /// caret is 15.96, measured); just after the element it is the line's.
+    /// Null when the caret is not there.</summary>
+    internal static TextPointer? VisibleCaretPast(TextPointer caret)
+    {
+        if (caret.Paragraph is not { } paragraph)
+        {
+            return null;
+        }
+        Run? speech = null;
+        foreach (Inline inline in paragraph.Inlines)
+        {
+            if (inline is Run run && ReadingSemantics.IsHiddenSpeech(run))
+            {
+                speech ??= run;
+                continue;
+            }
+            if (speech is not null && inline is InlineUIContainer container)
+            {
+                if (caret.CompareTo(speech.ElementStart) >= 0 && caret.CompareTo(container.ElementStart) <= 0)
+                {
+                    return container.ElementEnd;
+                }
+            }
+            speech = null;
+        }
+        return null;
+    }
+
+    /// <summary>#1708: where a chord lands on a block: its start, or, where
+    /// that is hidden speech, just after the block's element.</summary>
+    private static TextPointer Landing(Paragraph paragraph)
+    {
+        TextPointer start = Insertion(paragraph.ContentStart);
+        return VisibleCaretPast(start) ?? start;
+    }
+
+    /// <summary>#1708 (B1, Codex round 1): a binding to how tall a caret is
+    /// drawn in <paramref name="text"/>'s own text. WPF draws a caret just
+    /// after an embedded element no taller than the element, so an element
+    /// after hidden speech is at least this tall (a 1x1 image, a flat one, a
+    /// wide diagram scaled down to a narrow window, a short formula) and a
+    /// pending placeholder is exactly this tall. A control in flow content
+    /// does not inherit the text's size, so it is bound to it.</summary>
+    private static System.Windows.Data.MultiBinding CaretHeightOf(TextElement text)
+    {
+        var height = new System.Windows.Data.MultiBinding { Converter = ReadingLineReserve.TextCaretHeight };
+        height.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontSize)) { Source = text });
+        height.Bindings.Add(new System.Windows.Data.Binding(nameof(TextElement.FontFamily)) { Source = text });
+        return height;
+    }
 
     /// <summary>The width a speech run's whole line may give it.</summary>
     /// <summary>The body's size and line height (DS-3). The line height is a paragraph
@@ -730,16 +809,17 @@ internal static class ReadingDocumentBuilder
 
     /// <summary>The face for code and for source shown in place of a render,
     /// from the type layer, so it's the one the app ships (DS-1).</summary>
-    private const string CodeFontKey = "Slate.CodeFontFamily";
+    internal const string CodeFontKey = "Slate.CodeFontFamily";
 
     private const double SpeechRunWidthBudget = 24;
 
     private static double SpeechRunFontSize(string speech) =>
         Math.Clamp(SpeechRunWidthBudget / Math.Max(1, speech.Length), 0.01, 0.1);
 
-    /// <summary>An upper bound on the speech run's width, which the
-    /// element leaves free on their line: a speech glyph's advance stays
-    /// within its em, plus a margin.</summary>
+    /// <summary>The builder's estimate of the speech run's width, which the
+    /// element leaves free on their line: an em for each character, plus a
+    /// margin. A glyph wider than its em gets the room it takes when the
+    /// element is measured (<see cref="ReadingLineReserve.For"/>).</summary>
     private static double SpeechRunReserve(string speech) =>
         (speech.Length * SpeechRunFontSize(speech)) + 4;
 
@@ -994,6 +1074,9 @@ internal static class ReadingDocumentBuilder
         ReadingListBuildContext context)
     {
         string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
+        // #1708: the fenced source a rendered diagram's copy carries, kept on
+        // every diagram paragraph so a completion in place has it.
+        string fence = block.Source.TrimEnd('\n', '\r');
 
         // WB-20 (#1317): a fence the last diagram stage landed builds
         // complete, in that outcome's shape, with no decode here; a fence
@@ -1028,6 +1111,7 @@ internal static class ReadingDocumentBuilder
             case DiagramOutcome.Rendered rendered:
                 {
                     var paragraph = new Paragraph();
+                    ReadingSemantics.MarkDiagramFence(paragraph, fence);
                     ApplyRenderedShape(
                         paragraph,
                         new ReadingDiagramElement(rendered.Description, artifact!.Source),
@@ -1037,6 +1121,7 @@ internal static class ReadingDocumentBuilder
             case DiagramOutcome.Failed failed:
                 {
                     var paragraph = new Paragraph();
+                    ReadingSemantics.MarkDiagramFence(paragraph, fence);
                     ApplyFailureShape(
                         paragraph,
                         new ReadingDiagramElement(failed.Description, artifact!.Source),
@@ -1051,14 +1136,26 @@ internal static class ReadingDocumentBuilder
         // precedent.
         Paragraph sourceParagraph = MonospaceParagraph(fallbackSource);
         ReadingSemantics.MarkDiagramBlock(sourceParagraph, fallbackSource);
+        ReadingSemantics.MarkDiagramFence(sourceParagraph, fence);
         if (context.DiagramsPending)
         {
             // Pending (WB-20): the source stays IN the text range, where caret
             // reading and the TextPattern reach it, and a zero-size focusable
             // placeholder is named "Diagram, rendering" (WD11) until the stage
-            // completes it in place — the math coverage-gap shape.
-            sourceParagraph.Inlines.Add(new InlineUIContainer(
-                new ReadingDiagramElement(PendingDiagramName, fallbackSource)));
+            // completes it in place — the math coverage-gap shape. #1708
+            // (CB-20; the owner's answer to Call 1, "Before the source"): the
+            // name, as a hidden run, and the placeholder stand on a line of
+            // their own above the source, so line reading speaks the name.
+            Inline source = sourceParagraph.Inlines.FirstInline;
+            sourceParagraph.Inlines.InsertBefore(source, SpeechRun(PendingDiagramName));
+            var placeholder = new ReadingDiagramElement(PendingDiagramName, fallbackSource);
+            // As tall as a caret in the source's text, with no width, so a
+            // caret just after it is drawn as tall as on the lines below,
+            // where an empty one draws a sliver of a point (#1708, the diff
+            // red team's B1).
+            placeholder.SetBinding(FrameworkElement.HeightProperty, CaretHeightOf(source));
+            sourceParagraph.Inlines.InsertBefore(source, new InlineUIContainer(placeholder));
+            sourceParagraph.Inlines.InsertBefore(source, new LineBreak());
             string key = block.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ReadingSemantics.MarkDiagramPending(sourceParagraph, key);
             context.PendingDiagrams.Add(new PendingFence(key, block, fallbackSource));
@@ -1207,6 +1304,17 @@ internal static class ReadingDocumentBuilder
         paragraph.ClearValue(Block.PaddingProperty);
         paragraph.ClearValue(Block.BackgroundProperty);
         paragraph.ClearValue(TextElement.FontFamilyProperty);
+        // #1708 (CB-20): the description in range before the element, on its
+        // line, so line reading speaks it (#1595's shape for math); the
+        // element leaves the run room there. A copy carries the fence.
+        string speech = OneLine(rendered.Description);
+        paragraph.Inlines.InsertBefore(container, SpeechRun(speech));
+        element.LineReserve = SpeechRunReserve(speech);
+        element.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
+        if (ReadingSemantics.DiagramFenceOf(paragraph) is { } fence)
+        {
+            ReadingSemantics.MarkCopyText(paragraph, fence);
+        }
         ReadingSemantics.MarkDiagramBlock(paragraph, rendered.Landing);
     }
 
@@ -1223,6 +1331,11 @@ internal static class ReadingDocumentBuilder
         string source)
     {
         element.Complete(failed.Description, null);
+        // #1708: a failed diagram shows its text, so a copy carries it as
+        // shown, and the zero-size element needs no room on its line.
+        element.LineReserve = 0;
+        element.ClearValue(FrameworkElement.MinHeightProperty);
+        ReadingSemantics.ClearCopyText(paragraph);
         InlineUIContainer container = ContainerOf(paragraph, element);
         foreach (Inline inline in paragraph.Inlines.ToList())
         {
@@ -1536,7 +1649,7 @@ internal static class ReadingDocumentBuilder
                     + "budget. Open the source note to view it."));
                 break;
             case EmbedResolution.Image image:
-                AppendEmbedImage(section, image, key, context, artifact?.ImageDecode);
+                AppendEmbedImage(section, image, key, headerName, context, artifact?.ImageDecode);
                 break;
             case EmbedResolution.Unresolved:
                 // The header name IS the mac unresolved string; the
@@ -1781,6 +1894,7 @@ internal static class ReadingDocumentBuilder
         Section section,
         EmbedResolution.Image image,
         string key,
+        string name,
         ReadingListBuildContext context,
         ReadingEmbedImageDecode? decodedOffTheDispatcher)
     {
@@ -1864,7 +1978,18 @@ internal static class ReadingDocumentBuilder
             StretchDirection = StretchDirection.DownOnly,
             MaxHeight = 600,
         };
-        section.Blocks.Add(new BlockUIContainer(visual));
+        // #1708 (CB-20; the owner's answer to Call 4, "Fix it in CB-20"): an
+        // image alone in a block read "blank" in line reading. Its line holds
+        // its name, core's title for it (the card header's), as a hidden run
+        // before the image, which leaves the run room on their line. Centred
+        // with no margin, where the block put it (measured against main).
+        string speech = OneLine(name);
+        visual.LineReserve = SpeechRunReserve(speech);
+        var paragraph = new Paragraph { Margin = new Thickness(0), TextAlignment = TextAlignment.Center };
+        paragraph.Inlines.Add(SpeechRun(speech));
+        paragraph.Inlines.Add(new InlineUIContainer(visual));
+        visual.SetBinding(FrameworkElement.MinHeightProperty, CaretHeightOf(paragraph));
+        section.Blocks.Add(paragraph);
     }
 
     private static Paragraph InlineParagraph(
@@ -2057,14 +2182,14 @@ internal static class ReadingDocumentBuilder
                 {
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Math,
-                        Insertion(paragraph.ContentStart),
+                        Landing(paragraph),
                         text: ReadingSemantics.MathSpeechOf(paragraph)));
                 }
                 else if (ReadingSemantics.IsDiagramBlock(paragraph))
                 {
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Diagram,
-                        Insertion(paragraph.ContentStart),
+                        Landing(paragraph),
                         text: ReadingSemantics.DiagramDescriptionOf(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
@@ -2089,15 +2214,6 @@ internal static class ReadingDocumentBuilder
                     ReadingLandmarkKind.Table,
                     Insertion(table.ContentStart),
                     text: FirstCellText(table)));
-                break;
-
-            case BlockUIContainer container when ReadingSemantics.IsEmbed(container):
-                landmarks.Add(new ReadingLandmark(
-                    ReadingLandmarkKind.Embed,
-                    Insertion(container.ContentStart),
-                    text: container.Child is System.Windows.UIElement child
-                        ? AutomationProperties.GetName(child) ?? string.Empty
-                        : string.Empty));
                 break;
 
             case Section section when ReadingSemantics.IsEmbedSection(section):

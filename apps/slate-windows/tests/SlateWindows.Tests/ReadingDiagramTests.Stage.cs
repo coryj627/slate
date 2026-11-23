@@ -32,8 +32,10 @@ public sealed partial class ReadingDiagramTests
         + "After the diagram.\n";
 
     /// <summary>One note in reading mode with its diagram stage gated, and
-    /// the surface bound — hosted in a window when a fact needs focus.</summary>
-    private sealed class StageHarness : IDisposable
+    /// the surface bound — hosted in a window when a fact needs focus.
+    /// Internal for plan 47 CB-20's <c>ReadingEmbeddedElementCensus</c>,
+    /// which reads a note in both of its stages.</summary>
+    internal sealed class StageHarness : IDisposable
     {
         private readonly FixtureVault _fixture;
         private readonly CancelToken _cancel;
@@ -41,10 +43,19 @@ public sealed partial class ReadingDiagramTests
         private readonly Thread _thread = Thread.CurrentThread;
         private readonly List<ReadingContentViewModel> _models = [];
 
-        private StageHarness(string name, string markdown, Action<ReadingContentViewModel>? configure, bool hosted)
+        private StageHarness(
+            string name,
+            string markdown,
+            Action<ReadingContentViewModel>? configure,
+            bool hosted,
+            IReadOnlyDictionary<string, byte[]>? files)
         {
             _fixture = FixtureVault.Create(1, name);
             File.WriteAllText(Path.Combine(_fixture.Root, "note0.md"), markdown);
+            foreach ((string file, byte[] bytes) in files ?? new Dictionary<string, byte[]>())
+            {
+                File.WriteAllBytes(Path.Combine(_fixture.Root, file), bytes);
+            }
             Session = VaultSession.OpenFilesystem(_fixture.Root);
             _cancel = new CancelToken();
             Session.ScanInitial(_cancel);
@@ -92,10 +103,17 @@ public sealed partial class ReadingDiagramTests
         }
 
         public static StageHarness Open(
-            string name, string markdown, Action<ReadingContentViewModel>? configure = null, bool hosted = false) =>
-            new(name, markdown, configure, hosted);
+            string name,
+            string markdown,
+            Action<ReadingContentViewModel>? configure = null,
+            bool hosted = false,
+            IReadOnlyDictionary<string, byte[]>? files = null) =>
+            new(name, markdown, configure, hosted, files);
 
         public VaultSession Session { get; }
+
+        /// <summary>The fixture vault's folder, for a fact that saves the note.</summary>
+        public string Root => _fixture.Root;
 
         public WorkspaceTabViewModel Tab { get; }
 
@@ -190,6 +208,11 @@ public sealed partial class ReadingDiagramTests
 
     private static int OffsetOf(TextPointer from, TextPointer to) => from.GetOffsetToPosition(to);
 
+    /// <summary>#1708: where a rendered diagram's line starts for the caret:
+    /// the paragraph's first insertion position, the landmark's own.</summary>
+    private static TextPointer DiagramStart(StageHarness harness) =>
+        harness.DiagramParagraph().ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+
     private static TextPointer PositionAtText(FlowDocument document, string text)
     {
         TextPointer? navigator = document.ContentStart;
@@ -221,7 +244,16 @@ public sealed partial class ReadingDiagramTests
             string.Join(",", paragraph.Inlines.Select(inline => inline.GetType().Name)),
             ReadingSemantics.IsDiagramBlock(paragraph),
             ReadingSemantics.DiagramDescriptionOf(paragraph),
+            // #1708: the copy text a completion in place must give, as a
+            // fresh build does.
+            ReadingSemantics.CopyTextOf(paragraph) ?? "-",
             ReadingSemantics.PendingDiagramKeyOf(paragraph) ?? "-",
+            // #1708: a placeholder's height is bound while it renders; a
+            // completed element's is its drawing's, as in a fresh build.
+            string.Join(
+                ",",
+                paragraph.Inlines.OfType<InlineUIContainer>()
+                    .Select(container => container.Child.ReadLocalValue(FrameworkElement.HeightProperty).GetType().Name)),
             // The local value: the inherited one is the containing
             // document's, and the surface's differs from the builder's.
             paragraph.ReadLocalValue(Block.TextAlignmentProperty));
@@ -339,10 +371,13 @@ public sealed partial class ReadingDiagramTests
             harness.Land();
 
             Assert.True(placeholder.IsKeyboardFocused, "the placeholder lost focus");
-            // The rendered paragraph's inlines are its one kept container.
-            Assert.Same(
-                placeholder,
-                Assert.IsType<InlineUIContainer>(Assert.Single(harness.DiagramParagraph().Inlines)).Child);
+            // #1708: the rendered paragraph is its description's hidden run,
+            // then its one kept container.
+            Inline[] inlines = harness.DiagramParagraph().Inlines.ToArray();
+            Assert.Equal(2, inlines.Length);
+            Assert.True(ReadingSemantics.IsHiddenSpeech(Assert.IsType<Run>(inlines[0])));
+            Assert.Equal("Flowchart with 2 steps.", ((Run)inlines[0]).Text);
+            Assert.Same(placeholder, Assert.IsType<InlineUIContainer>(inlines[1]).Child);
             Assert.Equal("Flowchart with 2 steps.", AutomationProperties.GetName(placeholder));
             Assert.Same(peer, UIElementAutomationPeer.FromElement(placeholder));
             Assert.Equal("Flowchart with 2 steps.", placeholder.Description);
@@ -404,7 +439,11 @@ public sealed partial class ReadingDiagramTests
             harness.Land();
 
             Assert.Same(container, harness.Placeholder().Parent);
-            Assert.Equal(0, harness.Surface.Selection.Start.CompareTo(container.ElementStart));
+            // #1708 (CB-20, the lead's ruling on Call 11): the diagram's line
+            // opens with its description's hidden run, and WPF moves a pointer
+            // at the container back to that run's end, so the anchor goes to
+            // the paragraph's start, where the diagram's landmark is.
+            Assert.Equal(0, harness.Surface.Selection.Start.CompareTo(DiagramStart(harness)));
             Assert.Equal(endCharacter, CharacterAfter(harness.Surface.Selection.End));
             Assert.Equal(
                 backward,
@@ -417,14 +456,17 @@ public sealed partial class ReadingDiagramTests
     {
         RunSta(() =>
         {
-            // (a) The caret inside the pending source, Rendered: before the diagram.
+            // (a) The caret inside the pending source, Rendered: after the diagram.
             using (var harness = StageHarness.Open("reading-diagram-remap-a", StageNote, hosted: true))
             {
                 harness.Surface.CaretPosition =
                     PositionAtText(harness.Surface.Document, "flowchart LR").GetPositionAtOffset(5)!;
                 harness.Land();
-                var container = (InlineUIContainer)harness.Placeholder().Parent;
-                Assert.Equal(0, harness.Surface.CaretPosition.CompareTo(container.ElementStart));
+                // #1708 (CB-20, B1): just after the diagram, where its landmark
+                // is and where the caret is drawn at the line's height.
+                Assert.Equal(
+                    0,
+                    harness.Surface.CaretPosition.CompareTo(((InlineUIContainer)harness.Placeholder().Parent).ElementEnd));
             }
 
             // (b) A selection from the paragraph before into the source,
@@ -527,10 +569,12 @@ public sealed partial class ReadingDiagramTests
                 Assert.True(placeholder.Focus(), "premise: the placeholder takes focus");
                 harness.Land();
                 Assert.Same(placeholder, harness.Placeholder());
-                // The source shape's inlines still end in the kept container.
+                // #1708 (the owner's answer to CB-20's Call 1, "Before the
+                // source"): the kept container stays where it stood, first,
+                // since an element moved in the tree loses the keys.
                 Assert.Same(
                     placeholder,
-                    Assert.IsType<InlineUIContainer>(harness.DiagramParagraph().Inlines.LastInline).Child);
+                    Assert.IsType<InlineUIContainer>(harness.DiagramParagraph().Inlines.FirstInline).Child);
                 Assert.True(placeholder.IsKeyboardFocused);
                 Assert.Contains("flowchart LR", AutomationProperties.GetName(placeholder), StringComparison.Ordinal);
                 Assert.Contains(held, surfacePeer.GetChildren());
