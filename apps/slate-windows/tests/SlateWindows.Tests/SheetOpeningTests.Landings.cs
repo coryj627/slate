@@ -230,6 +230,41 @@ public sealed partial class SheetOpeningTests
             $"the picker opened again holds the keys on {Describe(Keyboard.FocusedElement)}, not on a row of its list");
     });
 
+    /// <summary>The NVDA spot on PR 2's head (A1): Enter on the launcher's New Note from
+    /// Template… row still said "unavailable". The picker opens loading, so the sheet held
+    /// the keys for an instant before its list, filled in the same call, took them; NVDA
+    /// ignores a focus event for an element that no longer has the keys when it reads it,
+    /// kept the row as its focus, and spoke the row going off. The keys go from the row
+    /// straight to the picker's row, with nothing in between.</summary>
+    [Fact]
+    public void ThePickerTakesTheKeysStraightFromItsLauncherRowToItsList() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"), ("Templates/Meeting.md", "# Meeting\n"));
+        host.Settle();
+        Button row = LauncherRow(host, "EmptyPaneNewFromTemplate");
+        host.Shell.Activate();
+        host.Settle();
+        TakeTheKeys(row);
+        List<string> landings = [];
+        void Landed(object sender, KeyboardFocusChangedEventArgs e) => landings.Add(Describe(e.NewFocus));
+        var handler = new KeyboardFocusChangedEventHandler(Landed);
+        host.Shell.AddHandler(Keyboard.GotKeyboardFocusEvent, handler, handledEventsToo: true);
+
+        Press(host, Key.Enter);
+        host.Settle();
+        host.Settle();
+        host.Shell.RemoveHandler(Keyboard.GotKeyboardFocusEvent, handler);
+
+        TemplatePickerViewModel picker = Assert.IsType<TemplatePickerViewModel>(host.Workspace.TemplatePickerSheet);
+        Assert.Equal(TemplatePickerState.Available, picker.State);
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem item && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), host.Shell.TemplatePickerList),
+            $"the picker holds the keys on {Describe(Keyboard.FocusedElement)}, not on a row of its list");
+        Assert.True(
+            landings.Count == 1,
+            $"from the launcher row the keys went to {string.Join(", then ", landings)}, not straight to the picker's row");
+    });
+
     /// <summary>The template flow's name box takes the keys with its seed selected in the
     /// turn the flow opens, so what the reader types first replaces the seed; the fallback
     /// landing then finds the keys on the box and selects nothing again, so the next letter
