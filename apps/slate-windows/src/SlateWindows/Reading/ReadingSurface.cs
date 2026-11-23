@@ -754,6 +754,10 @@ internal sealed class ReadingSurface : RichTextBox
         {
             caretAnchor = null;
         }
+        // #1708 (the delta judge's N2): a reader on a hidden letter is put
+        // back on it; any other reader the restore lands in hidden speech
+        // (a speech that grew, a block that moved) is moved past the element.
+        bool readerInSpeech = ReadingDocumentBuilder.VisibleCaretPast(CaretPosition) is not null;
 
         // DS-3: a formula's sideways scroll lives in the element this merge replaces.
         // The new one has to know before it joins the document, which lays it out at once.
@@ -782,6 +786,10 @@ internal sealed class ReadingSurface : RichTextBox
             try
             {
                 RestoreCaret(PositionAt(Document, anchor));
+                if (!readerInSpeech)
+                {
+                    MoveCaretPastHiddenSpeech(CaretPosition);
+                }
             }
             catch (InvalidOperationException)
             {
@@ -1613,6 +1621,12 @@ internal sealed class ReadingSurface : RichTextBox
     /// collapse back onto it).</summary>
     private bool _pressSelected;
 
+    /// <summary>#1708 (the delta judge's N1): the press itself changed the
+    /// selection, so it placed a caret. A press a child takes (the scroll bar,
+    /// a task's check box, a link, a formula's scroller) places none, and
+    /// its release moves nothing.</summary>
+    private bool _pressMovedCaret;
+
     /// <summary>#1708 (the merge judge's m2): a republish or a rebind is
     /// putting the reader back where they were, hidden letter included.</summary>
     private bool _restoringCaret;
@@ -1635,8 +1649,12 @@ internal sealed class ReadingSurface : RichTextBox
 
     protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
     {
-        // A key while the button is down ends the press's hold.
-        _pointerHeld = false;
+        // A key ends a hold the release was never heard for, but not one
+        // whose button is still down (Ctrl held for a Ctrl+click).
+        if (System.Windows.Input.Mouse.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+        {
+            _pointerHeld = false;
+        }
         _caretInputs++;
         _caretMovedAlongItsLine = e.Key is System.Windows.Input.Key.Left or System.Windows.Input.Key.Right
             || (e.Key is System.Windows.Input.Key.Home or System.Windows.Input.Key.End
@@ -1654,16 +1672,24 @@ internal sealed class ReadingSurface : RichTextBox
     protected override void OnPreviewMouseDown(System.Windows.Input.MouseButtonEventArgs e)
     {
         _caretMovedAlongItsLine = false;
-        _pointerHeld = true;
         _caretInputs++;
-        _pressSelected = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
+        // Only the left button places WPF's caret (the delta judge's N1).
+        if (e.ChangedButton == System.Windows.Input.MouseButton.Left)
+        {
+            _pointerHeld = true;
+            _pressMovedCaret = false;
+            _pressSelected = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
+        }
         base.OnPreviewMouseDown(e);
     }
 
     protected override void OnPreviewMouseUp(System.Windows.Input.MouseButtonEventArgs e)
     {
         base.OnPreviewMouseUp(e);
-        ReleasePointer();
+        if (e.ChangedButton == System.Windows.Input.MouseButton.Left)
+        {
+            ReleasePointer();
+        }
     }
 
     /// <summary>#1708 (the merge judge's M1): WPF captures the mouse for a
@@ -1691,7 +1717,7 @@ internal sealed class ReadingSurface : RichTextBox
         // or restore, or a caret set anywhere else since, supersedes it.
         int release = ++_caretInputs;
         TextPointer released = CaretPosition;
-        bool plainClick = !_pressSelected;
+        bool plainClick = _pressMovedCaret && !_pressSelected;
         _ = Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Input,
             () =>
@@ -1725,6 +1751,7 @@ internal sealed class ReadingSurface : RichTextBox
     {
         base.OnSelectionChanged(e);
         _caretInputs++;
+        _pressMovedCaret |= _pointerHeld;
         TextPointer? before = _caretBefore;
         TextPointer? anchor = _selectionAnchor;
         bool alongItsLine = _caretMovedAlongItsLine;
