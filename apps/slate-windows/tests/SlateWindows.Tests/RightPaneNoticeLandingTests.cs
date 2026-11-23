@@ -176,6 +176,37 @@ public sealed class RightPaneNoticeLandingTests
         Assert.Equal(PanelWithoutBodyLines[("math", "no note")], line.Text);
     });
 
+    /// <summary>Plan 47 CB-23 (AGENTS.md's republish rule): with the keys on
+    /// the line, a note shown from a selection and its view toggled change
+    /// the line in place; the same element keeps the keys through each.</summary>
+    [Fact]
+    public void APanelWithNoBodysLineKeepsTheKeysWhenItChanges() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("math", "no note");
+        TextBlock line = host.PanelWithoutBodyLine();
+        Assert.True(host.Beside.Focus());
+        host.Shell.LandInRightPane();
+        Assert.Same(line, Keyboard.FocusedElement);
+
+        host.Workspace.OpenPath("plain.md", fromSelection: true);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("math", "editor")], line.Text);
+        Assert.Same(line, Keyboard.FocusedElement);
+        Assert.Same(line, host.PanelWithoutBodyLine());
+
+        WorkspaceTabViewModel tab = host.Workspace.ActiveGroup.ActiveTab!;
+        host.Workspace.SetViewMode(tab, reading: true, landFocus: false);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("math", "reading")], line.Text);
+        Assert.Same(line, Keyboard.FocusedElement);
+
+        host.Workspace.SetViewMode(tab, reading: false, landFocus: false);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("math", "editor")], line.Text);
+        Assert.Same(line, Keyboard.FocusedElement);
+    });
+
     /// <summary>A LOADING sentence is not a stop — it gives way to the rows
     /// within moments — while the final sentences are. The leaf models'
     /// own loading flags, set the way their loaders set them.</summary>
