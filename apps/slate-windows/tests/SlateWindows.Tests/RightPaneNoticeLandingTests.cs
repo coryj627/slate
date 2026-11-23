@@ -167,6 +167,16 @@ public sealed class RightPaneNoticeLandingTests
         PumpedDispatcher.Drain();
         Assert.Equal(PanelWithoutBodyLines[("diagrams", "editor")], line.Text);
 
+        // The tab's own toggle, outside any workspace mutation, as the
+        // create-from-template normalization makes it: only the tab's own
+        // change reaches the line.
+        tab.ToggleViewMode();
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "reading")], line.Text);
+        tab.ToggleViewMode();
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "editor")], line.Text);
+
         host.Workspace.CloseActiveTabCommand.Execute(null);
         PumpedDispatcher.Drain();
         Assert.Equal(PanelWithoutBodyLines[("diagrams", "no note")], line.Text);

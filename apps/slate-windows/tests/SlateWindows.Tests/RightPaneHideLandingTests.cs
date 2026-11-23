@@ -118,6 +118,8 @@ public sealed class RightPaneHideLandingTests
     [InlineData("connections", "ConnectionsLeafBody")]
     [InlineData("history", "HistoryLeafBody")]
     [InlineData("syncDiagnostics", "SyncDiagnosticsLeafBody")]
+    // Plan 47 CB-23 (#1800): a panel with no body holds its line as its stop.
+    [InlineData("math", "RightPaneDockedPlaceholder")]
     public void ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf(string leaf, string body) => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "Just a line of text.\n"));
