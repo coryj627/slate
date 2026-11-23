@@ -105,16 +105,18 @@ public partial class MainWindow
 
     /// <summary>Forgets the openings of surfaces that have closed, and lands the topmost
     /// one if it opened beneath the surface that has just closed. When a surface closes over
-    /// one that had the keys before it, the one left on top is checked once the closing
-    /// surface's own restore and WPF's hand-up have run: a closer with no restore leaves the
-    /// keys to WPF, which can hand them to the window's element beneath it (red team on the
-    /// diff, F1).</summary>
+    /// one that had the keys before it with the keys still in it, the one left on top lands
+    /// them at once, in the close's own notification: a closer with no restore (the canvas
+    /// sheets) leaves them to WPF, which hands them to the window's element beneath it, and
+    /// every key already queued would reach that element first (the merge judge's minor 1).
+    /// Any other close leaves the one on top checked once the closing surface's own restore
+    /// and WPF's hand-up have run (red team on the diff, F1).</summary>
     private void LandAnOpeningThatWaited()
     {
-        List<ModalSurface> closed = [.. _openingLandings.Where(entry => !entry.Value.StillOpen()).Select(entry => entry.Key)];
-        foreach (ModalSurface surface in closed)
+        List<KeyValuePair<ModalSurface, OpeningLanding>> closed = [.. _openingLandings.Where(entry => !entry.Value.StillOpen())];
+        foreach (KeyValuePair<ModalSurface, OpeningLanding> entry in closed)
         {
-            _ = _openingLandings.Remove(surface);
+            _ = _openingLandings.Remove(entry.Key);
         }
 
         if (OpenModalSurface is not { } top || !_openingLandings.TryGetValue(top, out OpeningLanding? opening))
@@ -126,6 +128,10 @@ public partial class MainWindow
         {
             TryLandOpening(top);
         }
+        else if (closed.Any(entry => entry.Value.Surface.IsKeyboardFocusWithin))
+        {
+            _ = LandTheTopmostOpeningAgain();
+        }
         else if (closed.Count > 0)
         {
             _ = Dispatcher.InvokeAsync(() => LandTheTopmostOpeningAgain(), DispatcherPriority.Background);
@@ -136,8 +142,10 @@ public partial class MainWindow
     /// when the window comes back or a box over it closes: one presented while the window
     /// was away, or one that held the keys itself as it went. The element its scope held
     /// last lands first, when it held the keys and is still a stop, so the reader keeps their
-    /// place (red team on the diff, F4); else its opening landing. Says whether the keys are
-    /// in the surface now; false when nothing was to be done.</summary>
+    /// place (red team on the diff, F4); else its opening landing, which also takes a dead
+    /// element's place (the merge judge's nit: its scopes' landing would be the sheet's first
+    /// focusable element, Settings' Close). Says whether the keys are in the surface now;
+    /// false when nothing was to be done.</summary>
     private bool LandTheTopmostOpeningAgain()
     {
         if (!IsActive
@@ -154,7 +162,7 @@ public partial class MainWindow
             && !ReferenceEquals(last, opening.Surface)
             && IsWithin(last, opening.Surface)
             && RegionFocusGuard.HeldTheKeys(token)
-            && LandToken(token)
+            && TryFocus(token)
             && KeysAreOnAStopIn(opening.Surface))
         {
             return true;
