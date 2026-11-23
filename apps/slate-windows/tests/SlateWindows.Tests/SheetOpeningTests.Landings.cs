@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using SlateWindows.Templates;
 
 namespace SlateWindows.Tests;
@@ -381,14 +382,125 @@ public sealed partial class SheetOpeningTests
             $"once Files Citing closed over the details sheet the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
     });
 
-    /// <summary>The red team on PR 2's diff, F1's mirror: the card editor has no restore of
-    /// its own. Presented over Move To (a card's editor arriving while Move To is open) and
-    /// closed, it leaves the keys to WPF, which hands them to the window's own element
-    /// beneath Move To; the close's check lands Move To again.</summary>
+    /// <summary>The red team on PR 2's diff, F1's mirror, and the merge judge's minor 1: the
+    /// card editor has no restore of its own. Presented over Move To (a card's editor arriving
+    /// while Move To is open) and closed with the keys in it, it would leave them to WPF,
+    /// which hands them to the window's own element beneath Move To; Move To lands them in
+    /// the close's own notification, so they never rest beneath it.</summary>
     [Fact]
     public void ASheetWithNoRestoreClosedOverAnotherLandsTheOneLeftOnTop() => RunSta(() =>
     {
         using var bench = new Bench();
+        OpenTheCardEditorOverMoveTo(bench);
+
+        List<string> outside = LandingsOutside(bench.Shell, bench.Shell.MoveToOverlay, out Action stop);
+        bench.Workspace.CloseCanvasCardEditor();
+        bench.Host.Settle();
+        bench.Host.Settle();
+        stop();
+
+        Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
+        Assert.True(outside.Count == 0, $"as the card editor closed over Move To the keys went to {string.Join(", ", outside)}, beneath it");
+        Assert.True(
+            KeysFirstRecorder.TheKeysAreIn(bench.Shell.MoveToOverlay),
+            $"once the card editor closed over Move To the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
+    });
+
+    /// <summary>The merge judge's minor 1: a key queued as the card editor closes over Move To
+    /// (the reader's second Escape) reaches Move To, whose route closes it, and not what lay
+    /// beneath it. WPF's re-evaluation and every key already queued run at Input, ahead of a
+    /// landing queued below it.</summary>
+    [Fact]
+    public void AKeyQueuedAsASheetClosesOverAnotherReachesTheOneLeftOnTop() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        OpenTheCardEditorOverMoveTo(bench);
+
+        bench.Workspace.CloseCanvasCardEditor();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Input);
+        Press(bench.Host, Key.Escape);
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Null(bench.Shell.OpenModalSurface);
+        Assert.Null(bench.Sidebar!.MoveToSheet);
+    });
+
+    /// <summary>The merge judge's minor 2: Bulk Rename closed beneath Files Citing (its close
+    /// settles while Files Citing, presented from its own lookup, is on top) gives way to Files
+    /// Citing: its restore never lands the note behind both.</summary>
+    [Fact]
+    public void APropertySheetClosedBeneathAnotherNeverRestoresBeneathIt() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.LoadTheBibliography();
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        Assert.True(bench.Host.Land(ShellRegionKind.Editor), $"keyboard premise: the editor refused the keys (they are on {Describe(Keyboard.FocusedElement)})");
+        bench.Host.Settle();
+
+        using var held = new HeldWork(hook => bench.Workspace.FilesCitingInterleaveForTests = hook);
+        bench.Workspace.OpenFilesCiting("knuth1984");
+        held.WaitUntilEntered();
+        bench.Workspace.OpenBulkRenameSheetCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.BulkRename, bench.Shell.OpenModalSurface);
+        held.Release();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => bench.Workspace.FilesCiting is not null, TimeSpan.FromSeconds(15)),
+            "Files Citing never presented");
+        bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
+        Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.FilesCitingOverlay), $"premise: Files Citing holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
+
+        List<string> outside = LandingsOutside(bench.Shell, bench.Shell.FilesCitingOverlay, out Action stop);
+        bench.Workspace.CloseBulkRenameSheetCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        stop();
+
+        Assert.Null(bench.Workspace.BulkRenameSheet);
+        Assert.Equal(ModalSurface.FilesCiting, bench.Shell.OpenModalSurface);
+        Assert.True(outside.Count == 0, $"as Bulk Rename closed beneath Files Citing the keys went to {string.Join(", ", outside)}, behind it");
+    });
+
+    /// <summary>The merge judge's nit: the window comes back to Settings with the control the
+    /// reader left gone (collapsed while the window was away): the keys go to Settings' own
+    /// stop, its categories' row, never to its first focusable element, Close.</summary>
+    [Fact]
+    public void TheWindowsReturnWithTheLeftStopGoneLandsTheSheetsOwnStop() => RunSta(() =>
+    {
+        using var bench = new Bench();
+        bench.OpenTheTab(Note);
+        bench.Shell.Activate();
+        bench.Host.Settle();
+        bench.Host.Lifecycle.OpenSettingsCommand.Execute(null);
+        bench.Host.Settle();
+        bench.Host.Settle();
+        ComboBox theme = bench.Shell.SettingsThemeComboBox;
+        TakeTheKeys(theme);
+        bench.Host.Settle();
+
+        WindowActivation.GoAway(bench.Shell);
+        theme.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+        bench.Host.Settle();
+        WindowActivation.ComeBack(bench.Shell);
+        bench.Host.Settle();
+        bench.Host.Settle();
+
+        Assert.Equal(ModalSurface.Settings, bench.Shell.OpenModalSurface);
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem item && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), bench.Shell.SettingsCategoriesList),
+            $"the window came back to Settings with the reader's control gone; the keys are on {Describe(Keyboard.FocusedElement)}, not on a category");
+    });
+
+    /// <summary>Move To open from the Files tree, then a card's editor presented over it,
+    /// holding the keys.</summary>
+    private static void OpenTheCardEditorOverMoveTo(Bench bench)
+    {
         bench.OpenTheTab(Board);
         bench.SelectTheCard("alpha");
         bench.AttachASidebarAndSelect(Note);
@@ -405,16 +517,7 @@ public sealed partial class SheetOpeningTests
         bench.Host.Settle();
         Assert.Equal(ModalSurface.CanvasCardEditor, bench.Shell.OpenModalSurface);
         Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.CanvasCardEditorOverlay), $"premise: the card editor holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
-
-        bench.Workspace.CloseCanvasCardEditor();
-        bench.Host.Settle();
-        bench.Host.Settle();
-
-        Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
-        Assert.True(
-            KeysFirstRecorder.TheKeysAreIn(bench.Shell.MoveToOverlay),
-            $"once the card editor closed over Move To the keys rested on {Describe(Keyboard.FocusedElement)}, outside it");
-    });
+    }
 
     /// <summary>The red team on PR 2's diff, F2 and F4: when the window comes back with the
     /// keys outside the open sheet (WPF gives them to the window's own focused element, under
