@@ -344,18 +344,19 @@ public sealed partial class ConnectionsLeafTests
                 // note has no heading. The old path no longer loads: the open
                 // speaks core's failure once (#1266, WB-8). Out of the model
                 // (#1625, CD30): the rename's Modified for hub.md, whose link it
-                // rewrote, is never delivered. Through the real lifecycle this
-                // derivation holds when the reader's click beats the pool;
-                // when the pool settles first, the tree's line comes before the
-                // failure (ConnectionsLeafTests.Lifecycle.cs pins both).
+                // rewrote, is never delivered. From FOLLOWING, through the real
+                // lifecycle, this derivation holds when the reader's click
+                // beats the pool; when the pool settles first, the tree's line
+                // comes before the failure (ConnectionsLeafTests.Lifecycle.cs
+                // pins both). The pinned modes have no lifecycle witness.
                 return new([.. reRooted, OpenFailed, LinePlaceholder], 2, RenamedReRootTarget, Pinned(RenamedReRootTarget, target, pushed), "RightPane");
             case Composed.RenamePinFolderInDialog:
                 // FOLLOWING, the pin Deep from Hub's tree: the folder moves
                 // under the pin, the open installs the old path, which fails
                 // to load (#1266). Out of the model, as RenamePinInDialog: the
-                // Modified for hub.md is never delivered. Plan 47 CB-42's step
-                // 0 drove this cell through the real lifecycle and found the
-                // same two orders and loads as the pin's.
+                // Modified for hub.md is never delivered. Driven once through
+                // the real lifecycle in each order (recorded on #1625), it gave
+                // the same loads and line orders as the pin's.
                 return new([ReRooted(Deep), OpenFailed, LinePlaceholder], 2, MovedPin(), Pinned(MovedPin(), Deep, [.. stackBefore, (null, noteInView)]), "RightPane");
             case Composed.RenameEntryInDialog:
                 {
@@ -906,6 +907,7 @@ public sealed partial class ConnectionsLeafTests
         host.Workspace.NotifyGraphOfVaultChange();
     }
 
+    /// <summary>As <see cref="RenameIn"/>, for a folder.</summary>
     private static void RenameFolderIn(Host host, string from, string to)
     {
         host.Session.RenameFolder(from, Path.GetFileName(to));
@@ -914,7 +916,7 @@ public sealed partial class ConnectionsLeafTests
     }
 
     /// <summary>A delete as the lifecycle sees it, in part: the file gone
-    /// and the vault rescanned (a scan sends no Slate-owned event), the
+    /// and the vault rescanned (a scan sends no file-change event), the
     /// workspace's invalidation (the delete hook) and the graph probe, in
     /// place of the file-change arm's Deleted (#1625, see
     /// <see cref="Host"/>).</summary>
@@ -925,6 +927,7 @@ public sealed partial class ConnectionsLeafTests
         host.Workspace.NotifyGraphOfVaultChange();
     }
 
+    /// <summary>As <see cref="DeleteIn"/>, for a folder.</summary>
     private static void DeleteFolderIn(Host host, string folder)
     {
         string path = Path.Combine(host.Root, folder);

@@ -11,17 +11,18 @@ namespace SlateWindows.Tests;
 /// Plan 47 CB-42 (#1625, CD30): the model's host registers no session
 /// listener (<see cref="Host"/>), so it derives its cells without the events
 /// core sends. This fact drives one composed cell, <c>RenamePinInDialog</c>
-/// from FOLLOWING, through the real lifecycle instead: core's listener posts
-/// the rename's two events (a <c>Modified</c> for <c>hub.md</c>, whose link
-/// the rename rewrote, and the <c>Renamed</c>) to
-/// <c>VaultLifecycleViewModel.HandleFileChange</c>, whose file-change arm
-/// retargets the pin and probes the graph. The open's dirty-tab question is
-/// <c>MessageBox.Show</c> in the shell, whose modal loop runs the work posted
-/// while it is up before it takes the reader's click; the leaf's apply runs
-/// inside it only when the pool's read has returned first. So there are two
-/// orders, and the fact pins both. Click first, the cell is the model's own
-/// derivation. Pool settled, the loads and the state are the same and the
-/// tree's line comes before the failure.
+/// from FOLLOWING, through the real lifecycle instead: core calls the
+/// lifecycle's listener with the rename's two events (a <c>Modified</c> for
+/// <c>hub.md</c>, whose link the rename rewrote, and the <c>Renamed</c>), and
+/// the listener posts them to <c>VaultLifecycleViewModel.HandleFileChange</c>,
+/// whose file-change arm retargets the pin and probes the graph once for each.
+/// The open's dirty-tab question is <c>MessageBox.Show</c> in the shell, whose
+/// modal loop runs the work posted while it is up before it takes the reader's
+/// click; the leaf's apply runs inside it only when the pool's read has
+/// returned first. So there are two orders, and the fact pins both. Click
+/// first, the timeline, the loads, the gate's questions, the focus requests
+/// and rule D's state are the model's derivation. Pool settled, all the same
+/// but the timeline, where the tree's line comes before the failure.
 ///
 /// What the harness does not reproduce: production has one queue, the
 /// dispatcher's, where the harness drains the lifecycle's own queue before the
@@ -50,6 +51,7 @@ public sealed partial class ConnectionsLeafTests
         var timeline = new List<string>();
         var heard = new ConcurrentQueue<string>();
         var issued = new List<string>();
+        var focusRequests = new List<string>();
         RescanTests.Harness? h = null;
         ConnectionsLeafViewModel? leaf = null;
         ParkedFetch? parked = null;
@@ -60,7 +62,8 @@ public sealed partial class ConnectionsLeafTests
         {
             asked++;
             int handled = h!.Lifecycle.FileChangesHandledForTests;
-            // Core posts both events to the lifecycle's queue before the rename returns.
+            // Core calls the listener with both events before the rename
+            // returns, and the listener posts each to the lifecycle's queue.
             h.Lifecycle.SessionForTests!.RenameFile(ReRootTarget, Path.GetFileName(RenamedReRootTarget));
             // The box's modal loop runs the work posted while it is up.
             h.Context.Drain();
@@ -88,6 +91,9 @@ public sealed partial class ConnectionsLeafTests
                     }
                 };
                 h.AfterAnnounce = announced => timeline.Add(announced.GetType().Name);
+                // The focus requests the model compares, recorded as its Host does.
+                h.Workspace.EditorPaneFocusRequested += (_, _) => focusRequests.Add("editor");
+                h.Workspace.FocusBoundaryRequested += (_, boundary) => focusRequests.Add(boundary.ToString());
                 h.Workspace.ActiveLeaf = Host.ConnectionsLeaf;
                 h.Workspace.OpenPath(Hub, WorkspaceOpenTarget.CurrentTab);
                 h.PumpUntil(
@@ -100,7 +106,9 @@ public sealed partial class ConnectionsLeafTests
                 timeline.Clear();
                 issued.Clear();
                 heard.Clear();
+                focusRequests.Clear();
                 int before = leaf.LoadsIssuedForTests;
+                int probesBefore = GenerationReads(leaf);
 
                 // The pin's own load stays in flight across the rename, as the
                 // model's ParkedRoutes hold it.
@@ -113,17 +121,21 @@ public sealed partial class ConnectionsLeafTests
                     "the route settles");
                 h.Settle();
 
-                Assert.Equal(1, asked);
+                ComposedDerivation derived = DeriveComposed(new ComposedCell(Mode.Following, Composed.RenamePinInDialog), FixtureOf());
+                Assert.Equal(derived.Asked, asked);
                 Assert.Equal(2, handledInTheBox);
                 Assert.True(pinsLoad.Reached.IsSet, "the pin's load never reached its fetch");
                 Assert.False(pinsLoad.TimedOut, "the pin's load resumed on its own");
                 Assert.Equal(["Modified hub.md", $"Renamed {RenamedReRootTarget} from {ReRootTarget}"], heard);
+                // The file-change arm probed once for each event.
+                Assert.Equal(2, GenerationReads(leaf) - probesBefore);
                 Assert.Equal(
                     [$"{GraphAnnouncePolicy.Summary} {ReRootTarget}", $"{GraphAnnouncePolicy.Summary} {RenamedReRootTarget}"],
                     issued);
-                Assert.Equal(2, leaf.LoadsIssuedForTests - before);
+                Assert.Equal(derived.Loads, leaf.LoadsIssuedForTests - before);
+                Assert.Equal(derived.Focus, focusRequests.LastOrDefault());
+                Assert.Equal(derived.EditorRequested, focusRequests.Contains("editor"));
 
-                ComposedDerivation derived = DeriveComposed(new ComposedCell(Mode.Following, Composed.RenamePinInDialog), FixtureOf());
                 string line = LineFor(h.Lifecycle.SessionForTests!, derived.Root!, derived.Depth);
                 string[] modelsTimeline = [.. derived.Timeline.Select(entry => entry == LinePlaceholder ? line : entry)];
                 string[] expected = order == DialogOrder.ClickBeforeThePoolSettles
@@ -152,6 +164,15 @@ public sealed partial class ConnectionsLeafTests
             }
         }
     }, TimeSpan.FromSeconds(120), "the lifecycle fact timed out");
+
+    /// <summary>The leaf's generation reads so far: one per probe it ran.</summary>
+    private static int GenerationReads(ConnectionsLeafViewModel leaf)
+    {
+        lock (leaf.CrossingsForTests)
+        {
+            return leaf.CrossingsForTests["graph_generation"];
+        }
+    }
 
     /// <summary>The events core sent, as kind, path and the path a rename left.</summary>
     private sealed class HeardEvents(ConcurrentQueue<string> heard) : VaultEventListener

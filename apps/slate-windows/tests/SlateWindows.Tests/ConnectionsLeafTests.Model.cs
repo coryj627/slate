@@ -1859,7 +1859,8 @@ public sealed partial class ConnectionsLeafTests
                     // With no root in view the rename is Hub's, as B1 drove it.
                     // The four rename routes stand in for the file-change arm's
                     // retarget and probe only; the Modified events of the links
-                    // core rewrote are not delivered (#1625, see Host).
+                    // core rewrote, and of a moved note a task query re-reads,
+                    // are not delivered (#1625, see Host).
                     string from = RootBefore(cell) ?? Hub;
                     string to = cell.Pinned ? RenamedPin(cell) : RenamedRoot;
                     host.Session.RenameFile(from, Path.GetFileName(to));
@@ -1872,7 +1873,7 @@ public sealed partial class ConnectionsLeafTests
                     // The delete as the lifecycle sees it — the file gone and the
                     // vault rescanned (core's own delete trashes through COM and
                     // wants a thread of its own), then the lifecycle's two arms.
-                    // A scan sends no Slate-owned event, so the invalidation and
+                    // A scan sends no file-change event, so the invalidation and
                     // the probe stand in for the arm's Deleted (#1625, see Host).
                     DeleteTheFile(host, RootBefore(cell) ?? Hub);
                     host.Workspace.InvalidatePath(RootBefore(cell) ?? Hub);

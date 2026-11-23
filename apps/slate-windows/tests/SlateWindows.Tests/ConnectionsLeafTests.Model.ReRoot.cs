@@ -146,12 +146,16 @@ public sealed partial class ConnectionsLeafTests
         /// the moved generation and reloaded once more, on a cold runner only.
         /// Since #1996 that re-read finds no row and moves nothing; a task
         /// query that re-reads a moved note at its destination still moves
-        /// the generation (plan 47 CB-42's step 0). The order this fixes,
-        /// reads inside the dialog and applies after the open, is one of the
-        /// two a modal box gives, the one where the reader's click beats the
-        /// pool; when the pool settles first the box runs the applies too.
-        /// The model takes the first and hears no event core sends (#1625,
-        /// see <see cref="Host"/>). The work is told apart by a token per dialog window
+        /// the generation (measured for #1625). The order this fixes, reads
+        /// finished inside the dialog and applies after the open, is the
+        /// model's own. A modal box runs whatever was posted before the
+        /// reader's click, so in production either the pool settles first and
+        /// its applies run inside the box, or the click comes first and the
+        /// reads may still be running at the open. Since #1996 the open's task
+        /// query on the moved-from path moves nothing, so that race no longer
+        /// changes the result: the click-first order ends as the model derives
+        /// (ConnectionsLeafTests.Lifecycle.cs). The model hears no event core
+        /// sends (#1625, see <see cref="Host"/>). The work is told apart by a token per dialog window
         /// that a computation inherits from the action that scheduled it; a
         /// leaf retired inside the dialog refuses the applies, so the wait
         /// ends there.</summary>
