@@ -43,14 +43,18 @@ public sealed partial class ReadingDiagramTests
             RoutedEvent = Mouse.PreviewMouseUpEvent,
         });
 
-    /// <summary>Codex round 6: what a release posts belongs to that release.
-    /// A newer press, a key or a caret set (a UIA client's) before it runs
-    /// supersedes it, so it never moves the caret those put in hidden
-    /// speech; a drag the newer press starts still selects the element.</summary>
+    /// <summary>Codex rounds 6 and 8: what a release posts belongs to that
+    /// release. A newer press, a key, a caret set (a UIA client's), even one
+    /// that goes away and comes back to where the release left the caret,
+    /// or a selection made and collapsed back there, supersedes it, so it
+    /// never moves the caret those put in hidden speech; a drag the newer
+    /// press starts still selects the element.</summary>
     [Theory]
     [InlineData("press")]
     [InlineData("key")]
     [InlineData("caret set")]
+    [InlineData("caret set away and back")]
+    [InlineData("selection out and back")]
     public void AReleaseSupersededByNewerInputMovesNothing(string newer)
     {
         RunSta(() =>
@@ -78,6 +82,17 @@ public sealed partial class ReadingDiagramTests
                     case "key":
                         Press(surface, Key.Right, EditingCommands.MoveRightByCharacter);
                         expected = hidden.ContentStart.GetPositionAtOffset(1)!;
+                        break;
+                    case "caret set away and back":
+                        surface.Selection.Select(container.ElementEnd, container.ElementEnd);
+                        surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                        expected = hidden.ContentStart;
+                        break;
+                    case "selection out and back":
+                        surface.Selection.Select(
+                            hidden.ContentStart, PositionAtText(surface.Document, "After the line.").GetPositionAtOffset(5)!);
+                        surface.Selection.Select(hidden.ContentStart, hidden.ContentStart);
+                        expected = hidden.ContentStart;
                         break;
                     default:
                         expected = hidden.ContentStart.GetPositionAtOffset(2)!;
