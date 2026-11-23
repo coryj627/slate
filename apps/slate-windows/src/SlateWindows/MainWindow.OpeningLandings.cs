@@ -54,6 +54,14 @@ public partial class MainWindow
     /// while the surface is open and the topmost and the keys are not on a stop inside it:
     /// a second landing would select what the reader has typed since.
     /// </para>
+    /// <para>
+    /// <paramref name="landsLater"/> says the surface's own observer lands it later in the
+    /// same call (the template picker, opened loading and filled before its opening call
+    /// returns): it is not held meanwhile, so the keys go from what held them straight to
+    /// its stop. A hold of an instant is a focus event NVDA reads only after the keys have
+    /// moved on, and ignores, so it keeps the holder as its focus and speaks the holder
+    /// going off (the NVDA spot on PR 2's head, A1).
+    /// </para>
     /// </summary>
     private void LandInOpeningSurface(
         ModalSurface which,
@@ -61,10 +69,12 @@ public partial class MainWindow
         UIElement? stop,
         Func<bool> land,
         Func<bool> stillOpen,
-        Func<bool>? lateLand = null)
+        Func<bool>? lateLand = null,
+        Func<bool>? landsLater = null)
     {
         Func<bool> late = lateLand ?? land;
-        _openingLandings[which] = new OpeningLanding(surface, stillOpen, () => LandOpeningNow(which, surface, stop, land, late, stillOpen));
+        _openingLandings[which] = new OpeningLanding(
+            surface, stillOpen, () => LandOpeningNow(which, surface, stop, land, late, stillOpen, landsLater));
         TryLandOpening(which);
     }
 
@@ -183,7 +193,8 @@ public partial class MainWindow
         UIElement? stop,
         Func<bool> land,
         Func<bool> lateLand,
-        Func<bool> stillOpen)
+        Func<bool> stillOpen,
+        Func<bool>? landsLater)
     {
         BringUpToDate(surface, stop);
         if (!surface.IsKeyboardFocusWithin)
@@ -199,7 +210,9 @@ public partial class MainWindow
             return;
         }
 
-        if (!surface.IsKeyboardFocusWithin && (IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin))
+        if (!surface.IsKeyboardFocusWithin
+            && (IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
+            && landsLater?.Invoke() != true)
         {
             // A stop only while it holds the keys: it goes back once they leave, for a stop
             // inside it or because it closed.

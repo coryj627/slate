@@ -127,9 +127,10 @@ public partial class MainWindow
             {
                 _focusBeforeTemplates ??= CapturePreSheetFocus();
                 // Plan 47 CB-17b: it opens loading, and its list is filled before the
-                // opening call returns; while it loads the sheet holds the keys, never
-                // its Cancel ("Cancel, button" before the list), and the state
-                // observer lands its row once it is filled.
+                // opening call returns; while it loads nothing in it takes the keys,
+                // never its Cancel ("Cancel, button" before the list), and the sheet
+                // does not hold them either: the state observer lands its row in the
+                // same call, straight from where the keys were.
                 LandInOpeningSurface(
                     ModalSurface.TemplatePicker,
                     TemplatePickerOverlay,
@@ -140,7 +141,8 @@ public partial class MainWindow
                     {
                         FocusTemplatePicker();
                         return KeysAreOnAStopIn(TemplatePickerOverlay);
-                    });
+                    },
+                    () => picker.State == TemplatePickerState.Loading);
             }
             else if (workspace.TemplateFlowSheet is null)
             {
