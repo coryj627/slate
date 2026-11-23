@@ -23,25 +23,91 @@ public sealed partial class ReadingDiagramTests
 {
     /// <summary>A mouse button pressed on the surface, as WPF's input
     /// manager raises it before its own selection handling.</summary>
-    private static void PressMouse(ReadingSurface surface) =>
-        surface.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+    private static void PressMouse(ReadingSurface surface, MouseButton button = MouseButton.Left) =>
+        surface.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, button)
         {
             RoutedEvent = Mouse.PreviewMouseDownEvent,
         });
 
     /// <summary>The button released, and whatever the release posted.</summary>
-    private static void ReleaseMouse(ReadingSurface surface)
+    private static void ReleaseMouse(ReadingSurface surface, MouseButton button = MouseButton.Left)
     {
-        RaiseMouseUp(surface);
+        RaiseMouseUp(surface, button);
         PumpedDispatcher.Drain();
     }
 
     /// <summary>The button released, what the release posted still queued.</summary>
-    private static void RaiseMouseUp(ReadingSurface surface) =>
-        surface.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+    private static void RaiseMouseUp(ReadingSurface surface, MouseButton button = MouseButton.Left) =>
+        surface.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, button)
         {
             RoutedEvent = Mouse.PreviewMouseUpEvent,
         });
+
+    /// <summary>The delta judge's N1: only a press that placed the caret is
+    /// moved on release. A right-click, or a left press a child takes (the
+    /// scroll bar, a task's check box, a link, a formula's scroller), puts no
+    /// caret anywhere, so a reader stepping through a formula's speech keeps
+    /// their letter.</summary>
+    [Theory]
+    [InlineData("right click")]
+    [InlineData("press a child takes")]
+    public void APressThatPlacesNoCaretLeavesTheReadersLetter(string press)
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine("math", $"reading-caret-no-place-{press.Replace(' ', '-')}");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                Run hidden = Assert.Single(HiddenRuns(line));
+                surface.CaretPosition = line.Inlines.OfType<InlineUIContainer>().First().ElementEnd;
+                TextPointer letter = hidden.ContentStart.GetPositionAtOffset(3)!;
+                surface.CaretPosition = letter;
+                MouseButton button = press == "right click" ? MouseButton.Right : MouseButton.Left;
+
+                PressMouse(surface, button);
+                ReleaseMouse(surface, button);
+
+                Assert.Equal(0, surface.CaretPosition.CompareTo(letter));
+            }
+        });
+    }
+
+    /// <summary>The delta judge's N2: a republish restores a resting caret by
+    /// block and offset, so a formula whose speech grew puts the caret of a
+    /// reader who rested just after it inside the speech. The rule moves it
+    /// back past the formula; only a reader who was in the speech before is
+    /// kept there.</summary>
+    [Fact]
+    public void ARepublishThatGrowsAFormulasSpeechKeepsAResterAfterIt()
+    {
+        RunSta(() =>
+        {
+            (StageHarness harness, Paragraph line) = OpenEmbeddedLine("math", "reading-caret-speech-grows");
+            using (harness)
+            {
+                ReadingSurface surface = harness.Surface;
+                surface.Focus();
+                string before = Assert.Single(HiddenRuns(line)).Text;
+                surface.CaretPosition = line.Inlines.OfType<InlineUIContainer>().First().ElementEnd;
+
+                // A longer formula, saved and in the buffer alike, so core's
+                // artifact speaks it (an unsaved one is shown as its source).
+                string note = harness.Tab.EditorDocument!.Text.Replace("x^2", "x^2 + y^2 + z^2", StringComparison.Ordinal);
+                File.WriteAllText(Path.Combine(harness.Root, "note0.md"), note);
+                harness.Tab.EditorDocument.Text = note;
+                harness.Model.Refresh();
+                PumpedDispatcher.Drain();
+
+                Paragraph now = surface.Document.Blocks.OfType<Paragraph>().Single(ReadingSemantics.IsMathBlock);
+                Run speech = Assert.Single(HiddenRuns(now));
+                Assert.True(speech.Text.Length > before.Length + 8, $"premise: the speech grew (\"{speech.Text}\")");
+                Assert.Same(now, surface.CaretPosition.Paragraph);
+                Assert.Null(ReadingDocumentBuilder.VisibleCaretPast(surface.CaretPosition));
+            }
+        });
+    }
 
     /// <summary>Codex rounds 6 and 8: what a release posts belongs to that
     /// release. A newer press, a key, a caret set (a UIA client's), even one

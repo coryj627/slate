@@ -112,6 +112,9 @@ public sealed partial class ReadingDiagramTests
 
         public VaultSession Session { get; }
 
+        /// <summary>The fixture vault's folder, for a fact that saves the note.</summary>
+        public string Root => _fixture.Root;
+
         public WorkspaceTabViewModel Tab { get; }
 
         public ReadingSurface Surface { get; }

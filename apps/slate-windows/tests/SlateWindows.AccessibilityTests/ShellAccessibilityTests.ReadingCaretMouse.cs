@@ -108,9 +108,15 @@ public sealed partial class ShellAccessibilityTests
                 }
 
                 // A press inside the drag's selection would wait for a drag, so
-                // the selection is collapsed past it first, as a reader would.
+                // the selection is collapsed first. Home and Right leave the caret
+                // on the speech's second letter (the delta judge's N5), so the
+                // check below holds only once the click has moved it.
+                Keyboard.Type(FlaUI.Core.WindowsAPI.VirtualKeyShort.HOME);
                 Keyboard.Type(FlaUI.Core.WindowsAPI.VirtualKeyShort.RIGHT);
-                Mouse.Click(press);
+                // Further left than the drag's press, past the double-click
+                // rectangle, so the click is a click of its own.
+                var click = new Point(press.X - 10, press.Y);
+                Mouse.Click(click);
                 // The release moves a plain click's caret past the element.
                 if (!SpinWait.SpinUntil(
                     () => text.GetSelection()[0].CompareEndpoints(
@@ -124,7 +130,7 @@ public sealed partial class ShellAccessibilityTests
                         $"{kind}: a click beside it left the caret in its hidden speech (against the speech's start "
                         + $"{caret.CompareEndpoints(TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.Start)}, "
                         + $"its end {caret.CompareEndpoints(TextPatternRangeEndpoint.Start, speech, TextPatternRangeEndpoint.End)}; "
-                        + $"the caret's line \"{caretLine.GetText(-1)}\"; pressed at {press}, the speech's box {box})");
+                        + $"the caret's line \"{caretLine.GetText(-1)}\"; clicked at {click}, the speech's box {box})");
                 }
             }
 
