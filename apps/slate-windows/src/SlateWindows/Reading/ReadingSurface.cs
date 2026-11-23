@@ -1601,9 +1601,10 @@ internal sealed class ReadingSurface : RichTextBox
     /// caret is left there until the button is released.</summary>
     private bool _pointerHeld;
 
-    /// <summary>#1708 (Codex round 6): counts presses, keys, caret
-    /// restores and releases, so what a release posts runs only when no
-    /// newer input superseded it.</summary>
+    /// <summary>#1708 (Codex rounds 6 and 8): counts presses, keys, caret
+    /// restores, releases and every selection change, so what a release
+    /// posts runs only when nothing moved the caret or the selection since,
+    /// not even away and back.</summary>
     private int _caretInputs;
 
     /// <summary>#1708 (Codex round 7): the press selected, by Shift or by a
@@ -1723,6 +1724,7 @@ internal sealed class ReadingSurface : RichTextBox
     protected override void OnSelectionChanged(RoutedEventArgs e)
     {
         base.OnSelectionChanged(e);
+        _caretInputs++;
         TextPointer? before = _caretBefore;
         TextPointer? anchor = _selectionAnchor;
         bool alongItsLine = _caretMovedAlongItsLine;
