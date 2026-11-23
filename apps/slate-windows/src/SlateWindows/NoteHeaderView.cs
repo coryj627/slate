@@ -381,7 +381,10 @@ internal sealed class NoteHeaderView : Grid
             {
                 // The sibling rule, as the segments': a note's folders can repeat a name
                 // (notes/notes/x.md) or have none a reader hears (notes/_/x.md).
-                var row = new MenuItem { Header = name, Icon = Glyph(FolderGlyph, GlyphSize) };
+                // Plan 47 CB-22b: the name as a TextBlock, not a string. A string header
+                // reaches the row's presenter, which reads an underscore as an access-key
+                // marker: a folder my_notes painted and named "mynotes" and took the key N.
+                var row = new MenuItem { Header = new TextBlock { Text = name }, Icon = Glyph(FolderGlyph, GlyphSize) };
                 AutomationProperties.SetName(row, spoken);
                 row.Click += (_, _) => Workspace?.RevealFolderFromHeader(folder);
                 menu.Items.Add(row);

@@ -74,34 +74,21 @@ internal sealed class EditorEmbedPreviewView : ContentControl
             return content;
         }
 
+        // Plan 47 CB-22b: the title as a TextBlock, not a string. Fluent's header button
+        // reads an underscore in a string as an access-key marker: "my_notes.md" painted
+        // and named "mynotes.md", and its letter taken on the window (Alt+N, Alt+B). DS-2:
+        // the title wraps, so at 14 point in a narrow pane it doesn't run under the chevron.
+        // Fluent's template ignores HeaderTemplate, and Fluent's TextBlock style doesn't
+        // wrap, so the wrap is set here.
         var expander = new Expander
         {
-            Header = node.Title,
+            Header = new TextBlock { Text = node.Title, TextWrapping = TextWrapping.Wrap },
             IsExpanded = node.InitiallyExpanded,
             Content = content,
             Margin = new Thickness(0, 4, 0, 4),
         };
         AutomationProperties.SetName(expander, node.Title);
-        expander.Loaded += static (sender, _) => WrapTitle((DependencyObject)sender);
         return expander;
-    }
-
-    /// <summary>DS-2: a title wraps, so at 14 point in a narrow pane it doesn't run
-    /// under the expander's chevron. Fluent's template ignores HeaderTemplate, and a
-    /// presenter's text has no wrapping of its own, so this sets it where it lands.</summary>
-    private static void WrapTitle(DependencyObject parent)
-    {
-        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
-        {
-            DependencyObject child = VisualTreeHelper.GetChild(parent, index);
-            if (child is TextBlock { TemplatedParent: ContentPresenter { TemplatedParent: System.Windows.Controls.Primitives.ToggleButton } } title)
-            {
-                title.TextWrapping = TextWrapping.Wrap;
-                return;
-            }
-
-            WrapTitle(child);
-        }
     }
 
     private FrameworkElement BuildNodeContent(EditorEmbedPreviewNode node)
@@ -169,7 +156,9 @@ internal sealed class EditorEmbedPreviewView : ContentControl
         {
             var open = new Button
             {
-                Content = "Jump to source",
+                // CB-22b: a TextBlock, so the button's peer keeps the path's underscores in
+                // the name below; with a string content it strips the first from that name.
+                Content = new TextBlock { Text = "Jump to source" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 0),
             };
