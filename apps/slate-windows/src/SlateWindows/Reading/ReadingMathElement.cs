@@ -91,11 +91,14 @@ internal sealed class ReadingMathElement : ContentControl
 
     protected override Size MeasureOverride(Size constraint)
     {
-        if (LineReserve <= 0 || double.IsInfinity(constraint.Width))
+        // #1708: the speech run's width as laid out, where it is wider than
+        // the builder's estimate (ReadingLineReserve.For).
+        double reserve = ReadingLineReserve.For(this, LineReserve);
+        if (reserve <= 0 || double.IsInfinity(constraint.Width))
         {
             return base.MeasureOverride(constraint);
         }
-        double width = Math.Max(0, constraint.Width - LineReserve);
+        double width = Math.Max(0, constraint.Width - reserve);
         Size desired = base.MeasureOverride(new Size(width, constraint.Height));
         return new Size(Math.Min(desired.Width, width), desired.Height);
     }

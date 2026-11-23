@@ -24,6 +24,9 @@ namespace SlateWindows.Reading;
 /// <item>any other embedded element is one U+FFFC, so what it displays is
 /// neither searched nor counted.</item>
 /// </list>
+/// A run marked as hidden speech (#1708: a rendered diagram's description, a
+/// pending diagram's name, an embedded image's name) is skipped: it is in
+/// range for line reading only, and nothing on screen shows it.
 /// The walk runs on the dispatcher (text pointers are dispatcher-bound),
 /// once per content change.
 /// </summary>
@@ -75,7 +78,10 @@ internal sealed class ReadingTextIndex
                     // A math paragraph whose range holds its speech: its
                     // element stands for it instead.
                     bool inMath = pointer.Paragraph is { } paragraph && SpeaksInPlaceOfSource(paragraph);
-                    if (run.Length > 0 && !inMath)
+                    // #1708: a run for line reading only (a diagram's
+                    // description or name, an image's name) is never found.
+                    bool hidden = pointer.Parent is Run owner && ReadingSemantics.IsHiddenSpeech(owner);
+                    if (run.Length > 0 && !inMath && !hidden)
                     {
                         segments.Add(new Segment(text.Length, run.Length, pointer, null, null));
                         text.Append(run);
@@ -219,7 +225,7 @@ internal sealed class ReadingTextIndex
     /// <summary>A math block whose range is its speech (#1595's shape: it
     /// carries the fenced source a copy substitutes).</summary>
     private static bool SpeaksInPlaceOfSource(Paragraph paragraph) =>
-        ReadingSemantics.IsMathBlock(paragraph) && ReadingSemantics.MathCopyTextOf(paragraph) is not null;
+        ReadingSemantics.IsMathBlock(paragraph) && ReadingSemantics.CopyTextOf(paragraph) is not null;
 
     private int FirstEndingAfter(int offset)
     {

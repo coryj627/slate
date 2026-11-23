@@ -2017,6 +2017,12 @@ public sealed partial class ShellAccessibilityTests
                 {
                     resolved.Add((kind, range));
                 }
+                // #1708 (CB-20): NVDA reads the Line that encloses an
+                // embedded element, so a formula's and a diagram's read its name.
+                if (kind is "math" or "diagram" && LineReadsTheName(text, kind, element) is { } lineFailure)
+                {
+                    failures.Add(lineFailure);
+                }
             }
 
             // DOCUMENT ORDER: the census is authored top-to-bottom, so
