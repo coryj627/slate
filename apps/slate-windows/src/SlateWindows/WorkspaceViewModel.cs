@@ -3238,6 +3238,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 OnPropertyChanged(nameof(StripLeaf));
                 OnPropertyChanged(nameof(MoreLeafTitle));
                 OnPropertyChanged(nameof(MorePanelsName));
+                NotifyEmptyPanelLine();
                 bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
                 // Silent on the rail's arrow route (G21, AR-59), and on a pick from
                 // More panels (DS-16), whose button takes the keys back and names
@@ -3974,7 +3975,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _hotExit?.Detach();
         if (_titledTab is not null)
         {
-            _titledTab.PropertyChanged -= ActiveTab_TitleChanged;
+            _titledTab.PropertyChanged -= ActiveTab_PropertyChanged;
             _titledTab = null;
         }
 

@@ -2747,8 +2747,14 @@
                                 <panels:SyncDiagnosticsSurfaceView Model="{Binding SyncDiagnostics}" />
                             </DockPanel>
 
+                            <!-- Plan 47 CB-23 (#1800, CD15): a panel Windows has no body for
+                                 yet (Math, Code, Diagrams) says what it will show and where
+                                 that is read today, in core's line (ActiveLeafEmptyLine). The
+                                 line is final, so it is the panel's stop, as every other empty
+                                 panel's notice is (contract 40's R-5). -->
                             <StackPanel x:Name="RightPaneDockedPlaceholder"
-                                        Grid.Column="0" Margin="12">
+                                        Grid.Column="0" Margin="12"
+                                        KeyboardNavigation.DirectionalNavigation="Contained">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Style.Triggers>
@@ -2803,10 +2809,10 @@
                                     </Style>
                                 </StackPanel.Style>
                                 <local:PanelToolbarView Title="{Binding ActiveLeaf.Title}" />
-                                <TextBlock Margin="0,8,0,0"
-                                           Text="This panel is docked and ready for its feature surface."
-                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                                           TextWrapping="Wrap" />
+                                <TextBlock Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding ActiveLeafEmptyLine}"
+                                           AutomationProperties.Name="{Binding ActiveLeafEmptyLineName}"
+                                           Focusable="True" />
                             </StackPanel>
                             <!-- DS-16 (DSD8): the rail is a strip of five icons and More panels,
                                  which holds the other twelve. Arrows move in the strip, and More
