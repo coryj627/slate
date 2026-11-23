@@ -71,6 +71,111 @@ public sealed class RightPaneNoticeLandingTests
         }
     });
 
+    /// <summary>Plan 47 CB-23 (#1800, CD15): the lines the owner read for a
+    /// panel Windows has no body for, by panel and by where the reader is,
+    /// with the reading view's shortcut as the chord table shows it.</summary>
+    private static readonly Dictionary<(string Leaf, string State), string> PanelWithoutBodyLines = new()
+    {
+        [("math", "editor")] = "Math for this note isn't listed here yet. Open the note in the reading view (Ctrl+Shift+E) to read its math.",
+        [("math", "reading")] = "Math for this note isn't listed here yet. Read its math in the reading view, which is open now.",
+        [("math", "no note")] = "Math isn't listed here yet. Open a note, then the reading view (Ctrl+Shift+E), to read its math.",
+        [("code", "editor")] = "Code blocks for this note aren't listed here yet. Open the note in the reading view (Ctrl+Shift+E) to read its code blocks.",
+        [("code", "reading")] = "Code blocks for this note aren't listed here yet. Read its code blocks in the reading view, which is open now.",
+        [("code", "no note")] = "Code blocks aren't listed here yet. Open a note, then the reading view (Ctrl+Shift+E), to read its code blocks.",
+        [("diagrams", "editor")] = "Diagrams for this note aren't listed here yet. Open the note in the reading view (Ctrl+Shift+E) to read its diagrams.",
+        [("diagrams", "reading")] = "Diagrams for this note aren't listed here yet. Read its diagrams in the reading view, which is open now.",
+        [("diagrams", "no note")] = "Diagrams aren't listed here yet. Open a note, then the reading view (Ctrl+Shift+E), to read its diagrams.",
+    };
+
+    /// <summary>The same line as a screen reader is given it: the shortcut in
+    /// the chord table's spoken form.</summary>
+    private static string SpokenLine(string line) =>
+        line.Replace("(Ctrl+Shift+E)", "(Control Shift E)", StringComparison.Ordinal);
+
+    public static TheoryData<string, string> PanelWithoutBodyCases()
+    {
+        var cases = new TheoryData<string, string>();
+        foreach ((string leaf, string state) in PanelWithoutBodyLines.Keys)
+        {
+            cases.Add(leaf, state);
+        }
+
+        return cases;
+    }
+
+    /// <summary>Plan 47 CB-23 (#1800): a panel Windows has no body for yet
+    /// (Math, Code, Diagrams) shows core's line for where the reader is, and
+    /// that line is the panel's stop, as every other empty panel's final
+    /// notice is (R-5): the landing puts the keys on it, its name is the line
+    /// with the shortcut spoken, and every arrow from it stays in the leaf.</summary>
+    [Theory]
+    [MemberData(nameof(PanelWithoutBodyCases))]
+    public void APanelWithNoBodyLandsOnItsLineAndKeepsEveryArrow(string leaf, string state) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(leaf, state == "no note" ? "no note" : "empty");
+        if (state == "reading")
+        {
+            host.Workspace.SetViewMode(host.Workspace.ActiveGroup.ActiveTab!, reading: true, landFocus: false);
+            PumpedDispatcher.Drain();
+        }
+
+        string expected = PanelWithoutBodyLines[(leaf, state)];
+        TextBlock line = host.PanelWithoutBodyLine();
+        Assert.True(line.IsVisible, $"{leaf} ({state}): the placeholder's line is not shown");
+        Assert.Equal(expected, line.Text);
+        Assert.Equal(SpokenLine(expected), UIElementAutomationPeer.CreatePeerForElement(line).GetName());
+
+        foreach (Key key in new[] { Key.Left, Key.Right, Key.Up, Key.Down })
+        {
+            Assert.True(host.Beside.Focus());
+            host.Shell.LandInRightPane();
+
+            Assert.Same(line, Keyboard.FocusedElement);
+
+            host.Press(key);
+
+            FrameworkElement body = host.VisibleLeafBody();
+            Assert.True(
+                body.IsKeyboardFocusWithin,
+                $"{leaf} ({state}): {key} took the keys out of the leaf, to {Keyboard.FocusedElement}");
+        }
+    });
+
+    /// <summary>Plan 47 CB-23: the line follows where the reader is, without
+    /// the panel being opened again: a note opened, its reading view toggled
+    /// on and off, and the note closed.</summary>
+    [Fact]
+    public void APanelWithNoBodysLineFollowsTheNoteAndItsView() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("diagrams", "no note");
+        TextBlock line = host.PanelWithoutBodyLine();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "no note")], line.Text);
+
+        host.Workspace.OpenPath("plain.md");
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "editor")], line.Text);
+
+        WorkspaceTabViewModel tab = host.Workspace.ActiveGroup.ActiveTab!;
+        host.Workspace.SetViewMode(tab, reading: true, landFocus: false);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "reading")], line.Text);
+        Assert.Equal(SpokenLine(PanelWithoutBodyLines[("diagrams", "reading")]), UIElementAutomationPeer.CreatePeerForElement(line).GetName());
+
+        host.Workspace.SetViewMode(tab, reading: false, landFocus: false);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "editor")], line.Text);
+
+        host.Workspace.CloseActiveTabCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "no note")], line.Text);
+
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "math");
+        PumpedDispatcher.Drain();
+        Assert.Equal(PanelWithoutBodyLines[("math", "no note")], line.Text);
+    });
+
     /// <summary>A LOADING sentence is not a stop — it gives way to the rows
     /// within moments — while the final sentences are. The leaf models'
     /// own loading flags, set the way their loaders set them.</summary>
@@ -951,7 +1056,12 @@ public sealed class RightPaneNoticeLandingTests
         }
 
         public FrameworkElement VisibleLeafBody() =>
-            _leafHost.Children.OfType<DockPanel>().Single(body => Grid.GetColumn(body) == 0 && body.IsVisible);
+            _leafHost.Children.OfType<FrameworkElement>().Single(body => Grid.GetColumn(body) == 0 && body.IsVisible);
+
+        /// <summary>Plan 47 CB-23: the line of the placeholder, the body of a
+        /// panel Windows has no body for yet (its one text block).</summary>
+        public TextBlock PanelWithoutBodyLine() =>
+            Shell.RightPaneDockedPlaceholder.Children.OfType<TextBlock>().Single();
 
         public void Press(Key key)
         {

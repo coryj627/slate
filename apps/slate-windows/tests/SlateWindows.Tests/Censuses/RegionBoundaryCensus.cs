@@ -154,8 +154,7 @@ public sealed class RegionBoundaryCensus
             else if (parent is not null
                 && (string?)parent.Attribute(Xaml + "Name") == "RightPaneLeafHost"
                 && !element.Name.LocalName.Contains('.', StringComparison.Ordinal)
-                && ((string?)element.Attribute("Grid.Column") ?? "0") == "0"
-                && name != "RightPaneDockedPlaceholder")
+                && ((string?)element.Attribute("Grid.Column") ?? "0") == "0")
             {
                 roots.Add((element, ["Contained"]));
             }
