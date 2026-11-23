@@ -68,9 +68,11 @@
 //
 // A site that can turn a control off with the keys on it (an IsEnabled
 // trigger, binding or write, and every command site) takes only the witnesses
-// of FocusIntegrityManifestCensus.KeysFirst.cs (CB-17a, CD11): keys-first,
-// four checked exemptions, or a dated row that CB-17b ends. guard: and a fact
-// that only names such a site no longer witness it.
+// of FocusIntegrityManifestCensus.KeysFirst.cs (CB-17a, CD11): keys-first or
+// stays-on, whose fact cannot skip unless the row is one of the menu's
+// seventeen (FocusIntegrityManifestCensus.Skips.cs, CB-17b), or one of four
+// exemptions. guard: and a fact that only names such a site no longer witness
+// it.
 //
 // SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites the manifest with the scraped sites,
 // keeping every assignment and leaving new sites unassigned, which fails
@@ -114,11 +116,11 @@ public sealed partial class FocusIntegrityManifestCensus
             manifest = Manifest();
         }
 
-        var judge = new WitnessJudge(Facts(), GuardedScopes(), ShellXaml(), Creators(), ShellCompilation.Compilation, DatedBaseline);
+        var judge = new WitnessJudge(Facts(), GuardedScopes(), ShellXaml(), Creators(), ShellCompilation.Compilation, new SkipReach(TestSources.Value));
         string[] unread = UnreadSyntax(
             ShellCompilation.Sources.Select(entry => (entry.Source.Root, ShellCompilation.ModelFor(entry.Source))),
             ShellXamlFiles().Select(path => (Path.GetFileName(path), XDocument.Load(path, LoadOptions.SetLineInfo))));
-        string[] problems = ManifestProblems(scraped, manifest, judge, DatedCeiling, unread);
+        string[] problems = ManifestProblems(scraped, manifest, judge, unread);
         Assert.True(problems.Length == 0, string.Join("\n", problems));
     }
 
@@ -389,7 +391,7 @@ public sealed partial class FocusIntegrityManifestCensus
     {
         var sites = new SortedDictionary<string, Site>(StringComparer.Ordinal);
         (string File, XDocument Document)[] documents = [.. xaml];
-        HashSet<string> focusless = FocuslessNames(documents.Select(entry => entry.Document));
+        HashSet<(string Name, string? Type)> focusless = FocuslessNames(documents.Select(entry => entry.Document));
         foreach ((CompilationUnitSyntax root, SemanticModel model) in sources)
         {
             foreach (AssignmentExpressionSyntax assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>()
@@ -596,14 +598,15 @@ public sealed partial class FocusIntegrityManifestCensus
         return candidate;
     }
 
-    /// <summary>The names of the XAML elements that are declared out of the
-    /// keys' reach (Focusable="False").</summary>
-    private static HashSet<string> FocuslessNames(IEnumerable<XDocument> documents) =>
+    /// <summary>The XAML elements that are declared out of the keys' reach
+    /// (Focusable="False"), by name and type: a C# receiver is such an element only
+    /// when it has its name and is declared of its type (CB-17a's merge judge,
+    /// nit 4).</summary>
+    private static HashSet<(string Name, string? Type)> FocuslessNames(IEnumerable<XDocument> documents) =>
     [
         .. documents.SelectMany(document => document.Descendants())
-            .Where(element => IsFalse(PropertyAttribute(element, "Focusable")?.Value))
-            .Select(element => (string?)element.Attribute(Xaml + "Name"))
-            .OfType<string>(),
+            .Where(element => IsFalse(PropertyAttribute(element, "Focusable")?.Value) && element.Attribute(Xaml + "Name") is not null)
+            .Select(element => ((string)element.Attribute(Xaml + "Name")!, RegionBoundaryCensus.Resolve(element)?.FullName)),
     ];
 
     private static void Add(
@@ -758,7 +761,7 @@ public sealed partial class FocusIntegrityManifestCensus
         IReadOnlyList<XDocument> documents,
         IReadOnlyDictionary<string, string[]>? creators = null,
         Compilation? commands = null,
-        IReadOnlyCollection<string>? dated = null)
+        SkipReach? skips = null)
     {
         private readonly Dictionary<XDocument, HashSet<XElement>> _regionRoots = [];
         private KeysFirstRule? _keysFirst;
@@ -766,8 +769,8 @@ public sealed partial class FocusIntegrityManifestCensus
         public string? Judge(Site site, string witness)
         {
             // #1866 (CD11): a site that can turn a control off with the keys on it,
-            // and the keys-first and dated kinds, are judged by their own rule.
-            _keysFirst ??= new KeysFirstRule(facts, documents, commands, dated ?? []);
+            // and the keys-first and stays-on kinds, are judged by their own rule.
+            _keysFirst ??= new KeysFirstRule(facts, documents, commands, skips);
             if (_keysFirst.Judges(site, witness, out string? ruled))
             {
                 return ruled;
@@ -1088,10 +1091,12 @@ public sealed partial class FocusIntegrityManifestCensus
                 + "KeysFirstRecorder.AssertTheKeysLeaveFirst), 'stays-on: Class.Method' (CB-17b: the same, for a control that used to "
                 + "go off under the keys and now stays on, calling KeysFirstRecorder.AssertItStaysOn with what, root, act and reached), "
                 + "'exempt: not focusable', 'exempt: always on: Type.Property' (read from "
-                + "every construction of every property of that name), 'exempt: its own press never turns it off: <why>', 'exempt: "
-                + "never fires: <why> (Class.Method)', or 'dated: 2026-11-21; CB-17b (CD11): <mechanism>' for a key in DatedBaseline, "
-                + "whose count only falls. A row CB-17b ended (EndedByCb17b) takes only keys-first, stays-on, always on or not "
-                + "focusable. The press exemption's limit: a command-bound control has its keys moved first whoever turns it off "
+                + "every construction of every property of that name), 'exempt: its own press never turns it off: <why>' or 'exempt: "
+                + "never fires: <why> (Class.Method)'. A keys-first or stays-on fact that can skip at run time (read by following its "
+                + "calls by name) or has a skipped or explicit data row witnesses nothing; only the menu's seventeen rows, whose facts "
+                + "skip where a desktop refuses a menu the keys, are written 'keys-first, where a desktop gives a menu the keys (#1680): "
+                + "Class.Method', and each of them is. A row CB-17b ended (EndedByCb17b) takes only keys-first, stays-on, always on or not "
+                + "focusable, and a key it deleted with its trigger (GoneWithCb17b) never comes back. The press exemption's limit: a command-bound control has its keys moved first whoever turns it off "
                 + "(CommandKeysFirst, CB-17b); for an IsEnabled trigger, binding or write, and a Click button, another driver (a "
                 + "refresh's or a rescan's deselect, an in-place change of item, a find bar's mode switch) can still turn such a "
                 + "control off under the keys, and this census does not judge other drivers (#1955). A menu row is no command site: "
@@ -1122,11 +1127,17 @@ public sealed partial class FocusIntegrityManifestCensus
                     .Where(method => method.GetCustomAttributes<FactAttribute>(inherit: true).ToArray() is [var fact] && !NeverRuns(fact))
                     .Select(method => $"{type.Name}.{method.Name}")),
         ];
-        string tests = Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests");
-        return FactSources(
-            Directory.EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-                .Select(file => CSharpSource.LoadPath(file).Root),
-            declared);
+        return FactSources(TestSources.Value, declared);
     }
+
+    /// <summary>This project's sources, parsed once per test process: the facts' code, and
+    /// the helpers the skip reading follows (m1).</summary>
+    private static readonly Lazy<CompilationUnitSyntax[]> TestSources = new(() =>
+    [
+        .. Directory.EnumerateFiles(
+                Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "tests", "SlateWindows.Tests"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .Select(file => CSharpSource.LoadPath(file).Root),
+    ]);
 }

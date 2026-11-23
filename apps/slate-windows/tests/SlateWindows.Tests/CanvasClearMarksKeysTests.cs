@@ -95,19 +95,31 @@ public sealed class CanvasClearMarksKeysTests
         Assert.True(shell.Land(ShellRegionKind.Editor), "premise: the canvas did not take the keys again");
         shell.Settle();
 
+        // A row that cannot be landed: the list's rows refuse the keys from before the command,
+        // since the sheet opens inside it (the red team on PR 2's diff, F3). A handled preview
+        // refuses them whatever the list's style says of Focusable.
+        ListBox list = shell.Shell.CanvasPromptChoicesList;
+        void Refuse(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (!ReferenceEquals(e.NewFocus, list))
+            {
+                e.Handled = true;
+            }
+        }
+
+        list.PreviewGotKeyboardFocus += Refuse;
+        int onClear = 0;
+        void Counted(object sender, KeyboardFocusChangedEventArgs e) => onClear++;
+        clear.GotKeyboardFocus += Counted;
         shell.Workspace.CanvasShowMarksCommand.Execute(null);
-        // A row that cannot be landed yet: the list refuses the keys in the opening turn.
-        shell.Shell.CanvasPromptChoicesList.SetCurrentValue(UIElement.FocusableProperty, false);
         shell.Settle();
 
         FrameworkElement overlay = shell.Shell.CanvasPromptOverlay;
         Assert.IsType<CanvasMarksListPrompt>(shell.Workspace.CanvasPromptSheet);
-        Assert.False(
-            ReferenceEquals(clear, Keyboard.FocusedElement),
-            "the marks list opened with the keys on Clear All Marks");
+        Assert.Equal(0, onClear);
         Assert.True(
-            overlay.IsKeyboardFocusWithin,
-            $"the marks list opened with the keys on {Describe(Keyboard.FocusedElement)}, outside the sheet");
+            ReferenceEquals(overlay, Keyboard.FocusedElement),
+            $"the marks list opened with the keys on {Describe(Keyboard.FocusedElement)}, not on the sheet itself");
 
         // Again, once the sheet has let the keys go: it is a stop only while it holds them.
         shell.Workspace.CloseCanvasPrompt();
@@ -115,12 +127,12 @@ public sealed class CanvasClearMarksKeysTests
         Assert.True(shell.Land(ShellRegionKind.Editor), "premise: the canvas did not take the keys a third time");
         shell.Settle();
         shell.Workspace.CanvasShowMarksCommand.Execute(null);
-        shell.Shell.CanvasPromptChoicesList.SetCurrentValue(UIElement.FocusableProperty, false);
         shell.Settle();
 
+        Assert.Equal(0, onClear);
         Assert.True(
-            overlay.IsKeyboardFocusWithin,
-            $"the marks list opened a second time with the keys on {Describe(Keyboard.FocusedElement)}, outside the sheet");
+            ReferenceEquals(overlay, Keyboard.FocusedElement),
+            $"the marks list opened a second time with the keys on {Describe(Keyboard.FocusedElement)}, not on the sheet itself");
     });
 
     /// <summary>The board open on the canvas, its first card marked, the keys on the canvas,

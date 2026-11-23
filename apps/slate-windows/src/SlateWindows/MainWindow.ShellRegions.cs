@@ -273,33 +273,9 @@ public partial class MainWindow : IShellRegionHost
             Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
         }
 
-        bool sheet = open
-            && OpenModalSurface is not (ModalSurface.QuickOpen or ModalSurface.SearchOverlay or ModalSurface.CommandPalette);
-        if (sheet != IsModalSheetOpen)
-        {
-            IsModalSheetOpen = sheet;
-        }
-
-        // #1666: a card editor that opened beneath another surface takes the
-        // keys once it is the topmost.
-        if (_cardEditorAwaitingKeys is not null && OpenModalSurface is ModalSurface.CanvasCardEditor)
-        {
-            QueueCardEditorLanding();
-        }
-    }
-
-    public static readonly DependencyProperty IsModalSheetOpenProperty = DependencyProperty.Register(
-        nameof(IsModalSheetOpen), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
-
-    /// <summary>#1690: whether the open modal surface is a sheet rather than Quick Open,
-    /// search or the palette. Those three take the keys in the turn they open
-    /// (<see cref="LandInOpeningOverlay"/>), so what holds the keys under them can stay on
-    /// until then; a sheet's field takes them in a queued landing, and what's under it goes
-    /// off at once.</summary>
-    public bool IsModalSheetOpen
-    {
-        get => (bool)GetValue(IsModalSheetOpenProperty);
-        private set => SetValue(IsModalSheetOpenProperty, value);
+        // #1666, plan 47 CB-17b (red team F3): a surface that opened beneath another
+        // takes the keys once it is the topmost.
+        LandAnOpeningThatWaited();
     }
 
     public static readonly DependencyProperty IsModalSurfaceOpenProperty = DependencyProperty.Register(

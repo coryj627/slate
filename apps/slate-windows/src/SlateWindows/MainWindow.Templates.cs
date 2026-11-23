@@ -123,11 +123,26 @@ public partial class MainWindow
         if (eventArgs.PropertyName == nameof(WorkspaceViewModel.TemplatePickerSheet))
         {
             ObserveTemplatePicker(workspace.TemplatePickerSheet);
-            if (workspace.TemplatePickerSheet is not null)
+            if (workspace.TemplatePickerSheet is { } picker)
             {
                 _focusBeforeTemplates ??= CapturePreSheetFocus();
-                _ = Dispatcher.InvokeAsync(
-                    FocusTemplatePicker, DispatcherPriority.Input);
+                // Plan 47 CB-17b: it opens loading, and its list is filled before the
+                // opening call returns; while it loads nothing in it takes the keys,
+                // never its Cancel ("Cancel, button" before the list), and the sheet
+                // does not hold them either: the state observer lands its row in the
+                // same call, straight from where the keys were.
+                LandInOpeningSurface(
+                    ModalSurface.TemplatePicker,
+                    TemplatePickerOverlay,
+                    null,
+                    LandTemplatePickerNow,
+                    () => ReferenceEquals(_viewModel.Workspace?.TemplatePickerSheet, picker),
+                    () =>
+                    {
+                        FocusTemplatePicker();
+                        return KeysAreOnAStopIn(TemplatePickerOverlay);
+                    },
+                    () => picker.State == TemplatePickerState.Loading);
             }
             else if (workspace.TemplateFlowSheet is null)
             {
@@ -137,11 +152,19 @@ public partial class MainWindow
         else if (eventArgs.PropertyName == nameof(WorkspaceViewModel.TemplateFlowSheet))
         {
             ObserveTemplateFlow(workspace.TemplateFlowSheet);
-            if (workspace.TemplateFlowSheet is not null)
+            if (workspace.TemplateFlowSheet is { } flow)
             {
                 _focusBeforeTemplates ??= CapturePreSheetFocus();
-                _ = Dispatcher.InvokeAsync(
-                    FocusTemplateFlowStep, DispatcherPriority.Input);
+                LandInOpeningSurface(
+                    ModalSurface.TemplateFlow,
+                    TemplateFlowOverlay,
+                    null,
+                    () =>
+                    {
+                        FocusTemplateFlowStep();
+                        return KeysAreOnAStopIn(TemplateFlowOverlay);
+                    },
+                    () => ReferenceEquals(_viewModel.Workspace?.TemplateFlowSheet, flow));
             }
             else if (workspace.TemplatePickerSheet is null)
             {
@@ -182,8 +205,18 @@ public partial class MainWindow
         // TemplatePicker.swift:63-65).
         if (eventArgs.PropertyName == nameof(TemplatePickerViewModel.State))
         {
-            _ = Dispatcher.InvokeAsync(
-                FocusTemplatePicker, DispatcherPriority.Input);
+            // Plan 47 CB-17b (red team F1): while the picker is the topmost surface
+            // its landing runs at once, so a picker filled in its opening call has
+            // its row in that turn; one beneath another surface waits for it.
+            if (_openingLandings.ContainsKey(ModalSurface.TemplatePicker))
+            {
+                TryLandOpening(ModalSurface.TemplatePicker);
+            }
+            else
+            {
+                _ = Dispatcher.InvokeAsync(
+                    FocusTemplatePicker, DispatcherPriority.Input);
+            }
         }
     }
 
@@ -216,6 +249,32 @@ public partial class MainWindow
         {
             _ = Dispatcher.InvokeAsync(
                 FocusTemplateFlowStep, DispatcherPriority.Input);
+        }
+    }
+
+    /// <summary>Plan 47 CB-17b: the template picker's landing in the turn it opens or its
+    /// state changes: the selected row when it is filled, Try Again when it is empty or
+    /// failed, and nothing while it loads, so the sheet holds the keys rather than its
+    /// Cancel. The queued fallback (<see cref="FocusTemplatePicker"/>) may still take
+    /// Cancel.</summary>
+    private bool LandTemplatePickerNow()
+    {
+        TemplatePickerViewModel? picker = _viewModel.Workspace?.TemplatePickerSheet;
+        switch (picker?.State)
+        {
+            case TemplatePickerState.Available:
+                if (TemplatePickerList.Items.Count > 0 && TemplatePickerList.SelectedIndex < 0)
+                {
+                    TemplatePickerList.SelectedIndex = 0;
+                }
+
+                return SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList);
+            case TemplatePickerState.Empty:
+                return TemplatePickerTryAgainButton.Focus();
+            case TemplatePickerState.Failed:
+                return TemplatePickerFailedTryAgainButton.Focus();
+            default:
+                return false;
         }
     }
 

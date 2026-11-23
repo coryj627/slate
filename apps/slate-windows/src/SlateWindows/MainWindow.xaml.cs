@@ -737,101 +737,72 @@ public partial class MainWindow : Window
             return;
         }
         if (e.PropertyName == nameof(WorkspaceViewModel.CanvasPromptSheet)
-            && workspace.CanvasPromptSheet is not null)
+            && workspace.CanvasPromptSheet is { } prompt)
         {
-            _ = Dispatcher.InvokeAsync(FocusCanvasPromptSheet, DispatcherPriority.Input);
+            LandInOpeningSurface(
+                ModalSurface.CanvasPrompt,
+                CanvasPromptOverlay,
+                null,
+                LandCanvasPromptSheet,
+                () => ReferenceEquals(_viewModel.Workspace?.CanvasPromptSheet, prompt));
         }
         else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardPickerSheet)
-            && workspace.CanvasCardPickerSheet is not null)
+            && workspace.CanvasCardPickerSheet is { } picker)
         {
-            _ = Dispatcher.InvokeAsync(
-                () => _ = TryFocus(CanvasCardPickerFilterBox), DispatcherPriority.Input);
+            LandInOpeningSurface(
+                ModalSurface.CanvasCardPicker,
+                CanvasCardPickerOverlay,
+                CanvasCardPickerFilterBox,
+                () => TryFocus(CanvasCardPickerFilterBox),
+                () => ReferenceEquals(_viewModel.Workspace?.CanvasCardPickerSheet, picker));
         }
         else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet)
             && workspace.CanvasCardEditorSheet is { } cardEditor)
         {
-            // #1666: the card editor's text, editing or inspecting. The sheet
-            // opened with the keys left on the row behind it.
-            _cardEditorAwaitingKeys = cardEditor;
-            QueueCardEditorLanding();
-        }
-        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet))
-        {
-            // Closed before it had the keys: nothing waits for it.
-            _cardEditorAwaitingKeys = null;
+            // #1666: the card editor's text, editing or inspecting. One that opens
+            // beneath another surface (a new card's editor arriving after Settings
+            // opened) waits, and lands once it is the topmost.
+            LandInOpeningSurface(
+                ModalSurface.CanvasCardEditor,
+                CanvasCardEditorOverlay,
+                CanvasCardEditorTextBox,
+                () => TryFocus(CanvasCardEditorTextBox),
+                () => ReferenceEquals(_viewModel.Workspace?.CanvasCardEditorSheet, cardEditor));
         }
     }
 
-    /// <summary>#1666: the card editor sheet that has not had the keys yet.
-    /// It takes them only as the topmost surface: one that opens beneath
-    /// another (a new card's editor arriving after Settings opened) waits,
-    /// and lands when the surface above it closes
-    /// (<see cref="ModalSource_PropertyChanged"/>).</summary>
-    private Canvas.CanvasCardEditorViewModel? _cardEditorAwaitingKeys;
+    /// <summary>#1666: whether a card editor that opened beneath another surface still
+    /// waits to take the keys (<see cref="LandInOpeningSurface"/>).</summary>
+    internal bool CardEditorAwaitingKeysForTests =>
+        _openingLandings.TryGetValue(ModalSurface.CanvasCardEditor, out OpeningLanding? opening)
+        && opening.Awaiting
+        && opening.StillOpen();
 
-    /// <summary>Whether a card editor still waits to take the keys.</summary>
-    internal bool CardEditorAwaitingKeysForTests => _cardEditorAwaitingKeys is not null;
-
-    private void QueueCardEditorLanding() =>
-        _ = Dispatcher.InvokeAsync(LandCardEditor, DispatcherPriority.Input);
-
-    private void LandCardEditor()
-    {
-        if (_cardEditorAwaitingKeys is not { } sheet)
-        {
-            return;
-        }
-
-        if (!ReferenceEquals(sheet, _viewModel.Workspace?.CanvasCardEditorSheet))
-        {
-            _cardEditorAwaitingKeys = null;
-            return;
-        }
-
-        if (OpenModalSurface is not ModalSurface.CanvasCardEditor)
-        {
-            return;
-        }
-
-        _cardEditorAwaitingKeys = null;
-        _ = TryFocus(CanvasCardEditorTextBox);
-    }
-
-    private void FocusCanvasPromptSheet()
+    /// <summary>The canvas prompt's landing: its draft with what it holds selected, else the
+    /// selected choice's row, never the bare list (R-5, #1247). Never Clear All Marks, which
+    /// is no landing (its press clears every mark; plan 47 CB-17b): with no row to take the
+    /// keys, the sheet holds them while it is open (<see cref="LandInOpeningSurface"/>).</summary>
+    private bool LandCanvasPromptSheet()
     {
         if (_viewModel.Workspace?.CanvasPromptSheet is null)
         {
-            return;
+            return false;
         }
+
         if (CanvasPromptDraftBox.IsVisible)
         {
             if (TryFocus(CanvasPromptDraftBox))
             {
                 CanvasPromptDraftBox.SelectAll();
+                return true;
             }
-            return;
-        }
-        // R-5 (#1247): the selected choice's row, never the bare list; a
-        // row that cannot be landed yet leaves the keys to the sheet's
-        // other stop.
-        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable
-            && SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList))
-        {
-            return;
+
+            return false;
         }
 
-        // Plan 47 CB-17b (#1866, CD11): never Clear All Marks, which is no landing (its press
-        // clears every mark). With no row to take the keys, the sheet holds them while it is
-        // open, as an overlay holds them while its field waits (LandInOpeningOverlay). The
-        // sheet's scope forgets the element it last held them on first: it would hand them on
-        // to it, and that can be Clear All Marks.
-        void LetGo(object sender, KeyboardFocusChangedEventArgs e) => SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
-        SetHoldsTheKeys(CanvasPromptOverlay, true, LetGo);
-        FocusManager.SetFocusedElement(CanvasPromptOverlay, null);
-        if (!CanvasPromptOverlay.IsVisible || !SelectorFocus.LandOnStop(CanvasPromptOverlay))
-        {
-            SetHoldsTheKeys(CanvasPromptOverlay, false, LetGo);
-        }
+        return CanvasPromptChoicesList.IsVisible
+            && CanvasPromptChoicesList.Focusable
+            && SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList);
     }
 
     /// <summary>The editor's and the boundaries' deferred focus requests,
@@ -933,8 +904,13 @@ public partial class MainWindow : Window
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
             // #1690: in the same turn, with a queued fallback only for a
-            // field not yet able to take the keys (LandInOpeningOverlay).
-            LandInOpeningOverlay(QuickSwitcherOverlay, QuickSwitcherSearchTextBox, () => _observedQuickSwitcher?.IsOpen == true);
+            // field not yet able to take the keys (LandInOpeningSurface).
+            LandInOpeningSurface(
+                ModalSurface.QuickOpen,
+                QuickSwitcherOverlay,
+                QuickSwitcherSearchTextBox,
+                () => LandOnField(QuickSwitcherSearchTextBox),
+                () => _observedQuickSwitcher?.IsOpen == true);
         }
     }
 
@@ -1681,11 +1657,21 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                if (_windowClosed || !IsActive || _modalLoops.IsModalLoopActive)
+                {
+                    return;
+                }
+
+                // Plan 47 CB-17b (red team F4): the topmost surface that does not hold the
+                // keys takes them by its opening landing, one presented while the window
+                // was away or one that held the keys itself as the window went.
+                if (LandTheTopmostOpeningAgain())
+                {
+                    return;
+                }
+
                 IInputElement? keys = Keyboard.FocusedElement;
-                if (_windowClosed
-                    || !IsActive
-                    || _modalLoops.IsModalLoopActive
-                    || (keys is not null && !ReferenceEquals(keys, this))
+                if ((keys is not null && !ReferenceEquals(keys, this))
                     || LastFocusedElement() is not { } last
                     || ReferenceEquals(last, this)
                     || !RegionFocusGuard.HeldTheKeys(last))

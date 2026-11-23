@@ -15,7 +15,10 @@ namespace SlateWindows.Tests;
 /// <summary>Runs MainWindow's real queued Move-To focus callback, including
 /// its live sidebar, picker, and modal-owner reads. The actual named filter
 /// is rehosted so a stale request cannot pass merely because its old overlay
-/// became invisible. No production guard is duplicated in this fixture.</summary>
+/// became invisible. No production guard is duplicated in this fixture.
+/// Plan 47 CB-17b PR 2: Move To lands its filter in the turn it opens; the
+/// queued callback is the fallback, queued only when the filter cannot take
+/// the keys in that turn, so these facts refuse it there.</summary>
 public sealed class MoveToFocusTests
 {
     [Theory]
@@ -28,8 +31,11 @@ public sealed class MoveToFocusTests
         using var host = new Host();
         host.Initialize();
         MoveToPickerViewModel picker = NewPicker();
+        // The filter cannot take the keys in the opening turn, so the fallback is queued.
+        host.Filter.Focusable = false;
         DispatcherOperation initial = Assert.Single(host.CaptureInputOperations(() =>
             SetPrivateProperty(host.Sidebar, nameof(FilesSidebarViewModel.MoveToSheet), picker)));
+        host.Filter.Focusable = true;
         Assert.Equal(DispatcherOperationStatus.Pending, initial.Status);
         Assert.Same(host.Sentinel, Keyboard.FocusedElement);
         Assert.Equal(0, host.FilterFocusAttempts);
@@ -47,9 +53,12 @@ public sealed class MoveToFocusTests
                 break;
             case "picker replaced":
                 // Both callbacks target the SAME named TextBox. Letting the
-                // new callback run would mask an incorrect old focus attempt.
+                // new callback run would mask an incorrect old focus attempt;
+                // the filter refuses the new picker's same-turn landing too.
+                host.Filter.Focusable = false;
                 DispatcherOperation replacement = Assert.Single(host.CaptureInputOperations(() =>
                     SetPrivateProperty(host.Sidebar, nameof(FilesSidebarViewModel.MoveToSheet), NewPicker())));
+                host.Filter.Focusable = true;
                 Assert.True(replacement.Abort());
                 Assert.Equal(DispatcherOperationStatus.Aborted, replacement.Status);
                 Assert.Equal(ModalSurface.MoveTo, host.Shell.OpenModalSurface);
@@ -80,11 +89,9 @@ public sealed class MoveToFocusTests
     {
         using var host = new Host();
         host.Initialize();
-        DispatcherOperation initial = Assert.Single(host.CaptureInputOperations(() =>
-            SetPrivateProperty(host.Sidebar, nameof(FilesSidebarViewModel.MoveToSheet), NewPicker())));
-        Assert.Equal(DispatcherOperationStatus.Pending, initial.Status);
+        // Move To lands its filter in the turn it opens (plan 47 CB-17b PR 2).
+        SetPrivateProperty(host.Sidebar, nameof(FilesSidebarViewModel.MoveToSheet), NewPicker());
         PumpedDispatcher.Drain();
-        Assert.Equal(DispatcherOperationStatus.Completed, initial.Status);
         Assert.Same(host.Filter, Keyboard.FocusedElement);
         Assert.Equal(1, host.FilterFocusAttempts);
         Assert.Equal(0, host.SentinelFocusAttempts);
