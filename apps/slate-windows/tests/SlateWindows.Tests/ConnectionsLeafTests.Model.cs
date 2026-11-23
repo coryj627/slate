@@ -1833,7 +1833,8 @@ public sealed partial class ConnectionsLeafTests
                 host.Leaf.Activate(FirstGhost(host.Leaf).Ghost, newTab: false);
                 // The creation drained and its completion applied — the leaf
                 // NOT settled: a reload parked in flight stays parked until
-                // the route's synchronous part has run.
+                // the route's synchronous part has run. The create's own
+                // Created is not delivered (#1625, see Host).
                 PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
                 PumpedDispatcher.Drain();
                 break;
@@ -1856,6 +1857,9 @@ public sealed partial class ConnectionsLeafTests
             case Route.RenameRoot:
                 {
                     // With no root in view the rename is Hub's, as B1 drove it.
+                    // The four rename routes stand in for the file-change arm's
+                    // retarget and probe only; the Modified events of the links
+                    // core rewrote are not delivered (#1625, see Host).
                     string from = RootBefore(cell) ?? Hub;
                     string to = cell.Pinned ? RenamedPin(cell) : RenamedRoot;
                     host.Session.RenameFile(from, Path.GetFileName(to));
@@ -1868,6 +1872,8 @@ public sealed partial class ConnectionsLeafTests
                     // The delete as the lifecycle sees it — the file gone and the
                     // vault rescanned (core's own delete trashes through COM and
                     // wants a thread of its own), then the lifecycle's two arms.
+                    // A scan sends no Slate-owned event, so the invalidation and
+                    // the probe stand in for the arm's Deleted (#1625, see Host).
                     DeleteTheFile(host, RootBefore(cell) ?? Hub);
                     host.Workspace.InvalidatePath(RootBefore(cell) ?? Hub);
                     ProbeAfterTheMove(host, cell);
@@ -1989,12 +1995,16 @@ public sealed partial class ConnectionsLeafTests
     /// <summary>The line core reports for a root at a depth — the tree's
     /// summary, or the failure the leaf would render — read through the
     /// session, never from the workspace's publication.</summary>
-    private static string LineFor(Host host, string root, uint depth)
+    private static string LineFor(Host host, string root, uint depth) => LineFor(host.Session, root, depth);
+
+    /// <summary>The same line over any session: the lifecycle fact reads it
+    /// through the vault its lifecycle opened (CB-42, #1625).</summary>
+    private static string LineFor(VaultSession session, string root, uint depth)
     {
         try
         {
             return Render(new GraphA11yEvent.GraphNeighborhoodSummary(
-                host.Session.GraphConnectionsTree(root, depth, SlateUniffiMethods.GraphConnectionsFilter()).SummaryCounts));
+                session.GraphConnectionsTree(root, depth, SlateUniffiMethods.GraphConnectionsFilter()).SummaryCounts));
         }
         catch (VaultException failure)
         {

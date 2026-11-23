@@ -2169,7 +2169,9 @@ public sealed partial class RescanTests
             bool asyncTree = false,
             Action<Harness>? whileOpening = null,
             bool parkBeforeTheScan = false,
-            Action<VaultLifecycleViewModel>? beforeOpen = null)
+            Action<VaultLifecycleViewModel>? beforeOpen = null,
+            Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>? confirmDirtyNavigation = null,
+            Action<RenderedAnnouncement>? announceRendered = null)
         {
             Root = root;
             Seed(root, files);
@@ -2186,7 +2188,9 @@ public sealed partial class RescanTests
                 sessionLoadWorker: RunOnWorker<ScanReport>,
                 rescanWorker: new RecordingRescanWorker(this),
                 treeUiContext: asyncTree ? Context : null,
-                treeWorker: asyncTree ? RunTreeWorker : null);
+                treeWorker: asyncTree ? RunTreeWorker : null,
+                confirmDirtyNavigation: confirmDirtyNavigation,
+                announceRendered: announceRendered);
             Lifecycle.WindowIsActive = () => WindowActive;
             Lifecycle.ModalSurfaceOpen = () => ModalOpen;
             beforeOpen?.Invoke(Lifecycle);
@@ -2289,6 +2293,14 @@ public sealed partial class RescanTests
 
             Context.Post(_ => action(), null);
         }
+
+        /// <summary>Plan 47 CB-42 (#1625): <see cref="OpenExisting"/>, with the
+        /// open's dirty-tab dialog and the rendered lines handed to the fact.</summary>
+        public static Harness OpenExistingWithDialog(
+            string root,
+            Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision> confirmDirtyNavigation,
+            Action<RenderedAnnouncement> announceRendered) =>
+            new(root, [], null, confirmDirtyNavigation: confirmDirtyNavigation, announceRendered: announceRendered);
 
         public static Harness OpenExisting(string root) =>
             new(root, [], null);
