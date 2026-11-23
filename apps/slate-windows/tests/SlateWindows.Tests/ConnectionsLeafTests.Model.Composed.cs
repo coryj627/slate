@@ -354,9 +354,11 @@ public sealed partial class ConnectionsLeafTests
                 // FOLLOWING, the pin Deep from Hub's tree: the folder moves
                 // under the pin, the open installs the old path, which fails
                 // to load (#1266). Out of the model, as RenamePinInDialog: the
-                // Modified for hub.md is never delivered. Driven once through
-                // the real lifecycle in each order (recorded on #1625), it gave
-                // the same loads and line orders as the pin's.
+                // Modified for hub.md is never delivered. A record, not a
+                // witness: on 2026-11-22 a probe drove this cell once through
+                // the real lifecycle in each order and it gave the pin's loads
+                // and line orders (#1625, comment 7110957425); nothing here
+                // fails if that stops being true.
                 return new([ReRooted(Deep), OpenFailed, LinePlaceholder], 2, MovedPin(), Pinned(MovedPin(), Deep, [.. stackBefore, (null, noteInView)]), "RightPane");
             case Composed.RenameEntryInDialog:
                 {
@@ -898,8 +900,9 @@ public sealed partial class ConnectionsLeafTests
     /// <summary>A rename as the lifecycle sees it, in part: core's rename,
     /// the workspace's retarget (the rename hook) and the graph probe. They
     /// stand in for the file-change arm's retarget and probe only; the rest
-    /// of that arm does not run, and the Modified events of the links core
-    /// rewrote are not delivered (#1625, see <see cref="Host"/>).</summary>
+    /// of that arm does not run, and neither side effect's Modified is
+    /// delivered: those of the links core rewrote, and that of the moved note
+    /// when a task query re-reads it (#1625, see <see cref="Host"/>).</summary>
     private static void RenameIn(Host host, string from, string to)
     {
         host.Session.RenameFile(from, Path.GetFileName(to));

@@ -26,10 +26,14 @@ namespace SlateWindows.Tests;
 ///
 /// What the harness does not reproduce: production has one queue, the
 /// dispatcher's, where the harness drains the lifecycle's own queue before the
-/// dispatcher; the lifecycle's workspace runs task queries inline here and on
-/// the pool in production; and the vault watcher is off for the test process.
-/// So this pins the listener and the file-change routing in two
-/// interleavings, not every timing production can meet.
+/// dispatcher; the right-pane panels run their task queries inline here (their
+/// scheduler is synchronous under the harness's context) and on the pool in
+/// production, while a tab's own interaction refresh runs its task query
+/// through <c>Task.Run</c> in both; and the vault watcher is off for the test
+/// process by default (a watcher fact elsewhere can lift it, and core drops
+/// Slate's own writes as echoes, so this fact does not lean on it). So this
+/// pins the listener and the file-change routing in two interleavings, not
+/// every timing production can meet.
 /// </summary>
 public sealed partial class ConnectionsLeafTests
 {
@@ -61,6 +65,9 @@ public sealed partial class ConnectionsLeafTests
         WorkspaceDirtyNavigationDecision Decide(WorkspaceTabViewModel tab, WorkspaceItemState destination)
         {
             asked++;
+            // As the model's gate seam does: the pin's own load is in its
+            // fetch, parked, before anything lands inside the box.
+            Assert.True(parked!.Reached.Wait(TimeSpan.FromSeconds(10)), "the pin's load never reached its fetch before the box acted");
             int handled = h!.Lifecycle.FileChangesHandledForTests;
             // Core calls the listener with both events before the rename
             // returns, and the listener posts each to the lifecycle's queue.

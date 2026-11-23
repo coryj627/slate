@@ -73,15 +73,19 @@ public sealed partial class ConnectionsLeafTests
     /// probe only; the rest of that arm (for example the missing-tab reseat,
     /// the interaction states, a Modified path's staleness mark, Quick Open,
     /// the reading, Bases and history notices, the feed's provenance, and the
-    /// lifecycle's debounced sidebar refresh) does not run. The ghost routes
-    /// deliver nothing for their own Created. Events core sends as a side
-    /// effect are outside the model: a Modified for each note whose links a
-    /// rename rewrote, and a Modified for a moved note that a later task query
-    /// re-reads. The host runs task queries inline, so such a re-read's
-    /// generation move is seen by the hand-called probe, though its event is
-    /// not heard. So is the order in which the pool settles before a dialog's
-    /// click (the gate seam finishes the reads inside the dialog and applies
-    /// them after the open).
+    /// lifecycle's debounced sidebar refresh) does not run. The Stale
+    /// presentation's arrangement renames the pin's folder and retargets with
+    /// no probe at all: it models the window before the arm's probe applies.
+    /// The ghost routes deliver nothing for their own Created. Events core
+    /// sends as a side effect are outside the model: a Modified for each note
+    /// whose links a rename rewrote, and a Modified for a moved note that a
+    /// later task query re-reads. The right-pane panels run their task queries
+    /// inline in this host (a tab's own interaction refresh runs its query
+    /// through <c>Task.Run</c>, here as in the app), so a panel's re-read
+    /// moves the generation before the hand-called probe, though its event is
+    /// not heard. The order in which the pool settles before a dialog's click
+    /// is also outside the model (the gate seam finishes the reads inside the
+    /// dialog and applies them after the open).
     /// <c>ConnectionsLeafTests.Lifecycle.cs</c> drives one composed cell
     /// through the real lifecycle, in both of a modal box's orders.
     /// </remarks>

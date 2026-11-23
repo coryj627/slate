@@ -152,13 +152,16 @@ public sealed partial class ConnectionsLeafTests
         /// reader's click, so in production either the pool settles first and
         /// its applies run inside the box, or the click comes first and the
         /// reads may still be running at the open. Since #1996 the open's task
-        /// query on the moved-from path moves nothing, so that race no longer
-        /// changes the result: the click-first order ends as the model derives
-        /// (ConnectionsLeafTests.Lifecycle.cs). The model hears no event core
-        /// sends (#1625, see <see cref="Host"/>). The work is told apart by a token per dialog window
-        /// that a computation inherits from the action that scheduled it; a
-        /// leaf retired inside the dialog refuses the applies, so the wait
-        /// ends there.</summary>
+        /// query on the moved-from path moves nothing, so for RenamePinInDialog
+        /// from FOLLOWING that race no longer changes the result: the
+        /// click-first order ends as the model derives
+        /// (ConnectionsLeafTests.Lifecycle.cs). No other cell has a lifecycle
+        /// witness; where a moved note is open in a tab, its own task query
+        /// still re-reads the destination off the seam's wait. The model hears
+        /// no event core sends (#1625, see <see cref="Host"/>). The work is told
+        /// apart by a token per dialog window that a computation inherits from
+        /// the action that scheduled it; a leaf retired inside the dialog
+        /// refuses the applies, so the wait ends there.</summary>
         private void RunInsideTheDialog(Action inside)
         {
             Assert.True(Leaf is not null, "the gate seam has no leaf to wait for: build its host with ReRootHost");
