@@ -136,11 +136,13 @@ public sealed partial class EmbedPreviewTitleCensus
                         + "can read.");
                 }
 
-                // The renderer's cards are Expanders built in C# and their
-                // headers are strings; a style or template for Expander, or
-                // a template for every string, could wrap each card title in
-                // text. The type is read through the element's namespace map
-                // (codex round 3: `{x:Type wpf:Expander}` under an alias).
+                // The renderer's cards are Expanders built in C#, their headers
+                // TextBlocks holding the title (plan 47 CB-22b); a style or
+                // template for Expander could still wrap each card title in
+                // text, and a template for every string would template any
+                // string header that came back. The type is read through the
+                // element's namespace map (codex round 3: `{x:Type wpf:Expander}`
+                // under an alias).
                 if (name is "Style" or "ControlTemplate"
                     && (IsType(element, "TargetType", Expander) || IsType(element, "Key", Expander)))
                 {

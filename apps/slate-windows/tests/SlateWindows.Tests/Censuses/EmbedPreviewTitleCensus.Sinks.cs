@@ -675,14 +675,27 @@ public sealed partial class EmbedPreviewTitleCensus
                     yield return $"{file}:{Line(call)}: the renderer writes {named[..^"Property".Length]} through "
                         + $"{InvokedName(call)}, a route the census does not read: `{Short(call)}`.";
                     break;
+                case AssignmentExpressionSyntax assignment when InHeldTextBlock(assignment):
+                    // Read with the Header or Content that holds the TextBlock, below.
+                    break;
                 case AssignmentExpressionSyntax assignment
-                    when (assignment.Left switch
+                    when AssignedName(assignment) is { } target && TextTargets.Contains(target):
+                    if (target is "Header" or "Content" && HeldTextBlock(assignment.Right) is { } held)
                     {
-                        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-                        _ => null,
-                    }) is { } target && TextTargets.Contains(target):
-                    write = (target, assignment.Right);
+                        if (HeldTextBlockFault(held) is { } fault)
+                        {
+                            yield return $"{file}:{Line(node)}: the renderer's {target} is a TextBlock that {fault}; "
+                                + "a card's header and the Jump button's label are a TextBlock that sets its Text, "
+                                + "and its TextWrapping, and nothing else.";
+                            break;
+                        }
+
+                        write = (target, HeldText(held));
+                    }
+                    else
+                    {
+                        write = (target, assignment.Right);
+                    }
                     break;
             }
 
@@ -706,6 +719,81 @@ public sealed partial class EmbedPreviewTitleCensus
             yield return $"{file}: the renderer writes {target} = `{value}` {seen.Count(written => written == (target, value))} "
                 + "times; the census registers it once.";
         }
+    }
+
+    private static string? AssignedName(AssignmentExpressionSyntax assignment) => assignment.Left switch
+    {
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        _ => null,
+    };
+
+    /// <summary>Plan 47 CB-22b (Design 5): a card's header and the Jump button's label are
+    /// built as a TextBlock, because a string there reaches a presenter that reads an
+    /// underscore in a user's title as an access-key marker. The TextBlock is read as
+    /// what it holds: its one Text is a card's Title or a registered text.</summary>
+    private static ObjectCreationExpressionSyntax? HeldTextBlock(ExpressionSyntax value) =>
+        Unwrap(value) is ObjectCreationExpressionSyntax creation
+            && CSharpSource.Normalize(creation.Type) is "TextBlock" or "System.Windows.Controls.TextBlock"
+                or "global::System.Windows.Controls.TextBlock"
+                ? creation
+                : null;
+
+    /// <summary>What makes a held TextBlock more than its text, or null: a constructor
+    /// argument, any setter but one Text and at most one TextWrapping (an Inlines, a style,
+    /// a template, a format, any other property), or no Text.</summary>
+    private static string? HeldTextBlockFault(ObjectCreationExpressionSyntax held)
+    {
+        if (held.ArgumentList is { Arguments.Count: > 0 })
+        {
+            return "takes a constructor argument";
+        }
+
+        string[] setters = held.Initializer is { } initializer
+            ? [.. initializer.Expressions.Select(member =>
+                member is AssignmentExpressionSyntax { Left: IdentifierNameSyntax name } assignment
+                    && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                        ? name.Identifier.ValueText
+                        : $"`{Short(member)}`")]
+            : [];
+        if (setters.FirstOrDefault(setter => setter is not ("Text" or "TextWrapping")) is { } other)
+        {
+            return $"sets {other}";
+        }
+
+        int texts = setters.Count(setter => setter == "Text");
+        if (texts != 1)
+        {
+            return $"sets its Text {texts} times";
+        }
+
+        return setters.Count(setter => setter == "TextWrapping") > 1 ? "sets its TextWrapping twice" : null;
+    }
+
+    private static ExpressionSyntax HeldText(ObjectCreationExpressionSyntax held) =>
+        held.Initializer!.Expressions.OfType<AssignmentExpressionSyntax>()
+            .Single(assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "Text" })
+            .Right;
+
+    /// <summary>A setter inside a TextBlock that a Header or Content assignment holds: read
+    /// with its holder, not as a write of its own.</summary>
+    private static bool InHeldTextBlock(AssignmentExpressionSyntax assignment)
+    {
+        if (assignment.Parent is not InitializerExpressionSyntax { Parent: ObjectCreationExpressionSyntax creation }
+            || HeldTextBlock(creation) is null)
+        {
+            return false;
+        }
+
+        SyntaxNode? holder = creation.Parent;
+        while (holder is ParenthesizedExpressionSyntax or PostfixUnaryExpressionSyntax)
+        {
+            holder = holder.Parent;
+        }
+
+        return holder is AssignmentExpressionSyntax held
+            && AssignedName(held) is "Header" or "Content"
+            && ReferenceEquals(Unwrap(held.Right), creation);
     }
 
     private static string? AutomationMember(InvocationExpressionSyntax call) =>
