@@ -64,6 +64,25 @@ public sealed partial class ConnectionsLeafTests
     /// <summary>A workspace over a scanned session, capturing the shell's
     /// events and the relay's rendered lines in ONE timeline — the merged
     /// timelines of B-10 are stated over it.</summary>
+    /// <remarks>
+    /// What the model does not cover (plan 47 CB-42, #1625, CD30). The host
+    /// registers no session listener, so no event core sends reaches the
+    /// workspace through the lifecycle (<c>VaultLifecycleViewModel.HandleFileChange</c>).
+    /// The rename and delete drivers stand in for their own change by hand,
+    /// with the file-change arm's retarget or invalidation and the graph
+    /// probe only; the rest of that arm (the missing-tab reseat, the
+    /// interaction states, Quick Open, the reading and Bases notices, the
+    /// feed's provenance) does not run. The ghost routes deliver nothing for
+    /// their own Created. Events core sends as a side effect are outside the
+    /// model: a Modified for each note whose links a rename rewrote, and a
+    /// Modified for a moved note that a later task query re-reads. The host
+    /// runs task queries inline, so such a re-read's generation move is seen
+    /// by the hand-called probe, though its event is not heard. So is the
+    /// order in which the pool settles before a dialog's click (the gate seam
+    /// reads inside the dialog and applies after the open).
+    /// <c>ConnectionsLeafTests.Lifecycle.cs</c> drives one composed cell
+    /// through the real lifecycle, in both of a modal box's orders.
+    /// </remarks>
     private sealed class Host : IDisposable
     {
         public VaultSession Session { get; }

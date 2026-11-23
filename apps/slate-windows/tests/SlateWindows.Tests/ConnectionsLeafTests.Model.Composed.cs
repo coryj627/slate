@@ -342,12 +342,20 @@ public sealed partial class ConnectionsLeafTests
                 // it was built for — the OLD one (B2-D10); the probe marks the
                 // load in flight and its tree is current. No outline line: the
                 // note has no heading. The old path no longer loads: the open
-                // speaks core's failure once (#1266, WB-8).
+                // speaks core's failure once (#1266, WB-8). Out of the model
+                // (#1625, CD30): the rename's Modified for hub.md, whose link it
+                // rewrote, is never delivered. Through the real lifecycle this
+                // derivation holds when the reader's click beats the pool;
+                // when the pool settles first, the tree's line comes before the
+                // failure (ConnectionsLeafTests.Lifecycle.cs pins both).
                 return new([.. reRooted, OpenFailed, LinePlaceholder], 2, RenamedReRootTarget, Pinned(RenamedReRootTarget, target, pushed), "RightPane");
             case Composed.RenamePinFolderInDialog:
                 // FOLLOWING, the pin Deep from Hub's tree: the folder moves
                 // under the pin, the open installs the old path, which fails
-                // to load (#1266).
+                // to load (#1266). Out of the model, as RenamePinInDialog: the
+                // Modified for hub.md is never delivered. Plan 47 CB-42's step
+                // 0 drove this cell through the real lifecycle and found the
+                // same two orders and loads as the pin's.
                 return new([ReRooted(Deep), OpenFailed, LinePlaceholder], 2, MovedPin(), Pinned(MovedPin(), Deep, [.. stackBefore, (null, noteInView)]), "RightPane");
             case Composed.RenameEntryInDialog:
                 {
@@ -574,7 +582,11 @@ public sealed partial class ConnectionsLeafTests
                     // read applied on the dispatcher — lands only after the
                     // dialog returned and the pop transitioned, where it finds
                     // the pop's load in flight and marks (Term 6); the pop's tree
-                    // is current, so the pop's load is the one load.
+                    // is current, so the pop's load is the one load. That is the
+                    // order in which the reader's click beats the pool. When the
+                    // pool settles first, a modal box applies the probe's
+                    // decision inside it, before the pop; that order is out of
+                    // the model (#1625, CD30).
                     string[] missing = cell.Mode == Mode.PinnedFresh ? ["HostComposed"] : [];
                     return new([.. missing, ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
                 }
@@ -882,8 +894,11 @@ public sealed partial class ConnectionsLeafTests
         return parked;
     }
 
-    /// <summary>A rename as the lifecycle sees it: core's rename, the
-    /// workspace's retarget (the rename hook), the file-change arm.</summary>
+    /// <summary>A rename as the lifecycle sees it, in part: core's rename,
+    /// the workspace's retarget (the rename hook) and the graph probe. They
+    /// stand in for the file-change arm's retarget and probe only; the rest
+    /// of that arm does not run, and the Modified events of the links core
+    /// rewrote are not delivered (#1625, see <see cref="Host"/>).</summary>
     private static void RenameIn(Host host, string from, string to)
     {
         host.Session.RenameFile(from, Path.GetFileName(to));
@@ -898,9 +913,11 @@ public sealed partial class ConnectionsLeafTests
         host.Workspace.NotifyGraphOfVaultChange();
     }
 
-    /// <summary>A delete as the lifecycle sees it: the file gone and the
-    /// vault rescanned, the workspace's invalidation (the delete hook), the
-    /// file-change arm.</summary>
+    /// <summary>A delete as the lifecycle sees it, in part: the file gone
+    /// and the vault rescanned (a scan sends no Slate-owned event), the
+    /// workspace's invalidation (the delete hook) and the graph probe, in
+    /// place of the file-change arm's Deleted (#1625, see
+    /// <see cref="Host"/>).</summary>
     private static void DeleteIn(Host host, string path)
     {
         DeleteTheFile(host, path);
