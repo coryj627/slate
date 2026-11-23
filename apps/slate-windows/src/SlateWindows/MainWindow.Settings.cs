@@ -45,15 +45,16 @@ public partial class MainWindow
         if (_viewModel.SettingsSheet is { } sheet)
         {
             _focusBeforeSettings ??= CapturePreSheetFocus();
-            _ = Dispatcher.InvokeAsync(
-                () =>
-                {
-                    if (ReferenceEquals(_viewModel.SettingsSheet, sheet))
-                    {
-                        _ = SelectorFocus.FocusFirstOrSelectedItem(SettingsCategoriesList) || SettingsCloseButton.Focus();
-                    }
-                },
-                DispatcherPriority.Input);
+            // The categories' selected row in the turn it opens; the fallback may take
+            // Close when the row cannot be landed (red team F14: Close in the opening turn
+            // would end the fallback with the row still to come).
+            LandInOpeningSurface(
+                ModalSurface.Settings,
+                SettingsOverlay,
+                null,
+                () => SelectorFocus.FocusFirstOrSelectedItem(SettingsCategoriesList),
+                () => ReferenceEquals(_viewModel.SettingsSheet, sheet),
+                () => SelectorFocus.FocusFirstOrSelectedItem(SettingsCategoriesList) || SettingsCloseButton.Focus());
         }
         else
         {

@@ -224,32 +224,16 @@
                         <DataTrigger Binding="{Binding SettingsSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
-                        <!-- #1690: last, so they win over the overlays' triggers above. A
-                             chord pressed with the keys in the menu opens Quick Open, search
-                             or the palette over it, and the overlay's field takes the keys in
-                             the same turn. Those triggers may run first, and off while it held
-                             the keys, the menu said "unavailable" in NVDA before the field. -->
-                        <MultiDataTrigger>
-                            <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding QuickSwitcher.IsOpen}" Value="True" />
-                                <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True" />
-                            </MultiDataTrigger.Conditions>
+                        <!-- #1690, plan 47 CB-17b (#1866): last, so it wins over every surface's
+                             trigger above. A chord pressed with the keys in the menu opens a
+                             surface over it, and the surface takes the keys in the same turn.
+                             Those triggers may run first, and off while it held the keys, the
+                             menu said "unavailable" in NVDA before the surface. The menu stays
+                             on while it holds the keys and goes off as they leave; its condition
+                             reads no surface, so no order of notifications turns it off and on. -->
+                        <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True">
                             <Setter Property="IsEnabled" Value="True" />
-                        </MultiDataTrigger>
-                        <MultiDataTrigger>
-                            <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding Search.IsOpen}" Value="True" />
-                                <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True" />
-                            </MultiDataTrigger.Conditions>
-                            <Setter Property="IsEnabled" Value="True" />
-                        </MultiDataTrigger>
-                        <MultiDataTrigger>
-                            <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding Palette.IsOpen}" Value="True" />
-                                <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True" />
-                            </MultiDataTrigger.Conditions>
-                            <Setter Property="IsEnabled" Value="True" />
-                        </MultiDataTrigger>
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -1133,7 +1117,7 @@
                   AutomationProperties.Name="Workspace"
                   Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <!-- #1690: an overlay disables the workspace under it once the keys have left
-                     for its field (MainWindow.LandInOpeningOverlay, in the turn it opens), not
+                     for its field (MainWindow.LandInOpeningSurface, in the turn it opens), not
                      as soon as IsOpen changes: these triggers may run before that landing, and
                      disabled with the keys still inside, the focused control went unavailable
                      and NVDA said so before the field. The welcome view's style does the same. -->

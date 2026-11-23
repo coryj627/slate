@@ -49,8 +49,13 @@ public partial class MainWindow
             // palette's PD-2 guard, kept for the same reason).
             _focusBeforeSearch ??= Keyboard.FocusedElement;
             // #1690: in the same turn, with a queued fallback only for a
-            // field not yet able to take the keys (LandInOpeningOverlay).
-            LandInOpeningOverlay(SearchOverlay, SearchOverlaySearchTextBox, () => _viewModel.Search.IsOpen);
+            // field not yet able to take the keys (LandInOpeningSurface).
+            LandInOpeningSurface(
+                ModalSurface.SearchOverlay,
+                SearchOverlay,
+                SearchOverlaySearchTextBox,
+                () => LandOnField(SearchOverlaySearchTextBox),
+                () => _viewModel.Search.IsOpen);
         }
     }
 
