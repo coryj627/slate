@@ -138,6 +138,33 @@ public sealed class RightPaneHideLandingTests
         Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, $"the keys left the right pane, for {Keyboard.FocusedElement}");
     });
 
+    /// <summary>Plan 47 CB-23 (the merge judge's minor 1): a leaf switched under the
+    /// keys to a panel with no body lands them on its line, the placeholder's stop,
+    /// and not on the rail.</summary>
+    [Theory]
+    [InlineData("math")]
+    [InlineData("code")]
+    [InlineData("diagrams")]
+    public void ALeafSwitchedUnderTheKeysToAPanelWithNoBodyLandsThemOnItsLine(string leaf) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "outline");
+        host.Settle();
+        FrameworkElement outline = host.Body("OutlineLeafBody");
+        Assert.True(host.Land(ShellRegionKind.RightPaneContent), "premise: Outline took no keys");
+        Assert.True(outline.IsKeyboardFocusWithin, $"premise: the keys are not in Outline, but on {Keyboard.FocusedElement}");
+
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == leaf);
+        PumpedDispatcher.Drain();
+
+        TextBlock line = ShownShell.Descendants(host.Shell.RightPaneDockedPlaceholder).OfType<TextBlock>()
+            .Single(block => AutomationProperties.GetAutomationId(block) == "PanelPlaceholderNotice");
+        Assert.False(outline.IsVisible);
+        Assert.True(line.IsVisible, $"premise: {leaf} shows no line");
+        Assert.Same(line, Keyboard.FocusedElement);
+    });
+
     /// <summary>Codex PR 4b r1 F8's widened census: closing the vault with
     /// the keys in the workspace collapses WorkspaceRoot, and every scope in
     /// it; the keys land on the welcome view, never the window.</summary>

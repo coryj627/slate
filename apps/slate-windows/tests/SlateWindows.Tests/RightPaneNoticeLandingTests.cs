@@ -217,6 +217,45 @@ public sealed class RightPaneNoticeLandingTests
         Assert.Same(line, Keyboard.FocusedElement);
     });
 
+    /// <summary>Plan 47 CB-23 (the merge judge's minor 2): a tab that is not
+    /// a note (a canvas, a base, the graph) is no note to the line. Only a
+    /// Markdown tab is "this note", so the line never offers the reading
+    /// view's shortcut where it does nothing.</summary>
+    [Theory]
+    [InlineData("canvas")]
+    [InlineData("base")]
+    [InlineData("graph")]
+    public void APanelWithNoBodysLineReadsATabThatIsNotANoteAsNoNote(string kind) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(
+            "diagrams",
+            "no note",
+            files:
+            [
+                ("board.canvas", "{\"nodes\":[],\"edges\":[]}"),
+                ("Notes.base", "views:\n  - type: table\n    name: Main\n"),
+            ]);
+        TextBlock line = host.PanelWithoutBodyLine();
+
+        if (kind == "graph")
+        {
+            host.Workspace.OpenGraph();
+        }
+        else
+        {
+            host.Workspace.OpenPath(kind == "canvas" ? "board.canvas" : "Notes.base");
+        }
+
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        Assert.True(
+            kind switch { "canvas" => tab.IsCanvas, "base" => tab.IsBase, _ => tab.IsGraph },
+            $"premise: the active tab is not the {kind} (it is {tab.Item.Kind})");
+        Assert.Equal(PanelWithoutBodyLines[("diagrams", "no note")], line.Text);
+        Assert.Equal(SpokenLine(PanelWithoutBodyLines[("diagrams", "no note")]), UIElementAutomationPeer.CreatePeerForElement(line).GetName());
+    });
+
     /// <summary>A LOADING sentence is not a stop — it gives way to the rows
     /// within moments — while the final sentences are. The leaf models'
     /// own loading flags, set the way their loaders set them.</summary>
@@ -975,10 +1014,16 @@ public sealed class RightPaneNoticeLandingTests
         /// <param name="bibliography">Adds a bibliography and a citation
         /// style, so a citation of <c>knuth1984</c> resolves and
         /// expands.</param>
-        public void Initialize(string leaf, string state, string note = "Just a line of text.\n", bool bibliography = false)
+        /// <param name="files">More files written into the vault before its scan.</param>
+        public void Initialize(string leaf, string state, string note = "Just a line of text.\n", bool bibliography = false, (string Path, string Text)[]? files = null)
         {
             Assert.Null(Application.Current);
             File.WriteAllText(Path.Combine(_fixture.Root, "plain.md"), note);
+            foreach ((string path, string text) in files ?? [])
+            {
+                File.WriteAllText(Path.Combine(_fixture.Root, path), text);
+            }
+
             if (bibliography)
             {
                 File.WriteAllText(
@@ -1100,9 +1145,8 @@ public sealed class RightPaneNoticeLandingTests
             _leafHost.Children.OfType<FrameworkElement>().Single(body => Grid.GetColumn(body) == 0 && body.IsVisible);
 
         /// <summary>Plan 47 CB-23: the line of the placeholder, the body of a
-        /// panel Windows has no body for yet (its one text block).</summary>
-        public TextBlock PanelWithoutBodyLine() =>
-            Shell.RightPaneDockedPlaceholder.Children.OfType<TextBlock>().Single();
+        /// panel Windows has no body for yet, by its automation id.</summary>
+        public TextBlock PanelWithoutBodyLine() => ElementWithId<TextBlock>("PanelPlaceholderNotice");
 
         public void Press(Key key)
         {

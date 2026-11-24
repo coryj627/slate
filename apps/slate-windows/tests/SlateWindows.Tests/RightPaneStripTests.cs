@@ -342,7 +342,7 @@ public sealed class RightPaneStripTests
         host.Workspace.OpenPath("note.md");
         host.Workspace.ActiveLeaf = Leaf("math");
         host.Settle();
-        TextBlock line = host.Shell.RightPaneDockedPlaceholder.Children.OfType<TextBlock>().Single();
+        TextBlock line = PanelWithoutBodyLine(host);
         // The ring as the window drives it: its host is the shell, as the
         // window attaches it to its workspace.
         host.Workspace.ShellRegionHost = host.Shell;
@@ -364,6 +364,39 @@ public sealed class RightPaneStripTests
         Assert.Equal("math", host.Workspace.ActiveLeaf.Id);
         Assert.Same(host.Shell.RightPaneMorePanelsButton, Keyboard.FocusedElement);
     });
+
+    /// <summary>Plan 47 CB-23 (the merge judge's minor 1): Shift+Tab from the rail
+    /// reaches a panel with no body through its line, the stop before the rail in
+    /// the window's order: from More panels, back into the strip, then onto the
+    /// line, as NVDA heard it on #2049.</summary>
+    [Theory]
+    [InlineData("math")]
+    [InlineData("code")]
+    [InlineData("diagrams")]
+    public void ShiftTabFromTheRailLandsOnAPanelWithNoBodysLine(string leaf) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.OpenPath("note.md");
+        host.Workspace.ActiveLeaf = Leaf(leaf);
+        host.Settle();
+        TextBlock line = PanelWithoutBodyLine(host);
+        Assert.True(line.IsVisible, $"premise: {leaf} shows no line");
+        Assert.True(host.Shell.RightPaneMorePanelsButton.Focus(), "premise: More panels refused the keys");
+
+        var more = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        Assert.True(more.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous)), "Shift+Tab from More panels went nowhere");
+        Assert.True(host.Shell.RightPaneLeavesList.IsKeyboardFocusWithin, $"Shift+Tab from More panels left the strip, for {Keyboard.FocusedElement}");
+
+        var strip = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        Assert.True(strip.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous)), "Shift+Tab from the strip went nowhere");
+        Assert.Same(line, Keyboard.FocusedElement);
+    });
+
+    /// <summary>The line of the placeholder, the body of a panel Windows has no body
+    /// for yet, by its automation id.</summary>
+    private static TextBlock PanelWithoutBodyLine(ShownShell host) =>
+        ShownShell.Descendants(host.Shell.RightPaneDockedPlaceholder).OfType<TextBlock>()
+            .Single(block => AutomationProperties.GetAutomationId(block) == "PanelPlaceholderNotice");
 
     [Fact]
     public void AShortWindowKeepsMoreReachable() => RunSta(() =>

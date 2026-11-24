@@ -23,6 +23,7 @@
 
 using System.Collections;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace SlateWindows.Tests.Censuses;
@@ -112,7 +113,8 @@ public sealed class RightPaneLeafBodyCensus
 
     /// <summary>Plan 47 CB-23: the words are core's alone. No shell source
     /// spells the developer note the placeholder used to show, or the words
-    /// core's lines are made of.</summary>
+    /// core's lines are made of, outside a comment (the merge judge's nit 3:
+    /// a comment that quotes them shows the reader nothing).</summary>
     [Fact]
     public void NoShellSourceSpellsThePlaceholdersWords()
     {
@@ -134,13 +136,28 @@ public sealed class RightPaneLeafBodyCensus
                 continue;
             }
 
-            string text = File.ReadAllText(file);
+            string text = WithoutComments(File.ReadAllText(file), xaml: file.EndsWith(".xaml", StringComparison.Ordinal));
             offenders.AddRange(phrases
                 .Where(phrase => text.Contains(phrase, StringComparison.OrdinalIgnoreCase))
                 .Select(phrase => $"{relative} spells \"{phrase}\""));
         }
 
         Assert.True(offenders.Count == 0, "A panel without a body speaks core's line, never the shell's:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>A source without its comments: XAML's comment blocks, and C#'s
+    /// comment lines (<c>//</c> and <c>///</c>).</summary>
+    private static string WithoutComments(string text, bool xaml) => xaml
+        ? Regex.Replace(text, "<!--.*?-->", string.Empty, RegexOptions.Singleline)
+        : string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+    /// <summary>The word census still reads what the shell shows: a XAML
+    /// attribute and a C# string keep the words; only comments lose them.</summary>
+    [Fact]
+    public void TheWordCensusReadsCodeAndMarkupButNotComments()
+    {
+        Assert.Equal("<TextBlock Text=\"listed here yet\" />\n", WithoutComments("<!-- listed\nhere yet -->\n<TextBlock Text=\"listed here yet\" />\n", xaml: true).TrimStart('\n'));
+        Assert.Equal("string line = \"listed here yet\";", WithoutComments("/// listed here yet\n    // listed here yet\nstring line = \"listed here yet\";", xaml: false));
     }
 
     private static XDocument LoadWindow() =>
