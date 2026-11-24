@@ -412,6 +412,58 @@ pub fn sidebar_sort_button_name(order: SidebarSortOrder, grouped_by_date: bool) 
     core::sidebar_sort_button_name(order.into(), grouped_by_date)
 }
 
+/// Plan 47 CB-23 (#1800, CD15): a right-pane panel a host offers before it has a body
+/// for it. Windows shows Math, Code and Diagrams this way; the Mac has a body for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum EmptyPanel {
+    Math,
+    Code,
+    Diagrams,
+}
+
+impl From<EmptyPanel> for core::EmptyPanel {
+    fn from(panel: EmptyPanel) -> Self {
+        match panel {
+            EmptyPanel::Math => Self::Math,
+            EmptyPanel::Code => Self::Code,
+            EmptyPanel::Diagrams => Self::Diagrams,
+        }
+    }
+}
+
+/// Plan 47 CB-23: where the reader is while such a panel is open: no note in view, a
+/// note in its editor, or a note in its reading view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum EmptyPanelContext {
+    NoNote,
+    NoteInEditor,
+    NoteInReadingView,
+}
+
+impl From<EmptyPanelContext> for core::EmptyPanelContext {
+    fn from(context: EmptyPanelContext) -> Self {
+        match context {
+            EmptyPanelContext::NoNote => Self::NoNote,
+            EmptyPanelContext::NoteInEditor => Self::NoteInEditor,
+            EmptyPanelContext::NoteInReadingView => Self::NoteInReadingView,
+        }
+    }
+}
+
+/// Plan 47 CB-23: the panel's line, what it will show and where that is read today, for
+/// example `Math for this note isn't listed here yet. Open the note in the reading view
+/// (Ctrl+Shift+E) to read its math.` `reading_view_chord` is the host's own shortcut for
+/// the reading view, in the form the line is shown or spoken in (program decision 12); a
+/// blank one is left out.
+#[uniffi::export]
+pub fn empty_panel_line(
+    panel: EmptyPanel,
+    context: EmptyPanelContext,
+    reading_view_chord: String,
+) -> String {
+    core::empty_panel_line(panel.into(), context.into(), &reading_view_chord)
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {

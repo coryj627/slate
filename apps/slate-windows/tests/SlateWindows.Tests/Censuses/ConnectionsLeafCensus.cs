@@ -760,10 +760,14 @@ public sealed class ConnectionsLeafCensus
         Assert.Contains("<DataTrigger Binding=\"{Binding ActiveLeaf.Id}\" Value=\"connections\">", bodyBlock, StringComparison.Ordinal);
         Assert.Contains("<graph:ConnectionsLeafView", bodyBlock, StringComparison.Ordinal);
         Assert.Contains("Model=\"{Binding Connections}\"", bodyBlock, StringComparison.Ordinal);
-        // The placeholder's style: a collapse trigger for the leaf id.
-        int placeholder = xaml.IndexOf("This panel is docked and ready for its feature surface.", StringComparison.Ordinal);
+        // The placeholder's style: a collapse trigger for the leaf id. Found by
+        // its name, and read forward to its style's end (plan 47 CB-23: its
+        // line is a binding now, so it has no sentence to find it by).
+        int placeholder = xaml.IndexOf("x:Name=\"RightPaneDockedPlaceholder\"", StringComparison.Ordinal);
         Assert.True(placeholder >= 0, "the generic placeholder is not in MainWindow.xaml");
-        string placeholderStyle = xaml.Substring(Math.Max(0, placeholder - 4000), Math.Min(4000, placeholder));
+        int styleEnd = xaml.IndexOf("</StackPanel.Style>", placeholder, StringComparison.Ordinal);
+        Assert.True(styleEnd > placeholder, "the placeholder has no style");
+        string placeholderStyle = xaml[placeholder..styleEnd];
         int trigger = placeholderStyle.LastIndexOf("Value=\"connections\"", StringComparison.Ordinal);
         Assert.True(trigger >= 0, "the placeholder does not collapse for the leaf (B-13)");
         Assert.Contains("<Setter Property=\"Visibility\" Value=\"Collapsed\" />", placeholderStyle.Substring(trigger), StringComparison.Ordinal);

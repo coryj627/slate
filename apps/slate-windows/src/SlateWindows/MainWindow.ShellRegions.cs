@@ -805,15 +805,14 @@ public partial class MainWindow : IShellRegionHost
     }
 
     /// <summary>The leaf body currently shown in the right pane's content
-    /// column: the visible child of <c>RightPaneLeafHost</c> in column 0
-    /// that is not the docked placeholder. The placeholder is excluded BY
-    /// REFERENCE (final review, #1240): the old <c>is not StackPanel</c>
-    /// test would silently skip any future leaf body that happened to be a
-    /// <c>StackPanel</c>.</summary>
+    /// column: the visible child of <c>RightPaneLeafHost</c> in column 0.
+    /// Plan 47 CB-23 (#1800): that includes <c>RightPaneDockedPlaceholder</c>,
+    /// the body of a panel Windows has no body for yet, whose line is its
+    /// stop; until then it was excluded by reference (#1240), as a body with
+    /// nothing to land on.</summary>
     private FrameworkElement? VisibleLeafBody() =>
         RightPaneLeafHost.Children.OfType<FrameworkElement>()
-            .Where(child => Grid.GetColumn(child) == 0 && child.IsVisible)
-            .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
+            .FirstOrDefault(child => Grid.GetColumn(child) == 0 && child.IsVisible);
 
     /// <summary>
     /// A leaf's first stop, in visual order. Layout is no stop: a border
@@ -896,7 +895,7 @@ public partial class MainWindow : IShellRegionHost
         // of the right pane.
         RegionFocusGuard.SetLanding(RightPaneLeafHost, () => VisibleLeafBody() is { } shown && LandInLeaf(shown));
         foreach (FrameworkElement body in RightPaneLeafHost.Children.OfType<FrameworkElement>()
-            .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, RightPaneDockedPlaceholder)))
+            .Where(child => Grid.GetColumn(child) == 0))
         {
             RegionFocusGuard.SetLanding(body, () => LandInLeaf(body));
         }

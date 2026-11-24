@@ -133,8 +133,9 @@ public sealed class RegionBoundaryCensus
     /// <summary>The shell's region roots and what each may declare: the
     /// menu bar keeps arrows out altogether (None, MenuBarCensus); every
     /// other root contains them — the Files pane, the editor, each right
-    /// pane leaf body (every column-0 child of the leaf host but the docked
-    /// placeholder), the rail and its More panels button (DS-16), the status bar's border, the welcome view,
+    /// pane leaf body (every column-0 child of the leaf host, the docked
+    /// placeholder among them since plan 47 CB-23), the rail and its More
+    /// panels button (DS-16), the status bar's border, the welcome view,
     /// and every focus-scope overlay (a sheet may cycle).</summary>
     internal static IReadOnlyList<(XElement Root, string[] Allowed)> RegionRoots(XDocument window)
     {
@@ -154,8 +155,7 @@ public sealed class RegionBoundaryCensus
             else if (parent is not null
                 && (string?)parent.Attribute(Xaml + "Name") == "RightPaneLeafHost"
                 && !element.Name.LocalName.Contains('.', StringComparison.Ordinal)
-                && ((string?)element.Attribute("Grid.Column") ?? "0") == "0"
-                && name != "RightPaneDockedPlaceholder")
+                && ((string?)element.Attribute("Grid.Column") ?? "0") == "0")
             {
                 roots.Add((element, ["Contained"]));
             }

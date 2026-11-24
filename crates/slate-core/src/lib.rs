@@ -52,6 +52,7 @@ pub mod doc_buffer;
 mod dql_inline_fields_db;
 pub mod editor_spans;
 pub mod embeds;
+mod empty_panels;
 pub mod file_meta_db;
 pub mod frontmatter;
 mod property_key;
@@ -168,6 +169,7 @@ pub use templates::{
 };
 pub use text_buffer::TextBuffer;
 
+pub use empty_panels::{EmptyPanel, EmptyPanelContext, empty_panel_line};
 pub use more_panels::more_panels_name;
 pub use session::{
     BaseFileSummary, BaseViewStatus, BaseViewSummary, BasesColumn, BasesGroup, BasesResultSet,

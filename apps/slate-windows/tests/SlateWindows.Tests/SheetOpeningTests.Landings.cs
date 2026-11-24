@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using SlateWindows.FileManagement;
 using SlateWindows.Templates;
 
 namespace SlateWindows.Tests;
@@ -497,8 +498,11 @@ public sealed partial class SheetOpeningTests
             $"the window came back to Settings with the reader's control gone; the keys are on {Describe(Keyboard.FocusedElement)}, not on a category");
     });
 
-    /// <summary>Move To open from the Files tree, then a card's editor presented over it,
-    /// holding the keys.</summary>
+    /// <summary>Move To open from the Files tree with its destination folders published, then
+    /// a card's editor presented over it, holding the keys. The folders are listed off the UI
+    /// thread, and a listing that publishes while the card editor is on top closes Move To
+    /// (#2053, found by #2049's probe run 45292145048), so a fact that opened the card editor
+    /// before then would find Move To gone for that reason and not for the one it tests.</summary>
     private static void OpenTheCardEditorOverMoveTo(Bench bench)
     {
         bench.OpenTheTab(Board);
@@ -508,6 +512,14 @@ public sealed partial class SheetOpeningTests
         bench.Host.Settle();
         bench.Sidebar!.MoveToCommand.Execute(null);
         bench.Host.Settle();
+        bench.Host.Settle();
+        Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => bench.Sidebar.MoveToSheet is not { State: MoveToLoadState.Loading }, TimeSpan.FromSeconds(15)),
+            "Move To's destination folders never published");
+        Assert.True(
+            bench.Sidebar.MoveToSheet is { State: MoveToLoadState.Ready },
+            $"premise: Move To is open with its folders listed (it is {bench.Sidebar.MoveToSheet?.State.ToString() ?? "closed"})");
         bench.Host.Settle();
         Assert.Equal(ModalSurface.MoveTo, bench.Shell.OpenModalSurface);
         Assert.True(KeysFirstRecorder.TheKeysAreIn(bench.Shell.MoveToOverlay), $"premise: Move To holds the keys (they are on {Describe(Keyboard.FocusedElement)})");
