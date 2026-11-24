@@ -8,9 +8,10 @@ namespace SlateWindows;
 /// <summary>
 /// Plan 47 CB-23 (#1800, CD15): the line a right-pane panel shows while Windows has no body
 /// for it. Which leaves those are is this host's fact; the words are core's
-/// (<c>empty_panel_line</c>), and the reading view's shortcut in them is the chord table's,
-/// the row the menu and the note header's switch read, which <c>ChordTableTests</c> holds to
-/// the window's key bindings, so the line names the real key.
+/// (<c>empty_panel_line</c>), and the reading view's shortcut in them is the chord table's row
+/// for the toggle, the row the menu and the note header's switch read. <c>ChordTableTests</c>
+/// proves that the window has a key binding for that row's chord, not which command the
+/// binding runs; <c>MainWindow.xaml</c> binds it to the reading-view toggle.
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {

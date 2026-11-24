@@ -2810,6 +2810,7 @@
                                 </StackPanel.Style>
                                 <local:PanelToolbarView Title="{Binding ActiveLeaf.Title}" />
                                 <TextBlock Style="{StaticResource PanelEmptyMessage}"
+                                           AutomationProperties.AutomationId="PanelPlaceholderNotice"
                                            Text="{Binding ActiveLeafEmptyLine}"
                                            AutomationProperties.Name="{Binding ActiveLeafEmptyLineName}"
                                            Focusable="True" />
