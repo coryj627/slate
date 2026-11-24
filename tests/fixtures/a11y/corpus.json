@@ -52,12 +52,12 @@
   {
     "event": "TabFocused { prefix: \"\", filename: \"notes.md\", index: 1, count: 1 }",
     "priority": "medium",
-    "text": " notes.md, tab 1 of 1."
+    "text": "notes.md, tab 1 of 1."
   },
   {
     "event": "TabFocused { prefix: \"Tab bar. \", filename: \"notes.md\", index: 2, count: 3 }",
     "priority": "medium",
-    "text": "Tab bar.  notes.md, tab 2 of 3."
+    "text": "Tab bar. notes.md, tab 2 of 3."
   },
   {
     "event": "TabClosed { closed_title: \"draft.md\", successor: Some(\"notes.md\") }",
@@ -637,67 +637,67 @@
   {
     "event": "ImportFinished { copied_files: 2, copied_folders: 0, moved_items: 0, reconciled_items: 0, destination: \"\", cancelled: false, not_imported: 0, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 2 files to the vault root."
   },
   {
     "event": "ImportFinished { copied_files: 3, copied_folders: 1, moved_items: 0, reconciled_items: 0, destination: \"Inbox\", cancelled: true, not_imported: 0, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 3 files and 1 folder to Inbox. Import cancelled; completed copies remain."
   },
   {
     "event": "ImportFinished { copied_files: 0, copied_folders: 0, moved_items: 0, reconciled_items: 0, destination: \"\", cancelled: true, not_imported: 0, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "No items were imported to the vault root. Import cancelled; completed copies remain."
   },
   {
     "event": "ImportFinished { copied_files: 4, copied_folders: 0, moved_items: 0, reconciled_items: 0, destination: \"Projects/Notes\", cancelled: false, not_imported: 2, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 4 files to Notes. 2 items were not imported."
   },
   {
     "event": "ImportFinished { copied_files: 120, copied_folders: 3, moved_items: 0, reconciled_items: 0, destination: \"Inbox\", cancelled: false, not_imported: 0, warnings: 0, stopped_at_entry_limit: Some(10000) }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 120 files and 3 folders to Inbox. Import stopped at the 10,000-item safety limit; remaining entries were not enumerated."
   },
   {
     "event": "ImportFinished { copied_files: 0, copied_folders: 0, moved_items: 2, reconciled_items: 0, destination: \"Notes\", cancelled: false, not_imported: 0, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Moved 2 items to Notes."
   },
   {
     "event": "ImportFinished { copied_files: 0, copied_folders: 0, moved_items: 0, reconciled_items: 1, destination: \"Notes\", cancelled: false, not_imported: 0, warnings: 0, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Found 1 destination item during reconciliation to Notes."
   },
   {
     "event": "ImportFinished { copied_files: 1, copied_folders: 0, moved_items: 2, reconciled_items: 0, destination: \"Notes\", cancelled: false, not_imported: 0, warnings: 1, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 1 file and moved 2 items to Notes. 1 import warning needs attention."
   },
   {
     "event": "ImportFinished { copied_files: 2, copied_folders: 1, moved_items: 3, reconciled_items: 2, destination: \"Projects/Notes\", cancelled: false, not_imported: 0, warnings: 2, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 2 files and 1 folder and moved 3 items and found 2 destination items during reconciliation to Notes. 2 import warnings need attention."
   },
   {
     "event": "ImportFinished { copied_files: 1032, copied_folders: 1000, moved_items: 0, reconciled_items: 0, destination: \"Archive\", cancelled: false, not_imported: 1500, warnings: 0, stopped_at_entry_limit: Some(10000) }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 1,032 files and 1,000 folders to Archive. 1,500 items were not imported. Import stopped at the 10,000-item safety limit; remaining entries were not enumerated."
   },
   {
     "event": "ImportFinished { copied_files: 1032, copied_folders: 0, moved_items: 1200, reconciled_items: 1001, destination: \"Notes\", cancelled: false, not_imported: 0, warnings: 2000, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 1,032 files and moved 1,200 items and found 1,001 destination items during reconciliation to Notes. 2,000 import warnings need attention."
   },
   {
     "event": "ImportFinished { copied_files: 1, copied_folders: 1, moved_items: 1, reconciled_items: 0, destination: \"Notes\", cancelled: false, not_imported: 1, warnings: 1, stopped_at_entry_limit: None }",
     "priority": "medium",
-    "text": ""
+    "text": "Copied 1 file and 1 folder and moved 1 item to Notes. 1 item was not imported. 1 import warning needs attention."
   },
   {
     "event": "ImportCancelling",
     "priority": "medium",
-    "text": ""
+    "text": "Cancelling import…"
   },
   {
     "event": "VaultClosed",

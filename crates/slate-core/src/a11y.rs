@@ -640,9 +640,94 @@ pub enum ImportPhase {
 /// #1830, CD10). `A11yEvent::ImportCancelling` speaks the `Cancelling`
 /// line, so the status text and the sentence are one string.
 pub fn import_status_line(phase: ImportPhase) -> String {
-    // Tests-first placeholder: the real lines land with the render.
-    let _ = phase;
-    String::new()
+    match phase {
+        ImportPhase::Importing => "Importing…",
+        ImportPhase::Finishing => "Finishing import…",
+        ImportPhase::Moving => "Moving items…",
+        ImportPhase::Cancelling => "Cancelling import…",
+    }
+    .to_owned()
+}
+
+/// Where an import went, as its summary names it: "the vault root" for
+/// the root, else the destination's last segment, trailing slashes
+/// ignored (Windows' `Path.GetFileName(destination.TrimEnd('/'))`, the
+/// Mac's `lastPathComponent`).
+fn import_location(destination: &str) -> &str {
+    let trimmed = destination.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "the vault root";
+    }
+    trimmed.rsplit_once('/').map_or(trimmed, |(_, last)| last)
+}
+
+/// `A11yEvent::ImportFinished`'s sentence. The clause order, the first
+/// clause's capital and the cancel's precedence over the items not
+/// imported are both hosts' rules; every count is grouped.
+#[allow(clippy::too_many_arguments)]
+fn import_summary(
+    copied_files: u32,
+    copied_folders: u32,
+    moved_items: u32,
+    reconciled_items: u32,
+    destination: &str,
+    cancelled: bool,
+    not_imported: u32,
+    warnings: u32,
+    stopped_at_entry_limit: Option<u32>,
+) -> String {
+    let mut copied: Vec<String> = Vec::new();
+    if copied_files > 0 {
+        copied.push(counted(copied_files, "file", "files"));
+    }
+    if copied_folders > 0 {
+        copied.push(counted(copied_folders, "folder", "folders"));
+    }
+    let mut clauses: Vec<String> = Vec::new();
+    if !copied.is_empty() {
+        clauses.push(format!("Copied {}", copied.join(" and ")));
+    }
+    if moved_items > 0 {
+        let verb = if clauses.is_empty() { "Moved" } else { "moved" };
+        clauses.push(format!("{verb} {}", counted(moved_items, "item", "items")));
+    }
+    if reconciled_items > 0 {
+        let verb = if clauses.is_empty() { "Found" } else { "found" };
+        clauses.push(format!(
+            "{verb} {} during reconciliation",
+            counted(reconciled_items, "destination item", "destination items")
+        ));
+    }
+    let mut message = if clauses.is_empty() {
+        "No items were imported".to_owned()
+    } else {
+        clauses.join(" and ")
+    };
+    message.push_str(" to ");
+    message.push_str(import_location(destination));
+    message.push('.');
+    if cancelled {
+        message.push_str(" Import cancelled; completed copies remain.");
+    } else if not_imported > 0 {
+        message.push(' ');
+        message.push_str(&counted(not_imported, "item was", "items were"));
+        message.push_str(" not imported.");
+    }
+    if warnings > 0 {
+        message.push(' ');
+        message.push_str(&counted(
+            warnings,
+            "import warning needs",
+            "import warnings need",
+        ));
+        message.push_str(" attention.");
+    }
+    if let Some(limit) = stopped_at_entry_limit {
+        message.push_str(" Import stopped at the ");
+        message.push_str(&crate::sidebar_filter::group_thousands(u64::from(limit)));
+        message.push_str("-item safety limit; remaining entries were not enumerated.");
+    }
+    message
 }
 
 /// The shell regions F6 cycling names that carry no other event.
@@ -2113,7 +2198,15 @@ impl A11yEvent {
                 index,
                 count,
             } => {
-                format!("{prefix} {filename}, tab {index} of {count}.")
+                // One space between the prefix and the name, whichever way
+                // a host spells the prefix: Windows sends "" and "Tab bar. ",
+                // the Mac "Opened new tab." (plan 47 CB-16).
+                let prefix = prefix.trim();
+                if prefix.is_empty() {
+                    format!("{filename}, tab {index} of {count}.")
+                } else {
+                    format!("{prefix} {filename}, tab {index} of {count}.")
+                }
             }
             TabClosed {
                 closed_title,
@@ -2380,10 +2473,28 @@ impl A11yEvent {
             }
             SidebarSettingsReloaded => "Sidebar settings reloaded.".to_owned(),
 
-            // Tests-first placeholders: the real sentences land with the
-            // render.
-            ImportFinished { .. } => String::new(),
-            ImportCancelling => String::new(),
+            ImportFinished {
+                copied_files,
+                copied_folders,
+                moved_items,
+                reconciled_items,
+                destination,
+                cancelled,
+                not_imported,
+                warnings,
+                stopped_at_entry_limit,
+            } => import_summary(
+                *copied_files,
+                *copied_folders,
+                *moved_items,
+                *reconciled_items,
+                destination,
+                *cancelled,
+                *not_imported,
+                *warnings,
+                *stopped_at_entry_limit,
+            ),
+            ImportCancelling => import_status_line(ImportPhase::Cancelling),
 
             VaultClosed => "Vault closed. Returned to the welcome screen.".to_owned(),
             VaultClosedAllSaved => {
