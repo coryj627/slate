@@ -272,7 +272,18 @@ public sealed partial class EmbedPreviewTitleCensus
     [InlineData("EditorInteractions.cs", new[] { "PopoverTitle = WithSourceLineLocator(\n            SlateUniffiMethods.ResolvedEmbedTitle(content.Resolved),\n            sourceLine);", "PopoverTitle = $\"{SlateUniffiMethods.ResolvedEmbedTitle(content.Resolved)} — source line {sourceLine}\";" }, "the source-line locator appended outside WithSourceLineLocator")]
     [InlineData("EditorInteractions.cs", new[] { "$\"{coreTitle} — source line {sourceLine}\"", "$\"Embedded {coreTitle} — source line {sourceLine}\"" }, "adds host text beyond the source-line locator")]
     [InlineData("EditorInteractions.cs", new[] { "private set => SetField(ref _popoverTitle, value);", "private set => SetField(ref _popoverTitle, \"Embedded \" + value);" }, "PopoverTitle's setter")]
-    [InlineData("EditorEmbedPreview.cs", new[] { "Header = node.Title,", "Header = \"Embedded \" + node.Title," }, "the renderer composes a card's Title")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "Header = new TextBlock { Text = node.Title, TextWrapping = TextWrapping.Wrap },", "Header = \"Embedded \" + node.Title," }, "the renderer composes a card's Title")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "Header = new TextBlock { Text = node.Title,", "Header = new TextBlock { Text = \"Embedded \" + node.Title," }, "the renderer composes a card's Title")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "TextWrapping = TextWrapping.Wrap },", "TextWrapping = TextWrapping.Wrap, FontStyle = FontStyles.Italic }," }, "a TextBlock that sets FontStyle")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "Content = new TextBlock { Text = \"Jump to source\" },", "Content = new TextBlock { Text = \"Jump to \" + sourcePath }," }, "which is neither a card's Title nor a text the census registers")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "Header = new TextBlock { Text = node.Title,", "Header = new TextBlock(new System.Windows.Documents.Run(\"Draft: \")) { Text = node.Title," }, "takes a constructor argument")]
+    // Plan 47 CB-22b, the diff red team: text added to a held TextBlock after it is built
+    // (its Inlines, a Run, or a TextPointer insert) draws beside the title and leaves Text as it was.
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        ((TextBlock)expander.Header).Inlines.Add(new System.Windows.Documents.Run(\" (draft)\"));\n" }, "the renderer writes inline text")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        var draft = new System.Windows.Documents.Run(\" (draft)\");\n" }, "the renderer writes inline text")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        ((TextBlock)expander.Header).ContentEnd.InsertTextInRun(\" (draft)\");\n" }, "the renderer writes inline text")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        var strong = new System.Windows.Documents.Bold();\n" }, "the renderer writes inline text")]
+    [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        System.Windows.Documents.Span? held = null;\n" }, "the renderer writes inline text")]
     [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        AutomationProperties.SetName(expander, \"Preview \" + AutomationProperties.GetName(expander));\n" }, "which is neither a card's Title nor a text the census registers")]
     [InlineData("EditorEmbedPreview.cs", new[] { "        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n        expander.Header = \"Preview: \" + expander.Header;\n" }, "which is neither a card's Title nor a text the census registers")]
     [InlineData("EditorEmbedPreview.cs", new[] { "        var expander = new Expander\n", "        var expander = new EmbedCardExpander\n", "internal sealed record EditorEmbedPreviewPart(", "internal sealed class EmbedCardExpander : Expander\n{\n}\n\ninternal sealed record EditorEmbedPreviewPart(" }, "a host type whose automation peer")]
@@ -292,6 +303,20 @@ public sealed partial class EmbedPreviewTitleCensus
             failures.Any(failure => failure.StartsWith(file + ":", StringComparison.Ordinal)
                 && failure.Contains(cause, StringComparison.Ordinal)),
             $"no failure at {file} names \"{cause}\":\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>Plan 47 CB-22b, the merge judge's N1: the inline tripwire reads an Inline
+    /// type where a type is named, and a member that adds or inserts drawn text; a value
+    /// that only shares an Inline type's name (a font weight, a decoration) passes.</summary>
+    [Theory]
+    [InlineData("        expander.FontWeight = FontWeights.Bold;\n")]
+    [InlineData("        ((TextBlock)expander.Header).TextDecorations = TextDecorations.Underline;\n")]
+    public void AValueNamedLikeAnInlineIsNotInlineText(string planted)
+    {
+        string[] failures = CSharpMutantFailures(
+            "EditorEmbedPreview.cs",
+            ["        AutomationProperties.SetName(expander, node.Title);\n", "        AutomationProperties.SetName(expander, node.Title);\n" + planted]);
+        Assert.True(failures.Length == 0, $"the census refused {planted.Trim()}:\n" + string.Join("\n", failures));
     }
 
     /// <summary>The XAML half's teeth, on the shipped XAML: a StringFormat, a

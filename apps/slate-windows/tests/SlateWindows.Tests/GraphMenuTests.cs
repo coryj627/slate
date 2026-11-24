@@ -121,7 +121,8 @@ public sealed class GraphMenuTests
                 ("GraphWhereAmIMenuItem", "_Where Am I?", "{Binding Workspace.GraphWhereAmICommand}", "{cmd:ChordText slate.graph.whereAmI}"),
                 // W6-2 PR D (DD-Q3's default, DD-7): the four viewport verbs.
                 ("GraphZoomInMenuItem", "Zoom _In", "{Binding Workspace.GraphZoomInCommand}", "{cmd:ChordText slate.graph.zoomIn}"),
-                ("GraphZoomOutMenuItem", "Zoom _Out", "{Binding Workspace.GraphZoomOutCommand}", "{cmd:ChordText slate.graph.zoomOut}"),
+                // Plan 47 CB-22b: the owner's letter, T, as the Editor menu's Zoom Out has (O is Open Graph's).
+                ("GraphZoomOutMenuItem", "Zoom Ou_t", "{Binding Workspace.GraphZoomOutCommand}", "{cmd:ChordText slate.graph.zoomOut}"),
                 ("GraphActualSizeMenuItem", "_Actual Size", "{Binding Workspace.GraphActualSizeCommand}", "{cmd:ChordText slate.graph.actualSize}"),
                 ("GraphFitGraphMenuItem", "_Fit Graph", "{Binding Workspace.GraphFitGraphCommand}", "{cmd:ChordText slate.graph.fitGraph}"),
                 ("GraphVerbosityMenu", "_Verbosity", string.Empty, null),
