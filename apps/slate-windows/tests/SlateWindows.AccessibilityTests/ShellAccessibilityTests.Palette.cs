@@ -20,8 +20,9 @@ public sealed partial class ShellAccessibilityTests
     /// #1254 (R-11): typing into the palette at speed leaves exactly the
     /// view model's selection — never a row the user did not choose — and
     /// the rows core ranked for the final query, and a screen reader hears
-    /// exactly that: one count for the final query, and a selection line for
-    /// no row but the final selection.
+    /// exactly that: one count for the final query, and no selection line
+    /// for a selection the palette moved (#1834). A typed command name then
+    /// runs that command (#1834).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -113,20 +114,24 @@ public sealed partial class ShellAccessibilityTests
             string[] listed = WaitForListedRows(results, automation, minimum: 1);
             Assert.InRange(listed.Length, 1, splitMatches);
             Assert.Contains(selectedName, listed);
+            // #1834: the open's row was the palette's, so the selection is the
+            // first row core ranked for "split".
+            Assert.Equal(listed[0], selectedName);
             // R-4 (#1246; codex PR 3 round 8): the runtime item-name census at
             // this journey's representative state.
             AssertItemNamesAreSpeakable(process, "palette-results");
 
-            // Across leg 1, exactly ONE PaletteFilterCount — core's rendering
-            // for (splitMatches, "split") — and no PaletteCommandSelected
-            // naming any row but selectedName: the trailing count window (P10)
-            // and R-11's selection guard, heard the way NVDA hears them.
-            AssertHeardOneCountAndOnlyTheFinalSelection(
+            // Across leg 1, exactly ONE line: the PaletteFilterCount — core's
+            // rendering for (splitMatches, "split") — and no
+            // PaletteCommandSelected at all: the trailing count window (P10),
+            // R-11's selection guard, and a selection the palette moves is
+            // never announced (#1834), heard the way NVDA hears them.
+            AwaitHeardSince(
                 heard,
                 process.Id,
                 leg1,
-                SlateUniffiMethods.A11yRender(new A11yEvent.PaletteFilterCount((uint)splitMatches, "split")),
-                LabelOf(selectedName),
+                [SlateUniffiMethods.A11yRender(new A11yEvent.PaletteFilterCount((uint)splitMatches, "split"))],
+                TimeSpan.FromSeconds(10),
                 logFile);
 
             // --- leg 2: a selection that survives without being first -------
@@ -163,6 +168,19 @@ public sealed partial class ShellAccessibilityTests
                 logFile);
 
             PressKey(VirtualKeyShort.ESCAPE);
+            WaitForPaletteClosed(window, automation);
+
+            // --- leg 3: a typed name runs its command (#1834) ---------------
+            // "settings" in real keystrokes: once its rank has returned the
+            // selection is Settings…, whatever row the palette opened on, and
+            // Enter opens the Settings sheet.
+            (search, results) = OpenPaletteByChord(window);
+            TypeIntoSearch(window, search, "settings");
+            string settingsRow = Assert.Single(RegisteredCatalog(), row => row.Id == "slate.settings.open").AccessibleName;
+            WaitForSelectedRowNamed(results, automation, settingsRow);
+            PressKey(VirtualKeyShort.ENTER);
+            AutomationElement sheet = WaitForElement(window, "SettingsSheet", TimeSpan.FromSeconds(10));
+            Assert.Equal("Settings", sheet.Name);
             WaitForPaletteClosed(window, automation);
             outcome = ListenerOutcome.Completed;
         }
@@ -206,52 +224,40 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    /// <summary>
-    /// R-11 and P10 as a screen reader hears them: since <paramref
-    /// name="mark"/>, Slate raised <paramref name="count"/> — core's rendering
-    /// of the final query's count — exactly once and last, and before it at
-    /// most one selection line, naming <paramref name="finalLabel"/> (core's
-    /// "Selected: …", with or without its unavailability clause); no other
-    /// line. A stale row's selection, a second count or a count for an
-    /// intermediate query fails with what was heard.
-    /// </summary>
-    private static void AssertHeardOneCountAndOnlyTheFinalSelection(
-        ConcurrentQueue<ReceivedNotification> heard,
-        int processId,
-        int mark,
-        RenderedAnnouncement count,
-        string finalLabel,
-        string logFile)
+    /// <summary>#1834: waits until the list's one selected row is
+    /// <paramref name="name"/> — the typed name's rank has returned and
+    /// published — so the Enter that follows cannot beat it.</summary>
+    private static void WaitForSelectedRowNamed(
+        AutomationElement results, UIA3Automation automation, string name)
     {
-        _ = SpinWait.SpinUntil(
-            () => HeardFrom(heard, processId).Skip(mark).Any(line => line.DisplayString == count.Text),
+        string? seen = null;
+        bool selected = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    AutomationElement[] selection =
+                        results.Patterns.Selection.Pattern.Selection.ValueOrDefault ?? [];
+                    seen = selection.Length == 1 ? selection[0].Name : null;
+                    if (seen == name)
+                    {
+                        return true;
+                    }
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                }
+
+                Thread.Sleep(100);
+                return false;
+            },
             TimeSpan.FromSeconds(10));
-        // A settle past the count, so a late duplicate or stray line shows.
-        Thread.Sleep(TimeSpan.FromMilliseconds(500));
-        ReceivedNotification[] lines = [.. HeardFrom(heard, processId).Skip(mark)];
-        RenderedAnnouncement selected = SlateUniffiMethods.A11yRender(
-            new A11yEvent.PaletteCommandSelected(finalLabel, null));
-        // Core's unavailable form, read up to the reason it carries.
-        const string Reason = "\u0001";
-        string selectedUnavailable = SlateUniffiMethods.A11yRender(
-            new A11yEvent.PaletteCommandSelected(finalLabel, Reason)).Text.Split(Reason)[0];
-        bool NamesTheFinalSelection(string line) =>
-            line == selected.Text || line.StartsWith(selectedUnavailable, StringComparison.Ordinal);
-        string heardLines = string.Join(" | ", lines.Select(line => line.DisplayString));
         Assert.True(
-            lines.Length is 1 or 2
-                && lines[^1].DisplayString == count.Text
-                && lines.SkipLast(1).All(line => NamesTheFinalSelection(line.DisplayString)),
-            $"The desktop listener did not hear one count for the final query, after at most one selection line naming "
-            + $"\"{finalLabel}\". Expected: [({selected.Text}) | {count.Text}]. Heard: [{heardLines}]. Logged "
-            + "(a publication settling past P10's 150 ms window lets a count speak before the next keystroke): "
-            + string.Join(" | ", AnnouncementDiagnostics(logFile))
-            + " | " + string.Join(" | ", DiagnosticLines(logFile, "PaletteQueryChangeTimed")));
-        AssertRaisedAsRendered(count, lines[^1]);
-        if (lines.Length == 2)
-        {
-            AssertRaisedAsRendered(selected, lines[0]);
-        }
+            selected,
+            $"the selected row never became \"{name}\"; it is \"{seen}\"; rows: "
+            + string.Join(" | ", results
+                .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .Select(item => item.Name)));
     }
 
     /// <summary>Ctrl+Shift+P from the files tree, then the caret in the

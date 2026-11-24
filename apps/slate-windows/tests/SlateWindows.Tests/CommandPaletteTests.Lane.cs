@@ -52,12 +52,12 @@ public sealed partial class CommandPaletteTests
         host.Ranker.Release("o");
         host.PumpUntilPublished();
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             host.Harness.RowIds);
         Assert.Collection(
             host.Harness.Announcements,
             announced => Assert.Equal(
-                "New Note",
+                "Quick Open",
                 Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
             announced => Assert.Equal(
                 "o",
@@ -501,6 +501,9 @@ public sealed partial class CommandPaletteTests
         LaneHost host = LaneHost.Opened();
         CommandPaletteViewModel palette = host.Palette;
         List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        // A row the reader moved to, which "q" removes: its replacement is
+        // the selection line T3 orders before the count (#1834).
+        palette.SelectLast();
         host.Harness.Announcements.Clear();
 
         host.Ranker.Park("q");
@@ -537,6 +540,8 @@ public sealed partial class CommandPaletteTests
         LaneHost host = LaneHost.Opened();
         CommandPaletteViewModel palette = host.Palette;
         List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        // A row the reader moved to, which "q" removes (#1834).
+        palette.SelectLast();
         host.Harness.Announcements.Clear();
 
         palette.Query = "q";
@@ -584,7 +589,7 @@ public sealed partial class CommandPaletteTests
         gate.Release();
         host.PumpUntilPublished();
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             host.Harness.RowIds);
         A11yEvent.PaletteFilterCount count = Assert.IsType<A11yEvent.PaletteFilterCount>(
             Assert.Single(host.Harness.Announcements));

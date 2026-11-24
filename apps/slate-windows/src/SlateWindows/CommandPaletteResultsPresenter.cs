@@ -4,8 +4,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace SlateWindows;
@@ -36,6 +38,7 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         _palette = palette;
         _palette.PropertyChanged += Palette_PropertyChanged;
         _list.SelectionChanged += List_SelectionChanged;
+        _list.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
         Refresh();
     }
 
@@ -44,6 +47,7 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     {
         _palette.PropertyChanged -= Palette_PropertyChanged;
         _list.SelectionChanged -= List_SelectionChanged;
+        _list.RemoveHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
     }
 
     private void Palette_PropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
@@ -177,6 +181,31 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         {
             _palette.Select(row);
         }
+    }
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a row that takes the keys — Tab or a click lands them on it —
+    /// is the selection, and the reader's, so the row the keys are on is the row Enter runs and
+    /// a query keeps while it lists it. A click on the row already selected changes no
+    /// selection, so <see cref="List_SelectionChanged"/> never hears it; this does.
+    /// </summary>
+    /// <remarks>
+    /// Not when a publication swapped out the row the keys were on: the list then carries the
+    /// keys onto its selection, which is already what the publication made it (measured on
+    /// <c>main</c> for #1834: the keys land on the selected row of the new view, after the
+    /// publication, in every case), and carrying them is not a choice the reader made.
+    /// </remarks>
+    private void List_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (_syncingSelection
+            || e.NewFocus is not DependencyObject focused
+            || ItemsControl.ContainerFromElement(_list, focused) is not ListBoxItem { DataContext: CommandPaletteRowViewModel row }
+            || (e.OldFocus is ListBoxItem previous && PresentationSource.FromVisual(previous) is null))
+        {
+            return;
+        }
+
+        _palette.RowTookTheKeys(row);
     }
 
     /// <summary>
