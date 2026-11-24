@@ -813,6 +813,30 @@ mod tests {
     }
 
     #[test]
+    fn every_command_section_has_a_place_in_the_palette() {
+        // A row whose section SECTION_ORDER does not list is dropped from
+        // both layouts, so every section must be listed. The match is
+        // exhaustive: a new CommandSection fails to compile here until it
+        // is added to `every` and, through this assertion, to SECTION_ORDER.
+        use CommandSection::*;
+        let every = [
+            File, Navigation, View, Vault, Editor, Tasks, Settings, Plugins, Canvas, Bases, Graph,
+            Sidebar,
+        ];
+        for section in every {
+            match section {
+                File | Navigation | View | Vault | Editor | Tasks | Settings | Plugins | Canvas
+                | Bases | Graph | Sidebar => {}
+            }
+            assert!(
+                SECTION_ORDER.contains(&section),
+                "{section:?} has no place in SECTION_ORDER"
+            );
+        }
+        assert_eq!(SECTION_ORDER.len(), every.len());
+    }
+
+    #[test]
     fn an_exact_label_outranks_a_longer_label_with_the_same_prefix_score() {
         let commands = vec![
             cmd("a.vault.open", "Open Vault\u{2026}", CommandSection::File),

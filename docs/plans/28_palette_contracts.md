@@ -61,8 +61,12 @@ prohibitions, each with a live failure mode:
   from what the user sees.
   *Amended 2026-11-24 (CB-34):* the score is now the fuzzy part of the
   ranking only. The strongest match is the first row core returns, which
-  can differ from the highest score when an exact name ties a longer
-  label's prefix score, so no host derives the strongest match from it.
+  can differ from the highest score: an exact name comes before a longer
+  label with the same prefix score, and a name after the label's first
+  ": " that is the query comes before any higher score. So no host
+  derives the strongest match from the score; since CB-34 no Windows code
+  reads it, and the Mac's `filteredCommands` still orders by it for its
+  count and one integration test (#1954).
 - **`PaletteSection.Title` is canonical copy**, rendered verbatim. The
   host never maps a `CommandSection` to a heading string.
 
@@ -139,8 +143,11 @@ so both hosts handle them alike.
 "an untouched selection follows the first row").* Whether a selection
 survives a query change now depends on who placed it. **The reader's**:
 moved with the arrows, Home, End, Page Up or Page Down, a pointer click,
-a key inside the list or a UIA select through the list, or the row that
-takes the keys inside the list. It is kept while its row survives, and
+a key inside the list or a UIA select through the list, or a row that
+takes the keys inside the list from a click, or that is not the
+selection when it takes them (a row Tab lands on that is already the
+selection stays the palette's, and a focus restored with no element
+losing it moves nothing). It is kept while its row survives, and
 when a query removes it the selection goes to the first row and is the
 palette's. **The palette's**: the open's first row, a re-open's, and every
 selection a publication makes. It follows the first row at each
@@ -910,15 +917,15 @@ rather than assumed away.
 | # | Event | Guard | Effect |
 |---|---|---|---|
 | T1 | Open | vault open, `S` = Closed, not Sealed | enqueue `L`; clear query and selection, which is the palette's (P7 as amended by CB-34); arm the first-selection suppression; `S` := Open; T2 |
-| T1′ | Open | `S` = Open (PD-2), not Sealed | clear query and selection, which is the palette's; re-arm the suppression; until this open publishes, T6 does nothing (CB-34); T2 (no new `L`) |
+| T1′ | Open | `S` = Open (PD-2), not Sealed | clear query and selection, which is the palette's; re-arm the suppression; until this open publishes (T3) or its rank fails (T4), the rows on screen stay and T6 does nothing (CB-34); T2 (no new `L`) |
 | T1″ | Open | no vault / `S` = ShutDown / Sealed | announce `CommandPaletteNeedsVault` / nothing / nothing (a re-open would clear the list under a running command or a prompt and rank inside it, and an open after a running command dismissed the palette would be torn down by that command's own success) |
 | T2 | query change | `S` = Open, not Sealed | `r` := `r`+1; cancel rank(`r`−1)'s token; cancel `W`; non-empty query → open `W`(`r`) NOW; rank(`r`) waits for `L`, then joins the lane |
 | T2′ | query change | `S` = Open, Sealed | keep the text; `resume` := true — no rank, no window |
 | T3 | rank(g) returns | g = `r`, `S` = Open, not Sealed (on the owner thread) | `p` := g; `P` := g's rows; P7 against the CURRENT selection and its origin (CB-34: announced only when a query removed the reader's row, never for a move of the palette's own selection); count(g) speaks when `W`(g) has elapsed — at once if it already has |
-| T4 | rank(g) or `L` throws — not a cancellation: an `OperationCanceledException` or `ObjectDisposedException` counts as one only when rank(g)'s own token was cancelled | g = `r`, `S` = Open, not Sealed (owner thread) | log; `p` := g; cancel `W`; `P` unchanged |
+| T4 | rank(g) or `L` throws — not a cancellation: an `OperationCanceledException` or `ObjectDisposedException` counts as one only when rank(g)'s own token was cancelled | g = `r`, `S` = Open, not Sealed (owner thread) | log; `p` := g; cancel `W`; `P` unchanged; a re-open's gap ends (CB-34), so the keys work `P` |
 | T5 | rank(g) cancelled (its token was), or a failure whose T4 guard does not hold (superseded, closed, sealed, torn down) | — | nothing, and nothing logged |
 | T6 | Up / Down / Home / End / Page / pointer select | `S` = Open, not Sealed, not in T1′'s gap | move over `P`'s rows (no-op when empty); the selection is the reader's (CB-34); announce it with its P8 reason, except a row that takes the keys, which is silent |
-| T6′ | the same | `S` = Open, Sealed | refused; the palette's selection is re-asserted to the list; nothing said |
+| T6′ | the same | `S` = Open, Sealed, or in T1′'s gap (CB-34) | refused; the palette's selection is re-asserted to the list; nothing said |
 | T7 | Enter / row double-click | `S` = Open, not Sealed | rank(`r`) has returned and its T3 still waits behind input → that T3 runs first (owner decision, 2026-10-05); then `P` has a selection → T8 on it, at once; else nothing, silently |
 | T8 | invoke(row) | not Sealed (one command at a time, none under a prompt) | P9: (1) focus the field; (2) unavailable → announce, stay open — no seal, since nothing before this verdict can pump; (3) Invoking := true, which applies the seal (it is always the first cause here); (4) run the command, which may pump nested frames and raise its own prompts (T13/T14 while Invoking holds change nothing); (5) Invoking := false, however it returns or throws; (6) T11 ran meanwhile (a window close does, synchronously) → nothing more: no announcement, no record; (7) failure → announce; if no other cause holds, the seal's end (`resume` ∧ Open → T2); (8) success → enqueue record(id), THEN T9 |
 | T9 | Escape / dismiss | `S` = Open, Sealed or not (a command can dismiss the palette — a vault transition does) | clear `P`; cancel and release the snapshot and rank tokens; `p` = `r` := `r`+1; cancel `W`; `S` := Closed; raise `Dismissed` (the shell's focus hand-off) |
@@ -936,7 +943,7 @@ The seal's generation advance and the not-Sealed guards of T3/T4 are independent
 |---|---|---|---|---|
 | Open, nothing published (`L` or the first rank in flight) | T2 | no-op | no-op, silent | T9 |
 | Open, published and current (`p` = `r`) | T2 | T6 over `P` | T7 on `P`'s selection; no-op on zero matches | T9 |
-| Open, published and pending (`p` < `r`) | T2 (supersedes) | T6 over `P` — the rows on screen | rank(`r`) returned but not yet published → its T3 runs, then T7 on its selection; rank(`r`) still running → T7 on `P`'s selection, at once, and the pending rank is then discarded | T9 |
+| Open, published and pending (`p` < `r`) | T2 (supersedes) | T6 over `P` — the rows on screen; in T1′'s gap, refused (T6′) | rank(`r`) returned but not yet published → its T3 runs, then T7 on its selection; rank(`r`) still running → T7 on `P`'s selection, at once, and the pending rank is then discarded | T9 |
 | Open, Sealed — keys arrive only from a loop that neither is modal to the shell nor disables it (a command's own nested frame); a modal loop disables the shell, so none arrive during one | taken by the shell, nothing typed (T2′ for a query change that arrives otherwise) | taken (T6′ backs it) | taken | T9 |
 | Closed, Sealed — Escape dismissed the palette under its running command | taken | taken | taken | taken |
 | Closed / ShutDown | — | — | — | — |
