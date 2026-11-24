@@ -138,10 +138,10 @@ internal sealed class CommandPaletteRowViewModel
     public IReadOnlyList<CommandPaletteLabelSegment> LabelSegments { get; }
 
     /// <summary>
-    /// Core's winning fuzzy score: the fuzzy part of the match only, <b>not a
-    /// display order</b> (contract P1). Core's own order already puts the
-    /// strongest match first (#1834), ranking a whole-name match above any
-    /// score, so nothing in this file sorts by it.
+    /// Core's winning fuzzy score, mirroring the FFI row's: the fuzzy part of the
+    /// match only, <b>not a display order</b> (contract P1). Core's own order puts
+    /// the strongest match first, a whole-name match above any score, and since
+    /// #1834 no Windows code reads this.
     /// </summary>
     public int Score { get; }
 
@@ -848,7 +848,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _selectedRow = null;
         _selectionOrigin = level.RowOrigin;
         _reopenAwaitingRows = false;
-        _suppressSelectionAnnouncement = true;
+        // #1834: nothing armed here. Back says its row itself, a palette move at a publication
+        // is silent anyway, and an armed flag would swallow the one line a publication owes:
+        // the replacement of the reader's row a query typed before Back's rows land removes.
         OnPropertyChanged(nameof(Query));
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
@@ -1011,14 +1013,35 @@ internal sealed class CommandPaletteViewModel : BindableBase
     public void Select(CommandPaletteRowViewModel row) => UserSelect(row.Id);
 
     /// <summary>
-    /// #1834 (contract 28 P7): a row of the list took the keys — Tab or a click put them
-    /// there (the presenter leaves out the list carrying them onto its selection after a
-    /// publication). That row becomes the selection, and the reader's, so the row the keys are
-    /// on is the row Enter runs and a query keeps it while it lists it. Silent: the screen
-    /// reader speaks the row that took the keys. Refused, as any move, while sealed or before a
-    /// re-open's rows land.
+    /// #1834 (contract 28 P7): a row of the list took the keys from another element — a
+    /// letter the list searches by, say. That row becomes the selection, and the reader's, so
+    /// the row the keys are on is the row Enter runs and a query keeps it while it lists it.
+    /// Silent: the screen reader speaks the row that took the keys. Keys that land on the row
+    /// already selected change nothing: Tab and Shift+Tab land on the selection, which stays
+    /// whoever's it was (a click is <see cref="RowPressed"/>). Refused, as any move, while
+    /// sealed or before a re-open's rows land.
     /// </summary>
     internal void RowTookTheKeys(CommandPaletteRowViewModel row)
+    {
+        if (ReferenceEquals(row, _selectedRow))
+        {
+            return;
+        }
+
+        ReaderTakesRow(row);
+    }
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a pointer pressed on a row. The row becomes the selection, and
+    /// the reader's, silently, the row already selected included: a click on the row that
+    /// holds the keys and the selection changes neither, so nothing else would hear it.
+    /// Refused, as any move, while sealed or before a re-open's rows land.
+    /// </summary>
+    internal void RowPressed(CommandPaletteRowViewModel row) => ReaderTakesRow(row);
+
+    /// <summary>A row the reader took without a key the palette routes: the selection, and
+    /// theirs, silently.</summary>
+    private void ReaderTakesRow(CommandPaletteRowViewModel row)
     {
         if (IsSealed || _reopenAwaitingRows || Array.IndexOf(_rows, row) < 0)
         {

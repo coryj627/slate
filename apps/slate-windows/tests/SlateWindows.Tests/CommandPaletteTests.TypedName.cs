@@ -286,6 +286,28 @@ public sealed partial class CommandPaletteTests
     /// on screen yet.</summary>
     private static (PaletteHarness Harness, ParkedRanker Ranker, List<PaletteChoice> Chosen) ChoicesParkedBeforeTheirFirstRows()
     {
+        (PaletteHarness harness, ParkedRanker ranker, List<PaletteChoice> chosen) = ThemeCommandsOnTheLane();
+        CommandPaletteViewModel palette = harness.Palette;
+        palette.Select(Assert.Single(palette.Rows, row => row.Id == SwitchThemeId));
+
+        // The list's own first rank waits on the worker.
+        ranker.Park(string.Empty);
+        palette.InvokeSelected();
+        Assert.True(palette.IsChoosing);
+        Assert.True(
+            SpinWait.SpinUntil(() => ranker.Ranked.Count(query => query.Length == 0) >= 2, TimeSpan.FromSeconds(10)),
+            "the list's first rank never reached the ranker");
+        Assert.True(palette.IsRankPending);
+        Assert.Equal(ThemeChoice.UseWindowsSetting, palette.SelectedId);
+        harness.Announcements.Clear();
+        return (harness, ranker, chosen);
+    }
+
+    /// <summary>Show Tasks Review and Switch Theme… on the palette's own lane, ranked by a
+    /// <see cref="ParkedRanker"/>, open and published; Switch Theme… opens the themes on
+    /// "Use Windows setting".</summary>
+    private static (PaletteHarness Harness, ParkedRanker Ranker, List<PaletteChoice> Chosen) ThemeCommandsOnTheLane()
+    {
         var ranker = new ParkedRanker(Environment.CurrentManagedThreadId);
         var harness = new PaletteHarness(
             SynchronizationContext.Current,
@@ -312,20 +334,82 @@ public sealed partial class CommandPaletteTests
         };
         palette.Open();
         PumpUntilPublished(palette);
-        palette.Select(Assert.Single(palette.Rows, row => row.Id == SwitchThemeId));
-
-        // The list's own first rank waits on the worker.
-        ranker.Park(string.Empty);
-        palette.InvokeSelected();
-        Assert.True(palette.IsChoosing);
-        Assert.True(
-            SpinWait.SpinUntil(() => ranker.Ranked.Count(query => query.Length == 0) >= 2, TimeSpan.FromSeconds(10)),
-            "the list's first rank never reached the ranker");
-        Assert.True(palette.IsRankPending);
-        Assert.Equal(ThemeChoice.UseWindowsSetting, palette.SelectedId);
-        harness.Announcements.Clear();
         return (harness, ranker, chosen);
     }
+
+    /// <summary>
+    /// Codex round 1 (#1834): Esc brings back a row the reader arrowed to, and a letter typed
+    /// before Back's own rows land removes it. Back has said its row already; the letter's
+    /// publication replaces the reader's row and says the replacement once, before the count —
+    /// Back leaves nothing armed to swallow it.
+    /// </summary>
+    [Fact]
+    public void AQueryTypedBeforeEscBacksRowsLandStillSaysTheReplacement() => RunSta(() =>
+    {
+        (PaletteHarness harness, ParkedRanker ranker, _) = ThemeCommandsOnTheLane();
+        CommandPaletteViewModel palette = harness.Palette;
+        palette.MoveSelection(1);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+        palette.InvokeSelected();
+        PumpUntilPublished(palette);
+        Assert.True(palette.IsChoosing);
+
+        ranker.Park(string.Empty);
+        palette.BackOrDismiss();
+        Assert.True(
+            SpinWait.SpinUntil(() => ranker.Ranked.Count(query => query.Length == 0) >= 3, TimeSpan.FromSeconds(10)),
+            "Back's rank never reached the ranker");
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+        harness.Announcements.Clear();
+
+        palette.Query = "r";
+        ranker.Release(string.Empty);
+        PumpUntilPublished(palette);
+
+        Assert.Equal(["slate.tasks.review"], harness.RowIds);
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
+        Assert.Collection(
+            harness.Announcements,
+            announced => Assert.Equal(
+                "Show Tasks Review",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (1u, "r"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
+    });
+
+    /// <summary>Codex round 1 (#1834): Back's own rank fails, and the next query removes the
+    /// row the reader arrowed to: its replacement is said once, before the count.</summary>
+    [Fact]
+    public void AQueryAfterAFailedEscBackRankStillSaysTheReplacement() => RunSta(() =>
+    {
+        (PaletteHarness harness, ParkedRanker ranker, _) = ThemeCommandsOnTheLane();
+        CommandPaletteViewModel palette = harness.Palette;
+        palette.MoveSelection(1);
+        palette.InvokeSelected();
+        PumpUntilPublished(palette);
+        Assert.True(palette.IsChoosing);
+
+        ranker.Fail(string.Empty, new InvalidOperationException("ranking refused"));
+        palette.BackOrDismiss();
+        PumpUntilPublished(palette);
+        Assert.Contains(HostDiagnosticEvent.PaletteWorkFailed, harness.Diagnostics);
+        Assert.False(palette.IsChoosing);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+        harness.Announcements.Clear();
+
+        palette.Query = "r";
+        PumpUntilPublished(palette);
+
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
+        Assert.Collection(
+            harness.Announcements,
+            announced => Assert.Equal(
+                "Show Tasks Review",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal("r", Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+    });
 
     /// <summary>Esc from the choices brings the command's row back as the reader left it, and
     /// Back says so as it does today. A row they arrowed to is still theirs: a query keeps it
@@ -616,6 +700,18 @@ public sealed partial class CommandPaletteTests
         Assert.Contains("a.file.one", failure, StringComparison.Ordinal);
     }
 
+    /// <summary>Planted: a name that ranks no row at all does not lead with its command, and
+    /// the census says so.</summary>
+    [Fact]
+    public void TheTypedNameCensusFailsANameThatRanksNoRows()
+    {
+        Command[] catalog = [Cmd("a.file.one", "One", CommandSection.File)];
+
+        string failure = Assert.Single(TypedNameCensusFailures(catalog, [], (_, _) => []));
+
+        Assert.Contains("\"One\" leads with no row", failure, StringComparison.Ordinal);
+    }
+
     /// <summary>An allow-list row: commands that share a whole typed name, and why.</summary>
     private sealed record SharedTypedName(string[] Ids, string Reason);
 
@@ -688,9 +784,10 @@ public sealed partial class CommandPaletteTests
         {
             foreach (string name in Spellings(command.Label))
             {
-                if (Leader(name) is string leader && leader != command.Id)
+                string? leader = Leader(name);
+                if (leader != command.Id)
                 {
-                    failures.Add($"\"{name}\" leads with {leader}, not {command.Id}");
+                    failures.Add($"\"{name}\" leads with {leader ?? "no row"}, not {command.Id}");
                 }
             }
         }
@@ -713,9 +810,10 @@ public sealed partial class CommandPaletteTests
 
             foreach (string name in Spellings(tail!))
             {
-                if (Leader(name) is string leader && leader != command.Id)
+                string? leader = Leader(name);
+                if (leader != command.Id)
                 {
-                    failures.Add($"\"{name}\" (after the colon of \"{command.Label}\") leads with {leader}, not {command.Id}");
+                    failures.Add($"\"{name}\" (after the colon of \"{command.Label}\") leads with {leader ?? "no row"}, not {command.Id}");
                 }
             }
         }
@@ -771,9 +869,9 @@ public sealed partial class CommandPaletteTests
 
     // --- Call 10: a row that takes the keys -----------------------------------------
 
-    /// <summary>A row that takes the keys — as Tab or a click lands them — is the reader's,
-    /// silently (the screen reader speaks the focused row): a query that keeps it without
-    /// leading with it keeps it.</summary>
+    /// <summary>A row that takes the keys away from the selection — a click, or a letter the
+    /// list searches by — is the selection, and the reader's, silently (the screen reader
+    /// speaks the focused row): a query that keeps it without leading with it keeps it.</summary>
     [Fact]
     public void ARowThatTakesTheKeysIsTheReaders() => RunSta(() =>
     {
@@ -782,11 +880,48 @@ public sealed partial class CommandPaletteTests
         palette.Open();
         host.Settle();
         Assert.Equal("slate.file.newNote", palette.SelectedId);
-        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        // The keys on the palette's row first, as Tab lands them; a click then takes them.
+        var selected = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        Assert.True(selected.Focus(), "premise: the palette's row refused the keys");
+        host.Settle();
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.Rows[3]));
         host.ClearObservations();
 
+        Assert.True(row.Focus(), "premise: Toggle Bold's row refused the keys");
+        host.Settle();
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Empty(host.Harness.Announcements);
+
+        host.ChangeQuery("o");
+
+        Assert.Contains("slate.editor.bold", host.Harness.RowIds);
+        Assert.NotEqual("slate.editor.bold", palette.Rows[0].Id);
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Empty(host.SelectionAnnouncements);
+    });
+
+    /// <summary>
+    /// Codex round 1 (#1834): a click on the row that already holds the keys and the selection
+    /// changes neither, so neither the keys' route nor the list's selection hears it; the
+    /// pointer's press does. The palette's row is the reader's after it, and a query that keeps
+    /// it without leading with it keeps it.
+    /// </summary>
+    [Fact]
+    public void ClickingTheFocusedPalettesRowMakesItTheReaders() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
         Assert.True(row.Focus(), "premise: the palette's row refused the keys");
         host.Settle();
+        host.ClearObservations();
+
+        PressOn(row);
+        host.Settle();
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
         Assert.Empty(host.Harness.Announcements);
 
         host.ChangeQuery("o");
@@ -794,6 +929,183 @@ public sealed partial class CommandPaletteTests
         Assert.Contains("slate.file.newNote", host.Harness.RowIds);
         Assert.NotEqual("slate.file.newNote", palette.Rows[0].Id);
         Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Empty(host.SelectionAnnouncements);
+    });
+
+    /// <summary>Codex round 1 (#1834): Tab lands the keys on the palette's row, which stays the
+    /// palette's; a click on that same row then makes it the reader's, and a publication that
+    /// keeps it without leading with it keeps it.</summary>
+    [Fact]
+    public void TabThenAClickOnTheSameRowMakesItTheReaders() => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        string recents = host.FileInFixture(Path.Combine("device-state", "command-palette-recents.json"));
+        Directory.CreateDirectory(Path.GetDirectoryName(recents)!);
+        Assert.True(new CommandPaletteRecentsStore(recents).TrySave([ChordTable.Ids.CloseTab]));
+        host.OpenThePalette();
+        CommandPaletteViewModel palette = host.Palette;
+        TextBox field = host.Shell.CommandPaletteSearchTextBox;
+        Assert.Equal(ChordTable.Ids.CloseTab, palette.SelectedId);
+        Assert.True(field.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)), "Tab went nowhere");
+        host.Settle();
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(palette.SelectedRow, row.DataContext);
+
+        PressOn(row);
+        host.Settle();
+        host.Heard.Clear();
+        palette.Query = "s";
+        Assert.True(PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)), "\"s\" never published");
+        host.Settle();
+
+        Assert.Contains(palette.Rows, candidate => candidate.Id == ChordTable.Ids.CloseTab);
+        Assert.NotEqual(ChordTable.Ids.CloseTab, palette.Rows[0].Id);
+        Assert.Equal(ChordTable.Ids.CloseTab, palette.SelectedId);
+        Assert.Empty(host.Heard.OfType<A11yEvent.PaletteCommandSelected>());
+    });
+
+    /// <summary>The lead's ruling (#1834): a press while the palette is sealed changes nothing,
+    /// as every other move does nothing then (T6′). The press does not make the palette's row
+    /// the reader's, so once the seal lifts a query it survives below the first row moves the
+    /// selection to the first row.</summary>
+    [Fact]
+    public void APressWhileSealedChangesNothing() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        palette.SetModalLoop(true);
+        Assert.True(palette.IsSealed);
+        host.ClearObservations();
+
+        PressOn(row);
+        host.Settle();
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Empty(host.Harness.Announcements);
+        palette.SetModalLoop(false);
+        Assert.False(palette.IsSealed);
+        host.ChangeQuery("o");
+
+        Assert.Contains("slate.file.newNote", host.Harness.RowIds);
+        Assert.NotEqual("slate.file.newNote", palette.Rows[0].Id);
+        Assert.Equal(palette.Rows[0].Id, palette.SelectedId);
+        Assert.Empty(host.SelectionAnnouncements);
+    });
+
+    /// <summary>A left button's press on <paramref name="row"/>, as the pointer's preview
+    /// reaches the list: the press alone, with none of the click's own focus or capture.</summary>
+    private static void PressOn(ListBoxItem row) =>
+        row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        {
+            RoutedEvent = Mouse.PreviewMouseDownEvent,
+            Source = row,
+        });
+
+    /// <summary>
+    /// The red team's case: Tab lands the keys on the palette's own row, a Recent row whose hint
+    /// matches "settings"; Shift+Tab takes them back to the field, and the name typed then runs
+    /// Settings…. Had the Tab made the row the reader's, it would survive the name, and Enter
+    /// would run it (#1834's second cause).
+    /// </summary>
+    [Fact]
+    public void TabbingIntoTheListAndBackLeavesThePalettesRowThePalettes() => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        host.Lifecycle.ThemePreference = new ThemePreference(new AppPreferencesStore(host.FileInFixture("preferences.json")), _ => { });
+        string recents = host.FileInFixture(Path.Combine("device-state", "command-palette-recents.json"));
+        Directory.CreateDirectory(Path.GetDirectoryName(recents)!);
+        Assert.True(new CommandPaletteRecentsStore(recents).TrySave([ChordTable.Ids.CloseTab]));
+        host.OpenThePalette();
+        CommandPaletteViewModel palette = host.Palette;
+        TextBox field = host.Shell.CommandPaletteSearchTextBox;
+        Assert.Equal(ChordTable.Ids.CloseTab, palette.SelectedId);
+
+        Assert.True(field.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)), "Tab went nowhere");
+        host.Settle();
+        var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Same(palette.SelectedRow, row.DataContext);
+        Assert.True(field.Focus(), "the keys did not come back to the field");
+        host.Settle();
+        host.AssertFocusIsOn(field);
+
+        const string Name = "settings";
+        for (int typed = 1; typed <= Name.Length; typed++)
+        {
+            field.Text = Name[..typed];
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+                $"\"{Name[..typed]}\" never published");
+            host.Settle();
+        }
+
+        Assert.Contains(palette.Rows, candidate => candidate.Id == ChordTable.Ids.CloseTab);
+        Assert.Equal(ChordTable.Ids.OpenSettings, palette.SelectedId);
+        host.PressEnterInThePalette();
+        host.Settle();
+        Assert.False(palette.IsOpen);
+        Assert.NotNull(host.Lifecycle.SettingsSheet);
+    });
+
+    /// <summary>
+    /// With the keys on a row, the window's arrows move the selection and leave the keys where
+    /// they were (filed separately). A later focus restore — the window activated again, a
+    /// dialog closing back to the list — lands the keys on that row again with nothing before
+    /// them, and that is no move of the reader's: the selection stays where they put it.
+    /// </summary>
+    [Fact]
+    public void AFocusRestoreDoesNotMoveTheSelection() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        var keys = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        Assert.True(keys.Focus(), "premise: the palette's row refused the keys");
+        host.Settle();
+        palette.MoveSelection(1);
+        host.Settle();
+        Assert.Equal("slate.file.save", palette.SelectedId);
+        Assert.Same(keys, Keyboard.FocusedElement);
+        var olds = new List<IInputElement?>();
+        KeyboardFocusChangedEventHandler record = (_, e) => olds.Add(e.OldFocus);
+        Keyboard.AddGotKeyboardFocusHandler(host.List, record);
+
+        Keyboard.ClearFocus();
+        host.Settle();
+        Assert.True(keys.Focus(), "premise: the row refused the restored keys");
+        host.Settle();
+        Keyboard.RemoveGotKeyboardFocusHandler(host.List, record);
+
+        Assert.Null(Assert.Single(olds));
+        Assert.Equal("slate.file.save", palette.SelectedId);
+    });
+
+    /// <summary>With the keys on a row, a typed letter goes to the list's own search, which
+    /// matches the rows' labels: the keys and the selection land together on a row whose label
+    /// starts with it, silently (the screen reader speaks the row).</summary>
+    [Fact]
+    public void ALetterTypedInTheListLandsOnARowItsLabelStartsWith() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        Assert.True(row.Focus(), "premise: the palette's row refused the keys");
+        host.Settle();
+        host.ClearObservations();
+
+        TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, row, "t"));
+        host.Settle();
+
+        var keys = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
+        var landed = Assert.IsType<CommandPaletteRowViewModel>(keys.DataContext);
+        Assert.StartsWith("T", landed.Label, StringComparison.Ordinal);
+        Assert.Same(landed, palette.SelectedRow);
+        Assert.Same(landed, host.List.SelectedItem);
         Assert.Empty(host.SelectionAnnouncements);
     });
 
@@ -806,9 +1118,14 @@ public sealed partial class CommandPaletteTests
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
         host.Settle();
-        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
-        Assert.True(row.Focus(), "premise: the palette's row refused the keys");
+        // The keys on the palette's row first, as Tab lands them; a click then takes them.
+        var selected = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        Assert.True(selected.Focus(), "premise: the palette's row refused the keys");
         host.Settle();
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.Rows[3]));
+        Assert.True(row.Focus(), "premise: Toggle Bold's row refused the keys");
+        host.Settle();
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
 
         void AssertOneRow(string query)
         {
@@ -823,7 +1140,7 @@ public sealed partial class CommandPaletteTests
 
         host.ChangeQuery("o");
         AssertOneRow("o");
-        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
 
         host.ChangeQuery("q");
         AssertOneRow("q");
