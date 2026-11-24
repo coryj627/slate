@@ -236,6 +236,75 @@ public sealed class DataHeaderAccessKeyTests
             $"the title paints on {lines.Length} line(s) in a {expander.ActualWidth:F0}px card, so it didn't wrap: {Q(Painted(header))}");
     });
 
+    /// <summary>The merge judge's F1: a TextBlock set as a Header or Content is the logical
+    /// child of its Expander or Button and inherits their Foreground, while Fluent's
+    /// templates put their state colours (pressed, disabled) on the ContentPresenter that
+    /// draws it. So the card's title and its Jump label each paint what their presenter
+    /// holds: the Jump button pressed, and the card disabled.</summary>
+    [Fact]
+    public void AnEmbedCardsTitleAndJumpLabelPaintWhatTheirPresenterHolds() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new EditorEmbedPreviewView
+        {
+            Width = 400,
+            Root = new EditorEmbedPreviewNode(
+                "Embedded note: my_notes.md", [], null, "my_notes.md", IsDisclosure: true, InitiallyExpanded: true, IsWarning: false),
+        };
+        DockPanel.SetDock(view, Dock.Top);
+        ((DockPanel)host.Shell.Content).Children.Insert(0, view);
+        host.Settle();
+
+        Expander card = ShownShell.Descendants(view).OfType<Expander>().Single();
+        ToggleButton header = HeaderButtonOf(card);
+        Button jump = ShownShell.Descendants(card).OfType<Button>()
+            .Single(button => AutomationProperties.GetName(button) == "Jump to source: my_notes.md");
+        System.Reflection.MethodInfo setPressed = typeof(ButtonBase).GetMethod(
+                "SetIsPressed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("ButtonBase.SetIsPressed is gone");
+
+        var misreads = new List<string>();
+        _ = setPressed.Invoke(jump, [true]);
+        host.Settle();
+        misreads.AddRange(LabelMisreads(jump, "the Jump button, pressed"));
+        _ = setPressed.Invoke(jump, [false]);
+        host.Settle();
+
+        card.IsEnabled = false;
+        host.Settle();
+        misreads.AddRange(LabelMisreads(header, "the card's title, disabled"));
+        misreads.AddRange(LabelMisreads(jump, "the Jump button, disabled"));
+
+        Assert.True(misreads.Count == 0, string.Join("\n", misreads));
+    });
+
+    /// <summary>Where the TextBlock a control's presenter draws does not paint the colour
+    /// the presenter holds. Premise: in that state the presenter's colour is not the
+    /// colour of the label's logical parent (the Expander for the title, the Button for
+    /// the Jump label), which is what the label would inherit; else the reading proves
+    /// nothing.</summary>
+    private static List<string> LabelMisreads(Control owner, string what)
+    {
+        ContentPresenter presenter = ShownShell.Descendants(owner).OfType<ContentPresenter>()
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.TemplatedParent, owner) && candidate.Content is TextBlock)
+            ?? throw new Xunit.Sdk.XunitException($"{what}: no presenter of {owner.GetType().Name} draws a TextBlock");
+        var label = (TextBlock)presenter.Content;
+        var parent = LogicalTreeHelper.GetParent(label) as Control
+            ?? throw new Xunit.Sdk.XunitException($"{what}: the label's logical parent is not a control");
+        Color held = ColorOf(System.Windows.Documents.TextElement.GetForeground(presenter));
+        Color inherited = ColorOf(parent.Foreground);
+        Assert.True(
+            held != inherited,
+            $"premise: {what}: its presenter holds {held}, the colour of its logical parent {parent.GetType().Name} too, so the state is not seen");
+        Color painted = ColorOf(label.Foreground);
+        return painted == held
+            ? []
+            : [$"{what}: the label paints {painted} where its presenter holds {held} (its logical parent {parent.GetType().Name} has {inherited})"];
+    }
+
+    private static Color ColorOf(Brush brush) =>
+        brush is SolidColorBrush solid ? solid.Color : throw new Xunit.Sdk.XunitException($"a {brush.GetType().Name}, not a solid colour");
+
     // ---- the Folders menu -----------------------------------------------------
 
     /// <summary>The compact header's Folders menu for <paramref name="path"/>, opened as the
