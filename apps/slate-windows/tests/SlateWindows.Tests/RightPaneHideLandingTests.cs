@@ -140,20 +140,25 @@ public sealed class RightPaneHideLandingTests
 
     /// <summary>Plan 47 CB-23 (the merge judge's minor 1): a leaf switched under the
     /// keys to a panel with no body lands them on its line, the placeholder's stop,
-    /// and not on the rail.</summary>
+    /// and not on the rail: the leaves' host's landing finds the placeholder as the
+    /// leaf now shown. The keys start on a row of Outline; on its notice, Outline's
+    /// own notice keeper lands them first (on the rail, for any leaf switched to;
+    /// #2054).</summary>
     [Theory]
     [InlineData("math")]
     [InlineData("code")]
     [InlineData("diagrams")]
     public void ALeafSwitchedUnderTheKeysToAPanelWithNoBodyLandsThemOnItsLine(string leaf) => RunSta(() =>
     {
-        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        using var host = new ShownShell(("a.md", "# A heading\n\nText.\n"));
         host.Workspace.OpenPath("a.md");
         host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "outline");
         host.Settle();
         FrameworkElement outline = host.Body("OutlineLeafBody");
         Assert.True(host.Land(ShellRegionKind.RightPaneContent), "premise: Outline took no keys");
-        Assert.True(outline.IsKeyboardFocusWithin, $"premise: the keys are not in Outline, but on {Keyboard.FocusedElement}");
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem && outline.IsKeyboardFocusWithin,
+            $"premise: the keys are not on a row of Outline, but on {Keyboard.FocusedElement}");
 
         host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == leaf);
         PumpedDispatcher.Drain();
