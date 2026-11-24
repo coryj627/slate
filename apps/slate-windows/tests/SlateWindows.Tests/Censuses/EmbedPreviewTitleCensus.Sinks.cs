@@ -230,6 +230,7 @@ public sealed partial class EmbedPreviewTitleCensus
                     break;
                 case ClassDeclarationSyntax renderer when renderer.Identifier.ValueText == Renderer:
                     failures.AddRange(RendererWrapping(file, renderer));
+                    failures.AddRange(RendererInlines(file, renderer));
                     failures.AddRange(RendererTextFailures(file, renderer));
                     break;
                 case ClassDeclarationSyntax host when host.Identifier.ValueText == PopoverHost:
@@ -593,6 +594,36 @@ public sealed partial class EmbedPreviewTitleCensus
                 && assignment.Parent is InitializerExpressionSyntax => target.Identifier.ValueText,
         _ => null,
     };
+
+    /// <summary>The inline routes into a TextBlock's drawn text: its Inlines,
+    /// an Inline built in the renderer (a Run, a Span, a LineBreak), or a
+    /// TextPointer insert. Plan 47 CB-22b holds a card's title in a TextBlock;
+    /// text added there through any of these draws beside the title while the
+    /// TextBlock's Text stays as it was, so neither this census's assignment
+    /// reading nor a read of Text would see it (the diff red team,
+    /// measured).</summary>
+    private static readonly string[] InlineMembers = ["Inlines", "InsertTextInRun", "InsertLineBreak", "InsertParagraphBreak"];
+
+    private static readonly string[] InlineTypes =
+        ["Run", "Span", "Bold", "Italic", "Underline", "Hyperlink", "LineBreak", "InlineUIContainer", "Figure", "Floater"];
+
+    private static IEnumerable<string> RendererInlines(string file, ClassDeclarationSyntax renderer)
+    {
+        foreach (SyntaxNode node in renderer.DescendantNodes())
+        {
+            // By name, wherever it appears: a member access, a creation (qualified or not),
+            // or a declared type a target-typed `new()` would fill.
+            string? route = node is IdentifierNameSyntax { Identifier.ValueText: var name }
+                && (InlineMembers.Contains(name) || InlineTypes.Contains(name))
+                    ? name
+                    : null;
+            if (route is not null)
+            {
+                yield return $"{file}:{Line(node)}: the renderer writes inline text ({route}), which draws beside a "
+                    + "card's title where the census cannot read it.";
+            }
+        }
+    }
 
     /// <summary>The renderer hands a title to WPF whole; a format, template
     /// or style set there — assigned, or applied through SetValue, a

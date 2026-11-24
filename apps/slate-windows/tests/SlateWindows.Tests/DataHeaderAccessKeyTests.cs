@@ -58,27 +58,22 @@ public sealed class DataHeaderAccessKeyTests
             misreads.Add($"the menu's scope registers {Registered(menu)}; a folder's name holds no key");
         }
 
-        if (Registered(WindowSource(host)) != "none")
+        // The keys on a row of the open menu, else the desktop refused the menu (#1680): the
+        // press is then not measured, and the fact says so unless the reading above failed.
+        char letter = folder[folder.IndexOf('_', StringComparison.Ordinal) + 1];
+        if (TakeTheKeysOnto(host, menu, rows) is { } refused)
         {
-            misreads.Add($"the window's source registers {Registered(WindowSource(host))} with the menu open");
+            FailOrSkip(misreads, $"the Folders menu for {Q(folder)}", refused);
         }
 
-        Assert.True(misreads.Count == 0, $"the Folders menu for {Q(folder)}:\n" + string.Join("\n", misreads));
-
-        // The keys on a row of the open menu, else the desktop refused the menu (#1680).
-        TakeTheKeysOnto(host, menu, rows);
         MenuItem before = (MenuItem)Keyboard.FocusedElement;
         var clicks = new List<string>();
         row.Click += (_, _) => clicks.Add(folder);
-        char letter = folder[folder.IndexOf('_', StringComparison.Ordinal) + 1];
         Type(letter);
         host.Settle();
+        misreads.AddRange(PressMisreads(menu, before, clicks, letter));
 
-        Assert.True(clicks.Count == 0, $"'{letter}' typed in the open Folders menu clicked {string.Join(", ", clicks)}");
-        Assert.True(menu.IsOpen, $"'{letter}' typed in the open Folders menu closed it");
-        Assert.True(
-            ReferenceEquals(Keyboard.FocusedElement, before),
-            $"'{letter}' typed in the open Folders menu moved the keys from {Describe(before)} to {Describe(Keyboard.FocusedElement)}");
+        Assert.True(misreads.Count == 0, $"the Folders menu for {Q(folder)}:\n" + string.Join("\n", misreads));
         menu.IsOpen = false;
         host.Settle();
     });
@@ -96,9 +91,11 @@ public sealed class DataHeaderAccessKeyTests
             misreads.Add($"the menu's scope registers N for two folders (all it registers: {Registered(menu)})");
         }
 
-        Assert.True(misreads.Count == 0, "the Folders menu for more_notes/my_notes:\n" + string.Join("\n", misreads));
+        if (TakeTheKeysOnto(host, menu, rows) is { } refused)
+        {
+            FailOrSkip(misreads, "the Folders menu for more_notes/my_notes", refused);
+        }
 
-        TakeTheKeysOnto(host, menu, rows);
         MenuItem before = (MenuItem)Keyboard.FocusedElement;
         var clicks = new List<string>();
         foreach (MenuItem row in rows)
@@ -109,12 +106,9 @@ public sealed class DataHeaderAccessKeyTests
 
         Type('n');
         host.Settle();
+        misreads.AddRange(PressMisreads(menu, before, clicks, 'n'));
 
-        Assert.True(clicks.Count == 0, $"N typed in the open Folders menu clicked {string.Join(", ", clicks)}");
-        Assert.True(menu.IsOpen, "N typed in the open Folders menu closed it");
-        Assert.True(
-            ReferenceEquals(Keyboard.FocusedElement, before),
-            $"N typed in the open Folders menu moved the keys from {Describe(before)} to {Describe(Keyboard.FocusedElement)}");
+        Assert.True(misreads.Count == 0, "the Folders menu for more_notes/my_notes:\n" + string.Join("\n", misreads));
         menu.IsOpen = false;
         host.Settle();
     });
@@ -194,19 +188,28 @@ public sealed class DataHeaderAccessKeyTests
             misreads.Add($"the window's source registers {string.Join(", ", taken)} while the Embeds leaf shows (all it registers: {Registered(source)})");
         }
 
-        Assert.True(misreads.Count == 0, string.Join("\n", misreads));
-
         // The window's KeyDown decision reads the global query, which answers for the
         // keyboard's active source only (the spec red team, measured).
         if (!ReferenceEquals(Keyboard.PrimaryDevice.ActiveSource, source))
         {
-            Assert.Skip("this desktop did not make the shell the keyboard's active source (#1680), so the app menu's "
-                + "Alt-and-letter decision was not measured on it");
+            FailOrSkip(
+                misreads,
+                "the Embeds leaf's cards",
+                "this desktop did not make the shell the keyboard's active source, so the app menu's Alt-and-letter "
+                    + "decision was not measured on it");
         }
 
         MenuItem appMenu = host.Shell.AppMenuItem;
-        Assert.Equal("BaseMenu", AppMenuKeys.Decide(Key.B, false, () => !appMenu.IsSubmenuOpen && AccessKeyManager.IsKeyRegistered(null, "B")));
-        Assert.Equal("CanvasMenu", AppMenuKeys.Decide(Key.N, false, () => !appMenu.IsSubmenuOpen && AccessKeyManager.IsKeyRegistered(null, "N")));
+        foreach ((Key key, string letter, string menu) in new[] { (Key.B, "B", "BaseMenu"), (Key.N, "N", "CanvasMenu") })
+        {
+            string? opened = AppMenuKeys.Decide(key, false, () => !appMenu.IsSubmenuOpen && AccessKeyManager.IsKeyRegistered(null, letter));
+            if (opened != menu)
+            {
+                misreads.Add($"Alt+{letter} opens {Q(opened)}, not {menu}, while the Embeds leaf shows");
+            }
+        }
+
+        Assert.True(misreads.Count == 0, string.Join("\n", misreads));
     });
 
     /// <summary>DS-2 for a title with an underscore: at 160 wide its header wraps, read as
@@ -289,19 +292,53 @@ public sealed class DataHeaderAccessKeyTests
     }
 
     /// <summary>The keys on a row of the open menu: where the open did not land them, onto
-    /// the first row; a desktop that refuses that skips (#1680).</summary>
-    private static void TakeTheKeysOnto(ShownShell host, ContextMenu menu, MenuItem[] rows)
+    /// the first row. Null when a row holds them; else why not, for a desktop that refuses
+    /// the menu (#1680).</summary>
+    private static string? TakeTheKeysOnto(ShownShell host, ContextMenu menu, MenuItem[] rows)
     {
         if (!PumpedDispatcher.PumpUntil(() => HoldsTheKeys(rows), TimeSpan.FromSeconds(5)))
         {
-            KeysFirstRecorder.TakeTheMenuKeys(rows[0]);
+            // Not KeysFirstRecorder.TakeTheMenuKeys, which skips at once: a refusal here is
+            // weighed against the misreads by FailOrSkip.
+            _ = rows[0].Focus();
             host.Settle();
         }
 
-        if (!menu.IsOpen || !HoldsTheKeys(rows))
+        return menu.IsOpen && HoldsTheKeys(rows)
+            ? null
+            : $"the keys are on {Describe(Keyboard.FocusedElement)}, not a row of the open Folders menu";
+    }
+
+    /// <summary>Where a premise of the key-press part fails: the misreads found so far fail
+    /// the fact, and with none the fact skips as a desktop that refuses it (#1680). So on
+    /// <c>main</c> every part is read, and a refusing desktop never passes a fact.</summary>
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void FailOrSkip(List<string> misreads, string what, string refused)
+    {
+        Assert.True(
+            misreads.Count == 0,
+            $"{what}:\n" + string.Join("\n", misreads) + $"\n(the key-press part was not measured: {refused})");
+        _ = KeysFirstRecorder.SkipWhereTheDesktopRefusesTheMenu(refused);
+        throw new System.Diagnostics.UnreachableException("the skip returned instead of ending the fact");
+    }
+
+    /// <summary>What a letter typed in the open Folders menu did that a folder's name never
+    /// should: a row clicked, the menu closed, the keys moved.</summary>
+    private static IEnumerable<string> PressMisreads(ContextMenu menu, MenuItem before, List<string> clicks, char letter)
+    {
+        if (clicks.Count > 0)
         {
-            _ = KeysFirstRecorder.SkipWhereTheDesktopRefusesTheMenu(
-                $"the keys are on {Describe(Keyboard.FocusedElement)}, not a row of the open Folders menu");
+            yield return $"'{letter}' typed in the open Folders menu clicked {string.Join(", ", clicks)}";
+        }
+
+        if (!menu.IsOpen)
+        {
+            yield return $"'{letter}' typed in the open Folders menu closed it";
+        }
+
+        if (!ReferenceEquals(Keyboard.FocusedElement, before))
+        {
+            yield return $"'{letter}' typed in the open Folders menu moved the keys from {Describe(before)} to {Describe(Keyboard.FocusedElement)}";
         }
     }
 
@@ -351,13 +388,13 @@ public sealed class DataHeaderAccessKeyTests
     /// tree order, from their drawings' glyph runs; icon glyphs (the private use area) are
     /// left out.</summary>
     private static string Painted(DependencyObject root) =>
-        string.Concat(GlyphRunsOf(root).SelectMany(run => run.Run.Characters ?? []).Where(character => character is < '' or > ''));
+        string.Concat(GlyphRunsOf(root).SelectMany(run => run.Run.Characters ?? []).Where(character => character is < '\uE000' or > '\uF8FF'));
 
     /// <summary>The distinct baselines, in <paramref name="root"/>'s space, of the glyph runs
     /// that paint text: one per painted line.</summary>
     private static double[] PaintedLines(Visual root) =>
         [.. GlyphRunsOf(root)
-            .Where(run => run.Run.Characters?.Any(character => character is < '' or > '' && !char.IsWhiteSpace(character)) == true)
+            .Where(run => run.Run.Characters?.Any(character => character is < '\uE000' or > '\uF8FF' && !char.IsWhiteSpace(character)) == true)
             .Select(run => Math.Round(run.Owner.TransformToAncestor(root).Transform(run.Run.BaselineOrigin).Y * 2) / 2)
             .Distinct()
             .Order()];

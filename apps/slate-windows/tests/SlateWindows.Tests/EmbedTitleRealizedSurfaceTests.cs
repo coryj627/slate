@@ -651,7 +651,9 @@ public sealed class EmbedTitleRealizedSurfaceTests
             switch (node)
             {
                 case TextBlock text:
-                    parts.Add(text.Text);
+                    // Everything it draws, its Inlines included: Text keeps what was set while
+                    // a Run added later draws beside it (plan 47 CB-22b, the diff red team).
+                    parts.Add(new System.Windows.Documents.TextRange(text.ContentStart, text.ContentEnd).Text);
                     return;
                 case AccessText access:
                     parts.Add(access.Text);

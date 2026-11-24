@@ -1086,7 +1086,7 @@ public sealed class NoteHeaderTests
     {
         foreach (MenuItem row in rows)
         {
-            Assert.True(row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) is false, $"{row.Header} is not held {when}.");
+            Assert.True(row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) is false, $"{RowName(row)} is not held {when}.");
         }
     }
 
@@ -1096,9 +1096,14 @@ public sealed class NoteHeaderTests
         {
             Assert.True(
                 row.ReadLocalValue(UIElement.IsHitTestVisibleProperty) == DependencyProperty.UnsetValue,
-                $"{row.Header} keeps a local hit-test value {when}.");
+                $"{RowName(row)} keeps a local hit-test value {when}.");
         }
     }
+
+    /// <summary>A row's name for a failure line: its header text, or its UIA name where the
+    /// header is a TextBlock (plan 47 CB-22b: the Folders rows).</summary>
+    private static string RowName(MenuItem row) =>
+        row.Header as string ?? System.Windows.Automation.AutomationProperties.GetName(row);
 
     /// <summary>The Apps key through WPF's own route, as CanvasContextMenuTests drives it: a
     /// key-up handed to the input manager, where the popup service raises ContextMenuOpening
