@@ -1771,6 +1771,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelPlaceholderNotice",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelReviewFilters",
     "Surface": "Tasks panel + review flow (W4-3)"
   },

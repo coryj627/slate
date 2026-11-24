@@ -118,6 +118,8 @@ public sealed class RightPaneHideLandingTests
     [InlineData("connections", "ConnectionsLeafBody")]
     [InlineData("history", "HistoryLeafBody")]
     [InlineData("syncDiagnostics", "SyncDiagnosticsLeafBody")]
+    // Plan 47 CB-23 (#1800): a panel with no body holds its line as its stop.
+    [InlineData("math", "RightPaneDockedPlaceholder")]
     public void ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf(string leaf, string body) => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "Just a line of text.\n"));
@@ -134,6 +136,38 @@ public sealed class RightPaneHideLandingTests
         Assert.False(leafBody.IsVisible);
         Assert.IsNotType<MainWindow>(Keyboard.FocusedElement);
         Assert.True(host.Shell.RightPaneBorder.IsKeyboardFocusWithin, $"the keys left the right pane, for {Keyboard.FocusedElement}");
+    });
+
+    /// <summary>Plan 47 CB-23 (the merge judge's minor 1): a leaf switched under the
+    /// keys to a panel with no body lands them on its line, the placeholder's stop,
+    /// and not on the rail: the leaves' host's landing finds the placeholder as the
+    /// leaf now shown. The keys start on a row of Outline; on its notice, Outline's
+    /// own notice keeper lands them first (on the rail, for any leaf switched to;
+    /// #2054).</summary>
+    [Theory]
+    [InlineData("math")]
+    [InlineData("code")]
+    [InlineData("diagrams")]
+    public void ALeafSwitchedUnderTheKeysToAPanelWithNoBodyLandsThemOnItsLine(string leaf) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A heading\n\nText.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == "outline");
+        host.Settle();
+        FrameworkElement outline = host.Body("OutlineLeafBody");
+        Assert.True(host.Land(ShellRegionKind.RightPaneContent), "premise: Outline took no keys");
+        Assert.True(
+            Keyboard.FocusedElement is ListBoxItem && outline.IsKeyboardFocusWithin,
+            $"premise: the keys are not on a row of Outline, but on {Keyboard.FocusedElement}");
+
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(option => option.Id == leaf);
+        PumpedDispatcher.Drain();
+
+        TextBlock line = ShownShell.Descendants(host.Shell.RightPaneDockedPlaceholder).OfType<TextBlock>()
+            .Single(block => AutomationProperties.GetAutomationId(block) == "PanelPlaceholderNotice");
+        Assert.False(outline.IsVisible);
+        Assert.True(line.IsVisible, $"premise: {leaf} shows no line");
+        Assert.Same(line, Keyboard.FocusedElement);
     });
 
     /// <summary>Codex PR 4b r1 F8's widened census: closing the vault with

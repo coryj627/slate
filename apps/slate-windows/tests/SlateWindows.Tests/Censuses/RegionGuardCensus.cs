@@ -76,10 +76,11 @@ public sealed class RegionGuardCensus
             yield return (UIElement)(shell.FindName(name) ?? throw new Xunit.Sdk.XunitException($"{name} is gone"));
         }
 
+        // Plan 47 CB-23 (#1800): the placeholder is a body too, since its line is
+        // the stop of a panel Windows has no body for yet.
         var host = (Grid)shell.FindName("RightPaneLeafHost")!;
-        object placeholder = shell.FindName("RightPaneDockedPlaceholder")!;
         foreach (UIElement body in host.Children.OfType<UIElement>()
-            .Where(child => Grid.GetColumn(child) == 0 && !ReferenceEquals(child, placeholder)))
+            .Where(child => Grid.GetColumn(child) == 0))
         {
             yield return body;
         }

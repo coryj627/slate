@@ -66,24 +66,31 @@ internal sealed partial class WorkspaceViewModel
         {
             if (_titledTab is not null)
             {
-                _titledTab.PropertyChanged -= ActiveTab_TitleChanged;
+                _titledTab.PropertyChanged -= ActiveTab_PropertyChanged;
             }
 
             _titledTab = tab;
             if (tab is not null)
             {
-                tab.PropertyChanged += ActiveTab_TitleChanged;
+                tab.PropertyChanged += ActiveTab_PropertyChanged;
             }
         }
 
         OnPropertyChanged(nameof(ActiveTitle));
+        NotifyEmptyPanelLine();
     }
 
-    private void ActiveTab_TitleChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
+    /// <summary>The active tab's own changes: its title (a rename of its item), and its view
+    /// (the reading view toggled), which a panel without a body names (CB-23).</summary>
+    private void ActiveTab_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
     {
         if (eventArgs.PropertyName == nameof(WorkspaceTabViewModel.Title))
         {
             OnPropertyChanged(nameof(ActiveTitle));
+        }
+        else if (eventArgs.PropertyName == nameof(WorkspaceTabViewModel.IsReadingMode))
+        {
+            NotifyEmptyPanelLine();
         }
     }
     public bool HasDirtyTabs => Groups.SelectMany(group => group.Tabs).Any(tab => tab.IsDirty);
