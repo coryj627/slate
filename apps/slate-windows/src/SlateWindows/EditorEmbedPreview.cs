@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 
 namespace SlateWindows;
@@ -87,9 +88,22 @@ internal sealed class EditorEmbedPreviewView : ContentControl
             Content = content,
             Margin = new Thickness(0, 4, 0, 4),
         };
+        TakesItsPresentersColour((TextBlock)expander.Header);
         AutomationProperties.SetName(expander, node.Title);
         return expander;
     }
+
+    /// <summary>Plan 47 CB-22b: a TextBlock set as a Header or Content is the logical child of
+    /// its Expander or Button and would inherit their Foreground, but Fluent's templates put
+    /// their state colours (pointer over, pressed, disabled; High Contrast's Highlight and
+    /// GrayText) on the ContentPresenter that draws it. So the text takes the presenter's
+    /// colour, as a string's generated TextBlock does.</summary>
+    private static void TakesItsPresentersColour(TextBlock text) =>
+        text.SetBinding(TextBlock.ForegroundProperty, new Binding
+        {
+            Path = new PropertyPath(System.Windows.Documents.TextElement.ForegroundProperty),
+            RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ContentPresenter), 1),
+        });
 
     private FrameworkElement BuildNodeContent(EditorEmbedPreviewNode node)
     {
@@ -162,6 +176,7 @@ internal sealed class EditorEmbedPreviewView : ContentControl
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 0),
             };
+            TakesItsPresentersColour((TextBlock)open.Content);
             AutomationProperties.SetName(open, $"Jump to source: {sourcePath}");
             open.Click += (_, _) =>
             {

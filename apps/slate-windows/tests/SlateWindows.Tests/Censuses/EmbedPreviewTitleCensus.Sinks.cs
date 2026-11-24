@@ -601,9 +601,9 @@ public sealed partial class EmbedPreviewTitleCensus
     /// text added there through any of these draws beside the title while the
     /// TextBlock's Text stays as it was, so neither this census's assignment
     /// reading nor a read of Text would see it (the diff red team,
-    /// measured).</summary>
-    private static readonly string[] InlineMembers = ["Inlines", "InsertTextInRun", "InsertLineBreak", "InsertParagraphBreak"];
-
+    /// measured). The merge judge's N1: by syntax, not by any identifier, so a
+    /// value that only shares an Inline type's name (FontWeights.Bold,
+    /// TextDecorations.Underline) passes.</summary>
     private static readonly string[] InlineTypes =
         ["Run", "Span", "Bold", "Italic", "Underline", "Hyperlink", "LineBreak", "InlineUIContainer", "Figure", "Floater"];
 
@@ -611,12 +611,20 @@ public sealed partial class EmbedPreviewTitleCensus
     {
         foreach (SyntaxNode node in renderer.DescendantNodes())
         {
-            // By name, wherever it appears: a member access, a creation (qualified or not),
-            // or a declared type a target-typed `new()` would fill.
-            string? route = node is IdentifierNameSyntax { Identifier.ValueText: var name }
-                && (InlineMembers.Contains(name) || InlineTypes.Contains(name))
-                    ? name
-                    : null;
+            string? route = node switch
+            {
+                // A member that adds or inserts drawn text: Inlines, or a TextPointer insert.
+                SimpleNameSyntax { Identifier.ValueText: var member }
+                    when member == "Inlines" || member.StartsWith("Insert", StringComparison.Ordinal) => member,
+                // An Inline type where a type is named: a creation, a declaration a
+                // target-typed `new()` fills, a cast, a pattern, a type argument.
+                ObjectCreationExpressionSyntax { Type: var created } when InlineTypes.Contains(LastNameOf(created)) =>
+                    "new " + LastNameOf(created),
+                NameSyntax type when type.Parent is not QualifiedNameSyntax and not ObjectCreationExpressionSyntax
+                    && Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsInTypeOnlyContext(type)
+                    && InlineTypes.Contains(LastNameOf(type)) => LastNameOf(type),
+                _ => null,
+            };
             if (route is not null)
             {
                 yield return $"{file}:{Line(node)}: the renderer writes inline text ({route}), which draws beside a "
@@ -624,6 +632,16 @@ public sealed partial class EmbedPreviewTitleCensus
             }
         }
     }
+
+    /// <summary>A type's own name, without its namespace, its alias or its nullability.</summary>
+    private static string LastNameOf(TypeSyntax type) => type switch
+    {
+        NullableTypeSyntax nullable => LastNameOf(nullable.ElementType),
+        QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+        AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
+        SimpleNameSyntax simple => simple.Identifier.ValueText,
+        _ => string.Empty,
+    };
 
     /// <summary>The renderer hands a title to WPF whole; a format, template
     /// or style set there — assigned, or applied through SetValue, a
