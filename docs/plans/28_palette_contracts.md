@@ -227,7 +227,10 @@ Six events, rendered by core, never composed in C#:
   are announced as before, except a pointer press on a row and a row
   that takes the keys inside the list, which are silent because the
   screen reader speaks the row the keys land on (heard under NVDA on
-  2026-11-24: a click names the clicked row by its focus). Esc
+  2026-11-24: a click names the clicked row by its focus). The
+  first-selection suppression above ends at Esc back from a list of
+  choices and at a failed rank, so a reader's replacement or move after
+  either is said. Esc
   back from a list of choices still names its row, and a list of choices
   still opens with its current choice spoken.
 - `PaletteCommandUnavailable` renders the reason **verbatim, with no

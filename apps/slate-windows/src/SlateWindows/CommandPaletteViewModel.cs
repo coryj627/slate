@@ -848,9 +848,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _selectedRow = null;
         _selectionOrigin = level.RowOrigin;
         _reopenAwaitingRows = false;
-        // #1834: nothing armed here. Back says its row itself, a palette move at a publication
-        // is silent anyway, and an armed flag would swallow the one line a publication owes:
-        // the replacement of the reader's row a query typed before Back's rows land removes.
+        // #1834: nothing left armed. Back says its row itself, a palette move at a publication
+        // is silent anyway, and an armed flag — the choices arm one, and a Back before they
+        // publish, or after their rank fails, finds it still up — would swallow the one line a
+        // publication owes: the replacement of the reader's row a query removes.
+        _suppressSelectionAnnouncement = false;
         OnPropertyChanged(nameof(Query));
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
@@ -1612,7 +1614,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// say. The failure is logged by type only (W1-RT-01). A superseded
     /// generation, or a palette closed, sealed or torn down meanwhile,
     /// changes nothing and is not logged (T5). A re-open's failed rank ends
-    /// its gap (#1834): the rows on screen are what the keys act on (T4).
+    /// its gap (#1834): the rows on screen are what the keys act on (T4), and
+    /// the first selection P10 keeps quiet never published, so the reader's
+    /// first move over them is said.
     /// </summary>
     private void ResolveFailedRank(int generation, Exception exception)
     {
@@ -1624,6 +1628,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _diagnostics(HostDiagnosticEvent.PaletteWorkFailed, exception);
         _publishedGeneration = generation;
         _reopenAwaitingRows = false;
+        _suppressSelectionAnnouncement = false;
         CancelFilterCountWindow();
     }
 

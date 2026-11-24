@@ -379,6 +379,84 @@ public sealed partial class CommandPaletteTests
                     ((A11yEvent.PaletteFilterCount)announced).Query)));
     });
 
+    /// <summary>
+    /// Codex round 2 (#1834): Enter, Esc and a letter in one burst, all ahead of the choices'
+    /// first rows (publications post below input). Back brings the row the reader arrowed to
+    /// back before the choices ever published, and the letter's publication removes it: its
+    /// replacement is said once, before the count — nothing the choices armed swallows it.
+    /// </summary>
+    [Fact]
+    public void AnEscBackQueuedWithAQueryBeforeTheChoicesPublishStillSaysTheReplacement() => RunSta(() =>
+    {
+        (PaletteHarness harness, ParkedRanker ranker, _) = ThemeCommandsOnTheLane();
+        CommandPaletteViewModel palette = harness.Palette;
+        palette.MoveSelection(1);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+
+        ranker.Park(string.Empty);
+        palette.InvokeSelected();
+        Assert.True(palette.IsChoosing);
+        Assert.True(
+            SpinWait.SpinUntil(() => ranker.Ranked.Count(query => query.Length == 0) >= 2, TimeSpan.FromSeconds(10)),
+            "the choices' rank never reached the ranker");
+        Assert.Empty(palette.Rows);
+        palette.BackOrDismiss();
+        Assert.False(palette.IsChoosing);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+        harness.Announcements.Clear();
+
+        palette.Query = "r";
+        ranker.Release(string.Empty);
+        PumpUntilPublished(palette);
+
+        Assert.Equal(["slate.tasks.review"], harness.RowIds);
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
+        Assert.Collection(
+            harness.Announcements,
+            announced => Assert.Equal(
+                "Show Tasks Review",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (1u, "r"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
+    });
+
+    /// <summary>Codex round 2 (#1834): the choices' first rank fails, Esc goes back to the row
+    /// the reader arrowed to, and a query removes it: its replacement is said once, before the
+    /// count.</summary>
+    [Fact]
+    public void AFailedChoicesRankThenEscBackAndAQueryStillSaysTheReplacement() => RunSta(() =>
+    {
+        (PaletteHarness harness, ParkedRanker ranker, _) = ThemeCommandsOnTheLane();
+        CommandPaletteViewModel palette = harness.Palette;
+        palette.MoveSelection(1);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+
+        ranker.Fail(string.Empty, new InvalidOperationException("ranking refused"));
+        palette.InvokeSelected();
+        PumpUntilPublished(palette);
+        Assert.True(palette.IsChoosing);
+        Assert.Empty(palette.Rows);
+        Assert.Contains(HostDiagnosticEvent.PaletteWorkFailed, harness.Diagnostics);
+        palette.BackOrDismiss();
+        PumpUntilPublished(palette);
+        Assert.False(palette.IsChoosing);
+        Assert.Equal(SwitchThemeId, palette.SelectedId);
+        harness.Announcements.Clear();
+
+        palette.Query = "r";
+        PumpUntilPublished(palette);
+
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
+        Assert.Collection(
+            harness.Announcements,
+            announced => Assert.Equal(
+                "Show Tasks Review",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal("r", Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+    });
+
     /// <summary>Codex round 1 (#1834): Back's own rank fails, and the next query removes the
     /// row the reader arrowed to: its replacement is said once, before the count.</summary>
     [Fact]
@@ -538,6 +616,36 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(before[0].Id, palette.SelectedId);
         palette.InvokeSelected();
         Assert.Equal([before[0].Id], host.Harness.Source.Invoked);
+    });
+
+    /// <summary>Codex round 2 (#1834): a re-open whose rank fails never publishes the first
+    /// selection P10 keeps quiet, so the reader's first move over the rows on screen is theirs,
+    /// and is said.</summary>
+    [Fact]
+    public void AFailedReOpenRankLeavesTheFirstMoveSpoken() => RunSta(() =>
+    {
+        LaneHost host = LaneHost.Opened();
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Query = "o";
+        host.PumpUntilPublished();
+        CommandPaletteRowViewModel[] before = [.. palette.Rows];
+
+        host.Ranker.Fail(string.Empty, new InvalidOperationException("ranking refused"));
+        palette.Open();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !palette.IsRankPending, TimeSpan.FromSeconds(10)),
+            "a failed re-open rank left the palette pending forever");
+        PumpedDispatcher.PumpUntilDrained(palette.RankCompletion);
+        PumpedDispatcher.Drain();
+        Assert.Equal(before, palette.Rows);
+        host.Harness.Announcements.Clear();
+
+        palette.MoveSelection(1);
+
+        Assert.Equal(before[0].Id, palette.SelectedId);
+        Assert.Equal(
+            before[0].Label,
+            Assert.IsType<A11yEvent.PaletteCommandSelected>(Assert.Single(host.Harness.Announcements)).Label);
     });
 
     // --- T7: a typed-ahead Enter ---------------------------------------------------
