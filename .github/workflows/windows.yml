@@ -717,7 +717,7 @@ jobs:
     needs: [changes, route]
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.app-pool == 'home') && 'slate-win-app' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-app', github.ref != 'refs/heads/main' && '-pr' || '') }}
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - name: Record the runner
         env:
