@@ -911,7 +911,19 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public string Status
     {
         get => _status;
-        private set => SetField(ref _status, value);
+        private set => WriteStatus(value, writtenByTree: false);
+    }
+
+    /// <summary>Plan 47 CB-16 (#1791, W9): every write of the line goes
+    /// through here and says whether the tree wrote it. The tree's own writes
+    /// are <see cref="WriteTreeStatus"/>; every other write, the setter's,
+    /// clears the mark, so no writer can leave it standing by forgetting it.
+    /// The mark is set before the change is raised, so a write a listener
+    /// makes in answer is the one that counts.</summary>
+    private void WriteStatus(string value, bool writtenByTree)
+    {
+        _statusWrittenByTree = writtenByTree;
+        SetField(ref _status, value, nameof(Status));
     }
 
     /// <summary>#1230: the standing reason <c>.slate/sidebar.json</c> is

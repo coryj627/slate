@@ -150,6 +150,82 @@ internal sealed partial class FilesSidebarViewModel
     private void HoldStatusForPendingPublication() =>
         _statusToReassert = IsTreePublicationPending ? Status : null;
 
+    /// <summary>Plan 47 CB-16 (#1791, W9, Call 3): whether the tree wrote the
+    /// line now shown: a publication's arm (the count, an overflow line, the
+    /// settings notice, a silent tag-tree error) or a tree failure's report.
+    /// Set only through <see cref="WriteStatus"/> by
+    /// <see cref="WriteTreeStatus"/> and <see cref="MarkStatusWrittenByTree"/>;
+    /// every other write clears it. A flag cleared by every other write is
+    /// used rather than a record of the tree's last text, which would misfire
+    /// whenever another writer wrote the same words (a folder expansion's
+    /// overflow line is the publication's word for word).</summary>
+    private bool _statusWrittenByTree;
+
+    /// <summary>The transient line now shown ("Loading files…", "Filtering
+    /// files…"), from <see cref="ShowTransientStatus"/> until a put-back; the
+    /// line it replaced; and whether the tree wrote that line.</summary>
+    private string? _transientStatus;
+
+    private string _statusBeforeTransient = string.Empty;
+    private bool _treeWroteStatusBeforeTransient;
+
+    /// <summary>A line the tree writes: see <see cref="_statusWrittenByTree"/>.</summary>
+    private void WriteTreeStatus(string text) => WriteStatus(text, writtenByTree: true);
+
+    /// <summary>A tree failure's spoken line, written by
+    /// <see cref="ReportFailure(string)"/>, is the tree's own while the line
+    /// still shows it.</summary>
+    private void MarkStatusWrittenByTree(string text)
+    {
+        if (string.Equals(Status, text, StringComparison.Ordinal))
+        {
+            _statusWrittenByTree = true;
+        }
+    }
+
+    /// <summary>Plan 47 CB-16 (#1791, W9): show a line that says work is
+    /// running, remembering the line it replaces and whether the tree wrote
+    /// that line. When the line already shows a transient line, the memory
+    /// it has stays: a refresh that replaces a running one puts back the line
+    /// from before the first, never the first's "Loading files…".</summary>
+    private void ShowTransientStatus(string text)
+    {
+        bool showsTransient = _transientStatus is string shown
+            && string.Equals(Status, shown, StringComparison.Ordinal);
+        if (!showsTransient)
+        {
+            _statusBeforeTransient = Status;
+            _treeWroteStatusBeforeTransient = _statusWrittenByTree;
+        }
+
+        _transientStatus = text;
+        Status = text;
+    }
+
+    /// <summary>Plan 47 CB-16 (#1791, W9): the work that showed
+    /// <paramref name="text"/> ended with nothing of its own to say. Acts only
+    /// while the line still shows that text, so a line written while the work
+    /// ran wins (a mutation's result, a failure's detail, a count). It puts
+    /// back the remembered line, or leaves the line empty when the tree wrote
+    /// that line: an old count, overflow line, notice or failure is stale once
+    /// the tree has moved, and putting back a count is the count CD10 forbids
+    /// a plain refresh. An end that does not match leaves the memory alone;
+    /// only a put-back clears it.</summary>
+    private void EndTransientStatus(string text)
+    {
+        if (!string.Equals(_transientStatus, text, StringComparison.Ordinal)
+            || !string.Equals(Status, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string restored = _treeWroteStatusBeforeTransient ? string.Empty : _statusBeforeTransient;
+        _transientStatus = null;
+        _statusBeforeTransient = string.Empty;
+        _treeWroteStatusBeforeTransient = false;
+        Status = restored;
+    }
+
     private void ReassertStatusAfterPublication()
     {
         if (_statusToReassert is string reassert)
