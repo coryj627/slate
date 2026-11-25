@@ -15,9 +15,10 @@ public sealed partial class ShellAccessibilityTests
     /// Plan 47 CB-36 (#1722, contract 34 D3): a UI Automation client's FIRST name search on the
     /// visual board's ItemContainer pattern returns the off-window card or labelled edge it names,
     /// as the element the search realized. Before CB-36 the first call answered nothing while it
-    /// still panned the item into view, and only a second, identical call returned it; a client
-    /// that takes nothing as "not found" (Narrator, Inspect, a script) missed the item. The search
-    /// runs out of process, through UI Automation's core, as a reader's does.
+    /// still panned the item into view, and only a later, identical call returned it; a client
+    /// that takes nothing as "not found" (an inspection tool or a script; whether a screen reader
+    /// does is not checked here) missed the item. The search runs out of process, through UI
+    /// Automation's core, as a reader's does. A scan follows, with the item names census.
     /// </summary>
     [Fact]
     [Trait("gate", "W-C")]
@@ -30,14 +31,15 @@ public sealed partial class ShellAccessibilityTests
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
         // Home in view at the board's opening zoom; "Far One" and the labelled edge's two cards
-        // tens of thousands of units away, so no window the board opens with reaches them.
+        // tens of thousands of units away, so no window the board opens with reaches them. Alpha
+        // sits over Beta, so the edge's union (200 by 260) fits a small board at zoom 1.
         File.WriteAllText(
             Path.Combine(vaultRoot, "far.canvas"),
             "{\"nodes\":["
             + "{\"id\":\"home\",\"type\":\"text\",\"text\":\"Home\",\"x\":40,\"y\":40,\"width\":200,\"height\":100},"
             + "{\"id\":\"far\",\"type\":\"text\",\"text\":\"Far One\",\"x\":20000,\"y\":40,\"width\":200,\"height\":100},"
             + "{\"id\":\"a\",\"type\":\"text\",\"text\":\"Alpha\",\"x\":30000,\"y\":40,\"width\":200,\"height\":100},"
-            + "{\"id\":\"b\",\"type\":\"text\",\"text\":\"Beta\",\"x\":30300,\"y\":40,\"width\":200,\"height\":100}"
+            + "{\"id\":\"b\",\"type\":\"text\",\"text\":\"Beta\",\"x\":30000,\"y\":200,\"width\":200,\"height\":100}"
             + "],\"edges\":["
             + "{\"id\":\"e1\",\"fromNode\":\"a\",\"toNode\":\"b\",\"toEnd\":\"arrow\",\"label\":\"cites\"}"
             + "]}");
@@ -86,12 +88,12 @@ public sealed partial class ShellAccessibilityTests
                     null, automation.PropertyLibrary.Element.Name, name);
                 if (found is null)
                 {
-                    // The issue's control: say whether a second, identical search finds it.
+                    // The issue's control: say whether the same search, retried, finds it.
                     AutomationElement? again = Retry.WhileNull(
                         () => container.Pattern.FindItemByProperty(null, automation.PropertyLibrary.Element.Name, name),
                         TimeSpan.FromSeconds(10)).Result;
                     failures.Add(
-                        $"the first name search for \"{name}\" returned nothing; a second search returned "
+                        $"the first name search for \"{name}\" returned nothing; the same search, retried for up to 10 s, returned "
                         + (again is null ? "nothing too" : "it") + " (#1722)");
                     continue;
                 }
@@ -102,8 +104,10 @@ public sealed partial class ShellAccessibilityTests
                     continue;
                 }
 
-                // The element the client holds is the board's own item: its parent is the board, and once
-                // the install lands it is the board's child of that name, on screen inside the board.
+                // The element the client holds is the board's own item: once the install lands it is the
+                // board's child of that name, on screen inside the board. Its parent is read after the
+                // install may have landed, which makes the board its parent either way; the hosted
+                // TheItemTheDoorHandsOutIsUnderTheBoardBeforeItsInstall shows the door connects it first.
                 AutomationElement? parent = automation.TreeWalkerFactory.GetRawViewWalker().GetParent(found);
                 if (parent?.Properties.AutomationId.ValueOrDefault != "CanvasVisualBoard")
                 {
@@ -128,6 +132,9 @@ public sealed partial class ShellAccessibilityTests
             }
 
             Assert.True(failures.Count == 0, string.Join("; ", failures) + ".");
+
+            // The board after both realizations, scanned with its new children.
+            AssertAxeClean(process, "canvas-board-first-search");
         }
         catch (Exception)
         {

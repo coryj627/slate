@@ -912,11 +912,14 @@ public sealed class CanvasRendererPeerTests : IDisposable
     });
 
     /// <summary>Plan 47 CB-36 (#1838, contract 34 D9): the board paints its cards in core's
-    /// scene order, so a group listed before its members is painted under them on every run.
+    /// scene order and never re-sorts it, so a group listed before its members is painted under
+    /// them and one listed after them is painted over them, on every run, as hit testing answers.
     /// The cards layer used to paint in its placements dictionary's order, a string-hash order
     /// that changes from process to process (step 0 saw the group painted 11th, 6th and 1st).
-    /// Eleven overlapping nodes: a lucky pass is one chance in 11!. The expected rectangles come
-    /// from the fixture's own geometry, not from the placements the board paints from.</summary>
+    /// Twelve overlapping nodes, so a lucky pass is one chance in 12!. A card outside the window
+    /// whose key a client retains has a tombstone placement and is not painted. The expected
+    /// rectangles come from the fixture's own geometry, not from the placements the board paints
+    /// from.</summary>
     [Fact]
     public void TheBoardPaintsItsCardsInSceneOrderSoAGroupIsUnderItsMembers() => RunSta(() =>
     {
@@ -924,31 +927,44 @@ public sealed class CanvasRendererPeerTests : IDisposable
         var expected = new List<(string Id, Rect Document)> { ("g", new Rect(0, 0, 900, 600)) };
         for (int index = 0; index < 10; index++)
         {
+            if (index == 5)
+            {
+                nodes.Add(Card("far", "Far One", 20_000, 40));
+            }
             nodes.Add(Card($"c{index}", $"Card {index}", 20 + (40 * index), 20 + (20 * index)));
             expected.Add(($"c{index}", new Rect(20 + (40 * index), 20 + (20 * index), 200, 100)));
         }
+        nodes.Add(Group("h", "Late", 400, 150, 500, 300));
+        expected.Add(("h", new Rect(400, 150, 500, 300)));
         WriteCanvas("order.canvas", [.. nodes], []);
         using Board board = Open("order.canvas");
         board.ZoomTo(0.5);
+        CanvasBoardAutomationPeer far = Assert.IsType<CanvasCardAutomationPeer>(board.Renderer.PeerFor(CanvasPeerKey.Card("far")));
+        board.Renderer.Engine.CommitRetained(System.Collections.Immutable.ImmutableHashSet.Create(CanvasPeerKey.Card("far")));
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Card("far")) == CanvasPeerCell.Placeholder);
         CanvasPresentationState state = board.Renderer.Engine.Current!;
         Assert.Equal(
-            expected.Select(entry => entry.Id),
+            new[] { "g", "c0", "c1", "c2", "c3", "c4", "far", "c5", "c6", "c7", "c8", "c9", "h" },
             state.Source.Loaded!.Population.SceneNodes.Select(node => node.NodeId));
 
         string[] painted = [.. PaintedCardRectangles(board.Renderer).Select(rect =>
             expected.FirstOrDefault(entry => SameRect(ViewRect(state.Viewport, entry.Document), rect)).Id ?? $"(unknown {rect})")];
 
         Assert.Equal(expected.Select(entry => entry.Id), painted);
+        GC.KeepAlive(far);
     });
 
     /// <summary>Plan 47 CB-36 (#1722, contract 34 D3): a UI Automation client's FIRST search on
     /// the board's ItemContainer door returns the off-window card or labelled edge it realizes:
     /// by name, and as the next item after "Home" (property 0). The element the client holds is
-    /// the board's own item: its parent is the board, and once the install lands it is the
-    /// board's child of that name, on screen. Before CB-36 the first call answered nothing while
-    /// it still realized and panned (WPF wraps only a peer connected under the board, and the
-    /// minted peer was in no child list until the install). The client is UI Automation's own,
-    /// on a pool thread, while this thread pumps.</summary>
+    /// the board's own item: once the install lands it is the board's child of that name, on
+    /// screen. (Its parent is read after the install may have landed, which re-parents it to the
+    /// board either way; that the door connects it to the board before the install is
+    /// <see cref="TheItemTheDoorHandsOutIsUnderTheBoardBeforeItsInstall"/>'s to show.) Before
+    /// CB-36 the first call answered nothing while it still realized and panned: WPF wraps a peer
+    /// only once its parent and window handle are set or it finds the peer in a root's child
+    /// lists, and the minted peer was in no child list until the install. The client is UI
+    /// Automation's own, on a pool thread, while this thread pumps.</summary>
     [Theory]
     [InlineData("Far One", false)]
     [InlineData(FarEdge, false)]
@@ -1031,8 +1047,9 @@ public sealed class CanvasRendererPeerTests : IDisposable
     /// the board's window, a client reading the board's Selection gets that card, as a D3
     /// placeholder: offscreen, with the realize door and no SelectionItem. Before CB-36 the board
     /// handed back an array holding null for it, and the client read nothing selected. Follow
-    /// Selection is off, so the seat never materializes and its peer is first minted by the
-    /// read.</summary>
+    /// Selection is off, so the seat never materializes: its peer is first minted by the board's
+    /// own Selection, here in process before any client has connected the board, and then
+    /// read through the client.</summary>
     [Fact]
     public void AClientReadsASeatOffTheWindowAsTheSelection() => RunSta(() =>
     {
@@ -1102,11 +1119,12 @@ public sealed class CanvasRendererPeerTests : IDisposable
     private const string FarEdge =
         "Text card \"Alpha\" connects to Text card \"Beta\", labelled \"cites\"";
 
-    /// <summary>"Home" in view at the origin; "Far One", and "Alpha" and "Beta" with the labelled
-    /// edge "cites" between them, tens of thousands of units away.</summary>
+    /// <summary>"Home" in view at the origin; "Far One", and "Alpha" over "Beta" with the labelled
+    /// edge "cites" between them, tens of thousands of units away. The edge's union is 200 by
+    /// 260 units, so a realization at zoom 1 contains it on any board at least that big.</summary>
     private void WriteFarCanvas(string name) => WriteCanvas(
         name,
-        [Card("home", "Home", 40, 40), Card("far", "Far One", 20_000, 40), Card("a", "Alpha", 30_000, 40), Card("b", "Beta", 30_300, 40)],
+        [Card("home", "Home", 40, 40), Card("far", "Far One", 20_000, 40), Card("a", "Alpha", 30_000, 40), Card("b", "Beta", 30_000, 200)],
         [Edge("e1", "a", "b", "cites")]);
 
     /// <summary>A UI Automation client's read, made on a pool thread through UI Automation's

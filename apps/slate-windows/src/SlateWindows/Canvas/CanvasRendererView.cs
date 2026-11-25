@@ -297,10 +297,10 @@ internal sealed class CanvasRendererView : FrameworkElement
         double panY = state.Viewport.PanY;
         double fontSize = 12.0 * TextScaleService.CurrentFactor * zoom;
         var matched = MatchedIds(state);
-        // D9 (#1838): paint in core's scene order, the order hit testing and the outline
-        // read, so a group listed before its members is painted under them. The placements
-        // are a dictionary, whose order is a string-hash order that changes from process to
-        // process; they are only looked up here, never walked.
+        // D9 (#1838): paint in core's scene order, the order hit testing walks, so a group
+        // listed before its members is painted under them. The placements are a dictionary,
+        // whose order is a string-hash order that changes from process to process; they are
+        // only looked up here, never walked.
         foreach (CanvasSceneNode node in population.SceneNodes)
         {
             if (!state.Topology.Placements.TryGetValue(CanvasPeerKey.Card(node.NodeId), out CanvasPeerPlacement? placement)

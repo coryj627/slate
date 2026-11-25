@@ -148,12 +148,12 @@ internal sealed class CanvasRendererAutomationPeer :
     private bool IsShown => _view.Visibility is System.Windows.Visibility.Visible;
 
     /// <summary>A board peer's provider for a client, connected to the board first (#1722).
-    /// WPF wraps only a peer it finds connected under an automation root, and a peer minted for
-    /// an off-window item is in no child list until the next install refreshes the board's
-    /// children, so <c>ProviderFromPeer</c> alone answers null for it. Connecting sets the
-    /// peer's parent and window handle only, as WPF's own items controls do for the peers
-    /// their item door creates; the child list, and the one children-invalidated event each
-    /// install raises, are unchanged. With no client the board has no window handle, the
+    /// WPF wraps a peer only once its parent and window handle are set, or once it finds the peer
+    /// in an automation root's child lists; a peer minted for an off-window item is in no child
+    /// list until the next install refreshes the board's children, so <c>ProviderFromPeer</c>
+    /// alone answers null for it. Connecting sets the peer's parent and window handle only, as
+    /// WPF's own items controls do for the peers their item door creates; the child list, and
+    /// the one children-invalidated event each install raises, are unchanged. With no client the board has no window handle, the
     /// connection declines, and the answer is null, as before. If a later WPF drops the
     /// internal member, the answer is what it was before CB-36.</summary>
     private IRawElementProviderSimple? ConnectedProvider(CanvasBoardAutomationPeer peer)
@@ -174,8 +174,8 @@ internal sealed class CanvasRendererAutomationPeer :
         // existing yet; realization mints the placeholder (D3's
         // first-touch cell). Only the Name property participates —
         // the platform sends 0 for "next item".
-        // A hidden board answers nothing and realizes nothing (CB-36): it has no children,
-        // and a search would pan it out of sight.
+        // A hidden board answers nothing and realizes nothing (CB-36): it has no children, and
+        // a search would realize and pan the board while it is hidden.
         if (!IsShown
             || (propertyId != 0
                 && propertyId != AutomationElementIdentifiers.NameProperty.Id))
