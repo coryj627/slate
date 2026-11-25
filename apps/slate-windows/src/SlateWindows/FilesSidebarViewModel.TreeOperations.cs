@@ -12,6 +12,10 @@ namespace SlateWindows;
 /// </summary>
 internal sealed partial class FilesSidebarViewModel
 {
+    /// <summary>Plan 47 CB-16 (#1791): the asynchronous refresh's transient
+    /// line (<see cref="ShowTransientStatus"/>).</summary>
+    private const string LoadingFilesStatus = "Loading files…";
+
     // When present, tree providers and projection run through _runTreeWorker,
     // which must not execute inline on this context. RootNodes, Tags, Status,
     // and announcements are published only after posting back to this context.
@@ -339,7 +343,11 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         Task previous = _treeRefreshCompletion;
-        Status = "Loading files…";
+        // Plan 47 CB-16 (#1791, W9): transient. It ends at the publication
+        // (ApplyTreeRefresh), at a cancel with no successor
+        // (CancelTreeRefresh) and at a refused admission; a failure writes
+        // its own line, and a successor keeps this one's memory.
+        ShowTransientStatus(LoadingFilesStatus);
         _treeRefreshCompletion = RefreshTreeAsync(
             previous,
             generation,
@@ -356,14 +364,16 @@ internal sealed partial class FilesSidebarViewModel
     /// refresh — shown on the status line only (the rescan counts it).</summary>
     private void ReportTreeFailure(string message, bool silent)
     {
+        // Plan 47 CB-16 (#1791, W9): either way the line is the tree's own,
+        // so a later refresh never puts it back.
         if (silent)
         {
-            Status = message;
+            WriteTreeStatus(message);
             HoldStatusForPendingPublication();
             return;
         }
 
-        ReportFailure(message);
+        ReportTreeReadFailure(message);
     }
 
     private async Task RefreshTreeAsync(
@@ -405,6 +415,26 @@ internal sealed partial class FilesSidebarViewModel
                 token).ConfigureAwait(false);
             if (!admitted)
             {
+                // Plan 47 CB-16 (#1791, W9): refused (the session is shutting
+                // down), so nothing publishes; the line ends on the tree's
+                // context, as every other write of this refresh does, unless
+                // a later refresh or a cancel owns it by then.
+                _treeUiContext!.Post(
+                    _ =>
+                    {
+                        try
+                        {
+                            if (generation == _treeGeneration)
+                            {
+                                EndTransientStatus(LoadingFilesStatus);
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                        }
+                    },
+                    null);
                 return;
             }
 
@@ -704,18 +734,26 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         BatchSelectionCount = _batchChecked.Count;
+        // Plan 47 CB-16 (#1791, W9): every arm's line is the tree's own
+        // (WriteTreeStatus), so no later refresh puts it back.
         if (outcome.Level.Truncated)
         {
-            Status = DirectoryOverflowStatus(string.Empty);
+            WriteTreeStatus(DirectoryOverflowStatus(string.Empty));
         }
-        else if (reportCount || _settingsNotice is not null)
+        else if (reportCount)
         {
-            Status = $"{outcome.Level.MaterializedCount:N0} top-level items."
-                + (_settingsNotice is null ? string.Empty : $" {_settingsNotice}");
+            WriteTreeStatus($"{outcome.Level.MaterializedCount:N0} top-level items."
+                + (_settingsNotice is null ? string.Empty : $" {_settingsNotice}"));
+        }
+        else if (_settingsNotice is not null)
+        {
+            // Plan 47 CB-16 (drift 5, CD10): a refresh that does not count
+            // writes the notice alone; no plain refresh writes a count.
+            WriteTreeStatus(_settingsNotice);
         }
         else if (outcome.RestoredOverflowPath is string overflowPath)
         {
-            Status = DirectoryOverflowStatus(overflowPath);
+            WriteTreeStatus(DirectoryOverflowStatus(overflowPath));
         }
 
         // W7-7 PR 7 (v2 §6): a silent refresh's tag-tree failure is not
@@ -723,7 +761,7 @@ internal sealed partial class FilesSidebarViewModel
         // count, where it is seen; the rescan counts it.
         if (silent && outcome.TagGeneration == _tagGeneration && outcome.Tags.Error is string tagError)
         {
-            Status = tagError;
+            WriteTreeStatus(tagError);
         }
 
         // The mutation result wins the turn over this publication's
@@ -734,6 +772,10 @@ internal sealed partial class FilesSidebarViewModel
         // WB-12 (#1505): the published levels' stale pins, after the
         // publication; the prune itself is silent.
         StartReportedPinPrunes();
+        // Plan 47 CB-16 (#1791, W9): last, after the arms and the reassert. A
+        // publication with nothing of its own to say puts back what
+        // "Loading files…" replaced; a line any of them wrote stays.
+        EndTransientStatus(LoadingFilesStatus);
     }
 
     internal bool CancelTreeRefresh()
@@ -748,6 +790,9 @@ internal sealed partial class FilesSidebarViewModel
 
         CancelTreeRefreshCore();
         SettleTreeRefreshWaiters(int.MaxValue, failure: null, cancelled: true);
+        // Plan 47 CB-16 (#1791, P2e): the cancelled refresh has no successor
+        // (the close's path, a shutdown), so its "Loading files…" ends here.
+        EndTransientStatus(LoadingFilesStatus);
 
         return wasPending;
     }
@@ -855,7 +900,8 @@ internal sealed partial class FilesSidebarViewModel
                 ProjectBatchChecksOnto(level.Nodes);
                 if (level.Truncated)
                 {
-                    Status = DirectoryOverflowStatus(node.Path);
+                    // Plan 47 CB-16 (#1791, W9): the tree's own line.
+                    WriteTreeStatus(DirectoryOverflowStatus(node.Path));
                 }
 
                 await Task.Yield();
@@ -935,7 +981,7 @@ internal sealed partial class FilesSidebarViewModel
         HostLog.Write(HostDiagnosticEvent.SidebarBulkExpansionFailed, exception);
         try
         {
-            ReportFailure("Could not expand loaded folders.");
+            ReportTreeReadFailure("Could not expand loaded folders.");
         }
         catch (Exception callbackException)
         {

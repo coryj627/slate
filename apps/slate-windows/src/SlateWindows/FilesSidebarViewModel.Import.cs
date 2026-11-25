@@ -23,8 +23,13 @@ internal sealed partial class FilesSidebarViewModel
     private Task _importCompletion = Task.CompletedTask;
     private bool _isImporting;
     private bool _isImportRunning;
+    private bool _isImportCancelling;
 
     internal Task ImportCompletion => _importCompletion;
+
+    /// <summary>Plan 47 CB-16 (#1830): called after each file the import copies, on its
+    /// worker, so a fact can cancel part way through.</summary>
+    internal Action? AfterImportFileCopiedForTesting { get; set; }
 
     /// <summary>
     /// The import's admission: set at the press and cleared when the import ends, its pick
@@ -56,15 +61,67 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (SetField(ref _isImportRunning, value))
             {
-                OnPropertyChanged(nameof(ImportStatus));
+                OnPropertyChanged(nameof(ImportStatusLine));
+                RaiseCommandStates();
+                // Plan 47 CB-16 (Codex round 1): the status bar's item shows and hides after
+                // the commands are raised, so keys on its Cancel move first (CommandKeysFirst)
+                // as the import ends, before the item goes, as the trash's do.
+                OnPropertyChanged(nameof(ShowImportProgress));
+            }
+        }
+    }
+
+    /// <summary>Plan 47 CB-16 (#1830): the status bar shows the import (<see
+    /// cref="IsImportRunning"/>), raised after the commands so a Cancel holding the keys
+    /// hands them on before its item hides.</summary>
+    public bool ShowImportProgress => IsImportRunning;
+
+    /// <summary>Plan 47 CB-16 (#1830, W3): the running import has been asked to stop. Set
+    /// by a cancel while it copies, cleared when it ends, after <see cref="IsImportRunning"/>,
+    /// so Cancel import is never on again in between, and the next import starts at
+    /// Importing.</summary>
+    public bool IsImportCancelling
+    {
+        get => _isImportCancelling;
+        private set
+        {
+            if (SetField(ref _isImportCancelling, value))
+            {
+                OnPropertyChanged(nameof(ImportStatusLine));
                 RaiseCommandStates();
             }
         }
     }
 
-    public string ImportStatus => IsImportRunning ? "Import in progress" : "Import is idle";
+    /// <summary>Plan 47 CB-16 (#1830, CD10): what the status bar shows while an import runs,
+    /// in core's words ("Importing…", then "Cancelling import…" once it is asked to stop).
+    /// Empty while no import is copying.</summary>
+    public string ImportStatusLine => IsImportRunning
+        ? SlateUniffiMethods.ImportStatusLine(IsImportCancelling ? ImportPhase.Cancelling : ImportPhase.Importing)
+        : string.Empty;
 
-    public void CancelImport()
+    /// <summary>Plan 47 CB-16 (#1830; the owner's answer of 2026-11-24): Cancel import's
+    /// press, from any route (the status bar, the Files pane, the File menu, the palette,
+    /// Escape). It asks the import to stop and says so at once, in core's words; the
+    /// summary follows when the import settles. A press that finds nothing left to stop
+    /// says nothing, and nor does one during the pick (the merge judge's n4): Escape's
+    /// route cancels an admitted import then too (#1272), but nothing is copying, so it is
+    /// silent, as a close's is, and a pick that still chooses sources says the summary.
+    /// </summary>
+    private void RequestImportCancellation()
+    {
+        bool copying = IsImportRunning;
+        if (TryCancelImport() && copying)
+        {
+            _announce(new A11yEvent.ImportCancelling());
+        }
+    }
+
+    /// <summary>Asks the import to stop without a word: a vault close (which says its own
+    /// refusal) and the session's shutdown.</summary>
+    public void CancelImport() => _ = TryCancelImport();
+
+    private bool TryCancelImport()
     {
         CancellationTokenSource? cancellation;
         lock (_importCancellationGate)
@@ -75,7 +132,12 @@ internal sealed partial class FilesSidebarViewModel
 
         if (cancellation is null)
         {
-            return;
+            return false;
+        }
+
+        if (IsImportRunning)
+        {
+            IsImportCancelling = true;
         }
 
         try
@@ -95,6 +157,8 @@ internal sealed partial class FilesSidebarViewModel
         {
             cancellation.Dispose();
         }
+
+        return true;
     }
 
     /// <summary>Import…'s press. Plan 47 CB-17b (#1866, D3): the command admits while it
@@ -124,6 +188,11 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         IsImporting = true;
+        // Plan 47 CB-16 (#1830, W1): where the copy goes, once the pick has chosen sources;
+        // null until then, so a cancel before the pick returned reports nothing.
+        string? destination = null;
+        // The summary, said only once the import has ended (below).
+        A11yEvent? finished = null;
         try
         {
             IReadOnlyList<string> sources;
@@ -144,19 +213,23 @@ internal sealed partial class FilesSidebarViewModel
                 return;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-
+            // An empty pick (the box's Cancel, the dialog's Cancel) is no import: nothing to
+            // report, whatever else happened meanwhile (the red team's low 1).
             if (sources.Count == 0 || _vaultRoot is null)
             {
                 return;
             }
 
-            string destination = SelectedNode?.IsDirectory == true
+            destination = SelectedNode?.IsDirectory == true
                 ? SelectedNode.Path
                 : ParentPath(SelectedNode?.Path);
+            // A pick that returned sources after a close or a shutdown asked the import to
+            // stop: nothing was copied, and the import says so (below).
+            cancellationToken.ThrowIfCancellationRequested();
             string[] acceptedSources = sources.Take(256).ToArray();
             int omittedSources = sources.Count - acceptedSources.Length;
-            // D3: Import… goes off here, the keys moved off it first.
+            // D3: Import… goes off here, the keys moved off it first. CB-16 (W3): it starts
+            // copying at Importing, because every import's end clears its cancel (below).
             IsImportRunning = true;
             (bool admitted, ImportResult? result) = await RunImportWorkerAsync(
                 acceptedSources,
@@ -168,19 +241,28 @@ internal sealed partial class FilesSidebarViewModel
                 return;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
             if (result is null)
             {
                 throw new InvalidOperationException("Import worker completed without a result.");
             }
 
-            Status = ImportSummary(result, destination);
-            // W0.5-3 residue: Windows import-engine completion copy.
-            _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
-            Refresh();
+            // Plan 47 CB-16 (#1830, W1): what the worker did is reported, cancelled or not.
+            // The worker's own result says whether the copy was cut short: a cancel that
+            // came after the last copy reports a full copy.
+            finished = ReportImportFinished(result, destination, refresh: true);
         }
         catch (OperationCanceledException)
         {
+            // Plan 47 CB-16 (#1830, W1): cancelled after the pick chose sources and before
+            // the worker produced a result, so nothing was copied. Said, as a cancel during
+            // the copy is; a cancel before the pick returned has nothing to report.
+            if (destination is not null)
+            {
+                finished = ReportImportFinished(
+                    new ImportResult(0, 0, 0, Cancelled: true, LimitReached: false),
+                    destination,
+                    refresh: false);
+            }
         }
         catch (Exception exception)
         {
@@ -206,9 +288,61 @@ internal sealed partial class FilesSidebarViewModel
                 cancellation.Dispose();
             }
 
-            IsImportRunning = false;
-            IsImporting = false;
+            try
+            {
+                // Plan 47 CB-16 (NVDA spot 2, 2026-11-25): said before the flags clear, as the
+                // trash's summary is, so keys on a Cancel that goes with the import move after
+                // it. A focus change inside the window drops only NVDA's stale focus speech,
+                // never a notification; said after the keys moved, the summary waited behind
+                // the focus line of where they landed (11.4 s for the status bar's).
+                if (finished is not null)
+                {
+                    _announce(finished);
+                }
+            }
+            finally
+            {
+                // The merge judge's m1: the import ends even when its summary cannot be said
+                // (the dispatcher's raise can throw), or the vault could never close again.
+                // Running first: Cancel import reads both, and must not come on in between.
+                IsImportRunning = false;
+                IsImportCancelling = false;
+                IsImporting = false;
+            }
         }
+    }
+
+    /// <summary>Plan 47 CB-16 (#1830, CD10, W1): the import's outcome, in core's words
+    /// (<c>ImportFinished</c>), with <see cref="ReportResult"/>'s discipline: the refresh
+    /// first, whose "Loading files…" this line then replaces, and the line held for that
+    /// refresh's publication. Returns the event for the caller to say once the import has
+    /// ended; null, and nothing shown, while the session shuts down.
+    /// </summary>
+    private A11yEvent.ImportFinished? ReportImportFinished(ImportResult result, string destination, bool refresh)
+    {
+        if (SessionShutdownStarted)
+        {
+            return null;
+        }
+
+        var finished = new A11yEvent.ImportFinished(
+            CopiedFiles: (uint)result.ImportedFiles,
+            CopiedFolders: (uint)result.ImportedFolders,
+            MovedItems: 0,
+            ReconciledItems: 0,
+            Destination: destination,
+            Cancelled: result.Cancelled,
+            NotImported: (uint)result.Failed,
+            Warnings: 0,
+            StoppedAtEntryLimit: result.LimitReached ? (uint)MaxImportEntries : null);
+        if (refresh)
+        {
+            Refresh();
+        }
+
+        Status = SlateUniffiMethods.A11yRender(finished).Text;
+        HoldStatusForPendingPublication();
+        return finished;
     }
 
     private async Task<(bool Admitted, ImportResult? Result)> RunImportWorkerAsync(
@@ -288,6 +422,7 @@ internal sealed partial class FilesSidebarViewModel
                 {
                     ImportFile(absolute, destination, cancellationToken);
                     importedFiles++;
+                    AfterImportFileCopiedForTesting?.Invoke();
                 }
                 else if (Directory.Exists(absolute))
                 {
@@ -331,6 +466,7 @@ internal sealed partial class FilesSidebarViewModel
                             {
                                 ImportFile(child, destinationDirectory, cancellationToken);
                                 importedFiles++;
+                                AfterImportFileCopiedForTesting?.Invoke();
                             }
                         }
                     }
@@ -530,44 +666,6 @@ internal sealed partial class FilesSidebarViewModel
         string extension = Path.GetExtension(name);
         string stem = Path.GetFileNameWithoutExtension(name);
         return $"{stem} {suffix}{extension}";
-    }
-
-    private static string ImportSummary(ImportResult result, string destination)
-    {
-        var copied = new List<string>();
-        if (result.ImportedFiles > 0)
-        {
-            copied.Add($"{result.ImportedFiles:N0} {(result.ImportedFiles == 1 ? "file" : "files")}");
-        }
-
-        if (result.ImportedFolders > 0)
-        {
-            copied.Add($"{result.ImportedFolders:N0} {(result.ImportedFolders == 1 ? "folder" : "folders")}");
-        }
-
-        string location = string.IsNullOrEmpty(destination)
-            ? "the vault root"
-            : Path.GetFileName(destination.TrimEnd('/'));
-        string message = copied.Count == 0
-            ? $"No items were imported to {location}."
-            : $"Copied {string.Join(" and ", copied)} to {location}.";
-        if (result.Cancelled)
-        {
-            message += " Import cancelled; completed copies remain.";
-        }
-        else if (result.Failed > 0)
-        {
-            message += $" {result.Failed:N0} "
-                + (result.Failed == 1 ? "item was" : "items were")
-                + " not imported.";
-        }
-
-        if (result.LimitReached)
-        {
-            message += " Import stopped at the 10,000-item safety limit; remaining entries were not enumerated.";
-        }
-
-        return message;
     }
 
     private sealed record ImportResult(

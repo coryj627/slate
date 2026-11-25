@@ -95,6 +95,53 @@ public sealed class ImportEscapePrecedenceTests
         Assert.Equal(fromTheMenu ? 1 : 0, import.WorkerRuns);
     });
 
+    /// <summary>
+    /// Plan 47 CB-16 (the merge judge's n4): Escape during the pick still cancels the
+    /// admitted import (#1272), but nothing is copying yet, so it says nothing, as a close's
+    /// cancel does. A pick that then chooses its source says the summary (nothing imported,
+    /// cancelled); one that returns nothing is no import and says nothing at all. Before,
+    /// the press said "Cancelling import…", and after an empty pick no summary followed it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EscapeDuringThePickCancelsTheImportWithoutTheCancelSentence(bool chose) => RunSta(() =>
+    {
+        using var import = new PendingImport();
+        using var host = new ShellHost(import);
+        host.Sidebar.ImportCommand.Execute(null);
+        Assert.True(host.Sidebar.IsImporting, "premise: the import never asked for its sources");
+        Assert.False(host.Sidebar.IsImportRunning, "premise: the import is copying before its pick returned");
+
+        Assert.True(host.PressPreview(host.ByAutomationId("FilesTree"), Key.Escape), "Escape during the pick went unhandled.");
+        Assert.Empty(host.Said);
+
+        if (chose)
+        {
+            import.HandOverTheSource();
+        }
+        else
+        {
+            import.HandOverNothing();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ImportCompletion);
+        PumpedDispatcher.Drain();
+        Assert.False(host.Sidebar.IsImporting);
+        Assert.Equal(0, import.WorkerRuns);
+        Assert.DoesNotContain(host.Said, said => said is A11yEvent.ImportCancelling);
+        if (chose)
+        {
+            A11yEvent.ImportFinished finished = Assert.IsType<A11yEvent.ImportFinished>(Assert.Single(host.Said));
+            Assert.True(finished.Cancelled, "the summary did not say the import was cancelled");
+            Assert.Equal(0u, finished.CopiedFiles);
+        }
+        else
+        {
+            Assert.Empty(host.Said);
+        }
+    });
+
     /// <summary>The shipped shell, unshown (SheetKeyboardFenceTests' shape):
     /// the real MainWindow — its XAML, lifecycle and handlers — over a
     /// scanned fixture vault's workspace and a Files sidebar whose import
@@ -127,7 +174,7 @@ public sealed class ImportEscapePrecedenceTests
                 _ => { },
                 startInteractionBackgroundWork: false,
                 preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")));
-            Sidebar = NewSidebar(_session, _fixture.Root, import);
+            Sidebar = NewSidebar(_session, _fixture.Root, import, Said.Add);
             Shell = new MainWindow();
             _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
             SetState(_lifecycle, nameof(VaultLifecycleViewModel.Workspace), Workspace);
@@ -143,6 +190,9 @@ public sealed class ImportEscapePrecedenceTests
         public WorkspaceViewModel Workspace { get; }
 
         public FilesSidebarViewModel Sidebar { get; }
+
+        /// <summary>What the sidebar said, in order.</summary>
+        public List<A11yEvent> Said { get; } = [];
 
         public T Element<T>(string name)
             where T : class =>
@@ -239,11 +289,11 @@ public sealed class ImportEscapePrecedenceTests
         }
     }
 
-    private static FilesSidebarViewModel NewSidebar(VaultSession session, string root, PendingImport import)
+    private static FilesSidebarViewModel NewSidebar(VaultSession session, string root, PendingImport import, Action<A11yEvent> announce)
     {
         var sidebar = new FilesSidebarViewModel(
             session,
-            _ => { },
+            announce,
             vaultRoot: root,
             pickImportSources: import.PickSources,
             localAppDataRoot: Path.Combine(root, "device-state"),

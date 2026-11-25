@@ -620,6 +620,116 @@ pub enum RunningWork {
     ExpandLoadedFolders,
 }
 
+/// The phase of a running import (plan 47 CB-16, #1830, CD10): what the
+/// import's status text says while it runs. The members are the Mac
+/// import strip's four titles; choosing `Finishing` over `Importing`
+/// stays the Mac's rule. Windows uses `Importing` and `Cancelling`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportPhase {
+    /// Items are being copied in.
+    Importing,
+    /// The last provider is done and the import is settling.
+    Finishing,
+    /// Items inside the vault are being moved.
+    Moving,
+    /// A cancel was asked for and the import is stopping.
+    Cancelling,
+}
+
+/// The status text a running import shows for its phase (plan 47 CB-16,
+/// #1830, CD10). `A11yEvent::ImportCancelling` speaks the `Cancelling`
+/// line, so the status text and the sentence are one string.
+pub fn import_status_line(phase: ImportPhase) -> String {
+    match phase {
+        ImportPhase::Importing => "Importing…",
+        ImportPhase::Finishing => "Finishing import…",
+        ImportPhase::Moving => "Moving items…",
+        ImportPhase::Cancelling => "Cancelling import…",
+    }
+    .to_owned()
+}
+
+/// Where an import went, as its summary names it: "the vault root" for
+/// the root, else the destination's last segment, trailing slashes
+/// ignored (Windows' `Path.GetFileName(destination.TrimEnd('/'))`, the
+/// Mac's `lastPathComponent`).
+fn import_location(destination: &str) -> &str {
+    let trimmed = destination.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "the vault root";
+    }
+    trimmed.rsplit_once('/').map_or(trimmed, |(_, last)| last)
+}
+
+/// `A11yEvent::ImportFinished`'s sentence. The clause order, the first
+/// clause's capital and the cancel's precedence over the items not
+/// imported are both hosts' rules; every count is grouped.
+#[allow(clippy::too_many_arguments)]
+fn import_summary(
+    copied_files: u32,
+    copied_folders: u32,
+    moved_items: u32,
+    reconciled_items: u32,
+    destination: &str,
+    cancelled: bool,
+    not_imported: u32,
+    warnings: u32,
+    stopped_at_entry_limit: Option<u32>,
+) -> String {
+    let mut copied: Vec<String> = Vec::new();
+    if copied_files > 0 {
+        copied.push(counted(copied_files, "file", "files"));
+    }
+    if copied_folders > 0 {
+        copied.push(counted(copied_folders, "folder", "folders"));
+    }
+    let mut clauses: Vec<String> = Vec::new();
+    if !copied.is_empty() {
+        clauses.push(format!("Copied {}", copied.join(" and ")));
+    }
+    if moved_items > 0 {
+        let verb = if clauses.is_empty() { "Moved" } else { "moved" };
+        clauses.push(format!("{verb} {}", counted(moved_items, "item", "items")));
+    }
+    if reconciled_items > 0 {
+        let verb = if clauses.is_empty() { "Found" } else { "found" };
+        clauses.push(format!(
+            "{verb} {} during reconciliation",
+            counted(reconciled_items, "destination item", "destination items")
+        ));
+    }
+    let mut message = if clauses.is_empty() {
+        "No items were imported".to_owned()
+    } else {
+        clauses.join(" and ")
+    };
+    message.push_str(" to ");
+    message.push_str(import_location(destination));
+    message.push('.');
+    if cancelled {
+        message.push_str(" Import cancelled; completed copies remain.");
+    } else if not_imported > 0 {
+        message.push(' ');
+        message.push_str(&counted(not_imported, "item was", "items were"));
+        message.push_str(" not imported.");
+    }
+    if warnings > 0 {
+        message.push(' ');
+        message.push_str(&counted(
+            warnings,
+            "import warning needs",
+            "import warnings need",
+        ));
+        message.push_str(" attention.");
+    }
+    if let Some(limit) = stopped_at_entry_limit {
+        message.push_str(" Import stopped at the ");
+        message.push_str(&crate::sidebar_filter::group_thousands(u64::from(limit)));
+        message.push_str("-item safety limit; remaining entries were not enumerated.");
+    }
+    message
+}
+
 /// The shell regions F6 cycling names that carry no other event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellRegion {
@@ -986,6 +1096,37 @@ pub enum A11yEvent {
     },
     SidebarSettingsReloadedStaleRefs,
     SidebarSettingsReloaded,
+
+    // --- Files sidebar import (plan 47 CB-16, #1830, CD10) ---
+    /// Plan 47 CB-16 (#1830, CD10): an import's outcome, spoken when the
+    /// import settles. One sentence for both hosts' importers: Windows'
+    /// picker import and the Mac's Finder drop, whose moved and reconciled
+    /// items and warnings Windows never has, and whose entry limit the Mac
+    /// reports per item. Below 1,000 it is each host's sentence as it was;
+    /// every count is grouped (`1,032`).
+    ImportFinished {
+        copied_files: u32,
+        copied_folders: u32,
+        moved_items: u32,
+        reconciled_items: u32,
+        /// The vault-relative folder the import went into; "" for the
+        /// vault root.
+        destination: String,
+        cancelled: bool,
+        /// Items not imported; not said when `cancelled`, as both hosts
+        /// do.
+        not_imported: u32,
+        warnings: u32,
+        /// The entry limit the walk stopped at, when it did.
+        stopped_at_entry_limit: Option<u32>,
+    },
+    /// Plan 47 CB-16 (#1830, CD10): a cancel was asked for while an import
+    /// ran. Spoken at the press, before the import settles and
+    /// `ImportFinished` says what it copied; the words are the `Cancelling`
+    /// status line (`import_status_line`), the owner's approved wording.
+    /// High, as `WorkStillRunning` is: a press is answered at once, not
+    /// queued behind the focus line it moved.
+    ImportCancelling,
 
     // --- Vault close ---
     VaultClosed,
@@ -1985,6 +2126,10 @@ impl A11yEvent {
             | PaletteCommandNotFound { .. }
             | PaletteCommandUnavailable { .. }
             | WorkStillRunning { .. }
+            // Plan 47 CB-16: a cancel's press is answered at once, not queued
+            // behind the focus line the press moved (the lead's ruling of
+            // 2026-11-25), at the tier of WorkStillRunning.
+            | ImportCancelling
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
             | TaskToggleFailed { .. }
@@ -2059,7 +2204,15 @@ impl A11yEvent {
                 index,
                 count,
             } => {
-                format!("{prefix} {filename}, tab {index} of {count}.")
+                // One space between the prefix and the name, whichever way
+                // a host spells the prefix: Windows sends "" and "Tab bar. ",
+                // the Mac "Opened new tab." (plan 47 CB-16).
+                let prefix = prefix.trim();
+                if prefix.is_empty() {
+                    format!("{filename}, tab {index} of {count}.")
+                } else {
+                    format!("{prefix} {filename}, tab {index} of {count}.")
+                }
             }
             TabClosed {
                 closed_title,
@@ -2325,6 +2478,29 @@ impl A11yEvent {
                     .to_owned()
             }
             SidebarSettingsReloaded => "Sidebar settings reloaded.".to_owned(),
+
+            ImportFinished {
+                copied_files,
+                copied_folders,
+                moved_items,
+                reconciled_items,
+                destination,
+                cancelled,
+                not_imported,
+                warnings,
+                stopped_at_entry_limit,
+            } => import_summary(
+                *copied_files,
+                *copied_folders,
+                *moved_items,
+                *reconciled_items,
+                destination,
+                *cancelled,
+                *not_imported,
+                *warnings,
+                *stopped_at_entry_limit,
+            ),
+            ImportCancelling => import_status_line(ImportPhase::Cancelling),
 
             VaultClosed => "Vault closed. Returned to the welcome screen.".to_owned(),
             VaultClosedAllSaved => {
@@ -4365,6 +4541,20 @@ pub fn corpus() -> Vec<A11yEvent> {
             index: 1,
             count: 4,
         },
+        // Plan 47 CB-16: Windows' tab activation sends no prefix, and its
+        // F6 landing sends "Tab bar. " with its own trailing space.
+        TabFocused {
+            prefix: String::new(),
+            filename: "notes.md".into(),
+            index: 1,
+            count: 1,
+        },
+        TabFocused {
+            prefix: "Tab bar. ".into(),
+            filename: "notes.md".into(),
+            index: 2,
+            count: 3,
+        },
         TabClosed {
             closed_title: "draft.md".into(),
             successor: Some("notes.md".into()),
@@ -4739,6 +4929,150 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         SidebarSettingsReloadedStaleRefs,
         SidebarSettingsReloaded,
+        // Plan 47 CB-16 (#1830, CD10). Step 0's P1c: a completed import.
+        ImportFinished {
+            copied_files: 2,
+            copied_folders: 0,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: String::new(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        // P1a's shape: files and a folder to a named folder, cancelled.
+        ImportFinished {
+            copied_files: 3,
+            copied_folders: 1,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: "Inbox".into(),
+            cancelled: true,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        // P1b's: cancelled before anything was copied.
+        ImportFinished {
+            copied_files: 0,
+            copied_folders: 0,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: String::new(),
+            cancelled: true,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        // Items not imported, no cancel, into a nested folder.
+        ImportFinished {
+            copied_files: 4,
+            copied_folders: 0,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: "Projects/Notes".into(),
+            cancelled: false,
+            not_imported: 2,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        // Windows' entry limit.
+        ImportFinished {
+            copied_files: 120,
+            copied_folders: 3,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: "Inbox".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: Some(10_000),
+        },
+        // The Mac's shapes: moved only, then found only.
+        ImportFinished {
+            copied_files: 0,
+            copied_folders: 0,
+            moved_items: 2,
+            reconciled_items: 0,
+            destination: "Notes".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        ImportFinished {
+            copied_files: 0,
+            copied_folders: 0,
+            moved_items: 0,
+            reconciled_items: 1,
+            destination: "Notes".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        },
+        // Copied and moved, with a warning.
+        ImportFinished {
+            copied_files: 1,
+            copied_folders: 0,
+            moved_items: 2,
+            reconciled_items: 0,
+            destination: "Notes".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 1,
+            stopped_at_entry_limit: None,
+        },
+        // Copied, moved, found and warnings together.
+        ImportFinished {
+            copied_files: 2,
+            copied_folders: 1,
+            moved_items: 3,
+            reconciled_items: 2,
+            destination: "Projects/Notes".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 2,
+            stopped_at_entry_limit: None,
+        },
+        // Counts of 1,000 and up: Windows' clauses, then the Mac's.
+        ImportFinished {
+            copied_files: 1032,
+            copied_folders: 1000,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: "Archive".into(),
+            cancelled: false,
+            not_imported: 1500,
+            warnings: 0,
+            stopped_at_entry_limit: Some(10_000),
+        },
+        ImportFinished {
+            copied_files: 1032,
+            copied_folders: 0,
+            moved_items: 1200,
+            reconciled_items: 1001,
+            destination: "Notes".into(),
+            cancelled: false,
+            not_imported: 0,
+            warnings: 2000,
+            stopped_at_entry_limit: None,
+        },
+        // The singulars: a file, a folder, a moved item, an item not
+        // imported and a warning.
+        ImportFinished {
+            copied_files: 1,
+            copied_folders: 1,
+            moved_items: 1,
+            reconciled_items: 0,
+            destination: "Notes".into(),
+            cancelled: false,
+            not_imported: 1,
+            warnings: 1,
+            stopped_at_entry_limit: None,
+        },
+        ImportCancelling,
         VaultClosed,
         VaultClosedAllSaved,
         VaultClosedChangesDiscarded,
@@ -7587,6 +7921,8 @@ mod tests {
             (Medium, "Status bar. Scanning 120 files."),
             (Medium, "Editor pane 2 of 3, notes.md."),
             (Medium, "Now notes.md, tab 1 of 4."),
+            (Medium, "notes.md, tab 1 of 1."),
+            (Medium, "Tab bar. notes.md, tab 2 of 3."),
             (Medium, "Closed draft.md. notes.md is active."),
             (Medium, "Closed draft.md."),
             (Medium, "No split panes to resize."),
@@ -7830,6 +8166,56 @@ mod tests {
                 "Sidebar settings reloaded. Some pinned notes or sort overrides may still reference old locations.",
             ),
             (Medium, "Sidebar settings reloaded."),
+            (Medium, "Copied 2 files to the vault root."),
+            (
+                Medium,
+                "Copied 3 files and 1 folder to Inbox. Import cancelled; completed copies remain.",
+            ),
+            (
+                Medium,
+                "No items were imported to the vault root. Import cancelled; completed copies \
+                 remain.",
+            ),
+            (
+                Medium,
+                "Copied 4 files to Notes. 2 items were not imported.",
+            ),
+            (
+                Medium,
+                "Copied 120 files and 3 folders to Inbox. Import stopped at the 10,000-item \
+                 safety limit; remaining entries were not enumerated.",
+            ),
+            (Medium, "Moved 2 items to Notes."),
+            (
+                Medium,
+                "Found 1 destination item during reconciliation to Notes.",
+            ),
+            (
+                Medium,
+                "Copied 1 file and moved 2 items to Notes. 1 import warning needs attention.",
+            ),
+            (
+                Medium,
+                "Copied 2 files and 1 folder and moved 3 items and found 2 destination items \
+                 during reconciliation to Notes. 2 import warnings need attention.",
+            ),
+            (
+                Medium,
+                "Copied 1,032 files and 1,000 folders to Archive. 1,500 items were not \
+                 imported. Import stopped at the 10,000-item safety limit; remaining entries \
+                 were not enumerated.",
+            ),
+            (
+                Medium,
+                "Copied 1,032 files and moved 1,200 items and found 1,001 destination items \
+                 during reconciliation to Notes. 2,000 import warnings need attention.",
+            ),
+            (
+                Medium,
+                "Copied 1 file and 1 folder and moved 1 item to Notes. 1 item was not \
+                 imported. 1 import warning needs attention.",
+            ),
+            (High, "Cancelling import…"),
             (Medium, "Vault closed. Returned to the welcome screen."),
             (
                 Medium,
@@ -8680,6 +9066,386 @@ mod tests {
         );
     }
 
+    /// The counts an import reports, by the names both hosts give them;
+    /// `import_finished` builds core's event from them.
+    #[derive(Default, Clone, Copy)]
+    struct ImportCounts {
+        files: u32,
+        folders: u32,
+        moved: u32,
+        found: u32,
+        cancelled: bool,
+        not_imported: u32,
+        warnings: u32,
+        limit: Option<u32>,
+    }
+
+    fn import_finished(destination: &str, counts: ImportCounts) -> A11yEvent {
+        A11yEvent::ImportFinished {
+            copied_files: counts.files,
+            copied_folders: counts.folders,
+            moved_items: counts.moved,
+            reconciled_items: counts.found,
+            destination: destination.into(),
+            cancelled: counts.cancelled,
+            not_imported: counts.not_imported,
+            warnings: counts.warnings,
+            stopped_at_entry_limit: counts.limit,
+        }
+    }
+
+    /// Plan 47 CB-16 (#1830, CD10): one event speaks both hosts' import
+    /// summaries. Each expected string below 1,000 is the sentence that
+    /// host's own code produces for the same counts today, derived by
+    /// reading it (no host ran here): Windows' `ImportSummary`
+    /// (`apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Import.cs:535-571`;
+    /// `ImportedFiles`, `ImportedFolders`, `Failed`, `Cancelled`, and
+    /// `LimitReached` as the 10,000 limit) and the Mac's
+    /// `importBatchAnnouncement`
+    /// (`apps/slate-mac/Sources/SlateMac/AppState.swift:17652-17699`;
+    /// `moveCount`, `reconciledCandidateCount`, `failureCount`,
+    /// `warningCount`, and `wasCancelled || report.wasCancelled`). At 1,000
+    /// and up every count takes core's comma: Windows' `N0` gives the same
+    /// text under en-US, and the Mac's `CountCopy.counted` gives none today
+    /// (the owner's Call 6).
+    #[test]
+    fn an_import_summary_is_each_hosts_sentence() {
+        let limit = Some(10_000);
+        let windows: Vec<(&str, ImportCounts, &str)> = vec![
+            (
+                "",
+                ImportCounts {
+                    files: 2,
+                    ..Default::default()
+                },
+                "Copied 2 files to the vault root.",
+            ),
+            (
+                "Inbox",
+                ImportCounts {
+                    files: 3,
+                    folders: 1,
+                    cancelled: true,
+                    ..Default::default()
+                },
+                "Copied 3 files and 1 folder to Inbox. Import cancelled; completed copies remain.",
+            ),
+            (
+                "",
+                ImportCounts {
+                    cancelled: true,
+                    ..Default::default()
+                },
+                "No items were imported to the vault root. Import cancelled; completed copies \
+                 remain.",
+            ),
+            (
+                "Projects/Notes",
+                ImportCounts {
+                    files: 4,
+                    not_imported: 2,
+                    ..Default::default()
+                },
+                "Copied 4 files to Notes. 2 items were not imported.",
+            ),
+            (
+                "",
+                ImportCounts {
+                    folders: 1,
+                    not_imported: 1,
+                    ..Default::default()
+                },
+                "Copied 1 folder to the vault root. 1 item was not imported.",
+            ),
+            (
+                "",
+                ImportCounts {
+                    not_imported: 3,
+                    ..Default::default()
+                },
+                "No items were imported to the vault root. 3 items were not imported.",
+            ),
+            (
+                "Inbox",
+                ImportCounts {
+                    files: 120,
+                    folders: 3,
+                    limit,
+                    ..Default::default()
+                },
+                "Copied 120 files and 3 folders to Inbox. Import stopped at the 10,000-item \
+                 safety limit; remaining entries were not enumerated.",
+            ),
+            // A cancel says nothing of the items not imported.
+            (
+                "",
+                ImportCounts {
+                    files: 2,
+                    cancelled: true,
+                    not_imported: 5,
+                    ..Default::default()
+                },
+                "Copied 2 files to the vault root. Import cancelled; completed copies remain.",
+            ),
+            (
+                "Inbox/",
+                ImportCounts {
+                    files: 5,
+                    cancelled: true,
+                    limit,
+                    ..Default::default()
+                },
+                "Copied 5 files to Inbox. Import cancelled; completed copies remain. Import \
+                 stopped at the 10,000-item safety limit; remaining entries were not enumerated.",
+            ),
+        ];
+        let mac: Vec<(&str, ImportCounts, &str)> = vec![
+            (
+                "Notes",
+                ImportCounts {
+                    moved: 2,
+                    ..Default::default()
+                },
+                "Moved 2 items to Notes.",
+            ),
+            (
+                "Notes",
+                ImportCounts {
+                    found: 1,
+                    ..Default::default()
+                },
+                "Found 1 destination item during reconciliation to Notes.",
+            ),
+            (
+                "",
+                ImportCounts {
+                    moved: 1,
+                    found: 4,
+                    ..Default::default()
+                },
+                "Moved 1 item and found 4 destination items during reconciliation to the vault \
+                 root.",
+            ),
+            (
+                "Notes",
+                ImportCounts {
+                    files: 1,
+                    moved: 2,
+                    warnings: 1,
+                    ..Default::default()
+                },
+                "Copied 1 file and moved 2 items to Notes. 1 import warning needs attention.",
+            ),
+            (
+                "Projects/Notes",
+                ImportCounts {
+                    files: 2,
+                    folders: 1,
+                    moved: 3,
+                    found: 2,
+                    warnings: 2,
+                    ..Default::default()
+                },
+                "Copied 2 files and 1 folder and moved 3 items and found 2 destination items \
+                 during reconciliation to Notes. 2 import warnings need attention.",
+            ),
+            // The cancelled early return (AppState.swift:16800-16805): an
+            // empty report, no moves, and the cancelled items as failures.
+            (
+                "Inbox",
+                ImportCounts {
+                    cancelled: true,
+                    not_imported: 3,
+                    ..Default::default()
+                },
+                "No items were imported to Inbox. Import cancelled; completed copies remain.",
+            ),
+            (
+                "Notes",
+                ImportCounts {
+                    files: 2,
+                    cancelled: true,
+                    warnings: 1,
+                    ..Default::default()
+                },
+                "Copied 2 files to Notes. Import cancelled; completed copies remain. 1 import \
+                 warning needs attention.",
+            ),
+            (
+                "Notes",
+                ImportCounts {
+                    folders: 2,
+                    not_imported: 1,
+                    warnings: 3,
+                    ..Default::default()
+                },
+                "Copied 2 folders to Notes. 1 item was not imported. 3 import warnings need \
+                 attention.",
+            ),
+        ];
+        // Core's grouped forms. Windows' text under en-US is the same; the
+        // Mac's today is the same words without the commas.
+        let grouped: Vec<(&str, ImportCounts, &str)> = vec![
+            (
+                "Archive",
+                ImportCounts {
+                    files: 1032,
+                    folders: 1000,
+                    not_imported: 1500,
+                    limit,
+                    ..Default::default()
+                },
+                "Copied 1,032 files and 1,000 folders to Archive. 1,500 items were not \
+                 imported. Import stopped at the 10,000-item safety limit; remaining entries \
+                 were not enumerated.",
+            ),
+            (
+                "Notes",
+                ImportCounts {
+                    files: 1032,
+                    moved: 1200,
+                    found: 1001,
+                    warnings: 2000,
+                    ..Default::default()
+                },
+                "Copied 1,032 files and moved 1,200 items and found 1,001 destination items \
+                 during reconciliation to Notes. 2,000 import warnings need attention.",
+            ),
+            (
+                "",
+                ImportCounts {
+                    folders: 1,
+                    limit: Some(2500),
+                    ..Default::default()
+                },
+                "Copied 1 folder to the vault root. Import stopped at the 2,500-item safety \
+                 limit; remaining entries were not enumerated.",
+            ),
+        ];
+        // No host says warnings and the limit together today; core's order
+        // puts the warnings first.
+        let superset: Vec<(&str, ImportCounts, &str)> = vec![(
+            "",
+            ImportCounts {
+                files: 1,
+                warnings: 1,
+                limit,
+                ..Default::default()
+            },
+            "Copied 1 file to the vault root. 1 import warning needs attention. Import stopped \
+             at the 10,000-item safety limit; remaining entries were not enumerated.",
+        )];
+        for (host, rows) in [
+            ("Windows", windows),
+            ("Mac", mac),
+            ("grouped", grouped),
+            ("superset", superset),
+        ] {
+            for (destination, counts, sentence) in rows {
+                let event = import_finished(destination, counts);
+                assert_eq!(event.render(), sentence, "{host}: {event:?}");
+                assert_eq!(event.priority(), Medium, "{host}: {event:?}");
+            }
+        }
+    }
+
+    /// Plan 47 CB-16 (#1830, CD10): the import's status texts are the Mac
+    /// strip's four titles (`SidebarImportProgressStrip.title`), each ending
+    /// in the one-character ellipsis; the cancel sentence is the
+    /// `Cancelling` line, at High (it answers a press at once, as
+    /// `WorkStillRunning` does: the lead's ruling of 2026-11-25, after the
+    /// NVDA spot heard it 11 s late behind a focus line), and has a corpus
+    /// witness.
+    #[test]
+    fn the_import_status_lines_and_the_cancel_sentence() {
+        let lines = [
+            (ImportPhase::Importing, "Importing…"),
+            (ImportPhase::Finishing, "Finishing import…"),
+            (ImportPhase::Moving, "Moving items…"),
+            (ImportPhase::Cancelling, "Cancelling import…"),
+        ];
+        for (phase, line) in lines {
+            let rendered = import_status_line(phase);
+            assert_eq!(rendered, line, "{phase:?}");
+            assert!(
+                rendered.ends_with('\u{2026}') && !rendered.ends_with("..."),
+                "{phase:?} must end in U+2026, as the Mac's strip does"
+            );
+        }
+        assert_eq!(
+            declared_variants("ImportPhase"),
+            lines
+                .iter()
+                .map(|(phase, _)| format!("{phase:?}"))
+                .collect::<std::collections::BTreeSet<String>>(),
+            "ImportPhase gained or lost a member this fact does not hold"
+        );
+
+        let cancelling = A11yEvent::ImportCancelling;
+        assert_eq!(
+            cancelling.render(),
+            import_status_line(ImportPhase::Cancelling)
+        );
+        assert_eq!(cancelling.render(), "Cancelling import…");
+        assert_eq!(cancelling.priority(), High);
+        assert!(
+            corpus().contains(&cancelling),
+            "ImportCancelling has no witness in the corpus"
+        );
+    }
+
+    /// Plan 47 CB-16: the summary names the folder an import went into by
+    /// its last segment, trailing slashes ignored, and the vault root by
+    /// name, as both hosts do.
+    #[test]
+    fn an_import_destination_names_its_last_folder() {
+        for (destination, location) in [
+            ("", "the vault root"),
+            ("Inbox", "Inbox"),
+            ("a/b", "b"),
+            ("a/b/", "b"),
+        ] {
+            let event = import_finished(
+                destination,
+                ImportCounts {
+                    files: 1,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                event.render(),
+                format!("Copied 1 file to {location}."),
+                "{destination:?}"
+            );
+        }
+    }
+
+    /// Plan 47 CB-16 (step 0's find): a tab focus joins its prefix to the
+    /// filename with one space. Windows sends an empty prefix on a tab
+    /// activation and "Tab bar. " (its own trailing space) on the F6
+    /// landing, which rendered a leading space and a double space; the
+    /// Mac's prefixes ("Opened new tab.") render as before.
+    #[test]
+    fn a_tab_focus_joins_its_prefix_with_one_space() {
+        let tab = |prefix: &str| {
+            A11yEvent::TabFocused {
+                prefix: prefix.into(),
+                filename: "notes.md".into(),
+                index: 1,
+                count: 4,
+            }
+            .render()
+        };
+        assert_eq!(tab(""), "notes.md, tab 1 of 4.");
+        assert_eq!(tab("   "), "notes.md, tab 1 of 4.");
+        assert_eq!(tab("Now"), "Now notes.md, tab 1 of 4.");
+        assert_eq!(tab("Tab bar. "), "Tab bar. notes.md, tab 1 of 4.");
+        assert_eq!(
+            tab("Opened new tab."),
+            "Opened new tab. notes.md, tab 1 of 4."
+        );
+    }
+
     /// DS-10: a reader can't see the check mark, so the current choice says
     /// so; and a list of themes isn't a list of commands.
     #[test]
@@ -9337,8 +10103,10 @@ mod tests {
             // Settings sheet, 237; DS-11's accent, 238; plan 47 CB-14
             // (#1660) the landed-unindexed toggle, TaskToggledUnindexed, 239;
             // plan 47 CB-17b (#1866, CD11) the press on a button whose work
-            // is still running, WorkStillRunning, 240.
-            240,
+            // is still running, WorkStillRunning, 240; plan 47 CB-16 (#1830,
+            // CD10) the import's summary and its cancel, ImportFinished and
+            // ImportCancelling, 242.
+            242,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

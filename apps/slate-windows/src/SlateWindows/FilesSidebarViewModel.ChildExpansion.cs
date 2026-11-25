@@ -218,7 +218,10 @@ internal sealed partial class FilesSidebarViewModel
             StartReportedPinPrunes();
             if (level.Truncated)
             {
-                Status = DirectoryOverflowStatus(node.Path);
+                // Plan 47 CB-16 (#1791, W9; the diff red team's finding 2): an
+                // overflow line is the tree's own, stale once the folder closes or
+                // shrinks, so no refresh puts it back.
+                WriteTreeStatus(DirectoryOverflowStatus(node.Path));
             }
         }
         catch (Exception exception)
@@ -309,13 +312,14 @@ internal sealed partial class FilesSidebarViewModel
                             // round 7): recursive check projection.
                             ProjectBatchChecksOnto(outcome.Children);
                             StartReportedPinPrunes();
+                            // Plan 47 CB-16 (#1791, W9): the tree's own lines.
                             if (outcome.Level.Truncated)
                             {
-                                Status = DirectoryOverflowStatus(node.Path);
+                                WriteTreeStatus(DirectoryOverflowStatus(node.Path));
                             }
                             else if (outcome.RestoredOverflowPath is string overflowPath)
                             {
-                                Status = DirectoryOverflowStatus(overflowPath);
+                                WriteTreeStatus(DirectoryOverflowStatus(overflowPath));
                             }
                         }
 
@@ -404,7 +408,7 @@ internal sealed partial class FilesSidebarViewModel
                             token))
                         {
                             node.FailChildLoad(ChildExpansionFailure);
-                            ReportFailure(ChildExpansionFailure);
+                            ReportTreeReadFailure(ChildExpansionFailure);
                         }
 
                         applied.TrySetResult();
@@ -434,7 +438,7 @@ internal sealed partial class FilesSidebarViewModel
         node.FailChildLoad(ChildExpansionFailure);
         try
         {
-            ReportFailure(ChildExpansionFailure);
+            ReportTreeReadFailure(ChildExpansionFailure);
         }
         catch (Exception callbackException)
         {

@@ -685,7 +685,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => !IsImportRunning && !IsTrashing && StructuralMutationBlocked is null,
             () => StructuralMutationBlocked,
             admitWhileExecuting: true);
-        CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImportRunning);
+        // Plan 47 CB-16 (#1830; the owner's answer of 2026-11-24, "Off, keys go back"): the
+        // press asks the import to stop and says so at once, and Cancel import goes off with
+        // it, as the trash's Cancel does; the keys move first (CommandKeysFirst).
+        CancelImportCommand = new RelayCommand(
+            _ => RequestImportCancellation(),
+            _ => IsImportRunning && !IsImportCancelling);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => InThePane(ClearRecents), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => InThePane(CollapseAll), _ => true);
@@ -911,7 +916,19 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public string Status
     {
         get => _status;
-        private set => SetField(ref _status, value);
+        private set => WriteStatus(value, writtenByTree: false);
+    }
+
+    /// <summary>Plan 47 CB-16 (#1791, W9): every write of the line goes
+    /// through here and says whether the tree wrote it. The tree's own writes
+    /// are <see cref="WriteTreeStatus"/>; every other write, the setter's,
+    /// clears the mark, so no writer can leave it standing by forgetting it.
+    /// The mark is set before the change is raised, so a write a listener
+    /// makes in answer is the one that counts.</summary>
+    private void WriteStatus(string value, bool writtenByTree)
+    {
+        _statusWrittenByTree = writtenByTree;
+        SetField(ref _status, value, nameof(Status));
     }
 
     /// <summary>#1230: the standing reason <c>.slate/sidebar.json</c> is
@@ -1638,13 +1655,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         if (outcome.Error is not null)
         {
+            // Plan 47 CB-16 (#1791, W9; the diff red team's finding 1): a tag tree's
+            // failure is a line the tree wrote, stale once a later load succeeds, so no
+            // refresh puts it back.
             if (announce)
             {
-                ReportFailure(outcome.Error);
+                ReportTreeReadFailure(outcome.Error);
             }
             else
             {
-                Status = outcome.Error;
+                WriteTreeStatus(outcome.Error);
                 HoldStatusForPendingPublication();
             }
         }
@@ -2667,12 +2687,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 DualPaneFiles.Add(FileTreeNodeViewModel.Overflow(
                     $"More than {MaxMaterializedDirectoryItems:N0} items; refine the folder."));
-                Status = DirectoryOverflowStatus(parentPath);
+                // Plan 47 CB-16 (#1791, W9): the tree's own line.
+                WriteTreeStatus(DirectoryOverflowStatus(parentPath));
             }
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
+            ReportTreeReadFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
         }
     }
 
@@ -2912,9 +2933,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         return $"Sorted by {field}, {direction}{(GroupByDate ? ", grouped by date" : string.Empty)}.";
     }
 
-    private void ReportFailure(string message)
+    /// <summary>A failure, shown and said. Plan 47 CB-16 (#1791, Codex round 2):
+    /// <paramref name="writtenByTree"/> marks a read's failure as the tree's own line before
+    /// it is held for a pending publication, so its reassertion keeps the mark.</summary>
+    private void ReportFailure(string message, bool writtenByTree = false)
     {
-        Status = message;
+        WriteStatus(message, writtenByTree);
         // Codex round 2: same reassert discipline as results.
         HoldStatusForPendingPublication();
 

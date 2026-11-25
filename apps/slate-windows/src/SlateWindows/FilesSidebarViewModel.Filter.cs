@@ -14,6 +14,11 @@ namespace SlateWindows;
 internal sealed partial class FilesSidebarViewModel
 {
     private const int FilterDebounceMilliseconds = 200;
+
+    /// <summary>Plan 47 CB-16 (#1791): a user's filter run's transient line
+    /// (<see cref="ShowTransientStatus"/>).</summary>
+    private const string FilteringFilesStatus = "Filtering files…";
+
     private readonly SynchronizationContext? _filterUiContext;
     private readonly Func<Action, CancellationToken, Task> _runFilterWorker;
     private readonly Func<CancellationToken, Task> _filterDelay;
@@ -201,6 +206,11 @@ internal sealed partial class FilesSidebarViewModel
                 _filterCompletion = previous;
             }
 
+            // Plan 47 CB-16 (P3b): a request that ends the filter ends the
+            // "Filtering files…" of the run it cancelled. Nothing is spoken
+            // here: a field that starts with a space is typing (the setter's
+            // rule), and a clear speaks for itself after this.
+            EndTransientStatus(FilteringFilesStatus);
             return;
         }
 
@@ -251,7 +261,10 @@ internal sealed partial class FilesSidebarViewModel
 
         if (!automatic)
         {
-            Status = "Filtering files…";
+            // Plan 47 CB-16 (#1791, W9): transient. The run's outcome or
+            // failure writes its own line; a successor writes; a cancel with
+            // no successor (CancelFilter) and an ended filter put it back.
+            ShowTransientStatus(FilteringFilesStatus);
         }
 
         Task completion = FilterAfterDelayAsync(
@@ -277,6 +290,12 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelFilterCore();
+        // Plan 47 CB-16 (P3a): no run follows this cancel (the close's
+        // admission, a shutdown), so a "Filtering files…" still shown ends
+        // here, whichever run showed it last: the user's, or a publication's
+        // automatic run that superseded it. The close does not run the filter
+        // again (XD1; the red team's M2).
+        EndTransientStatus(FilteringFilesStatus);
         return wasPending;
     }
 
@@ -521,7 +540,7 @@ internal sealed partial class FilesSidebarViewModel
             // filter summary, nor speak a redundant count after the
             // mutation result.
             _statusToReassert = null;
-            Status = reassert;
+            WriteReassertedStatus(reassert);
         }
         else
         {

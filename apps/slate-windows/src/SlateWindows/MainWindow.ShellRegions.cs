@@ -929,6 +929,12 @@ public partial class MainWindow : IShellRegionHost
         // (LandWhereTrashCancelCameFrom), as its restore put them after the off.
         RegionFocusGuard.SetStrandedLanding(
             ElementWithAutomationId<Button>(ShellStatusBar, "CancelTrash"), LandWhereTrashCancelCameFrom);
+
+        // Plan 47 CB-16 (#1830; the owner's answer of 2026-11-24): the import's Cancel on the
+        // status bar goes off in its own press, as the trash's does, and when the import ends
+        // with the keys on it; the keys go back where they came to it from first.
+        RegionFocusGuard.SetStrandedLanding(
+            ElementWithAutomationId<Button>(ShellStatusBar, "CancelImport"), LandWhereImportCancelCameFrom);
     }
 
     /// <summary>A region whose landing is synchronous — never held, so its
