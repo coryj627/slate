@@ -372,12 +372,10 @@ public sealed partial class CommandPaletteTests
             PumpedDispatcher.Drain();
             Assert.Equal(1, Published);
             Assert.Equal("slate.workspace.quickOpen", palette.SelectedId);
-            Assert.Collection(
-                host.Heard,
-                announced => Assert.IsType<A11yEvent.PaletteCommandSelected>(announced),
-                announced => Assert.Equal(
-                    "quick open",
-                    Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+            // The open's row was the palette's: its replacement is silent (#1834).
+            Assert.Equal(
+                "quick open",
+                Assert.IsType<A11yEvent.PaletteFilterCount>(Assert.Single(host.Heard)).Query);
         }
     }
 

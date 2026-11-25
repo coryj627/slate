@@ -30,6 +30,9 @@ public sealed partial class CommandPaletteTests
     /// under the loop (P9). After a success it is dismissed and has said
     /// nothing; after a failure the failure is announced, then the current
     /// query ranks again — its rows, the selection they bring, one count.
+    /// The row Enter runs is one the reader moved to, which the query
+    /// removes, so the replacement's line witnesses where it lands once the
+    /// seal lifts: after the failure, before the count (#1834).
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -39,6 +42,8 @@ public sealed partial class CommandPaletteTests
         LaneHost host = LaneHost.Opened();
         CommandPaletteViewModel palette = host.Palette;
         List<TaskCompletionSource> windows = host.HoldTheCountWindows();
+        palette.SelectLast();
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
         host.Harness.Announcements.Clear();
         var published = new List<string[]>();
         palette.PropertyChanged += (_, change) =>
@@ -50,7 +55,7 @@ public sealed partial class CommandPaletteTests
         };
         if (commandFails)
         {
-            host.Harness.Source.InvokeFailures["slate.file.newNote"] =
+            host.Harness.Source.InvokeFailures["slate.tasks.review"] =
                 new CommandException.ActionFailed("Disk is full.");
         }
 
@@ -86,11 +91,11 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(0, inside.Published);
         Assert.Equal(0, inside.Heard);
         Assert.Equal(onScreen, inside.Rows);
-        Assert.Equal("slate.file.newNote", inside.Selected);
+        Assert.Equal("slate.tasks.review", inside.Selected);
         Assert.True(inside.Open, "the palette stays up under the command's loop (P9)");
         Assert.True(inside.Invoking);
         Assert.False(palette.IsInvoking);
-        Assert.Equal(["slate.file.newNote"], host.Harness.Source.Invoked);
+        Assert.Equal(["slate.tasks.review"], host.Harness.Source.Invoked);
 
         if (!commandFails)
         {
@@ -110,12 +115,15 @@ public sealed partial class CommandPaletteTests
         windows[1].SetResult();
         PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
         PumpedDispatcher.Drain();
+        // The reader's row is gone from "q": its replacement is said once,
+        // after the failure and before the count (P10, #1834).
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
         Assert.Collection(
             host.Harness.Announcements,
             announced =>
             {
                 var failed = Assert.IsType<A11yEvent.PaletteCommandFailed>(announced);
-                Assert.Equal(("New Note", "Disk is full."), (failed.Label, failed.Detail));
+                Assert.Equal(("Tasks Review", "Disk is full."), (failed.Label, failed.Detail));
             },
             announced => Assert.Equal(
                 "Quick Open",
@@ -337,12 +345,11 @@ public sealed partial class CommandPaletteTests
         Assert.True(palette.IsOpen);
         host.PumpUntilPublished();
         Assert.Equal(["slate.nav.quickOpen"], host.Harness.RowIds);
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        // The open's row was the palette's: its replacement is silent (#1834).
         Assert.Collection(
             host.Harness.Announcements,
             announced => Assert.IsType<A11yEvent.PaletteCommandFailed>(announced),
-            announced => Assert.Equal(
-                "Quick Open",
-                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
             announced => Assert.Equal(
                 "q",
                 Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
@@ -426,14 +433,11 @@ public sealed partial class CommandPaletteTests
 
         Assert.Empty(host.Harness.Diagnostics);
         Assert.Equal(["slate.nav.quickOpen"], host.Harness.RowIds);
-        Assert.Collection(
-            host.Harness.Announcements,
-            announced => Assert.Equal(
-                "Quick Open",
-                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
-            announced => Assert.Equal(
-                "q",
-                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        // The open's row was the palette's: its replacement is silent (#1834).
+        Assert.Equal(
+            "q",
+            Assert.IsType<A11yEvent.PaletteFilterCount>(Assert.Single(host.Harness.Announcements)).Query);
     });
 
     /// <summary>
@@ -591,13 +595,11 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(1, published - publishedBeforeClose);
         Assert.Equal("slate.workspace.quickOpen", palette.SelectedId);
         A11yEvent[] afterPrompt = [.. announced.Skip(heardBeforeClose)];
-        Assert.Collection(
-            afterPrompt.Where(announcement =>
-                announcement is A11yEvent.PaletteCommandSelected or A11yEvent.PaletteFilterCount),
-            announced => Assert.IsType<A11yEvent.PaletteCommandSelected>(announced),
-            announced => Assert.Equal(
-                "quick open",
-                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+        // The open's row was the palette's: its replacement is silent (#1834).
+        Assert.Equal(
+            "quick open",
+            Assert.IsType<A11yEvent.PaletteFilterCount>(Assert.Single(afterPrompt, announcement =>
+                announcement is A11yEvent.PaletteCommandSelected or A11yEvent.PaletteFilterCount)).Query);
     });
 
     /// <summary>
@@ -669,12 +671,11 @@ public sealed partial class CommandPaletteTests
         PumpedDispatcher.PumpUntilDrained(palette.FilterCountCompletion);
         PumpedDispatcher.Drain();
         Assert.Equal(1, published);
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
+        // The open's row was the palette's: its replacement is silent (#1834).
         Assert.Collection(
             host.Harness.Announcements,
             announced => Assert.IsType<A11yEvent.PaletteCommandFailed>(announced),
-            announced => Assert.Equal(
-                "Quick Open",
-                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
             announced => Assert.Equal(
                 "q",
                 Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));

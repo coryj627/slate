@@ -3010,8 +3010,6 @@ public sealed class TestWaitCensus
             "late-arrival: the menu-show delay passes and the row under the resting pointer stays shut"),
         ("ShellAccessibilityTests.HotExit.cs", "HotExit_ClosingAndReopeningKeepsAnUnsavedNote", 1,
             "late-arrival: two seconds past the restored line, so a late duplicate shows"),
-        ("ShellAccessibilityTests.Palette.cs", "AssertHeardOneCountAndOnlyTheFinalSelection", 1,
-            "late-arrival: 500 ms past the count, so a late duplicate or a stray line shows"),
         ("ShellAccessibilityTests.RegionStops.cs", "ClickFilterFromOutsideTheGroup", 1,
             "registration: the focus and notification listeners settle before their queues are cleared"),
         ("ShellAccessibilityTests.RegionStops.cs", "ClickFilterFromOutsideTheGroup", 1,

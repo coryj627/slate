@@ -4,8 +4,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace SlateWindows;
@@ -36,6 +38,13 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         _palette = palette;
         _palette.PropertyChanged += Palette_PropertyChanged;
         _list.SelectionChanged += List_SelectionChanged;
+        _list.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
+        _list.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(List_PreviewMouseDown));
+        // #1834: no letter search in the list. WPF's default search matched every row's type
+        // name, so "s" took the keys and the selection to the first row from any other row, and
+        // a search over the labels moved the keys with a "Selected:" line that NVDA then
+        // repeated as the focused row. With the keys on a row a letter now moves nothing.
+        _list.IsTextSearchEnabled = false;
         Refresh();
     }
 
@@ -44,6 +53,8 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     {
         _palette.PropertyChanged -= Palette_PropertyChanged;
         _list.SelectionChanged -= List_SelectionChanged;
+        _list.RemoveHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
+        _list.RemoveHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(List_PreviewMouseDown));
     }
 
     private void Palette_PropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
@@ -176,6 +187,55 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         if (_list.SelectedItem is CommandPaletteRowViewModel row)
         {
             _palette.Select(row);
+        }
+    }
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a row that takes the keys from another element — Tab onto a
+    /// row other than the selection, or a UIA SetFocus — is the selection, and the reader's,
+    /// so the row the keys are on is the row Enter runs and a query keeps while it lists it.
+    /// Keys that land on the
+    /// selection itself, as Tab's do, are no move of the reader's
+    /// (<see cref="CommandPaletteViewModel.RowTookTheKeys"/>); a click is
+    /// <see cref="List_PreviewMouseDown"/>'s.
+    /// </summary>
+    /// <remarks>
+    /// Not when a publication swapped out the row the keys were on: the list then carries the
+    /// keys onto its selection, which is already what the publication made it (measured on
+    /// <c>main</c> for #1834: the keys land on the selected row of the new view, after the
+    /// publication, in every case), and carrying them is not a choice the reader made. Nor when
+    /// the keys come back with nothing before them — the window activated again, a dialog
+    /// closing back to the list: the window's arrows can have moved the selection off the row
+    /// the keys stayed on, and a restore is no move of the reader's either.
+    /// </remarks>
+    private void List_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (_syncingSelection
+            || e.OldFocus is null
+            || e.NewFocus is not DependencyObject focused
+            || ItemsControl.ContainerFromElement(_list, focused) is not ListBoxItem { DataContext: CommandPaletteRowViewModel row }
+            || (e.OldFocus is ListBoxItem previous && PresentationSource.FromVisual(previous) is null))
+        {
+            return;
+        }
+
+        _palette.RowTookTheKeys(row);
+    }
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a pointer pressed on a row makes it the selection, and the
+    /// reader's (<see cref="CommandPaletteViewModel.RowPressed"/>). Heard at the press,
+    /// before the click moves the keys or the selection: a click on the row that already holds
+    /// both changes neither, so neither <see cref="List_GotKeyboardFocus"/> nor
+    /// <see cref="List_SelectionChanged"/> would hear it.
+    /// </summary>
+    private void List_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton is MouseButton.Left or MouseButton.Right
+            && e.OriginalSource is DependencyObject source
+            && ItemsControl.ContainerFromElement(_list, source) is ListBoxItem { DataContext: CommandPaletteRowViewModel row })
+        {
+            _palette.RowPressed(row);
         }
     }
 

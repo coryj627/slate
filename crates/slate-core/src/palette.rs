@@ -12,8 +12,8 @@
 //!   report the matched label byte ranges for per-platform bolding;
 //! - section layout ([`palette_sections`]) — Recent-first empty-query
 //!   grouping with recent-id exclusion, declared section order,
-//!   host-pinned within-Sidebar catalog order, and score-ranked
-//!   non-empty-query grouping;
+//!   host-pinned within-Sidebar catalog order, and best-match
+//!   non-empty-query ordering, sections included (#1834);
 //! - ordered-recents policy ([`recents_decode`] / [`recents_encode`] /
 //!   [`recents_add`] / [`recents_remove`]) — the LRU transitions, the
 //!   dedupe + cap rules, the malformed-tolerant decode, and the
@@ -59,8 +59,10 @@ pub struct MatchSpan {
 /// query matched, and the winning fuzzy score. Spans are empty when the
 /// query is empty or when only the accessibility hint matched (there is
 /// nothing in the visible label to bold); `score` is the max of the
-/// label and hint scores (0 on an empty query) so hosts can derive the
-/// global ranked order across sections without re-scoring.
+/// label and hint scores (0 on an empty query). It is the fuzzy part of
+/// the ranking only: [`palette_sections`] already returns the rows in
+/// best-match order, an exact name before a higher score, so the first
+/// row is the strongest match and no host re-sorts by `score`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaletteRow {
     pub command: Command,
@@ -233,11 +235,18 @@ fn grapheme_key(grapheme: &str) -> String {
 /// input order at the end.
 ///
 /// **Non-empty query** — fuzzy-filter over label and accessibility
-/// hint (best of the two scores; a row survives if either matches),
-/// globally sorted by descending score with id as the stable
-/// tiebreaker, grouped into native sections in declared order. No
-/// Recent section, no Sidebar catalog reorder: score order is the
-/// user's answer.
+/// hint (best of the two scores; a row survives if either matches), in
+/// best-match order (#1834, plan 47 CB-34): a row whose whole label is
+/// the query comes first, then one whose name after the label's first
+/// ": " is the query ("show outline" names "Canvas: Show Outline"), then
+/// the higher score, then a label match before a hint-only match, then
+/// the declared section, then the id. "Is the query" compares the
+/// matcher's own grapheme keys, so case, canonical equivalence and the
+/// final sigma fold as in [`fuzzy_score`], and a label's one trailing
+/// `…` may be left off. Sections come in the order of their best row,
+/// so two sections whose best rows tie on everything above keep the
+/// declared order. No Recent section, no Sidebar catalog reorder: the
+/// best match is the user's answer, and it is the first row.
 pub fn palette_sections(
     commands: &[Command],
     query: &str,
@@ -248,9 +257,14 @@ pub fn palette_sections(
         return empty_query_sections(commands, recent_ids, sidebar_pinned_order);
     }
 
-    let mut matched: Vec<(i32, PaletteRow)> = commands
+    let query_keys = grapheme_keys(query);
+    // Every tier is computed once per matched row, never inside the sort.
+    let mut matched: Vec<RankedRow> = commands
         .iter()
         .filter_map(|command| {
+            let section_rank = SECTION_ORDER
+                .iter()
+                .position(|&section| section == command.section)?;
             let label = fuzzy_score(query, &command.label);
             let hint = command
                 .accessibility_hint
@@ -263,40 +277,75 @@ pub fn palette_sections(
                 (None, Some(h)) => h,
                 (None, None) => return None,
             };
+            let label_matches = label.is_some();
             let label_match_spans = label.map(|(_, spans)| spans).unwrap_or_default();
-            Some((
-                best,
-                PaletteRow {
+            Some(RankedRow {
+                names_label: names_exactly(&query_keys, &command.label),
+                names_tail: command
+                    .label
+                    .split_once(": ")
+                    .is_some_and(|(_, tail)| names_exactly(&query_keys, tail)),
+                label_matches,
+                section_rank,
+                row: PaletteRow {
                     command: command.clone(),
                     label_match_spans,
                     score: best,
                 },
-            ))
-        })
-        .collect();
-    matched.sort_by(|(ls, lrow), (rs, rrow)| {
-        rs.cmp(ls)
-            .then_with(|| lrow.command.id.cmp(&rrow.command.id))
-    });
-
-    SECTION_ORDER
-        .iter()
-        .filter_map(|&section| {
-            let rows: Vec<PaletteRow> = matched
-                .iter()
-                .filter(|(_, row)| row.command.section == section)
-                .map(|(_, row)| row.clone())
-                .collect();
-            if rows.is_empty() {
-                return None;
-            }
-            Some(PaletteSection {
-                title: section_title(section).to_owned(),
-                kind: Some(section),
-                rows,
             })
         })
-        .collect()
+        .collect();
+    matched.sort_by(|l, r| {
+        r.names_label
+            .cmp(&l.names_label)
+            .then_with(|| r.names_tail.cmp(&l.names_tail))
+            .then_with(|| r.row.score.cmp(&l.row.score))
+            .then_with(|| r.label_matches.cmp(&l.label_matches))
+            .then_with(|| l.section_rank.cmp(&r.section_rank))
+            .then_with(|| l.row.command.id.cmp(&r.row.command.id))
+    });
+
+    // Sections in the order their first row appears in that sort.
+    let mut sections: Vec<PaletteSection> = Vec::new();
+    for ranked in matched {
+        let section = ranked.row.command.section;
+        match sections.iter_mut().find(|s| s.kind == Some(section)) {
+            Some(existing) => existing.rows.push(ranked.row),
+            None => sections.push(PaletteSection {
+                title: section_title(section).to_owned(),
+                kind: Some(section),
+                rows: vec![ranked.row],
+            }),
+        }
+    }
+    sections
+}
+
+/// One matched row with the tiers [`palette_sections`] sorts it by.
+struct RankedRow {
+    names_label: bool,
+    names_tail: bool,
+    label_matches: bool,
+    section_rank: usize,
+    row: PaletteRow,
+}
+
+/// The query's grapheme keys, as [`fuzzy_score`] compares them.
+fn grapheme_keys(text: &str) -> Vec<String> {
+    text.graphemes(true).map(grapheme_key).collect()
+}
+
+/// Whether the query (as `query_keys`) is `name` exactly, with `name`'s
+/// one trailing `…` optional: "rename" names "Rename…".
+fn names_exactly(query_keys: &[String], name: &str) -> bool {
+    let name_keys = grapheme_keys(name);
+    if name_keys == query_keys {
+        return true;
+    }
+    match name_keys.split_last() {
+        Some((last, rest)) if last == "\u{2026}" => rest == query_keys,
+        _ => false,
+    }
 }
 
 fn empty_query_sections(
@@ -685,32 +734,207 @@ mod tests {
         ]
     }
 
+    fn titles(sections: &[PaletteSection]) -> Vec<&str> {
+        sections.iter().map(|s| s.title.as_str()).collect()
+    }
+
+    fn score(query: &str, target: &str) -> i32 {
+        fuzzy_score(query, target)
+            .unwrap_or_else(|| panic!("premise: {query:?} matches {target:?}"))
+            .0
+    }
+
     #[test]
-    fn ranked_query_groups_by_section_in_declared_order() {
+    fn ranked_query_sections_follow_their_best_row() {
         let sections = palette_sections(&corpus(), "ne", &[], &[]);
-        // "ne" matches New Note (File), Rename…? r-e-n... "ne"
-        // subsequence: New Note prefix "Ne" strongly; sidebar New Note;
-        // Rename… (n at 2? "Rename…": R,e,n,a,m,e — 'n' at idx 2, 'e'
-        // at idx 5); Quick Open ('n' in Open? O-p-e-n: n at end, then
-        // needs 'e' after — none → no match); Rescan Vault hint? "Walk
-        // the vault and refresh the index" — 'n' in "and", 'e' in
-        // "refresh" → matches via hint.
+        // "ne" matches File's and the Sidebar's New Note by prefix (78
+        // each), the Sidebar's Rename… by scattered letters, and Rescan
+        // Vault by its hint ("and", "refresh"). The two New Notes tie, so
+        // File keeps its declared place before the Sidebar; Vault's best
+        // row is a weak hint match, so Vault comes last (#1834).
+        assert_eq!(score("ne", "New Note"), 78);
         let got = ids(&sections);
-        // Sections present in declared order: File, Vault (hint match),
-        // Sidebar.
-        assert_eq!(
-            sections
-                .iter()
-                .map(|s| s.title.as_str())
-                .collect::<Vec<_>>(),
-            vec!["File", "Vault", "Sidebar"],
-        );
-        // File: only "New Note" (Save has no n).
+        assert_eq!(titles(&sections), vec!["File", "Sidebar", "Vault"]);
         assert_eq!(got[0], vec!["slate.file.newNote"]);
-        // Sidebar: prefix-scored New Note first, then Rename….
         assert_eq!(
-            got[2],
+            got[1],
             vec!["slate.sidebar.newNote", "slate.sidebar.rename"]
+        );
+        assert_eq!(got[2], vec!["slate.vault.rescan"]);
+    }
+
+    #[test]
+    fn an_exact_label_match_is_the_first_row_whatever_its_section() {
+        // #1834's own case: "settings" also matches Close Tab's hint, and
+        // View is declared long before Settings.
+        let commands = vec![
+            cmd_hint(
+                "a.view.closeTab",
+                "Close Tab",
+                "Close the active tab. Prompts if it has unsaved changes.",
+                CommandSection::View,
+            ),
+            cmd_hint(
+                "z.settings.open",
+                "Settings\u{2026}",
+                "Open Settings.",
+                CommandSection::Settings,
+            ),
+        ];
+        let sections = palette_sections(&commands, "settings", &[], &[]);
+        assert_eq!(titles(&sections), vec!["Settings", "View"]);
+        assert_eq!(sections[0].rows[0].command.id, "z.settings.open");
+    }
+
+    #[test]
+    fn sections_come_in_the_order_of_their_best_row() {
+        let commands = vec![
+            cmd("a.file.recent", "Recent Overview", CommandSection::File),
+            cmd("b.editor.reveal", "Toggle Reveal", CommandSection::Editor),
+            cmd("c.tasks.review", "Review Tasks", CommandSection::Tasks),
+        ];
+        // Premise: the best rows score in the reverse of the declared order.
+        assert!(score("rev", "Review Tasks") > score("rev", "Toggle Reveal"));
+        assert!(score("rev", "Toggle Reveal") > score("rev", "Recent Overview"));
+        let sections = palette_sections(&commands, "rev", &[], &[]);
+        assert_eq!(titles(&sections), vec!["Tasks", "Editor", "File"]);
+    }
+
+    #[test]
+    fn sections_whose_best_rows_tie_keep_the_declared_order() {
+        // Equal rows in Tasks and File, with ids that would put Tasks
+        // first: the tie keeps the declared order, File before Tasks.
+        let commands = vec![
+            cmd("a.tasks.save", "Save", CommandSection::Tasks),
+            cmd("z.file.save", "Save", CommandSection::File),
+        ];
+        let sections = palette_sections(&commands, "sav", &[], &[]);
+        assert_eq!(titles(&sections), vec!["File", "Tasks"]);
+    }
+
+    #[test]
+    fn every_command_section_has_a_place_in_the_palette() {
+        // A row whose section SECTION_ORDER does not list is dropped from
+        // both layouts, so every section must be listed. The match is
+        // exhaustive: a new CommandSection fails to compile here until it
+        // is added to `every` and, through this assertion, to SECTION_ORDER.
+        use CommandSection::*;
+        let every = [
+            File, Navigation, View, Vault, Editor, Tasks, Settings, Plugins, Canvas, Bases, Graph,
+            Sidebar,
+        ];
+        for section in every {
+            match section {
+                File | Navigation | View | Vault | Editor | Tasks | Settings | Plugins | Canvas
+                | Bases | Graph | Sidebar => {}
+            }
+            assert!(
+                SECTION_ORDER.contains(&section),
+                "{section:?} has no place in SECTION_ORDER"
+            );
+        }
+        assert_eq!(SECTION_ORDER.len(), every.len());
+    }
+
+    #[test]
+    fn an_exact_label_outranks_a_longer_label_with_the_same_prefix_score() {
+        let commands = vec![
+            cmd("a.vault.open", "Open Vault\u{2026}", CommandSection::File),
+            cmd("b.file.open", "Open", CommandSection::File),
+        ];
+        assert_eq!(score("open", "Open Vault\u{2026}"), score("open", "Open"));
+        let sections = palette_sections(&commands, "open", &[], &[]);
+        assert_eq!(ids(&sections), vec![vec!["b.file.open", "a.vault.open"]]);
+    }
+
+    #[test]
+    fn the_name_after_the_first_colon_is_an_exact_match() {
+        // "show outline" is a prefix of the View row's whole label and only
+        // a scattered match of the Canvas row's, so by score the View row
+        // leads; the Canvas row's name after its "Canvas: " lead is the
+        // query exactly.
+        let commands = vec![
+            cmd("a.view.outline", "Show Outline Panel", CommandSection::View),
+            cmd(
+                "z.canvas.outline",
+                "Canvas: Show Outline",
+                CommandSection::Canvas,
+            ),
+        ];
+        assert!(
+            score("show outline", "Show Outline Panel")
+                > score("show outline", "Canvas: Show Outline")
+        );
+        let sections = palette_sections(&commands, "show outline", &[], &[]);
+        assert_eq!(sections[0].rows[0].command.id, "z.canvas.outline");
+
+        // A whole label that is the query still comes before a tail.
+        let commands = vec![
+            cmd(
+                "a.canvas.duplicate",
+                "Canvas: Duplicate",
+                CommandSection::Canvas,
+            ),
+            cmd("z.sidebar.duplicate", "Duplicate", CommandSection::Sidebar),
+        ];
+        let sections = palette_sections(&commands, "duplicate", &[], &[]);
+        assert_eq!(sections[0].rows[0].command.id, "z.sidebar.duplicate");
+    }
+
+    #[test]
+    fn a_trailing_ellipsis_and_the_matchers_fold_do_not_stop_an_exact_match() {
+        // Each competitor scores the same as the named row and has the
+        // smaller id, so only the exact tier puts the named row first.
+        let cases: [(&str, &str, &str); 4] = [
+            ("rename", "Rename Group\u{2026}", "Rename\u{2026}"),
+            ("RENAME", "Rename Group\u{2026}", "Rename\u{2026}"),
+            // Canonical equivalence: a decomposed é names a composed one.
+            ("cafe\u{301}", "Caf\u{e9} Menu", "Caf\u{e9}"),
+            // The final sigma (CB-32): ΚΟΣΜΟΣ names κοσμος.
+            (
+                "\u{39a}\u{39f}\u{3a3}\u{39c}\u{39f}\u{3a3}",
+                "\u{3ba}\u{3bf}\u{3c3}\u{3bc}\u{3bf}\u{3c3} \u{3c7}",
+                "\u{3ba}\u{3bf}\u{3c3}\u{3bc}\u{3bf}\u{3c2}",
+            ),
+        ];
+        for (query, competitor, named) in cases {
+            assert_eq!(
+                score(query, competitor),
+                score(query, named),
+                "premise: {query:?} scores {competitor:?} and {named:?} alike"
+            );
+            let commands = vec![
+                cmd("a.competitor", competitor, CommandSection::File),
+                cmd("z.named", named, CommandSection::File),
+            ];
+            let sections = palette_sections(&commands, query, &[], &[]);
+            assert_eq!(
+                sections[0].rows[0].command.id, "z.named",
+                "{query:?} names {named:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_label_match_outranks_a_hint_only_match_of_equal_score() {
+        let commands = vec![
+            cmd_hint(
+                "a.file.archive",
+                "Archive",
+                "Notes in the archive",
+                CommandSection::File,
+            ),
+            cmd("b.file.notesIndex", "Notes Index", CommandSection::File),
+        ];
+        assert_eq!(
+            score("notes", "Notes in the archive"),
+            score("notes", "Notes Index")
+        );
+        assert!(fuzzy_score("notes", "Archive").is_none());
+        let sections = palette_sections(&commands, "notes", &[], &[]);
+        assert_eq!(
+            ids(&sections),
+            vec![vec!["b.file.notesIndex", "a.file.archive"]]
         );
     }
 
@@ -747,12 +971,10 @@ mod tests {
     }
 
     #[test]
-    fn scores_expose_the_global_ranked_order_across_sections() {
-        // The display is section-grouped, but hosts also need "strongest
-        // match overall" (the mac model's filteredCommands contract): a
-        // weak hint-only match in an early section must not outrank a
-        // strong label match in a later one once rows are re-sorted by
-        // the exposed score.
+    fn the_display_leads_with_the_strongest_match() {
+        // #1834: a weak hint-only match in an early section no longer comes
+        // before a strong label match in a later one. The display itself is
+        // the best-match order, so no host re-sorts by score.
         let commands = vec![
             cmd_hint(
                 "a.file.print",
@@ -765,21 +987,13 @@ mod tests {
         let sections = palette_sections(&commands, "save", &[], &[]);
         assert_eq!(
             ids(&sections),
-            vec![vec!["a.file.print"], vec!["z.editor.save"]],
-            "display stays section-grouped",
+            vec![vec!["z.editor.save"], vec!["a.file.print"]],
         );
-        let mut rows: Vec<&PaletteRow> = sections.iter().flat_map(|s| s.rows.iter()).collect();
-        rows.sort_by(|l, r| {
-            r.score
-                .cmp(&l.score)
-                .then_with(|| l.command.id.cmp(&r.command.id))
-        });
-        assert_eq!(rows[0].command.id, "z.editor.save");
         assert!(
-            rows[0].score > rows[1].score,
+            sections[0].rows[0].score > sections[1].rows[0].score,
             "{} vs {}",
-            rows[0].score,
-            rows[1].score
+            sections[0].rows[0].score,
+            sections[1].rows[0].score
         );
     }
 

@@ -74,25 +74,6 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(["slate.sidebar.zzz", "slate.sidebar.aaa"], harness.RowIds);
     }
 
-    [Fact]
-    public void ScoreIdentifiesTheStrongestMatchWithoutReorderingTheDisplay()
-    {
-        var harness = new PaletteHarness(
-            Cmd("a.file.print", "Print Note", CommandSection.File, "Print or save the note"),
-            Cmd("z.editor.save", "Save", CommandSection.Editor));
-
-        harness.Palette.Open();
-        harness.Palette.Query = "save";
-
-        // Display order stays section-grouped: File before Editor.
-        Assert.Equal(["a.file.print", "z.editor.save"], harness.RowIds);
-        CommandPaletteRowViewModel strongest = harness.Palette.Rows
-            .OrderByDescending(row => row.Score)
-            .ThenBy(row => row.Id, StringComparer.Ordinal)
-            .First();
-        Assert.Equal("z.editor.save", strongest.Id);
-    }
-
     // --- P18: one computation per query change ---------------------------
 
     [Fact]
@@ -379,10 +360,11 @@ public sealed partial class CommandPaletteTests
 
         // "Save" has no 'o', so the stale row leaves the result set —
         // activating it is how a host reaches the no-selection state
-        // with rows still on screen.
+        // with rows still on screen. Quick Open's word-boundary "O" is the
+        // best match, so it leads (P1).
         harness.Palette.Query = "o";
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             harness.RowIds);
 
         harness.Palette.Select(stale);
@@ -390,7 +372,7 @@ public sealed partial class CommandPaletteTests
         Assert.Null(harness.Palette.SelectedRow);
 
         harness.Palette.MoveSelection(1);
-        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
 
         harness.Palette.Select(stale);
         harness.Palette.MoveSelection(-1);
@@ -439,7 +421,7 @@ public sealed partial class CommandPaletteTests
         // first, "preserved" and "snapped to the first row" would be
         // indistinguishable and this fact would pass vacuously.
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             harness.RowIds);
         Assert.Equal("slate.editor.bold", harness.Palette.SelectedId);
         // Preserved selection is not a selection change, so the AT hears
@@ -460,9 +442,9 @@ public sealed partial class CommandPaletteTests
         harness.Palette.Query = "o";
 
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             harness.RowIds);
-        Assert.Equal("slate.file.newNote", harness.Palette.SelectedId);
+        Assert.Equal("slate.nav.quickOpen", harness.Palette.SelectedId);
     }
 
     [Fact]
