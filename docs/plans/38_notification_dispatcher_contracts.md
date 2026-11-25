@@ -1238,9 +1238,15 @@ On Windows a press of Cancel import, from any route, says `ImportCancelling`
 at once and turns Cancel import off; the summary follows when the import
 settles, with what was copied and "Import cancelled; completed copies
 remain." when the copy was cut short. A cancel that lands after the copy
-ended reports the full copy. A vault close that stops an import says its
-own refusal line instead of `ImportCancelling`, and the summary still
-follows; a session shutdown says nothing. The Mac's adoption of both
+ended reports the full copy. An import that ends while the keys are on a
+Cancel that goes off with it says the summary before the keys move, as the
+trash does: a focus change inside the window drops only NVDA's stale focus
+speech, never a notification, so the summary is heard at once and the focus
+line of where the keys land follows it (said after the move, the NVDA spot
+heard it 11.4 s late, behind the status bar's own focus line). A vault
+close that stops an import says its own refusal line instead of
+`ImportCancelling`, and the summary still follows; a session shutdown says
+nothing. The Mac's adoption of both
 events and of `import_status_line` is owed on #1954, with a VoiceOver pass;
 until then `importBatchAnnouncement` composes its summary and a cancel
 speaks nothing at the press (the ledger's Mac designations below).

@@ -718,8 +718,8 @@ public sealed class FilesPaneKeysFirstTests
     });
 
     /// <summary>An import that ends, with no press, while the keys are on the status bar's
-    /// Cancel import: the item goes and the button goes off, and the keys go first to the
-    /// element they came to it from.</summary>
+    /// Cancel import: the summary is said first, then the item goes and the button goes off,
+    /// and the keys go first to the element they came to it from.</summary>
     [Fact]
     public void AnImportThatEndsUnderTheKeysLandsThemFirst() => RunSta(() =>
     {
@@ -733,8 +733,10 @@ public sealed class FilesPaneKeysFirstTests
         var filter = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
         pane.TakeTheKeys(filter);
         pane.TakeTheKeys(cancel);
-        // The diff red team's finding 3: the summary is said after the keys have left, so
-        // the focus change cannot cut it short.
+        // NVDA spot 2 (2026-11-25): the summary is said before the keys leave, as the
+        // trash's is. A focus change inside the window drops only NVDA's stale focus speech,
+        // never a notification, so a summary said after the keys moved waited 11.4 s behind
+        // the status bar's own focus line.
         int saidWhenTheKeysLeft = -1;
         cancel.LostKeyboardFocus += (_, _) => saidWhenTheKeysLeft = saidWhenTheKeysLeft < 0 ? pane.Said.Count : saidWhenTheKeysLeft;
         // Codex round 1: the item hides only after the keys have left its Cancel.
@@ -753,8 +755,8 @@ public sealed class FilesPaneKeysFirstTests
         int summary = pane.Said.FindIndex(said => said is A11yEvent.ImportFinished);
         Assert.True(summary >= 0, "the import's summary was not said");
         Assert.True(
-            saidWhenTheKeysLeft >= 0 && summary >= saidWhenTheKeysLeft,
-            $"the summary was said (at {summary}) before the keys left Cancel (at {saidWhenTheKeysLeft})");
+            saidWhenTheKeysLeft >= 0 && summary < saidWhenTheKeysLeft,
+            $"the summary was said (at {summary}) after the keys left Cancel (at {saidWhenTheKeysLeft}), where it waits behind the focus line");
         Assert.Equal(1, import.WorkRuns);
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
     });

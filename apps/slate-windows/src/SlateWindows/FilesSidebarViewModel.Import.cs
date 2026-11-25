@@ -284,17 +284,20 @@ internal sealed partial class FilesSidebarViewModel
                 cancellation.Dispose();
             }
 
-            // Running first: Cancel import reads both, and must not come on in between.
-            IsImportRunning = false;
-            IsImportCancelling = false;
-            IsImporting = false;
-            // Plan 47 CB-16 (the diff red team's finding 3): said after the flags clear, so
-            // keys on the status bar's Cancel, which goes with the import, move before the
-            // summary is raised; a focus change raised after it would cut it short.
+            // Plan 47 CB-16 (NVDA spot 2, 2026-11-25): said before the flags clear, as the
+            // trash's summary is, so keys on a Cancel that goes with the import move after it.
+            // A focus change inside the window drops only NVDA's stale focus speech, never a
+            // notification; said after the keys moved, the summary waited behind the focus
+            // line of where they landed (11.4 s for the status bar's).
             if (finished is not null)
             {
                 _announce(finished);
             }
+
+            // Running first: Cancel import reads both, and must not come on in between.
+            IsImportRunning = false;
+            IsImportCancelling = false;
+            IsImporting = false;
         }
     }
 
