@@ -128,13 +128,41 @@ internal sealed class CanvasRendererAutomationPeer :
 
     bool ISelectionProvider.IsSelectionRequired => false;
 
+    /// <summary>The seat, also while it is outside the window: then it is a D3 placeholder
+    /// (offscreen, the realize door, no SelectionItem), connected to the board as the item
+    /// door's answer is (CB-36). Never an array holding null; a hidden board, which has no
+    /// children, has no selection either.</summary>
     IRawElementProviderSimple[] ISelectionProvider.GetSelection()
     {
         string? selected = _view.Engine.Current?.Selection;
-        return selected is not null
+        return IsShown
+            && selected is not null
             && _view.PeerFor(CanvasPeerKey.Card(selected)) is { } peer
-                ? [ProviderFromPeer(peer)]
+            && ConnectedProvider(peer) is { } provider
+                ? [provider]
                 : [];
+    }
+
+    /// <summary>The board's rule for its automation surface: only while it is the active
+    /// projection (<see cref="GetChildrenCore"/>).</summary>
+    private bool IsShown => _view.Visibility is System.Windows.Visibility.Visible;
+
+    /// <summary>A board peer's provider for a client, connected to the board first (#1722).
+    /// WPF wraps only a peer it finds connected under an automation root, and a peer minted for
+    /// an off-window item is in no child list until the next install refreshes the board's
+    /// children, so <c>ProviderFromPeer</c> alone answers null for it. Connecting sets the
+    /// peer's parent and window handle only, as WPF's own items controls do for the peers
+    /// their item door creates; the child list, and the one children-invalidated event each
+    /// install raises, are unchanged. With no client the board has no window handle, the
+    /// connection declines, and the answer is null, as before. If a later WPF drops the
+    /// internal member, the answer is what it was before CB-36.</summary>
+    private IRawElementProviderSimple? ConnectedProvider(CanvasBoardAutomationPeer peer)
+    {
+        if (WpfEditorPeerConnection.WpfInternalsResolved)
+        {
+            WpfEditorPeerConnection.Connect(peer, this);
+        }
+        return ProviderFromPeer(peer);
     }
 
     // --- ItemContainer: the unrealized cell's door (D3) ----------------
@@ -146,16 +174,22 @@ internal sealed class CanvasRendererAutomationPeer :
         // existing yet; realization mints the placeholder (D3's
         // first-touch cell). Only the Name property participates —
         // the platform sends 0 for "next item".
-        if (propertyId != 0
-            && propertyId != AutomationElementIdentifiers.NameProperty.Id)
+        // A hidden board answers nothing and realizes nothing (CB-36): it has no children,
+        // and a search would pan it out of sight.
+        if (!IsShown
+            || (propertyId != 0
+                && propertyId != AutomationElementIdentifiers.NameProperty.Id))
         {
             return null;
         }
         CanvasPeerKey? key = _view.FindByName(
             startAfter is null ? null : PeerFromProvider(startAfter),
             propertyId == 0 ? null : value as string);
+        // The search realizes what it finds (D3), so a client walking the board item by item
+        // pans it to each item in turn; the element it gets back is the one the install
+        // promotes.
         return key is { } found && _view.RealizePeer(found) is { } peer
-            ? ProviderFromPeer(peer)
+            ? ConnectedProvider(peer)
             : null;
     }
 }

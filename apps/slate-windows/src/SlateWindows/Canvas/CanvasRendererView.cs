@@ -297,20 +297,22 @@ internal sealed class CanvasRendererView : FrameworkElement
         double panY = state.Viewport.PanY;
         double fontSize = 12.0 * TextScaleService.CurrentFactor * zoom;
         var matched = MatchedIds(state);
-        foreach (System.Collections.Generic.KeyValuePair<CanvasPeerKey, CanvasPeerPlacement>
-            entry in state.Topology.Placements)
+        // D9 (#1838): paint in core's scene order, the order hit testing and the outline
+        // read, so a group listed before its members is painted under them. The placements
+        // are a dictionary, whose order is a string-hash order that changes from process to
+        // process; they are only looked up here, never walked.
+        foreach (CanvasSceneNode node in population.SceneNodes)
         {
-            if (entry.Key.IsEdge
-                || entry.Value.Cell != CanvasPeerCell.Materialized
-                || !population.SceneByNode.TryGetValue(entry.Key.Id, out CanvasSceneNode? node))
+            if (!state.Topology.Placements.TryGetValue(CanvasPeerKey.Card(node.NodeId), out CanvasPeerPlacement? placement)
+                || placement.Cell != CanvasPeerCell.Materialized)
             {
                 continue;
             }
             var rect = new Rect(
-                (entry.Value.X * zoom) + panX,
-                (entry.Value.Y * zoom) + panY,
-                entry.Value.Width * zoom,
-                entry.Value.Height * zoom);
+                (placement.X * zoom) + panX,
+                (placement.Y * zoom) + panY,
+                placement.Width * zoom,
+                placement.Height * zoom);
             bool dimmed = matched is not null && !matched.Contains(node.NodeId);
             Brush fill = FillBrush(node);
             context.PushOpacity(dimmed ? 0.35 : 1.0);
