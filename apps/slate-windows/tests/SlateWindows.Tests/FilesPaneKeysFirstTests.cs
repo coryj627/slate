@@ -76,10 +76,11 @@ public sealed class FilesPaneKeysFirstTests
         pane.AssertTheKeysAreOn(pane.Group("SidebarBatchActions"), "the Batch actions group");
     });
 
-    /// <summary>Cancel import goes off when the import it stops settles, a later turn than
-    /// its press: the keys go to the File actions group first.</summary>
+    /// <summary>Cancel import goes off in its own press (plan 47 CB-16; the owner's answer of
+    /// 2026-11-24, "Off, keys go back"), as it once went off only when the import it stopped
+    /// settled: either way the keys go to the File actions group first.</summary>
     [Fact]
-    public void CancelImportMovesTheKeysToItsGroupFirstWhenTheImportSettles() => RunSta(() =>
+    public void CancelImportMovesTheKeysToItsGroupFirstWhenPressed() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
@@ -547,6 +548,128 @@ public sealed class FilesPaneKeysFirstTests
         pane.AssertTheKeysAreOn(host.Body("ContentPaneBorder"), "the editor");
     });
 
+    /// <summary>Plan 47 CB-16 (#1830): an import shows on the status bar while it copies, not
+    /// while its pick is up, with the Files pane hidden too: core's line, and a Cancel named
+    /// for what it cancels whose description is that line. It goes when the import ends.
+    /// </summary>
+    [Fact]
+    public void AnImportShowsOnTheStatusBarWithItsCancel() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        host.Workspace.IsFilesSidebarVisible = false;
+        host.Settle();
+        // Found in the logical tree: a collapsed status bar item has no visual tree yet.
+        var line = LogicalById<TextBlock>(host.Shell.ShellStatusBar, "ImportProgressStatus");
+        var cancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.Picks == 1, TimeSpan.FromSeconds(10)), "the press never asked for the import's sources");
+        host.Settle();
+        Assert.False(cancel.IsVisible, "the status bar showed the import while its pick was up");
+
+        import.HandOverTheSource();
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        string importing = SlateUniffiMethods.ImportStatusLine(ImportPhase.Importing);
+        Assert.True(line.IsVisible && cancel.IsVisible && cancel.IsEnabled, "the status bar did not show the running import with its Cancel on");
+        Assert.Equal(importing, line.Text);
+        Assert.Equal("Cancel import", AutomationProperties.GetName(cancel));
+        Assert.Equal(importing, AutomationProperties.GetHelpText(cancel));
+        Assert.Same(pane.Sidebar.CancelImportCommand, cancel.Command);
+
+        import.ReleaseTheWorker();
+        PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
+        host.Settle();
+        Assert.False(cancel.IsVisible, "the status bar still showed the import after it ended");
+    });
+
+    /// <summary>Plan 47 CB-16 (#1830; the owner's answer of 2026-11-24, "Off, keys go back"):
+    /// the status bar's Cancel import goes off in its own press, and the keys go first to the
+    /// element they came to it from, as the trash's Cancel does.</summary>
+    [Fact]
+    public void TheStatusBarsImportCancelLandsTheKeysWhereTheyCameFromFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        var cancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+        var filter = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
+        pane.TakeTheKeys(filter);
+        pane.TakeTheKeys(cancel);
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
+        {
+            Press(cancel);
+            PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
+            host.Settle();
+        });
+
+        Assert.Equal(0, import.WorkRuns);
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+        Assert.Null(host.Shell.ImportCancelCameFromForTests);
+    });
+
+    /// <summary>The same, when the keys came to the status bar's Cancel import from nothing:
+    /// they go first to the editor, as the trash's do.</summary>
+    [Fact]
+    public void TheStatusBarsImportCancelLandsTheKeysInTheEditorWhenTheyCameFromNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("b.md", "# B\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        host.Workspace.OpenPath("b.md");
+        host.Settle();
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        var cancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+        Keyboard.ClearFocus();
+        Assert.True(Keyboard.FocusedElement is null, $"premise: the keys are still on {Describe(Keyboard.FocusedElement)}");
+        pane.TakeTheKeys(cancel);
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
+        {
+            Press(cancel);
+            PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
+            host.Settle();
+        });
+
+        pane.AssertTheKeysAreOn(host.Body("ContentPaneBorder"), "the editor");
+    });
+
+    /// <summary>An import that ends, with no press, while the keys are on the status bar's
+    /// Cancel import: the item goes and the button goes off, and the keys go first to the
+    /// element they came to it from.</summary>
+    [Fact]
+    public void AnImportThatEndsUnderTheKeysLandsThemFirst() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        var cancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+        var filter = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
+        pane.TakeTheKeys(filter);
+        pane.TakeTheKeys(cancel);
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
+        {
+            import.ReleaseTheWorker();
+            PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
+            pane.SettleThePublication();
+        });
+
+        Assert.Equal(1, import.WorkRuns);
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+    });
+
     /// <summary>The trash's Cancel when its staging ends on a folder that holds items: the
     /// trash asks to confirm, which hides Cancel and then turns it off. The keys still go
     /// first to the element they came to Cancel from (red team F1: the hide had already
@@ -800,6 +923,32 @@ public sealed class FilesPaneKeysFirstTests
 
     private static void RunSta(Action body) =>
         StaThread.RunPumped(body, TimeSpan.FromSeconds(120), "The Files pane keys-first fact timed out.");
+
+    /// <summary>The element under <paramref name="root"/>'s logical tree whose AutomationId is
+    /// <paramref name="id"/>: a collapsed item's content is there before it has a visual tree.
+    /// </summary>
+    private static T LogicalById<T>(DependencyObject root, string id)
+        where T : FrameworkElement
+    {
+        var pending = new Stack<DependencyObject>([root]);
+        while (pending.TryPop(out DependencyObject? next))
+        {
+            if (next is T match && AutomationProperties.GetAutomationId(match) == id)
+            {
+                return match;
+            }
+
+            foreach (object child in LogicalTreeHelper.GetChildren(next))
+            {
+                if (child is DependencyObject element)
+                {
+                    pending.Push(element);
+                }
+            }
+        }
+
+        throw new InvalidOperationException($"no {typeof(T).Name} with AutomationId {id} under {root}");
+    }
 
     /// <summary>The Files sidebar attached to a shown shell through the lifecycle's own
     /// setter, so the window observes it as in the app (its Move To sheet, its status bar

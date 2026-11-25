@@ -464,6 +464,13 @@ pub fn empty_panel_line(
     core::empty_panel_line(panel.into(), context.into(), &reading_view_chord)
 }
 
+/// Plan 47 CB-16 (#1830, CD10): the line a host shows while an import runs
+/// ("Importing…", "Cancelling import…"), in core's words.
+#[uniffi::export]
+pub fn import_status_line(phase: ImportPhase) -> String {
+    core::a11y::import_status_line(phase.into())
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {
@@ -9999,6 +10006,27 @@ impl From<RunningWork> for core::a11y::RunningWork {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::ImportPhase` (plan 47 CB-16, #1830,
+/// CD10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ImportPhase {
+    Importing,
+    Finishing,
+    Moving,
+    Cancelling,
+}
+
+impl From<ImportPhase> for core::a11y::ImportPhase {
+    fn from(phase: ImportPhase) -> Self {
+        match phase {
+            ImportPhase::Importing => Self::Importing,
+            ImportPhase::Finishing => Self::Finishing,
+            ImportPhase::Moving => Self::Moving,
+            ImportPhase::Cancelling => Self::Cancelling,
+        }
+    }
+}
+
 /// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
 /// (see that module for per-variant docs, the copy rules, and the
 /// `HostComposed` residue contract).
@@ -10235,6 +10263,21 @@ pub enum A11yEvent {
     },
     SidebarSettingsReloadedStaleRefs,
     SidebarSettingsReloaded,
+    /// Plan 47 CB-16 (#1830, CD10): an import's outcome, for both hosts'
+    /// importers (core's `ImportFinished`).
+    ImportFinished {
+        copied_files: u32,
+        copied_folders: u32,
+        moved_items: u32,
+        reconciled_items: u32,
+        destination: String,
+        cancelled: bool,
+        not_imported: u32,
+        warnings: u32,
+        stopped_at_entry_limit: Option<u32>,
+    },
+    /// Plan 47 CB-16 (#1830, CD10): a cancel, said at once on its press.
+    ImportCancelling,
     VaultClosed,
     VaultClosedAllSaved,
     VaultClosedChangesDiscarded,
@@ -12156,6 +12199,28 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             }
             F::SidebarSettingsReloadedStaleRefs => C::SidebarSettingsReloadedStaleRefs,
             F::SidebarSettingsReloaded => C::SidebarSettingsReloaded,
+            F::ImportFinished {
+                copied_files,
+                copied_folders,
+                moved_items,
+                reconciled_items,
+                destination,
+                cancelled,
+                not_imported,
+                warnings,
+                stopped_at_entry_limit,
+            } => C::ImportFinished {
+                copied_files,
+                copied_folders,
+                moved_items,
+                reconciled_items,
+                destination,
+                cancelled,
+                not_imported,
+                warnings,
+                stopped_at_entry_limit,
+            },
+            F::ImportCancelling => C::ImportCancelling,
             F::VaultClosed => C::VaultClosed,
             F::VaultClosedAllSaved => C::VaultClosedAllSaved,
             F::VaultClosedChangesDiscarded => C::VaultClosedChangesDiscarded,
@@ -15996,6 +16061,50 @@ mod tests {
             assert_eq!(rendered.text, sentence, "{ffi:?}");
             assert_eq!(rendered.priority, A11yPriority::High, "{ffi:?}");
         }
+    }
+
+    /// Plan 47 CB-16 (#1830, CD10): each member of `ImportPhase` crosses the
+    /// FFI as its own member and gives core's line; the cancel event renders
+    /// the Cancelling line at Medium, and the summary crosses field by field.
+    #[test]
+    fn each_import_phase_crosses_and_renders_cores_line() {
+        use slate_core::a11y::ImportPhase as CorePhase;
+        for (ffi, core_phase, line) in [
+            (ImportPhase::Importing, CorePhase::Importing, "Importing…"),
+            (
+                ImportPhase::Finishing,
+                CorePhase::Finishing,
+                "Finishing import…",
+            ),
+            (ImportPhase::Moving, CorePhase::Moving, "Moving items…"),
+            (
+                ImportPhase::Cancelling,
+                CorePhase::Cancelling,
+                "Cancelling import…",
+            ),
+        ] {
+            assert_eq!(CorePhase::from(ffi), core_phase);
+            assert_eq!(import_status_line(ffi), line, "{ffi:?}");
+        }
+        let cancelling = a11y_render(A11yEvent::ImportCancelling);
+        assert_eq!(cancelling.text, import_status_line(ImportPhase::Cancelling));
+        assert_eq!(cancelling.priority, A11yPriority::Medium);
+        let finished = a11y_render(A11yEvent::ImportFinished {
+            copied_files: 3,
+            copied_folders: 1,
+            moved_items: 0,
+            reconciled_items: 0,
+            destination: "Projects/Inbox".into(),
+            cancelled: true,
+            not_imported: 0,
+            warnings: 0,
+            stopped_at_entry_limit: None,
+        });
+        assert_eq!(
+            finished.text,
+            "Copied 3 files and 1 folder to Inbox. Import cancelled; completed copies remain."
+        );
+        assert_eq!(finished.priority, A11yPriority::Medium);
     }
 
     /// The mac corpus mirror must stay in lockstep with `corpus()`.

@@ -23,6 +23,9 @@ public partial class MainWindow
     /// <summary>The element Cancel's landing would go back to, for the facts.</summary>
     internal IInputElement? TrashCancelCameFromForTests => _trashCancelCameFrom;
 
+    /// <summary>Plan 47 CB-16 tests-first scaffold: main has no import Cancel.</summary>
+    internal IInputElement? ImportCancelCameFromForTests => null;
+
     private void TrashFallback_KeyDown(object sender, KeyEventArgs e)
     {
         // This bubbling fallback runs only after the focused control declines

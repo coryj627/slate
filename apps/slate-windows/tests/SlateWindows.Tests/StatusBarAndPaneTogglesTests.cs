@@ -135,6 +135,24 @@ public sealed class StatusBarAndPaneTogglesTests
         Assert.True(cancel.ActualHeight >= 24, $"the button is {cancel.ActualHeight} high, under the target's 24");
     });
 
+    /// <summary>Plan 47 CB-16 (#1830): the import's item, beside the trash's, keeps the bar at
+    /// 24 and its Cancel at the target's 24.</summary>
+    [Fact]
+    public void TheBarStaysTwentyFourWhileAnImportRuns() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        StatusBar bar = host.Shell.ShellStatusBar;
+        Button cancel = LogicalButtons(bar).Single(button => AutomationProperties.GetAutomationId(button) == "CancelImport");
+        var item = (StatusBarItem)LogicalTreeHelper.GetParent(LogicalTreeHelper.GetParent(cancel));
+
+        item.Visibility = Visibility.Visible;
+        host.Settle();
+
+        Assert.True(cancel.IsVisible, "premise: the button is not showing");
+        Assert.Equal(24, bar.ActualHeight, 1);
+        Assert.True(cancel.ActualHeight >= 24, $"the button is {cancel.ActualHeight} high, under the target's 24");
+    });
+
     [Fact]
     public void TheProgressItemIsNoFixedWidth() => RunSta(() =>
     {
@@ -588,7 +606,7 @@ public sealed class StatusBarAndPaneTogglesTests
         ["BatchMoveCommand"] = "spoken, and its field is in the pane",
         ["BatchTrashCommand"] = "the status bar's progress",
         ["ImportCommand"] = "a file picker, then spoken when it finishes",
-        ["CancelImportCommand"] = "no surface shows an import, pane or not: #1830",
+        ["CancelImportCommand"] = "the status bar's progress",
         ["CancelTrashCommand"] = "the status bar's progress",
     };
 

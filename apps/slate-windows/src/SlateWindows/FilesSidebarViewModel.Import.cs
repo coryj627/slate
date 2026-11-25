@@ -26,6 +26,17 @@ internal sealed partial class FilesSidebarViewModel
 
     internal Task ImportCompletion => _importCompletion;
 
+    /// <summary>Plan 47 CB-16 (#1830): called after each file the import copies, on its
+    /// worker, so a fact can cancel part way through.</summary>
+    internal Action? AfterImportFileCopiedForTesting { get; set; }
+
+    /// <summary>Plan 47 CB-16 tests-first scaffold: main's behaviour, named as the fix
+    /// names it.</summary>
+    public bool IsImportCancelling => false;
+
+    /// <summary>Plan 47 CB-16 tests-first scaffold: main's text.</summary>
+    public string ImportStatusLine => ImportStatus;
+
     /// <summary>
     /// The import's admission: set at the press and cleared when the import ends, its pick
     /// included. A rescan is refused while it is set (R-9), a second press starts nothing,
@@ -288,6 +299,7 @@ internal sealed partial class FilesSidebarViewModel
                 {
                     ImportFile(absolute, destination, cancellationToken);
                     importedFiles++;
+                    AfterImportFileCopiedForTesting?.Invoke();
                 }
                 else if (Directory.Exists(absolute))
                 {
@@ -331,6 +343,7 @@ internal sealed partial class FilesSidebarViewModel
                             {
                                 ImportFile(child, destinationDirectory, cancellationToken);
                                 importedFiles++;
+                                AfterImportFileCopiedForTesting?.Invoke();
                             }
                         }
                     }
