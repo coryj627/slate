@@ -193,6 +193,47 @@ public sealed class FilesStatusLineTests
         Assert.Equal(string.Empty, h.Sidebar.Status);
     });
 
+    /// <summary>Codex round 2: the dual pane's read fails while a refresh is still to
+    /// publish, so its line is held for that publication; the reassertion keeps it the
+    /// tree's own, and a later plain refresh leaves the line empty, not the old failure.
+    /// </summary>
+    [Fact]
+    public void AHeldReadFailureStaysTheTreesOwn() => RunSta(() =>
+    {
+        using RescanTests.Harness h = RescanTests.Harness.WithAsyncTree(
+            "files-line-held-read-failure",
+            ("alpha.md", "# Alpha\n"),
+            ("kept/inner.md", "# Inner\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        FileTreeNodeViewModel kept = Assert.Single(h.Sidebar.RootNodes, node => node.Path == "kept");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var parked = new ManualResetEventSlim(false);
+        h.TreeWorker = async (work, token) =>
+        {
+            parked.Set();
+            await release.Task.WaitAsync(token).ConfigureAwait(false);
+            work();
+        };
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => parked.IsSet, "the refresh parking");
+
+        var unreadable = new FileTreeNodeViewModel(h.Sidebar, "../outside", "outside", isDirectory: true, level: 1, hasChildren: false);
+        h.Sidebar.SelectedNode = unreadable;
+        h.Sidebar.IsDualPaneEnabled = true;
+        Assert.StartsWith("Could not load folder files", h.Sidebar.Status, StringComparison.Ordinal);
+        release.SetResult();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the held refresh's publication");
+        h.TreeWorker = null;
+        Assert.StartsWith("Could not load folder files", h.Sidebar.Status, StringComparison.Ordinal);
+
+        h.Sidebar.SelectedNode = kept;
+        h.Settle();
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the plain refresh");
+
+        Assert.Equal(string.Empty, h.Sidebar.Status);
+    });
+
     /// <summary>Fact 21 (P2e): a refresh cancelled with no successor (the
     /// close's path) puts back the line it replaced.</summary>
     [Fact]

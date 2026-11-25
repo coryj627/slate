@@ -166,7 +166,7 @@ internal sealed partial class FilesSidebarViewModel
     /// settings notice, a silent tag-tree error), a folder expansion's or the
     /// dual pane's overflow line, a tag tree's failure or a tree failure's
     /// report. Set only through <see cref="WriteStatus"/> by
-    /// <see cref="WriteTreeStatus"/>, <see cref="MarkStatusWrittenByTree"/>
+    /// <see cref="WriteTreeStatus"/>, <see cref="ReportTreeReadFailure"/>
     /// and a held line's reassertion; every other write clears it. A flag
     /// cleared by every other write is used rather than a record of the tree's
     /// last text, which would misfire whenever another writer wrote the same
@@ -184,27 +184,14 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>A line the tree writes: see <see cref="_statusWrittenByTree"/>.</summary>
     private void WriteTreeStatus(string text) => WriteStatus(text, writtenByTree: true);
 
-    /// <summary>Plan 47 CB-16 (#1791, W9; Codex round 1): a read of the tree's content
-    /// failed (the tree, a folder's children, the dual pane's files, Expand Loaded): said and
-    /// shown as <see cref="ReportFailure(string)"/> says it, and the tree's own line, stale
-    /// once a later read succeeds, so no refresh puts it back. A mutation's failure is not
-    /// a read's, and keeps its line.</summary>
-    private void ReportTreeReadFailure(string message)
-    {
-        ReportFailure(message);
-        MarkStatusWrittenByTree(message);
-    }
-
-    /// <summary>A tree failure's spoken line, written by
-    /// <see cref="ReportFailure(string)"/>, is the tree's own while the line
-    /// still shows it.</summary>
-    private void MarkStatusWrittenByTree(string text)
-    {
-        if (string.Equals(Status, text, StringComparison.Ordinal))
-        {
-            _statusWrittenByTree = true;
-        }
-    }
+    /// <summary>Plan 47 CB-16 (#1791, W9; Codex rounds 1 and 2): a read of the tree's
+    /// content failed (the tree, the tag tree, a folder's children, the dual pane's files,
+    /// Expand Loaded): said and shown as <see cref="ReportFailure(string, bool)"/> says it,
+    /// and the tree's own line, marked before it is held for a pending publication, so no
+    /// refresh puts it back once a later read succeeds. A mutation's failure is not a
+    /// read's, and keeps its line.</summary>
+    private void ReportTreeReadFailure(string message) =>
+        ReportFailure(message, writtenByTree: true);
 
     /// <summary>Plan 47 CB-16 (#1791, W9): show a line that says work is
     /// running, remembering the line it replaces and whether the tree wrote

@@ -625,6 +625,48 @@ public sealed class FilesPaneKeysFirstTests
         Assert.Null(host.Shell.ImportCancelCameFromForTests);
     });
 
+    /// <summary>Codex round 2: the keys came to the status bar's Cancel import from the Files
+    /// pane's Cancel import (a pointer moved them), and both go off in one raise, at the
+    /// status bar's press or as the import ends. The keys never land on the pane's Cancel on
+    /// the way, which would put them on a control about to go off.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TheStatusBarsImportCancelNeverLandsTheKeysOnThePanesCancelAsBothGoOff(bool pressed) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true, HoldThroughTheCancel = true };
+        using var pane = new FilesPane(host, import: import);
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        Button paneCancel = pane.CommandButton("SidebarFileActionsExpander", pane.Sidebar.CancelImportCommand);
+        var statusCancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+        pane.TakeTheKeys(paneCancel);
+        pane.TakeTheKeys(statusCancel);
+        List<string> paneCancelOffUnder = [];
+
+        KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", statusCancel, () =>
+        {
+            paneCancelOffUnder = KeysFirstRecorder.DisabledWithTheKeysInside(paneCancel, () =>
+            {
+                if (pressed)
+                {
+                    Press(statusCancel);
+                    host.Settle();
+                }
+
+                import.ReleaseTheWorker();
+                PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
+                pane.SettleThePublication();
+            });
+        });
+
+        Assert.True(paneCancelOffUnder.Count == 0, $"the Files pane's Cancel import went off with the keys on {string.Join(", ", paneCancelOffUnder)}");
+        Assert.False(ReferenceEquals(Keyboard.FocusedElement, paneCancel), "the keys rest on the Files pane's Cancel import, which is off");
+        Assert.True(Keyboard.FocusedElement is UIElement { IsVisible: true, IsEnabled: true }, $"the keys rest on {Describe(Keyboard.FocusedElement)}");
+    });
+
     /// <summary>AGENTS.md's republish rule (the diff red team's low 7): a tree publication
     /// during an import (the change feed refreshes after every copied file) leaves the keys on
     /// the status bar's Cancel import, and leaves it on.</summary>

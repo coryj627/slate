@@ -66,13 +66,23 @@ public partial class MainWindow
     /// </summary>
     private bool LandWhereCancelCameFrom(StatusBarCancelKeys keys)
     {
-        if (!LandToken(keys.CameFrom))
+        if (!LandCancelsTarget(keys.CameFrom))
         {
             FocusActiveEditorPane();
         }
 
         return true;
     }
+
+    /// <summary>The element the keys came to a Cancel from, unless it is a command source
+    /// whose command now refuses (Codex round 2): the Files pane's Cancel import goes off in
+    /// the same raise as the status bar's, its IsEnabled not yet lowered, so landing on it
+    /// would put the keys on a control about to go off. Such a target, like a dead one,
+    /// gives way to the scopes it was in.</summary>
+    private bool LandCancelsTarget(IInputElement? target) =>
+        target is ICommandSource { Command: { } command } source && !command.CanExecute(source.CommandParameter)
+            ? RegionFocusGuard.LandInScopesOf(target)
+            : LandToken(target);
 
     private void CancelAvailabilityChanged(StatusBarCancelKeys keys, object sender)
     {
@@ -90,7 +100,7 @@ public partial class MainWindow
             if (!ReferenceEquals(sidebar, _viewModel.FileSidebar) || OpenModalSurface is not null
                 || (Keyboard.FocusedElement is { } focused && !ReferenceEquals(focused, this)
                     && !ReferenceEquals(focused, button))) { return; }
-            if (!LandToken(target)) { FocusActiveEditorPane(); }
+            if (!LandCancelsTarget(target)) { FocusActiveEditorPane(); }
         }, DispatcherPriority.Input);
     }
 

@@ -2933,9 +2933,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         return $"Sorted by {field}, {direction}{(GroupByDate ? ", grouped by date" : string.Empty)}.";
     }
 
-    private void ReportFailure(string message)
+    /// <summary>A failure, shown and said. Plan 47 CB-16 (#1791, Codex round 2):
+    /// <paramref name="writtenByTree"/> marks a read's failure as the tree's own line before
+    /// it is held for a pending publication, so its reassertion keeps the mark.</summary>
+    private void ReportFailure(string message, bool writtenByTree = false)
     {
-        Status = message;
+        WriteStatus(message, writtenByTree);
         // Codex round 2: same reassert discipline as results.
         HoldStatusForPendingPublication();
 
