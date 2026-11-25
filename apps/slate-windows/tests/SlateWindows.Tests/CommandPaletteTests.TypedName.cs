@@ -977,9 +977,10 @@ public sealed partial class CommandPaletteTests
 
     // --- Call 10: a row that takes the keys -----------------------------------------
 
-    /// <summary>A row that takes the keys away from the selection — a click, or a letter the
-    /// list searches by — is the selection, and the reader's, silently (the screen reader
-    /// speaks the focused row): a query that keeps it without leading with it keeps it.</summary>
+    /// <summary>A row that takes the keys away from the selection — a click, or Tab or a UIA
+    /// SetFocus onto a row other than the selection — is the selection, and the reader's,
+    /// silently (the screen reader speaks the focused row): a query that keeps it without
+    /// leading with it keeps it.</summary>
     [Fact]
     public void ARowThatTakesTheKeysIsTheReaders() => RunSta(() =>
     {
@@ -1192,9 +1193,11 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>With the keys on a row, a typed letter moves nothing: the list's own letter
-    /// search is off. It matched every row's type name, and searching labels instead made a
+    /// search is off. WPF's default search matched every row's type name, so "s" took the keys
+    /// and the selection to the first row from any other row; a search over the labels made a
     /// letter speak its row twice under NVDA (the palette's "Selected:" line, then the focused
-    /// row), where <c>main</c> moved nothing (CB-34's spot check, 2026-11-24).</summary>
+    /// row; CB-34's spot check, 2026-11-24). The keys start on the fourth row, so either search
+    /// would move them.</summary>
     [Fact]
     public void ALetterTypedInTheListMovesNothing() => RunSta(() =>
     {
@@ -1202,21 +1205,25 @@ public sealed partial class CommandPaletteTests
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
         host.Settle();
-        CommandPaletteRowViewModel? opened = palette.SelectedRow;
-        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(opened));
-        Assert.True(row.Focus(), "premise: the palette's row refused the keys");
+        var first = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.Rows[0]));
+        Assert.True(first.Focus(), "premise: the first row refused the keys");
         host.Settle();
+        CommandPaletteRowViewModel fourth = palette.Rows[3];
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(fourth));
+        Assert.True(row.Focus(), "premise: the fourth row refused the keys");
+        host.Settle();
+        Assert.Same(fourth, palette.SelectedRow);
         host.ClearObservations();
 
-        foreach (string letter in new[] { "t", "s", "q" })
+        foreach (string letter in new[] { "s", "s", "t", "q" })
         {
             TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, row, letter));
             host.Settle();
         }
 
         Assert.Same(row, Keyboard.FocusedElement);
-        Assert.Same(opened, palette.SelectedRow);
-        Assert.Same(opened, host.List.SelectedItem);
+        Assert.Same(fourth, palette.SelectedRow);
+        Assert.Same(fourth, host.List.SelectedItem);
         Assert.Empty(host.Harness.Announcements);
     });
 

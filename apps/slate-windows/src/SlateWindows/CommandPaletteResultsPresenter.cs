@@ -40,9 +40,10 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         _list.SelectionChanged += List_SelectionChanged;
         _list.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
         _list.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(List_PreviewMouseDown));
-        // #1834: no letter search in the list. It matched every row's type name, and a search
-        // over the labels moved the keys with a "Selected:" line that NVDA then repeated as the
-        // focused row; with the keys on a row a letter moves nothing, as on main.
+        // #1834: no letter search in the list. WPF's default search matched every row's type
+        // name, so "s" took the keys and the selection to the first row from any other row, and
+        // a search over the labels moved the keys with a "Selected:" line that NVDA then
+        // repeated as the focused row. With the keys on a row a letter now moves nothing.
         _list.IsTextSearchEnabled = false;
         Refresh();
     }
@@ -190,9 +191,10 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     }
 
     /// <summary>
-    /// #1834 (contract 28 P7): a row that takes the keys from another element — a letter the
-    /// list searches by, say — is the selection, and the reader's, so the row the keys are on
-    /// is the row Enter runs and a query keeps while it lists it. Keys that land on the
+    /// #1834 (contract 28 P7): a row that takes the keys from another element — Tab onto a
+    /// row other than the selection, or a UIA SetFocus — is the selection, and the reader's,
+    /// so the row the keys are on is the row Enter runs and a query keeps while it lists it.
+    /// Keys that land on the
     /// selection itself, as Tab's do, are no move of the reader's
     /// (<see cref="CommandPaletteViewModel.RowTookTheKeys"/>); a click is
     /// <see cref="List_PreviewMouseDown"/>'s.

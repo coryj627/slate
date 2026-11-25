@@ -1015,9 +1015,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     public void Select(CommandPaletteRowViewModel row) => UserSelect(row.Id);
 
     /// <summary>
-    /// #1834 (contract 28 P7): a row of the list took the keys from another element — a
-    /// letter the list searches by, say. That row becomes the selection, and the reader's, so
-    /// the row the keys are on is the row Enter runs and a query keeps it while it lists it.
+    /// #1834 (contract 28 P7): a row of the list took the keys from another element — Tab onto
+    /// a row other than the selection, or a UIA SetFocus. That row becomes the selection, and
+    /// the reader's, so the row the keys are on is the row Enter runs and a query keeps it
+    /// while it lists it.
     /// Silent: the screen reader speaks the row that took the keys. Keys that land on the row
     /// already selected change nothing: Tab and Shift+Tab land on the selection, which stays
     /// whoever's it was (a click is <see cref="RowPressed"/>). Refused, as any move, while
