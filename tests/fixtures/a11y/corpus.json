@@ -696,7 +696,7 @@
   },
   {
     "event": "ImportCancelling",
-    "priority": "medium",
+    "priority": "high",
     "text": "Cancelling import…"
   },
   {

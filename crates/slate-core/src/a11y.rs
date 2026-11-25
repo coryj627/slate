@@ -1124,6 +1124,8 @@ pub enum A11yEvent {
     /// ran. Spoken at the press, before the import settles and
     /// `ImportFinished` says what it copied; the words are the `Cancelling`
     /// status line (`import_status_line`), the owner's approved wording.
+    /// High, as `WorkStillRunning` is: a press is answered at once, not
+    /// queued behind the focus line it moved.
     ImportCancelling,
 
     // --- Vault close ---
@@ -2124,6 +2126,10 @@ impl A11yEvent {
             | PaletteCommandNotFound { .. }
             | PaletteCommandUnavailable { .. }
             | WorkStillRunning { .. }
+            // Plan 47 CB-16: a cancel's press is answered at once, not queued
+            // behind the focus line the press moved (the lead's ruling of
+            // 2026-11-25), at the tier of WorkStillRunning.
+            | ImportCancelling
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
             | TaskToggleFailed { .. }
@@ -8209,7 +8215,7 @@ mod tests {
                 "Copied 1 file and 1 folder and moved 1 item to Notes. 1 item was not \
                  imported. 1 import warning needs attention.",
             ),
-            (Medium, "Cancelling import…"),
+            (High, "Cancelling import…"),
             (Medium, "Vault closed. Returned to the welcome screen."),
             (
                 Medium,
@@ -9346,7 +9352,10 @@ mod tests {
     /// Plan 47 CB-16 (#1830, CD10): the import's status texts are the Mac
     /// strip's four titles (`SidebarImportProgressStrip.title`), each ending
     /// in the one-character ellipsis; the cancel sentence is the
-    /// `Cancelling` line, at Medium, and has a corpus witness.
+    /// `Cancelling` line, at High (it answers a press at once, as
+    /// `WorkStillRunning` does: the lead's ruling of 2026-11-25, after the
+    /// NVDA spot heard it 11 s late behind a focus line), and has a corpus
+    /// witness.
     #[test]
     fn the_import_status_lines_and_the_cancel_sentence() {
         let lines = [
@@ -9378,7 +9387,7 @@ mod tests {
             import_status_line(ImportPhase::Cancelling)
         );
         assert_eq!(cancelling.render(), "Cancelling import…");
-        assert_eq!(cancelling.priority(), Medium);
+        assert_eq!(cancelling.priority(), High);
         assert!(
             corpus().contains(&cancelling),
             "ImportCancelling has no witness in the corpus"

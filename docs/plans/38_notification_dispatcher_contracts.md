@@ -1227,8 +1227,12 @@ events, not the host's; the cancel is spoken at once. Its wording,
   stopped_at_entry_limit }` (Medium) is the import's summary, for both
   hosts' importers: below 1,000 it renders each host's sentence as it was,
   and every count takes core's grouping ("1,032").
-- `ImportCancelling` (Medium) is "Cancelling import…", the line
-  `import_status_line(ImportPhase::Cancelling)` gives the status bar.
+- `ImportCancelling` (High) is "Cancelling import…", the line
+  `import_status_line(ImportPhase::Cancelling)` gives the status bar. It
+  answers a press at once, at the tier of `WorkStillRunning`, and so cuts
+  the focus line the press moved: at Medium the NVDA spot heard it about
+  11 s after a press of the status bar's Cancel, queued behind the status
+  bar's own focus line and its help text (the lead's ruling, 2026-11-25).
 
 On Windows a press of Cancel import, from any route, says `ImportCancelling`
 at once and turns Cancel import off; the summary follows when the import

@@ -16088,7 +16088,7 @@ mod tests {
         }
         let cancelling = a11y_render(A11yEvent::ImportCancelling);
         assert_eq!(cancelling.text, import_status_line(ImportPhase::Cancelling));
-        assert_eq!(cancelling.priority, A11yPriority::Medium);
+        assert_eq!(cancelling.priority, A11yPriority::High);
         let finished = a11y_render(A11yEvent::ImportFinished {
             copied_files: 3,
             copied_folders: 1,
