@@ -916,8 +916,10 @@ public sealed class CanvasRendererPeerTests : IDisposable
     /// them and one listed after them is painted over them, on every run, as hit testing answers.
     /// The cards layer used to paint in its placements dictionary's order, a string-hash order
     /// that changes from process to process (step 0 saw the group painted 11th, 6th and 1st).
-    /// Twelve overlapping nodes, so a lucky pass is one chance in 12!. A card outside the window
-    /// whose key a client retains has a tombstone placement and is not painted. The expected
+    /// Twelve overlapping nodes whose positions are scrambled against the scene's order, so
+    /// neither a dictionary walk (a premise below checks this run's dictionary order differs) nor
+    /// a sort by position can pass. Two cards outside the window are not painted: one whose key a
+    /// client retains (a tombstone placement) and one with no placement at all. The expected
     /// rectangles come from the fixture's own geometry, not from the placements the board paints
     /// from.</summary>
     [Fact]
@@ -927,15 +929,22 @@ public sealed class CanvasRendererPeerTests : IDisposable
         var expected = new List<(string Id, Rect Document)> { ("g", new Rect(0, 0, 900, 600)) };
         for (int index = 0; index < 10; index++)
         {
+            if (index == 3)
+            {
+                nodes.Add(Card("away", "Away", 25_000, 300));
+            }
             if (index == 5)
             {
                 nodes.Add(Card("far", "Far One", 20_000, 40));
             }
-            nodes.Add(Card($"c{index}", $"Card {index}", 20 + (40 * index), 20 + (20 * index)));
-            expected.Add(($"c{index}", new Rect(20 + (40 * index), 20 + (20 * index), 200, 100)));
+            // Positions scrambled against the scene's order: x by 3 i mod 10, y by 7 i mod 10.
+            int x = 20 + (40 * ((index * 3) % 10));
+            int y = 20 + (20 * ((index * 7) % 10));
+            nodes.Add(Card($"c{index}", $"Card {index}", x, y));
+            expected.Add(($"c{index}", new Rect(x, y, 200, 100)));
         }
-        nodes.Add(Group("h", "Late", 400, 150, 500, 300));
-        expected.Add(("h", new Rect(400, 150, 500, 300)));
+        nodes.Add(Group("h", "Late", 10, 150, 500, 300));
+        expected.Add(("h", new Rect(10, 150, 500, 300)));
         WriteCanvas("order.canvas", [.. nodes], []);
         using Board board = Open("order.canvas");
         board.ZoomTo(0.5);
@@ -944,8 +953,15 @@ public sealed class CanvasRendererPeerTests : IDisposable
         board.SettleUntil(() => board.Cell(CanvasPeerKey.Card("far")) == CanvasPeerCell.Placeholder);
         CanvasPresentationState state = board.Renderer.Engine.Current!;
         Assert.Equal(
-            new[] { "g", "c0", "c1", "c2", "c3", "c4", "far", "c5", "c6", "c7", "c8", "c9", "h" },
+            new[] { "g", "c0", "c1", "c2", "away", "c3", "c4", "far", "c5", "c6", "c7", "c8", "c9", "h" },
             state.Source.Loaded!.Population.SceneNodes.Select(node => node.NodeId));
+        Assert.Null(board.Cell(CanvasPeerKey.Card("away")));
+        string[] dictionaryOrder = [.. state.Topology.Placements
+            .Where(entry => !entry.Key.IsEdge && entry.Value.Cell == CanvasPeerCell.Materialized)
+            .Select(entry => entry.Key.Id)];
+        Assert.False(
+            dictionaryOrder.SequenceEqual(expected.Select(entry => entry.Id)),
+            "premise: this run's placements dictionary walks in the scene's order, so a dictionary walk would pass by luck.");
 
         string[] painted = [.. PaintedCardRectangles(board.Renderer).Select(rect =>
             expected.FirstOrDefault(entry => SameRect(ViewRect(state.Viewport, entry.Document), rect)).Id ?? $"(unknown {rect})")];
@@ -1048,8 +1064,9 @@ public sealed class CanvasRendererPeerTests : IDisposable
     /// placeholder: offscreen, with the realize door and no SelectionItem. Before CB-36 the board
     /// handed back an array holding null for it, and the client read nothing selected. Follow
     /// Selection is off, so the seat never materializes: its peer is first minted by the board's
-    /// own Selection, here in process before any client has connected the board, and then
-    /// read through the client.</summary>
+    /// own Selection, here in process before this fact's client connects the board, and then
+    /// read through the client. (A board no client can reach is
+    /// <see cref="ABoardNoClientCanReachNeverHandsBackASelectionHoldingNull"/>'s.)</summary>
     [Fact]
     public void AClientReadsASeatOffTheWindowAsTheSelection() => RunSta(() =>
     {
@@ -1061,7 +1078,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
         board.SettleUntil(() => board.Renderer.Engine.Current!.Selection == "far");
         Assert.Null(board.Cell(CanvasPeerKey.Card("far")));
 
-        // In process, before any client: never an array holding null.
+        // In process, before this fact's client: never an array holding null.
         Assert.DoesNotContain(((ISelectionProvider)board.Peer).GetSelection(), provider => provider is null);
 
         nint handle = new System.Windows.Interop.WindowInteropHelper(board.Window).Handle;
@@ -1075,6 +1092,45 @@ public sealed class CanvasRendererPeerTests : IDisposable
         });
 
         Assert.Equal(new[] { "Far One offscreen=True realizable=True" }, selected);
+    });
+
+    /// <summary>Plan 47 CB-36: a board in no window, which no UI Automation client can reach,
+    /// never hands back a selection holding null for a seat outside its window: the provider
+    /// cannot be made (the board has no window handle, so the connection declines), and the
+    /// array is empty. Before CB-36 it held null. With no presentation source at all, no client
+    /// running on the desktop can connect this board first.</summary>
+    [Fact]
+    public void ABoardNoClientCanReachNeverHandsBackASelectionHoldingNull() => RunSta(() =>
+    {
+        WriteFarCanvas("unhosted.canvas");
+        CanvasDocumentViewModel document = OpenDocument("unhosted.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        CanvasRendererView renderer = surface.VisualForTests;
+        try
+        {
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            surface.Measure(new Size(900, 700));
+            surface.Arrange(new Rect(0, 0, 900, 700));
+            surface.UpdateLayout();
+            renderer.Engine.CommitViewport(view => view.WithFollowSelection(false).PannedTo(0, 0));
+            document.SeatSelectionSilently("far");
+            PumpUntil(() => renderer.Engine.Current is { Selection: "far", Source.Loaded: not null } state
+                && state.Viewport.ViewWidth > 0
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport));
+            Assert.Null(PresentationSource.FromVisual(renderer));
+            Assert.False(renderer.Engine.Current!.Topology.Placements.ContainsKey(CanvasPeerKey.Card("far")));
+            Assert.Equal(Visibility.Visible, renderer.Visibility);
+            var board = Assert.IsType<CanvasRendererAutomationPeer>(UIElementAutomationPeer.CreatePeerForElement(renderer));
+
+            IRawElementProviderSimple[] selected = ((ISelectionProvider)board).GetSelection();
+
+            Assert.DoesNotContain(selected, provider => provider is null);
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
     });
 
     /// <summary>Plan 47 CB-36: a hidden board (the Outline view showing) answers a client that
