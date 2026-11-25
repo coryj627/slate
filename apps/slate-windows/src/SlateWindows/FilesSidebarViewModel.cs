@@ -685,7 +685,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => !IsImportRunning && !IsTrashing && StructuralMutationBlocked is null,
             () => StructuralMutationBlocked,
             admitWhileExecuting: true);
-        CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImportRunning);
+        // Plan 47 CB-16 (#1830; the owner's answer of 2026-11-24, "Off, keys go back"): the
+        // press asks the import to stop and says so at once, and Cancel import goes off with
+        // it, as the trash's Cancel does; the keys move first (CommandKeysFirst).
+        CancelImportCommand = new RelayCommand(
+            _ => RequestImportCancellation(),
+            _ => IsImportRunning && !IsImportCancelling);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => InThePane(ClearRecents), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => InThePane(CollapseAll), _ => true);

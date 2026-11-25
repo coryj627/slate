@@ -946,6 +946,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "CancelImport",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "CancelTrash",
     "Surface": "File management (W5-4)"
   },
@@ -1608,6 +1613,11 @@
     "Source": "MainWindow.xaml",
     "Expression": "HistoryLeafBody",
     "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ImportProgressStatus",
+    "Surface": "File management (W5-4)"
   },
   {
     "Source": "MainWindow.xaml",

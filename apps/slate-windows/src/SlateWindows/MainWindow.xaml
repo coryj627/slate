@@ -898,6 +898,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" MinWidth="60" MaxWidth="180" />
@@ -948,15 +949,39 @@
                                 AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
                     </StackPanel>
                 </StatusBarItem>
-                <StatusBarItem Grid.Column="2">
+                <!-- Plan 47 CB-16 (#1830): an import shows while it copies (not while its
+                     pick is up), in core's words, whether or not the Files pane shows. Its
+                     Cancel goes off in its own press and the keys go back first to where
+                     they came from (the owner's answer of 2026-11-24); its description is
+                     the line, so a reader who tabs to it hears what is running. -->
+                <StatusBarItem Grid.Column="2"
+                               Visibility="{Binding FileSidebar.IsImportRunning, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding FileSidebar.ImportStatusLine}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="360"
+                                   AutomationProperties.AutomationId="ImportProgressStatus" />
+                        <Button Content="Cancel" Margin="8,0,8,0"
+                                MinHeight="24"
+                                Padding="8,0"
+                                Command="{Binding FileSidebar.CancelImportCommand}"
+                                GotKeyboardFocus="ImportCancel_GotKeyboardFocus"
+                                LostKeyboardFocus="ImportCancel_LostKeyboardFocus"
+                                IsEnabledChanged="ImportCancel_AvailabilityChanged"
+                                IsVisibleChanged="ImportCancel_AvailabilityChanged"
+                                AutomationProperties.AutomationId="CancelImport"
+                                AutomationProperties.Name="Cancel import"
+                                AutomationProperties.HelpText="{Binding FileSidebar.ImportStatusLine}" />
+                    </StackPanel>
+                </StatusBarItem>
+                <StatusBarItem Grid.Column="3">
                     <TextBlock x:Name="StatusTextBlock"
                                AutomationProperties.AutomationId="VaultStatus"
                                Text="{Binding StatusText}"
                                TextTrimming="CharacterEllipsis"
                                AutomationProperties.Name="Vault status" />
                 </StatusBarItem>
-                <Separator Grid.Column="3" />
-                <StatusBarItem Grid.Column="4" HorizontalContentAlignment="Stretch">
+                <Separator Grid.Column="4" />
+                <StatusBarItem Grid.Column="5" HorizontalContentAlignment="Stretch">
                     <!-- #1773: a reader can still ask how the last scan ended, so the
                          bar stays in the tree. It only draws fully while work runs. -->
                     <Border>
@@ -979,7 +1004,7 @@
                                      AutomationProperties.Name="Vault scan progress" />
                     </Border>
                 </StatusBarItem>
-                <StatusBarItem Grid.Column="5"
+                <StatusBarItem Grid.Column="6"
                                Padding="0"
                                Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <ToggleButton Style="{DynamicResource Slate.SubtleIconToggleButtonStyle}"
