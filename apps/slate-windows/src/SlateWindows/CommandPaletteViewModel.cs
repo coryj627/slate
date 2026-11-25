@@ -138,9 +138,10 @@ internal sealed class CommandPaletteRowViewModel
     public IReadOnlyList<CommandPaletteLabelSegment> LabelSegments { get; }
 
     /// <summary>
-    /// Core's winning fuzzy score. <b>Not a display order</b> (contract
-    /// P1): exposed only so a caller can identify the strongest match
-    /// overall without re-scoring. Nothing in this file sorts by it.
+    /// Core's winning fuzzy score, mirroring the FFI row's: the fuzzy part of the
+    /// match only, <b>not a display order</b> (contract P1). Core's own order puts
+    /// the strongest match first, a whole-name match above any score, and since
+    /// #1834 no Windows code reads this.
     /// </summary>
     public int Score { get; }
 
@@ -348,6 +349,32 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private CommandsLevel? _commandsLevel;
     private PaletteChoices? _stagedChoices;
 
+    /// <summary>#1834: who placed the selection, which decides what a publication does
+    /// with it (contract 28 P7).</summary>
+    private SelectionOrigin _selectionOrigin;
+
+    /// <summary>#1834: a re-open (PD-2) keeps the previous query's rows on screen until
+    /// its own rows land, or its rank fails (T4); a reader move over rows that are going does
+    /// nothing.</summary>
+    private bool _reopenAwaitingRows;
+
+    /// <summary>Who placed the selection (#1834, contract 28 P7).</summary>
+    private enum SelectionOrigin
+    {
+        /// <summary>The palette: the open's first row, a follow, a snap, a recovery. A
+        /// publication moves it to its first row, and says nothing.</summary>
+        Palette,
+
+        /// <summary>The reader: a key, the pointer or UIA moved it, or a row took the keys.
+        /// Kept while a query keeps its row; a query that removes it says the
+        /// replacement.</summary>
+        Reader,
+
+        /// <summary>DS-10's current choice. Kept until the query changes: the first
+        /// publication that keeps it makes it the palette's, and so does a query change.</summary>
+        Seed,
+    }
+
     /// <param name="source">The command layer (registry, availability, recents).</param>
     /// <param name="announce">The shell's one announcement funnel.</param>
     /// <param name="filterCountWindow">P10's trailing window; facts hold it.</param>
@@ -392,8 +419,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private readonly System.Windows.Threading.Dispatcher? _ownerDispatcher;
 
     /// <summary>DS-10: what Esc goes back to from a list of choices a command opened: its
-    /// snapshot, the query and the command's row.</summary>
-    private sealed record CommandsLevel(Task<PaletteSnapshot> SnapshotLoad, string Query, string RowId, string RowLabel);
+    /// snapshot, the query and the command's row, with who had placed that row when Enter ran
+    /// it (#1834).</summary>
+    private sealed record CommandsLevel(
+        Task<PaletteSnapshot> SnapshotLoad,
+        string Query,
+        string RowId,
+        string RowLabel,
+        SelectionOrigin RowOrigin);
 
     /// <summary>The open-time snapshot (contract P4): the command list and the
     /// recents, loaded together off the UI thread.</summary>
@@ -518,6 +551,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
             if (!SetField(ref _query, value ?? string.Empty))
             {
                 return;
+            }
+
+            // #1834: the current choice holds until the query changes.
+            if (_selectionOrigin == SelectionOrigin.Seed)
+            {
+                _selectionOrigin = SelectionOrigin.Palette;
             }
 
             if (IsOpen && IsSealed)
@@ -692,9 +731,13 @@ internal sealed class CommandPaletteViewModel : BindableBase
                 _snapshotCancellation.Token);
         }
 
+        // #1834: a re-open keeps the rows on screen until its own land, so no
+        // empty state flashes, and a reader move over them does nothing.
+        _reopenAwaitingRows = _isOpen;
         _query = string.Empty;
         _selectedId = null;
         _selectedRow = null;
+        _selectionOrigin = SelectionOrigin.Palette;
         _queryChangesSinceOpen = 0;
         // Contract P10: the first selection change after open is
         // silent — the initial row is not announced before any user
@@ -718,9 +761,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// The rows go through core's ranking and the lane like any others, so what the list
     /// shows, what the keys navigate and what Enter runs stay one query's (P18). Input order
     /// is what an empty query keeps, and the selection is seeded on the current choice, which
-    /// the P7 rule then keeps. From a running command they wait for it to succeed: nothing here
-    /// changes under the seal, and a command that goes on to fail leaves the commands as they
-    /// were, as an Esc during it does.
+    /// the P7 rule keeps until the query changes (#1834): a letter typed before the rows land
+    /// is such a change, and the first row its query ranks is selected; a seal that ranks the
+    /// empty query again is not. From a running command they wait for it to succeed: nothing
+    /// here changes under the seal, and a command that goes on to fail leaves the commands as
+    /// they were, as an Esc during it does.
     /// </remarks>
     internal void OpenChoices(PaletteChoices choices)
     {
@@ -742,9 +787,18 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
     private void EnterChoices(PaletteChoices choices, CommandPaletteRowViewModel? fromRow)
     {
+        // #1834: the command's row comes back as the reader left it — theirs if they moved
+        // to it, the palette's if it was followed there.
         _commandsLevel = fromRow is null
             ? null
-            : new CommandsLevel(_snapshotLoad, _query, fromRow.Id, fromRow.Label);
+            : new CommandsLevel(
+                _snapshotLoad,
+                _query,
+                fromRow.Id,
+                fromRow.Label,
+                fromRow.Id == _selectedId && _selectionOrigin != SelectionOrigin.Reader
+                    ? SelectionOrigin.Palette
+                    : SelectionOrigin.Reader);
         _choices = choices;
         _snapshotLoad = Task.FromResult(new PaletteSnapshot(
             choices.Choices
@@ -757,6 +811,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _query = string.Empty;
         _selectedId = choices.CurrentId;
         _selectedRow = null;
+        _reopenAwaitingRows = false;
         _suppressSelectionAnnouncement = true;
         _isOpen = true;
         OnPropertyChanged(nameof(Query));
@@ -769,6 +824,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _announce(new A11yEvent.PaletteChoicesOpened(
             choices.Prompt,
             choices.Choices.First(choice => choice.Id == choices.CurrentId).Label));
+        _selectionOrigin = SelectionOrigin.Seed;
         RequestRank();
     }
 
@@ -790,7 +846,13 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _query = level.Query;
         _selectedId = level.RowId;
         _selectedRow = null;
-        _suppressSelectionAnnouncement = true;
+        _selectionOrigin = level.RowOrigin;
+        _reopenAwaitingRows = false;
+        // #1834: nothing left armed. Back says its row itself, a palette move at a publication
+        // is silent anyway, and an armed flag — the choices arm one, and a Back before they
+        // publish, or after their rank fails, finds it still up — would swallow the one line a
+        // publication owes: the replacement of the reader's row a query removes.
+        _suppressSelectionAnnouncement = false;
         OnPropertyChanged(nameof(Query));
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
@@ -824,6 +886,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rows = [];
         _selectedId = null;
         _selectedRow = null;
+        _selectionOrigin = SelectionOrigin.Palette;
+        _reopenAwaitingRows = false;
         _choices = null;
         _commandsLevel = null;
         LastRecomputeTiming = null;
@@ -949,6 +1013,47 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
     /// <summary>Pointer / explicit selection.</summary>
     public void Select(CommandPaletteRowViewModel row) => UserSelect(row.Id);
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a row of the list took the keys from another element — Tab onto
+    /// a row other than the selection, or a UIA SetFocus. That row becomes the selection, and
+    /// the reader's, so the row the keys are on is the row Enter runs and a query keeps it
+    /// while it lists it.
+    /// Silent: the screen reader speaks the row that took the keys. Keys that land on the row
+    /// already selected change nothing: Tab and Shift+Tab land on the selection, which stays
+    /// whoever's it was (a click is <see cref="RowPressed"/>). Refused, as any move, while
+    /// sealed or before a re-open's rows land.
+    /// </summary>
+    internal void RowTookTheKeys(CommandPaletteRowViewModel row)
+    {
+        if (ReferenceEquals(row, _selectedRow))
+        {
+            return;
+        }
+
+        ReaderTakesRow(row);
+    }
+
+    /// <summary>
+    /// #1834 (contract 28 P7): a pointer pressed on a row. The row becomes the selection, and
+    /// the reader's, silently, the row already selected included: a click on the row that
+    /// holds the keys and the selection changes neither, so nothing else would hear it.
+    /// Refused, as any move, while sealed or before a re-open's rows land.
+    /// </summary>
+    internal void RowPressed(CommandPaletteRowViewModel row) => ReaderTakesRow(row);
+
+    /// <summary>A row the reader took without a key the palette routes: the selection, and
+    /// theirs, silently.</summary>
+    private void ReaderTakesRow(CommandPaletteRowViewModel row)
+    {
+        if (IsSealed || _reopenAwaitingRows || Array.IndexOf(_rows, row) < 0)
+        {
+            return;
+        }
+
+        SetSelection(row.Id, spoken: false);
+        _selectionOrigin = SelectionOrigin.Reader;
+    }
 
     /// <summary>
     /// Activate the selection. No selection is a no-op that does not
@@ -1509,7 +1614,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// published, which is what the keys act on. Its count has nothing to
     /// say. The failure is logged by type only (W1-RT-01). A superseded
     /// generation, or a palette closed, sealed or torn down meanwhile,
-    /// changes nothing and is not logged (T5).
+    /// changes nothing and is not logged (T5). A re-open's failed rank ends
+    /// its gap (#1834): the rows on screen are what the keys act on (T4), and
+    /// the first selection P10 keeps quiet never published, so the reader's
+    /// first move over them is said.
     /// </summary>
     private void ResolveFailedRank(int generation, Exception exception)
     {
@@ -1520,6 +1628,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         _diagnostics(HostDiagnosticEvent.PaletteWorkFailed, exception);
         _publishedGeneration = generation;
+        _reopenAwaitingRows = false;
+        _suppressSelectionAnnouncement = false;
         CancelFilterCountWindow();
     }
 
@@ -1549,6 +1659,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
 
         _publishedGeneration = generation;
+        _reopenAwaitingRows = false;
         _snapshot = snapshot.Commands;
         _snapshotLoaded = true;
         _publishedQuery = query;
@@ -1607,15 +1718,22 @@ internal sealed class CommandPaletteViewModel : BindableBase
             : null;
         RaiseDerivedState();
 
-        // Contract P7: preserve the selection when its id survived,
-        // snap to the first row when it vanished or was null, and go
-        // null on zero matches.
-        string? nextId = _rows.Length == 0
-            ? null
-            : previousId is not null && Array.Exists(_rows, row => row.Id == previousId)
-                ? previousId
-                : _rows[0].Id;
-        SetSelection(nextId);
+        // Contract P7, by who placed the selection (#1834): no rows, no
+        // selection. The reader's row is kept while it survives; the current
+        // choice is kept until the query changes (the Query setter makes it the
+        // palette's), and is the palette's once a publication keeps it; anything
+        // else takes the first row — core's best match — and is the palette's. A
+        // selection the palette moves is never announced here (P10): only a
+        // reader's row this query removed is, by its replacement, once.
+        bool survives = previousId is not null && Array.Exists(_rows, row => row.Id == previousId);
+        bool kept = survives
+            && _selectionOrigin is (SelectionOrigin.Reader or SelectionOrigin.Seed);
+        string? nextId = _rows.Length == 0 ? null : kept ? previousId : _rows[0].Id;
+        bool readersRowRemoved = _selectionOrigin == SelectionOrigin.Reader && !survives;
+        SetSelection(nextId, spoken: readersRowRemoved);
+        _selectionOrigin = kept && _selectionOrigin == SelectionOrigin.Reader
+            ? SelectionOrigin.Reader
+            : SelectionOrigin.Palette;
 
         // Contract P10 (amended): the latest non-empty query speaks once
         // after a trailing window — opened at THIS generation's keystroke
@@ -1633,18 +1751,21 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
     }
 
-    /// <summary>A selection the user makes on the published rows — refused
-    /// while sealed, with the palette's own selection re-asserted so a list
-    /// the pointer moved shows it again.</summary>
+    /// <summary>A selection the user makes on the published rows — the reader's
+    /// when it lands on a row (#1834). Refused while sealed, and before a
+    /// re-open's rows land, when the rows on screen are going (#1834), with the
+    /// palette's own selection re-asserted so a list the pointer moved shows it
+    /// again.</summary>
     private void UserSelect(string? id)
     {
-        if (IsSealed)
+        if (IsSealed || _reopenAwaitingRows)
         {
             OnPropertyChanged(nameof(SelectedRow));
             return;
         }
 
         SetSelection(id);
+        _selectionOrigin = _selectedRow is null ? SelectionOrigin.Palette : SelectionOrigin.Reader;
     }
 
     /// <summary>
@@ -1769,7 +1890,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _countWindow = null;
     }
 
-    private void SetSelection(string? id)
+    /// <param name="id">The row to select, or <see langword="null"/>.</param>
+    /// <param name="spoken">Whether a change here is said (#1834): a reader's
+    /// move, and the replacement of a reader's row a query removed, are; a
+    /// selection the palette moves at a publication, and a row that took the
+    /// keys, are not.</param>
+    private void SetSelection(string? id, bool spoken = true)
     {
         // An id with no row in the current set normalizes to no
         // selection, so SelectedId is non-null exactly when SelectedRow
@@ -1814,7 +1940,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        if (row is null)
+        if (row is null || !spoken)
         {
             return;
         }

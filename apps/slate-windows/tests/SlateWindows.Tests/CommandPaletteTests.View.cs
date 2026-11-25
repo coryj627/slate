@@ -117,7 +117,7 @@ public sealed partial class CommandPaletteTests
         // Survives, and is the LAST of three rows: nothing to say (P7).
         host.ChangeQuery("o");
         Assert.Equal(
-            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            ["slate.nav.quickOpen", "slate.file.newNote", "slate.editor.bold"],
             host.Harness.RowIds);
         Assert.Equal("slate.editor.bold", palette.SelectedId);
         Assert.Empty(host.SelectionAnnouncements);
@@ -134,9 +134,11 @@ public sealed partial class CommandPaletteTests
         Assert.Empty(host.SelectionAnnouncements);
         host.AssertShowsTheViewModelsSelection();
 
-        // Recovering from none selects, and says so, once.
+        // Recovering from none selects the first row, the palette's, and a
+        // selection the palette moves is not announced (P10, #1834).
         host.ChangeQuery("sav");
-        Assert.Equal(["Save"], host.SelectionAnnouncements);
+        Assert.Equal("slate.file.save", palette.SelectedId);
+        Assert.Empty(host.SelectionAnnouncements);
         host.AssertShowsTheViewModelsSelection();
     });
 
@@ -168,11 +170,11 @@ public sealed partial class CommandPaletteTests
         // the three rows left, and that move is the one thing to say
         // before the count.
         host.ChangeQuery("o");
-        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
         Assert.Collection(
             host.Harness.Announcements,
             announced => Assert.Equal(
-                "New Note",
+                "Quick Open",
                 Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
             announced => Assert.Equal(
                 (3u, "o"),
@@ -180,12 +182,12 @@ public sealed partial class CommandPaletteTests
                     ((A11yEvent.PaletteFilterCount)announced).Query)));
         host.AssertShowsTheViewModelsSelection();
 
-        // "New Note" survives "no": the count, and nothing else.
-        host.ChangeQuery("no");
-        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        // "Quick Open" survives "op": the count, and nothing else.
+        host.ChangeQuery("op");
+        Assert.Equal("slate.nav.quickOpen", palette.SelectedId);
         A11yEvent.PaletteFilterCount count = Assert.IsType<A11yEvent.PaletteFilterCount>(
             Assert.Single(host.Harness.Announcements));
-        Assert.Equal("no", count.Query);
+        Assert.Equal("op", count.Query);
         host.AssertShowsTheViewModelsSelection();
     });
 
@@ -219,6 +221,9 @@ public sealed partial class CommandPaletteTests
         Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(now));
         Assert.NotNull(PresentationSource.FromVisual(now));
         Assert.DoesNotContain(changes, focus => focus is ListBox or Window);
+        // #1834 (Call 10): the row holding the keys is the reader's row, which survives.
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Same(palette.SelectedRow, now.DataContext);
     });
 
     /// <summary>
@@ -255,7 +260,7 @@ public sealed partial class CommandPaletteTests
         host.ChangeQuery("o");
         Assert.Contains(
             host.ListSelections,
-            added => added is CommandPaletteRowViewModel { Id: "slate.file.newNote" });
+            added => added is CommandPaletteRowViewModel { Id: "slate.nav.quickOpen" });
         Assert.Empty(host.SelectionAnnouncements);
         Assert.Equal("slate.editor.bold", palette.SelectedId);
         Assert.Same(palette.SelectedRow, host.List.SelectedItem);
@@ -395,17 +400,14 @@ public sealed partial class CommandPaletteTests
             Assert.Single(host.Harness.Announcements));
         Assert.Equal((0u, "zzzz"), (none.Count, none.Query));
 
-        // Recovering from none: the selection, then the count.
+        // Recovering from none: the first row, the palette's, selected
+        // without a word, then the count (P10, #1834).
         host.ChangeQuery("sav");
+        Assert.Equal("slate.file.save", palette.SelectedId);
         host.AssertShowsTheViewModelsSelection();
-        Assert.Collection(
-            host.Harness.Announcements,
-            announced => Assert.Equal(
-                "Save",
-                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
-            announced => Assert.Equal(
-                "sav",
-                Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Query));
+        Assert.Equal(
+            "sav",
+            Assert.IsType<A11yEvent.PaletteFilterCount>(Assert.Single(host.Harness.Announcements)).Query);
 
         Assert.NotEmpty(threads);
         Assert.All(threads, thread => Assert.Equal(owner, thread));

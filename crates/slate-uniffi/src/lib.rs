@@ -8819,8 +8819,10 @@ pub struct UnresolvedCitation {
 const MAX_ACTION_ERROR_MSG_LEN: usize = 1024;
 
 /// Top-level grouping for commands shown in the palette. Mirrors
-/// `slate_core::CommandSection` 1:1; declared in palette render
-/// order. New section requires a deliberate edit on both sides.
+/// `slate_core::CommandSection` 1:1. The declaration order is not the
+/// palette's order: `palette_sections` places the sections (the declared
+/// palette order for an empty query, best match first for a typed one).
+/// New section requires a deliberate edit on both sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CommandSection {
     File,
@@ -9680,8 +9682,10 @@ impl From<core::palette::MatchSpan> for MatchSpan {
 
 /// One ranked palette row: the command, the label ranges the query
 /// matched (empty on an empty query or a hint-only match), and the
-/// winning fuzzy score (0 on an empty query) — hosts derive the global
-/// "strongest match overall" order from it without re-scoring.
+/// winning fuzzy score (0 on an empty query). The score is the fuzzy part
+/// of the ranking only: `palette_sections` returns the rows in best-match
+/// order, an exact name before a higher score, so the first row is the
+/// strongest match and no host re-sorts by the score.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct PaletteRow {
     pub command: Command,
