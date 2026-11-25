@@ -184,6 +184,17 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>A line the tree writes: see <see cref="_statusWrittenByTree"/>.</summary>
     private void WriteTreeStatus(string text) => WriteStatus(text, writtenByTree: true);
 
+    /// <summary>Plan 47 CB-16 (#1791, W9; Codex round 1): a read of the tree's content
+    /// failed (the tree, a folder's children, the dual pane's files, Expand Loaded): said and
+    /// shown as <see cref="ReportFailure(string)"/> says it, and the tree's own line, stale
+    /// once a later read succeeds, so no refresh puts it back. A mutation's failure is not
+    /// a read's, and keeps its line.</summary>
+    private void ReportTreeReadFailure(string message)
+    {
+        ReportFailure(message);
+        MarkStatusWrittenByTree(message);
+    }
+
     /// <summary>A tree failure's spoken line, written by
     /// <see cref="ReportFailure(string)"/>, is the tree's own while the line
     /// still shows it.</summary>

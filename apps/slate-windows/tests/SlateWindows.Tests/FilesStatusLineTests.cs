@@ -135,6 +135,64 @@ public sealed class FilesStatusLineTests
         Assert.Equal(string.Empty, h.Sidebar.Status);
     });
 
+    /// <summary>Codex round 1: a folder whose children fail to load says so, and that line is
+    /// the tree's own: once the folder is closed and a plain refresh succeeds, the line is
+    /// empty, not the old failure.</summary>
+    [Fact]
+    public void ARefreshNeverPutsBackAFolderExpansionsFailure() => RunSta(() =>
+    {
+        using RescanTests.Harness h = RescanTests.Harness.WithAsyncTree(
+            "files-line-expansion-failure",
+            ("alpha.md", "# Alpha\n"),
+            ("folder/inner.md", "# Inner\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        int reads = 0;
+        h.TreeWorker = (work, token) => Interlocked.Increment(ref reads) == 1
+            ? Task.FromException(new IOException("injected folder read failure"))
+            : Task.Run(work, token);
+        FileTreeNodeViewModel folder = Assert.Single(h.Sidebar.RootNodes, node => node.Path == "folder");
+        folder.IsExpanded = true;
+        h.Context.Await(h.Sidebar.ChildExpansionCompletion, "the folder's failed expansion");
+        h.Settle();
+        string failed = h.Sidebar.Status;
+        Assert.False(string.IsNullOrEmpty(failed) || failed == Loading, $"premise: the failed expansion left the line \"{failed}\"");
+
+        folder.IsExpanded = false;
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the plain refresh");
+        h.TreeWorker = null;
+
+        Assert.Equal(string.Empty, h.Sidebar.Status);
+    });
+
+    /// <summary>Codex round 1: the dual pane's failed read of a folder is the tree's own line:
+    /// after a healthy folder is chosen and a plain refresh succeeds, the line is empty, not
+    /// the old failure.</summary>
+    [Fact]
+    public void ARefreshNeverPutsBackTheDualPanesFailure() => RunSta(() =>
+    {
+        using RescanTests.Harness h = RescanTests.Harness.WithAsyncTree(
+            "files-line-dual-pane-failure",
+            ("alpha.md", "# Alpha\n"),
+            ("kept/inner.md", "# Inner\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        FileTreeNodeViewModel kept = Assert.Single(h.Sidebar.RootNodes, node => node.Path == "kept");
+        // A folder row whose path core refuses to read, so the dual pane's read fails.
+        var unreadable = new FileTreeNodeViewModel(h.Sidebar, "../outside", "outside", isDirectory: true, level: 1, hasChildren: false);
+        h.Sidebar.SelectedNode = unreadable;
+        h.Sidebar.IsDualPaneEnabled = true;
+        h.Settle();
+        string failed = h.Sidebar.Status;
+        Assert.StartsWith("Could not load folder files", failed, StringComparison.Ordinal);
+
+        h.Sidebar.SelectedNode = kept;
+        h.Settle();
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the plain refresh");
+
+        Assert.Equal(string.Empty, h.Sidebar.Status);
+    });
+
     /// <summary>Fact 21 (P2e): a refresh cancelled with no successor (the
     /// close's path) puts back the line it replaced.</summary>
     [Fact]

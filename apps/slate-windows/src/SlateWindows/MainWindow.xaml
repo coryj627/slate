@@ -955,7 +955,7 @@
                      they came from (the owner's answer of 2026-11-24); its description is
                      the line, so a reader who tabs to it hears what is running. -->
                 <StatusBarItem Grid.Column="2"
-                               Visibility="{Binding FileSidebar.IsImportRunning, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                               Visibility="{Binding FileSidebar.ShowImportProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="{Binding FileSidebar.ImportStatusLine}" VerticalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="360"

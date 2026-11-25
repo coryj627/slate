@@ -373,8 +373,7 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        ReportFailure(message);
-        MarkStatusWrittenByTree(message);
+        ReportTreeReadFailure(message);
     }
 
     private async Task RefreshTreeAsync(
@@ -982,7 +981,7 @@ internal sealed partial class FilesSidebarViewModel
         HostLog.Write(HostDiagnosticEvent.SidebarBulkExpansionFailed, exception);
         try
         {
-            ReportFailure("Could not expand loaded folders.");
+            ReportTreeReadFailure("Could not expand loaded folders.");
         }
         catch (Exception callbackException)
         {

@@ -408,7 +408,7 @@ internal sealed partial class FilesSidebarViewModel
                             token))
                         {
                             node.FailChildLoad(ChildExpansionFailure);
-                            ReportFailure(ChildExpansionFailure);
+                            ReportTreeReadFailure(ChildExpansionFailure);
                         }
 
                         applied.TrySetResult();
@@ -438,7 +438,7 @@ internal sealed partial class FilesSidebarViewModel
         node.FailChildLoad(ChildExpansionFailure);
         try
         {
-            ReportFailure(ChildExpansionFailure);
+            ReportTreeReadFailure(ChildExpansionFailure);
         }
         catch (Exception callbackException)
         {

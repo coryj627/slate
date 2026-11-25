@@ -63,9 +63,18 @@ internal sealed partial class FilesSidebarViewModel
             {
                 OnPropertyChanged(nameof(ImportStatusLine));
                 RaiseCommandStates();
+                // Plan 47 CB-16 (Codex round 1): the status bar's item shows and hides after
+                // the commands are raised, so keys on its Cancel move first (CommandKeysFirst)
+                // as the import ends, before the item goes, as the trash's do.
+                OnPropertyChanged(nameof(ShowImportProgress));
             }
         }
     }
+
+    /// <summary>Plan 47 CB-16 (#1830): the status bar shows the import (<see
+    /// cref="IsImportRunning"/>), raised after the commands so a Cancel holding the keys
+    /// hands them on before its item hides.</summary>
+    public bool ShowImportProgress => IsImportRunning;
 
     /// <summary>Plan 47 CB-16 (#1830, W3): the running import has been asked to stop. Set
     /// by a cancel, cleared as the next import starts copying and when this one ends, after

@@ -1660,8 +1660,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // refresh puts it back.
             if (announce)
             {
-                ReportFailure(outcome.Error);
-                MarkStatusWrittenByTree(outcome.Error);
+                ReportTreeReadFailure(outcome.Error);
             }
             else
             {
@@ -2694,7 +2693,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
+            ReportTreeReadFailure($"Could not load folder files: {FailureDetail.Of(exception)}");
         }
     }
 

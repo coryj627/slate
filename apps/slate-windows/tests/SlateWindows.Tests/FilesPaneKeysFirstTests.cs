@@ -695,6 +695,10 @@ public sealed class FilesPaneKeysFirstTests
         // the focus change cannot cut it short.
         int saidWhenTheKeysLeft = -1;
         cancel.LostKeyboardFocus += (_, _) => saidWhenTheKeysLeft = saidWhenTheKeysLeft < 0 ? pane.Said.Count : saidWhenTheKeysLeft;
+        // Codex round 1: the item hides only after the keys have left its Cancel.
+        bool hidWithTheKeys = false;
+        cancel.IsVisibleChanged += (_, e) => hidWithTheKeys |= e.NewValue is false
+            && (cancel.IsKeyboardFocusWithin || ReferenceEquals(Keyboard.FocusedElement, cancel));
 
         KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
         {
@@ -703,6 +707,7 @@ public sealed class FilesPaneKeysFirstTests
             pane.SettleThePublication();
         });
 
+        Assert.False(hidWithTheKeys, "the status bar's import item hid with the keys still on its Cancel");
         int summary = pane.Said.FindIndex(said => said is A11yEvent.ImportFinished);
         Assert.True(summary >= 0, "the import's summary was not said");
         Assert.True(
