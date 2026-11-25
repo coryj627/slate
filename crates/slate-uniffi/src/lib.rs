@@ -16065,7 +16065,7 @@ mod tests {
 
     /// Plan 47 CB-16 (#1830, CD10): each member of `ImportPhase` crosses the
     /// FFI as its own member and gives core's line; the cancel event renders
-    /// the Cancelling line at Medium, and the summary crosses field by field.
+    /// the Cancelling line at High, and the summary crosses field by field.
     #[test]
     fn each_import_phase_crosses_and_renders_cores_line() {
         use slate_core::a11y::ImportPhase as CorePhase;

@@ -32,6 +32,9 @@ internal sealed class PendingImport : IDisposable
 
     public void HandOverTheSource() => _sources.SetResult([_source]);
 
+    /// <summary>The picker returns nothing: its Cancel.</summary>
+    public void HandOverNothing() => _sources.SetResult([]);
+
     public void Dispose()
     {
         _ = _sources.TrySetResult([]);

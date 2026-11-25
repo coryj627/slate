@@ -77,8 +77,9 @@ internal sealed partial class FilesSidebarViewModel
     public bool ShowImportProgress => IsImportRunning;
 
     /// <summary>Plan 47 CB-16 (#1830, W3): the running import has been asked to stop. Set
-    /// by a cancel, cleared as the next import starts copying and when this one ends, after
-    /// <see cref="IsImportRunning"/>, so Cancel import is never on again in between.</summary>
+    /// by a cancel while it copies, cleared when it ends, after <see cref="IsImportRunning"/>,
+    /// so Cancel import is never on again in between, and the next import starts at
+    /// Importing.</summary>
     public bool IsImportCancelling
     {
         get => _isImportCancelling;
@@ -103,10 +104,14 @@ internal sealed partial class FilesSidebarViewModel
     /// press, from any route (the status bar, the Files pane, the File menu, the palette,
     /// Escape). It asks the import to stop and says so at once, in core's words; the
     /// summary follows when the import settles. A press that finds nothing left to stop
-    /// says nothing.</summary>
+    /// says nothing, and nor does one during the pick (the merge judge's n4): Escape's
+    /// route cancels an admitted import then too (#1272), but nothing is copying, so it is
+    /// silent, as a close's is, and a pick that still chooses sources says the summary.
+    /// </summary>
     private void RequestImportCancellation()
     {
-        if (TryCancelImport())
+        bool copying = IsImportRunning;
+        if (TryCancelImport() && copying)
         {
             _announce(new A11yEvent.ImportCancelling());
         }
@@ -223,9 +228,8 @@ internal sealed partial class FilesSidebarViewModel
             cancellationToken.ThrowIfCancellationRequested();
             string[] acceptedSources = sources.Take(256).ToArray();
             int omittedSources = sources.Count - acceptedSources.Length;
-            // D3: Import… goes off here, the keys moved off it first. CB-16 (W3): every
-            // import starts copying at Importing, whatever the last one ended in.
-            IsImportCancelling = false;
+            // D3: Import… goes off here, the keys moved off it first. CB-16 (W3): it starts
+            // copying at Importing, because every import's end clears its cancel (below).
             IsImportRunning = true;
             (bool admitted, ImportResult? result) = await RunImportWorkerAsync(
                 acceptedSources,
@@ -284,20 +288,27 @@ internal sealed partial class FilesSidebarViewModel
                 cancellation.Dispose();
             }
 
-            // Plan 47 CB-16 (NVDA spot 2, 2026-11-25): said before the flags clear, as the
-            // trash's summary is, so keys on a Cancel that goes with the import move after it.
-            // A focus change inside the window drops only NVDA's stale focus speech, never a
-            // notification; said after the keys moved, the summary waited behind the focus
-            // line of where they landed (11.4 s for the status bar's).
-            if (finished is not null)
+            try
             {
-                _announce(finished);
+                // Plan 47 CB-16 (NVDA spot 2, 2026-11-25): said before the flags clear, as the
+                // trash's summary is, so keys on a Cancel that goes with the import move after
+                // it. A focus change inside the window drops only NVDA's stale focus speech,
+                // never a notification; said after the keys moved, the summary waited behind
+                // the focus line of where they landed (11.4 s for the status bar's).
+                if (finished is not null)
+                {
+                    _announce(finished);
+                }
             }
-
-            // Running first: Cancel import reads both, and must not come on in between.
-            IsImportRunning = false;
-            IsImportCancelling = false;
-            IsImporting = false;
+            finally
+            {
+                // The merge judge's m1: the import ends even when its summary cannot be said
+                // (the dispatcher's raise can throw), or the vault could never close again.
+                // Running first: Cancel import reads both, and must not come on in between.
+                IsImportRunning = false;
+                IsImportCancelling = false;
+                IsImporting = false;
+            }
         }
     }
 

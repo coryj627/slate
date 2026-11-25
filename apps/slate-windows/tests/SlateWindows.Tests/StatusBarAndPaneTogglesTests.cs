@@ -135,10 +135,11 @@ public sealed class StatusBarAndPaneTogglesTests
         Assert.True(cancel.ActualHeight >= 24, $"the button is {cancel.ActualHeight} high, under the target's 24");
     });
 
-    /// <summary>Plan 47 CB-16 (#1830): the import's item, beside the trash's, keeps the bar at
-    /// 24 and its Cancel at the target's 24.</summary>
+    /// <summary>Plan 47 CB-16 (#1830): the import's item, shown beside the trash's, keeps the
+    /// bar at 24 and its Cancel at the target's 24. It shows the item directly; no import
+    /// runs (the merge judge's n3 renamed it for that).</summary>
     [Fact]
-    public void TheBarStaysTwentyFourWhileAnImportRuns() => RunSta(() =>
+    public void TheBarStaysTwentyFourWithTheImportItemShown() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         StatusBar bar = host.Shell.ShellStatusBar;

@@ -243,8 +243,37 @@ public sealed class ImportOutcomeTests
         Assert.Equal(2, import.Said.Count);
     });
 
+    /// <summary>The merge judge's m1: an import whose summary cannot be said (the
+    /// dispatcher's raise throws) still ends. With the summary said before the flags clear,
+    /// a throw skipped the clears: the import stayed admitted, so the vault could not close
+    /// for the rest of the session, and the status bar kept "Cancelling import…".</summary>
+    [Fact]
+    public void AnImportWhoseSummaryCannotBeSaidStillEnds() => RunSta(() =>
+    {
+        using var import = new ImportSidebar(
+            sourceFiles: 2,
+            worker: ImportSidebar.WaitForTheCancel,
+            cannotSay: said => said is A11yEvent.ImportFinished);
+        import.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.Sidebar.IsImportRunning), "premise: the import never started copying");
+        import.Sidebar.CancelImportCommand.Execute(null);
+        Assert.True(import.Sidebar.IsImportCancelling, "premise: the press did not mark the import as stopping");
+
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => import.Sidebar.ImportCompletion.IsCompleted, TimeSpan.FromSeconds(30)),
+            "the import never ended");
+        PumpedDispatcher.Drain();
+
+        Assert.IsType<A11yEvent.ImportFinished>(import.Said[^1]);
+        Assert.False(import.Sidebar.IsImportRunning, "the import still shows as copying after its summary could not be said");
+        Assert.False(import.Sidebar.IsImportCancelling, "the import still shows as stopping after its summary could not be said");
+        Assert.False(import.Sidebar.IsImporting, "the import stayed admitted after its summary could not be said, so the vault cannot close");
+    });
+
     /// <summary>The red team's M3: after a cancelled import settles, the next import starts
-    /// at "Importing…" with Cancel import on.</summary>
+    /// at "Importing…" with Cancel import on. The one reset is the end's, which runs even
+    /// when the summary cannot be said (the merge judge's n2: a second reset as the next
+    /// import started copying could never be reached, so this fact could not pin it).</summary>
     [Fact]
     public void ASecondImportAfterACancelledOneStartsAtImporting() => RunSta(() =>
     {
@@ -296,7 +325,8 @@ public sealed class ImportOutcomeTests
             int sourceFiles,
             Func<Action, CancellationToken, Task>? worker = null,
             Func<Task<IReadOnlyList<string>>>? pick = null,
-            bool malformedSidebarSettings = false)
+            bool malformedSidebarSettings = false,
+            Func<A11yEvent, bool>? cannotSay = null)
         {
             _root = NewVault();
             if (malformedSidebarSettings)
@@ -314,7 +344,16 @@ public sealed class ImportOutcomeTests
 
             Sidebar = new FilesSidebarViewModel(
                 _session,
-                Said.Add,
+                said =>
+                {
+                    Said.Add(said);
+                    // The dispatcher's UIA raise throws on a failed HRESULT (the merge
+                    // judge's m1); this one throws on the events the fact names.
+                    if (cannotSay?.Invoke(said) == true)
+                    {
+                        throw new InvalidOperationException("The announcement could not be raised.");
+                    }
+                },
                 vaultRoot: _root,
                 pickImportSources: pick ?? (() => Task.FromResult(Sources)),
                 localAppDataRoot: _root + "-device",

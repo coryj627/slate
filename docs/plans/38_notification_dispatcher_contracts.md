@@ -1246,7 +1246,9 @@ line of where the keys land follows it (said after the move, the NVDA spot
 heard it 11.4 s late, behind the status bar's own focus line). A vault
 close that stops an import says its own refusal line instead of
 `ImportCancelling`, and the summary still follows; a session shutdown says
-nothing. The Mac's adoption of both
+nothing. Escape during the pick, the one press that reaches an import not
+yet copying, cancels it without `ImportCancelling`; a pick that still
+chooses sources says the summary. The Mac's adoption of both
 events and of `import_status_line` is owed on #1954, with a VoiceOver pass;
 until then `importBatchAnnouncement` composes its summary and a cancel
 speaks nothing at the press (the ledger's Mac designations below).
