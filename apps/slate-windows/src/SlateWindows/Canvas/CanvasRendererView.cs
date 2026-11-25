@@ -279,6 +279,10 @@ internal sealed class CanvasRendererView : FrameworkElement
             System.Collections.Immutable.ImmutableHashSet.CreateRange(state.Retained.Where(PeerIsLive)));
     }
 
+    /// <summary>The cards layer's drawing as the last install painted it, one child per card in
+    /// paint order (#1838's fact reads the order here, not by the layer's index).</summary>
+    internal Drawing? CardsDrawingForTests => _cards.Drawing;
+
     private void DrawCards(CanvasPresentationState state)
     {
         using DrawingContext context = _cards.RenderOpen();

@@ -911,7 +911,225 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.Equal(Supports, Assert.Single(board.Children().OfType<CanvasEdgeAutomationPeer>()).GetName());
     });
 
+    /// <summary>Plan 47 CB-36 (#1838, contract 34 D9): the board paints its cards in core's
+    /// scene order, so a group listed before its members is painted under them on every run.
+    /// The cards layer used to paint in its placements dictionary's order, a string-hash order
+    /// that changes from process to process (step 0 saw the group painted 11th, 6th and 1st).
+    /// Eleven overlapping nodes: a lucky pass is one chance in 11!. The expected rectangles come
+    /// from the fixture's own geometry, not from the placements the board paints from.</summary>
+    [Fact]
+    public void TheBoardPaintsItsCardsInSceneOrderSoAGroupIsUnderItsMembers() => RunSta(() =>
+    {
+        var nodes = new List<string> { Group("g", "Shelf", 0, 0, 900, 600) };
+        var expected = new List<(string Id, Rect Document)> { ("g", new Rect(0, 0, 900, 600)) };
+        for (int index = 0; index < 10; index++)
+        {
+            nodes.Add(Card($"c{index}", $"Card {index}", 20 + (40 * index), 20 + (20 * index)));
+            expected.Add(($"c{index}", new Rect(20 + (40 * index), 20 + (20 * index), 200, 100)));
+        }
+        WriteCanvas("order.canvas", [.. nodes], []);
+        using Board board = Open("order.canvas");
+        board.ZoomTo(0.5);
+        CanvasPresentationState state = board.Renderer.Engine.Current!;
+        Assert.Equal(
+            expected.Select(entry => entry.Id),
+            state.Source.Loaded!.Population.SceneNodes.Select(node => node.NodeId));
+
+        string[] painted = [.. PaintedCardRectangles(board.Renderer).Select(rect =>
+            expected.FirstOrDefault(entry => SameRect(ViewRect(state.Viewport, entry.Document), rect)).Id ?? $"(unknown {rect})")];
+
+        Assert.Equal(expected.Select(entry => entry.Id), painted);
+    });
+
+    /// <summary>Plan 47 CB-36 (#1722, contract 34 D3): a UI Automation client's FIRST search on
+    /// the board's ItemContainer door returns the off-window card or labelled edge it realizes:
+    /// by name, and as the next item after "Home" (property 0). The element the client holds is
+    /// the board's own item: its parent is the board, and once the install lands it is the
+    /// board's child of that name, on screen. Before CB-36 the first call answered nothing while
+    /// it still realized and panned (WPF wraps only a peer connected under the board, and the
+    /// minted peer was in no child list until the install). The client is UI Automation's own,
+    /// on a pool thread, while this thread pumps.</summary>
+    [Theory]
+    [InlineData("Far One", false)]
+    [InlineData(FarEdge, false)]
+    [InlineData("Far One", true)]
+    public void AClientsFirstSearchReturnsTheOffWindowItemItRealizes(string name, bool nextAfterHome) => RunSta(() =>
+    {
+        WriteFarCanvas("first.canvas");
+        using Board board = Open("first.canvas");
+        board.PanTo(0, 0);
+        CanvasPeerKey key = name == FarEdge ? CanvasPeerKey.Edge("e1") : CanvasPeerKey.Card("far");
+        Assert.Null(board.Cell(key));
+        CanvasViewportState before = board.Renderer.Engine.CommittedViewport;
+        nint handle = new System.Windows.Interop.WindowInteropHelper(board.Window).Handle;
+
+        AutomationElement? found = AsAClient(() =>
+        {
+            var container = (ItemContainerPattern)ClientBoard(handle).GetCurrentPattern(ItemContainerPattern.Pattern);
+            return nextAfterHome
+                ? container.FindItemByProperty(
+                    container.FindItemByProperty(null, AutomationElement.NameProperty, "Home")
+                        ?? throw new Xunit.Sdk.XunitException("premise: the client found no \"Home\"."),
+                    null,
+                    null)
+                : container.FindItemByProperty(null, AutomationElement.NameProperty, name);
+        });
+
+        Assert.True(found is not null, $"the client's first search for \"{name}\" returned nothing (#1722).");
+        (string held, string parent) = AsAClient(() => (
+            found.Current.Name,
+            TreeWalker.RawViewWalker.GetParent(found)?.Current.AutomationId ?? "(none)"));
+        Assert.Equal(name, held);
+        Assert.Equal("CanvasVisualBoard", parent);
+
+        board.SettleUntil(() => board.Cell(key) == CanvasPeerCell.Materialized);
+        (bool same, bool offscreen, System.Windows.Rect bounds) = AsAClient(() =>
+        {
+            AutomationElement? child = TreeWalker.RawViewWalker.GetFirstChild(ClientBoard(handle));
+            while (child is not null && child.Current.Name != name)
+            {
+                child = TreeWalker.RawViewWalker.GetNextSibling(child);
+            }
+            return (child is not null && Automation.Compare(child, found), found.Current.IsOffscreen, found.Current.BoundingRectangle);
+        });
+        Assert.True(same, $"the element the search returned is not the board's child \"{name}\" after the install (D3).");
+        Assert.False(offscreen, $"the element the search returned for \"{name}\" still reads offscreen after the install.");
+        Assert.False(bounds.IsEmpty, $"the element the search returned for \"{name}\" has an empty rectangle after the install.");
+        // D3 and D4: the door realizes what it finds, so the board pans to it and holds its key
+        // while the client holds the element; a next-item walk therefore moves the board item by item.
+        Assert.NotEqual((before.PanX, before.PanY), (board.Renderer.Engine.CommittedViewport.PanX, board.Renderer.Engine.CommittedViewport.PanY));
+        Assert.Contains(key, board.Renderer.Engine.Current!.Retained);
+        GC.KeepAlive(found);
+    });
+
+    /// <summary>Plan 47 CB-36 (found with #1722, the same class): while a card is seated outside
+    /// the board's window, a client reading the board's Selection gets that card, as a D3
+    /// placeholder: offscreen, with the realize door and no SelectionItem. Before CB-36 the board
+    /// handed back an array holding null for it, and the client read nothing selected. Follow
+    /// Selection is off, so the seat never materializes and its peer is first minted by the
+    /// read.</summary>
+    [Fact]
+    public void AClientReadsASeatOffTheWindowAsTheSelection() => RunSta(() =>
+    {
+        WriteFarCanvas("seat.canvas");
+        using Board board = Open("seat.canvas");
+        board.Renderer.Engine.CommitViewport(view => view.WithFollowSelection(false));
+        board.PanTo(0, 0);
+        board.Document.SeatSelectionSilently("far");
+        board.SettleUntil(() => board.Renderer.Engine.Current!.Selection == "far");
+        Assert.Null(board.Cell(CanvasPeerKey.Card("far")));
+
+        // In process, before any client: never an array holding null.
+        Assert.DoesNotContain(((ISelectionProvider)board.Peer).GetSelection(), provider => provider is null);
+
+        nint handle = new System.Windows.Interop.WindowInteropHelper(board.Window).Handle;
+        string[] selected = AsAClient(() =>
+        {
+            var selection = (SelectionPattern)ClientBoard(handle).GetCurrentPattern(SelectionPattern.Pattern);
+            return selection.Current.GetSelection()
+                .Select(element => $"{element.Current.Name} offscreen={element.Current.IsOffscreen} "
+                    + $"realizable={element.GetCurrentPropertyValue(AutomationElement.IsVirtualizedItemPatternAvailableProperty)}")
+                .ToArray();
+        });
+
+        Assert.Equal(new[] { "Far One offscreen=True realizable=True" }, selected);
+    });
+
+    /// <summary>Plan 47 CB-36: a hidden board (the Outline view showing) answers a client that
+    /// still holds it with nothing: its search finds nothing, realizes nothing and pans nothing,
+    /// and its selection is empty, as its children already are. Before CB-36 the hidden board's
+    /// search realized and panned it.</summary>
+    [Fact]
+    public void AHiddenBoardsDoorAnswersNothingAndMovesNothing() => RunSta(() =>
+    {
+        WriteFarCanvas("hidden.canvas");
+        using Board board = Open("hidden.canvas");
+        board.PanTo(0, 0);
+        board.Document.SeatSelectionSilently("home");
+        board.SettleUntil(() => board.Renderer.Engine.Current!.Selection == "home");
+        nint handle = new System.Windows.Interop.WindowInteropHelper(board.Window).Handle;
+        AutomationElement held = AsAClient(() => ClientBoard(handle));
+
+        board.Document.ShowSurface(CanvasSurfaceKind.Outline);
+        board.Window.UpdateLayout();
+        board.Settle();
+        Assert.NotEqual(Visibility.Visible, board.Renderer.Visibility);
+        CanvasViewportState before = board.Renderer.Engine.CommittedViewport;
+
+        (bool foundNothing, int selected) = AsAClient(() =>
+        {
+            var container = (ItemContainerPattern)held.GetCurrentPattern(ItemContainerPattern.Pattern);
+            var selection = (SelectionPattern)held.GetCurrentPattern(SelectionPattern.Pattern);
+            return (container.FindItemByProperty(null, AutomationElement.NameProperty, "Far One") is null,
+                selection.Current.GetSelection().Length);
+        });
+        board.Settle();
+
+        Assert.True(foundNothing, "the hidden board's search returned an element.");
+        Assert.Equal(0, selected);
+        CanvasViewportState after = board.Renderer.Engine.CommittedViewport;
+        Assert.Equal((before.PanX, before.PanY, before.Zoom), (after.PanX, after.PanY, after.Zoom));
+        Assert.DoesNotContain(CanvasPeerKey.Card("far"), board.Renderer.Engine.Current!.Retained);
+    });
+
     // --- Fixture -----------------------------------------------------------
+
+    private const string FarEdge =
+        "Text card \"Alpha\" connects to Text card \"Beta\", labelled \"cites\"";
+
+    /// <summary>"Home" in view at the origin; "Far One", and "Alpha" and "Beta" with the labelled
+    /// edge "cites" between them, tens of thousands of units away.</summary>
+    private void WriteFarCanvas(string name) => WriteCanvas(
+        name,
+        [Card("home", "Home", 40, 40), Card("far", "Far One", 20_000, 40), Card("a", "Alpha", 30_000, 40), Card("b", "Beta", 30_300, 40)],
+        [Edge("e1", "a", "b", "cites")]);
+
+    /// <summary>A UI Automation client's read, made on a pool thread through UI Automation's
+    /// core while this thread pumps, as a reader's is (CB-25's recipe).</summary>
+    private static T AsAClient<T>(Func<T> read)
+    {
+        Task<T> task = Task.Run(read);
+        PumpedDispatcher.PumpUntilDrained(task, TimeSpan.FromSeconds(30));
+        return task.Result;
+    }
+
+    /// <summary>The board as a client finds it: walking from the window, which connects the
+    /// window's automation root and the board.</summary>
+    private static AutomationElement ClientBoard(nint handle) =>
+        AutomationElement.FromHandle(handle).FindFirst(
+            TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "CanvasVisualBoard"))
+        ?? throw new Xunit.Sdk.XunitException("the client found no board.");
+
+    /// <summary>The cards layer's fill rectangles in paint order: one child group per card, its
+    /// first drawing the fill.</summary>
+    private static List<Rect> PaintedCardRectangles(CanvasRendererView renderer)
+    {
+        var rectangles = new List<Rect>();
+        if (renderer.CardsDrawingForTests is System.Windows.Media.DrawingGroup layer)
+        {
+            foreach (System.Windows.Media.Drawing card in layer.Children)
+            {
+                if (card is System.Windows.Media.DrawingGroup { Children: [System.Windows.Media.GeometryDrawing { Geometry: System.Windows.Media.RectangleGeometry fill }, ..] })
+                {
+                    rectangles.Add(fill.Rect);
+                }
+            }
+        }
+        return rectangles;
+    }
+
+    private static Rect ViewRect(CanvasViewportState viewport, Rect document) => new(
+        (document.X * viewport.Zoom) + viewport.PanX,
+        (document.Y * viewport.Zoom) + viewport.PanY,
+        document.Width * viewport.Zoom,
+        document.Height * viewport.Zoom);
+
+    private static bool SameRect(Rect a, Rect b) =>
+        Math.Abs(a.X - b.X) < 0.01 && Math.Abs(a.Y - b.Y) < 0.01
+        && Math.Abs(a.Width - b.Width) < 0.01 && Math.Abs(a.Height - b.Height) < 0.01;
+
+    private static string Group(string id, string label, int x, int y, int width, int height) =>
+        $"{{\"id\":\"{id}\",\"type\":\"group\",\"label\":\"{label}\",\"x\":{x},\"y\":{y},\"width\":{width},\"height\":{height}}}";
 
     private static string Card(string id, string text, int x, int y) =>
         $"{{\"id\":\"{id}\",\"type\":\"text\",\"text\":\"{text}\",\"x\":{x},\"y\":{y},\"width\":200,\"height\":100}}";
