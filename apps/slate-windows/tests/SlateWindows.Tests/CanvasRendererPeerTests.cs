@@ -1002,6 +1002,31 @@ public sealed class CanvasRendererPeerTests : IDisposable
         GC.KeepAlive(found);
     });
 
+    /// <summary>Plan 47 CB-36 (#1722): the item the door hands out is the board's item from
+    /// the moment it is handed out, before the install that lists it: its provider exists and
+    /// its parent is the board, so a client that asks for the parent at once is answered with the
+    /// board. Called in process right after a client has connected the board, with nothing pumped
+    /// in between, so the install cannot have landed (step 0's P5: before CB-36 this very call
+    /// answered null, WPF's own answer).</summary>
+    [Fact]
+    public void TheItemTheDoorHandsOutIsUnderTheBoardBeforeItsInstall() => RunSta(() =>
+    {
+        WriteFarCanvas("door.canvas");
+        using Board board = Open("door.canvas");
+        board.PanTo(0, 0);
+        nint handle = new System.Windows.Interop.WindowInteropHelper(board.Window).Handle;
+        _ = AsAClient(() => ClientBoard(handle).Current.Name);
+
+        IRawElementProviderSimple? provider = ((IItemContainerProvider)board.Peer).FindItemByProperty(
+            null, AutomationElementIdentifiers.NameProperty.Id, "Far One");
+        CanvasBoardAutomationPeer peer = Assert.IsType<CanvasCardAutomationPeer>(
+            board.Renderer.PeerFor(CanvasPeerKey.Card("far")));
+
+        Assert.Null(board.Cell(CanvasPeerKey.Card("far")));
+        Assert.True(provider is not null, "the door answered nothing for \"Far One\" (#1722).");
+        Assert.Same(board.Peer, peer.GetParent());
+    });
+
     /// <summary>Plan 47 CB-36 (found with #1722, the same class): while a card is seated outside
     /// the board's window, a client reading the board's Selection gets that card, as a D3
     /// placeholder: offscreen, with the realize door and no SelectionItem. Before CB-36 the board
