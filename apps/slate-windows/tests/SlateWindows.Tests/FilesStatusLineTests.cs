@@ -87,6 +87,54 @@ public sealed class FilesStatusLineTests
         Assert.Equal((string.Empty, string.Empty), (afterTheFeed, afterTheRetry));
     });
 
+    /// <summary>The diff red team's finding 1: a tag tree's failure on a plain
+    /// refresh is a line the tree wrote, so a later refresh whose tags load
+    /// leaves the line empty rather than put the failure back.</summary>
+    [Fact]
+    public void ARefreshNeverPutsBackATagTreesFailure() => RunSta(() =>
+    {
+        using RescanTests.Harness h = RescanTests.Harness.WithAsyncTree("files-line-tag-failure", ("alpha.md", "# Alpha\n\n#topic\n"));
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the refresh whose tags fail");
+        string failed = h.Sidebar.Status;
+        Assert.False(string.IsNullOrEmpty(failed) || failed == Loading, $"premise: the tag tree's failure left the line \"{failed}\"");
+
+        h.Sidebar.AfterTagTreeForTests = null;
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the refresh whose tags load");
+
+        Assert.Equal(string.Empty, h.Sidebar.Status);
+    });
+
+    /// <summary>The diff red team's finding 2: a folder expansion's overflow
+    /// line is the tree's own, stale once the folder closes, so a plain refresh
+    /// leaves the line empty rather than put it back.</summary>
+    [Fact]
+    [Trait("census", "moderate")]
+    public void ARefreshNeverPutsBackAnExpansionsOverflowLine() => RunSta(() =>
+    {
+        var files = new List<(string Path, string Text)> { ("alpha.md", "# Alpha\n") };
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            files.Add(($"folder/note-{index:D5}.md", string.Empty));
+        }
+
+        using RescanTests.Harness h = RescanTests.Harness.WithAsyncTree("files-line-overflow", [.. files]);
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        FileTreeNodeViewModel folder = Assert.Single(h.Sidebar.RootNodes, node => node.Path == "folder");
+        folder.IsExpanded = true;
+        h.Context.Await(h.Sidebar.ChildExpansionCompletion, "the folder's expansion");
+        Assert.Contains("Showing the first 5,000 items in folder", h.Sidebar.Status, StringComparison.Ordinal);
+
+        folder.IsExpanded = false;
+        h.Sidebar.Refresh();
+        h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the plain refresh");
+
+        Assert.Equal(string.Empty, h.Sidebar.Status);
+    });
+
     /// <summary>Fact 21 (P2e): a refresh cancelled with no successor (the
     /// close's path) puts back the line it replaced.</summary>
     [Fact]

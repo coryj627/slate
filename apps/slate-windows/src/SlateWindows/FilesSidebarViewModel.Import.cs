@@ -177,6 +177,8 @@ internal sealed partial class FilesSidebarViewModel
         // Plan 47 CB-16 (#1830, W1): where the copy goes, once the pick has chosen sources;
         // null until then, so a cancel before the pick returned reports nothing.
         string? destination = null;
+        // The summary, said only once the import has ended (below).
+        A11yEvent? finished = null;
         try
         {
             IReadOnlyList<string> sources;
@@ -234,7 +236,7 @@ internal sealed partial class FilesSidebarViewModel
             // Plan 47 CB-16 (#1830, W1): what the worker did is reported, cancelled or not.
             // The worker's own result says whether the copy was cut short: a cancel that
             // came after the last copy reports a full copy.
-            ReportImportFinished(result, destination, refresh: true);
+            finished = ReportImportFinished(result, destination, refresh: true);
         }
         catch (OperationCanceledException)
         {
@@ -243,7 +245,7 @@ internal sealed partial class FilesSidebarViewModel
             // the copy is; a cancel before the pick returned has nothing to report.
             if (destination is not null)
             {
-                ReportImportFinished(
+                finished = ReportImportFinished(
                     new ImportResult(0, 0, 0, Cancelled: true, LimitReached: false),
                     destination,
                     refresh: false);
@@ -277,19 +279,27 @@ internal sealed partial class FilesSidebarViewModel
             IsImportRunning = false;
             IsImportCancelling = false;
             IsImporting = false;
+            // Plan 47 CB-16 (the diff red team's finding 3): said after the flags clear, so
+            // keys on the status bar's Cancel, which goes with the import, move before the
+            // summary is raised; a focus change raised after it would cut it short.
+            if (finished is not null)
+            {
+                _announce(finished);
+            }
         }
     }
 
     /// <summary>Plan 47 CB-16 (#1830, CD10, W1): the import's outcome, in core's words
     /// (<c>ImportFinished</c>), with <see cref="ReportResult"/>'s discipline: the refresh
-    /// first, whose "Loading files…" this line then replaces; the line held for that
-    /// refresh's publication; the event announced. Silent while the session shuts down.
+    /// first, whose "Loading files…" this line then replaces, and the line held for that
+    /// refresh's publication. Returns the event for the caller to say once the import has
+    /// ended; null, and nothing shown, while the session shuts down.
     /// </summary>
-    private void ReportImportFinished(ImportResult result, string destination, bool refresh)
+    private A11yEvent.ImportFinished? ReportImportFinished(ImportResult result, string destination, bool refresh)
     {
         if (SessionShutdownStarted)
         {
-            return;
+            return null;
         }
 
         var finished = new A11yEvent.ImportFinished(
@@ -309,7 +319,7 @@ internal sealed partial class FilesSidebarViewModel
 
         Status = SlateUniffiMethods.A11yRender(finished).Text;
         HoldStatusForPendingPublication();
-        _announce(finished);
+        return finished;
     }
 
     private async Task<(bool Admitted, ImportResult? Result)> RunImportWorkerAsync(

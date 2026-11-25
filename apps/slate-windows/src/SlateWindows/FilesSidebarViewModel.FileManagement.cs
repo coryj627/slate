@@ -147,18 +147,30 @@ internal sealed partial class FilesSidebarViewModel
     /// guard against, and holding it let a LATER refresh resurrect it
     /// over whatever the status said by then; an older hold is
     /// superseded by this status either way.</summary>
-    private void HoldStatusForPendingPublication() =>
+    private void HoldStatusForPendingPublication()
+    {
         _statusToReassert = IsTreePublicationPending ? Status : null;
+        _statusToReassertWrittenByTree = _statusToReassert is not null && _statusWrittenByTree;
+    }
+
+    /// <summary>Plan 47 CB-16 (#1791, W9): whether the tree wrote the held line, so its
+    /// reassertion keeps the mark (a held tag-tree failure stays the tree's own).</summary>
+    private bool _statusToReassertWrittenByTree;
+
+    /// <summary>The held line written back, with the mark it was held with.</summary>
+    private void WriteReassertedStatus(string reassert) =>
+        WriteStatus(reassert, _statusToReassertWrittenByTree);
 
     /// <summary>Plan 47 CB-16 (#1791, W9, Call 3): whether the tree wrote the
     /// line now shown: a publication's arm (the count, an overflow line, the
-    /// settings notice, a silent tag-tree error) or a tree failure's report.
-    /// Set only through <see cref="WriteStatus"/> by
-    /// <see cref="WriteTreeStatus"/> and <see cref="MarkStatusWrittenByTree"/>;
-    /// every other write clears it. A flag cleared by every other write is
-    /// used rather than a record of the tree's last text, which would misfire
-    /// whenever another writer wrote the same words (a folder expansion's
-    /// overflow line is the publication's word for word).</summary>
+    /// settings notice, a silent tag-tree error), a folder expansion's or the
+    /// dual pane's overflow line, a tag tree's failure or a tree failure's
+    /// report. Set only through <see cref="WriteStatus"/> by
+    /// <see cref="WriteTreeStatus"/>, <see cref="MarkStatusWrittenByTree"/>
+    /// and a held line's reassertion; every other write clears it. A flag
+    /// cleared by every other write is used rather than a record of the tree's
+    /// last text, which would misfire whenever another writer wrote the same
+    /// words.</summary>
     private bool _statusWrittenByTree;
 
     /// <summary>The transient line now shown ("Loading files…", "Filtering
@@ -230,7 +242,7 @@ internal sealed partial class FilesSidebarViewModel
     {
         if (_statusToReassert is string reassert)
         {
-            Status = reassert;
+            WriteReassertedStatus(reassert);
             // An active filter's AUTOMATIC refilter is still coming
             // (this publication just scheduled it) and would stomp
             // Status after the debounce — leave the value for

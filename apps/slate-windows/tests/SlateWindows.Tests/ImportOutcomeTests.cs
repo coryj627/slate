@@ -139,6 +139,21 @@ public sealed class ImportOutcomeTests
         Assert.Contains(import.Sidebar.RootNodes, node => node.Path == "n0000.md");
     });
 
+    /// <summary>The summary stays on the Files line over the settings notice the import's own
+    /// refresh writes as it publishes: the line is held for that publication, as every
+    /// mutation's result is.</summary>
+    [Fact]
+    public void ACompletedImportsSentenceStaysOverTheSettingsNotice() => RunSta(() =>
+    {
+        using var import = new ImportSidebar(sourceFiles: 2, malformedSidebarSettings: true);
+        Assert.NotNull(import.Sidebar.SettingsNotice);
+
+        import.Sidebar.ImportCommand.Execute(null);
+        import.AwaitTheImportAndItsPublication();
+
+        Assert.Equal("Copied 2 files to the vault root.", import.Sidebar.Status);
+    });
+
     /// <summary>A shutdown asks the import to stop and says nothing; a close says its own
     /// refusal, not the press's sentence, and the summary follows when the import settles.
     /// </summary>
@@ -174,6 +189,11 @@ public sealed class ImportOutcomeTests
         Assert.True(PumpedDispatcher.PumpUntil(() => sidebar.IsImportRunning), "premise: the import never started copying");
 
         Assert.False(lifecycle.PrepareForApplicationClose(), "the close was not refused while an import ran");
+        // The diff red team's low 4: the close's cancel is silent, but the import is
+        // stopping all the same: the status bar says so and Cancel import is off.
+        Assert.True(sidebar.IsImportRunning, "premise: the import ended before the close returned");
+        Assert.Equal(SlateUniffiMethods.ImportStatusLine(ImportPhase.Cancelling), sidebar.ImportStatusLine);
+        Assert.False(sidebar.CancelImportCommand.CanExecute(null), "Cancel import stayed on while the close's cancel drained");
         PumpedDispatcher.PumpUntilDrained(sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
         PumpedDispatcher.Drain();
 
@@ -275,9 +295,16 @@ public sealed class ImportOutcomeTests
         public ImportSidebar(
             int sourceFiles,
             Func<Action, CancellationToken, Task>? worker = null,
-            Func<Task<IReadOnlyList<string>>>? pick = null)
+            Func<Task<IReadOnlyList<string>>>? pick = null,
+            bool malformedSidebarSettings = false)
         {
             _root = NewVault();
+            if (malformedSidebarSettings)
+            {
+                Directory.CreateDirectory(Path.Combine(_root, ".slate"));
+                File.WriteAllText(Path.Combine(_root, ".slate", "sidebar.json"), "{\"version\":1,\"sort\":\"bogus\"}");
+            }
+
             _source = NewSource(sourceFiles);
             _session = VaultSession.OpenFilesystem(_root);
             using (var cancel = new CancelToken())

@@ -1655,13 +1655,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         if (outcome.Error is not null)
         {
+            // Plan 47 CB-16 (#1791, W9; the diff red team's finding 1): a tag tree's
+            // failure is a line the tree wrote, stale once a later load succeeds, so no
+            // refresh puts it back.
             if (announce)
             {
                 ReportFailure(outcome.Error);
+                MarkStatusWrittenByTree(outcome.Error);
             }
             else
             {
-                Status = outcome.Error;
+                WriteTreeStatus(outcome.Error);
                 HoldStatusForPendingPublication();
             }
         }
@@ -2684,7 +2688,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 DualPaneFiles.Add(FileTreeNodeViewModel.Overflow(
                     $"More than {MaxMaterializedDirectoryItems:N0} items; refine the folder."));
-                Status = DirectoryOverflowStatus(parentPath);
+                // Plan 47 CB-16 (#1791, W9): the tree's own line.
+                WriteTreeStatus(DirectoryOverflowStatus(parentPath));
             }
         }
         catch (VaultException exception)

@@ -901,7 +901,8 @@ internal sealed partial class FilesSidebarViewModel
                 ProjectBatchChecksOnto(level.Nodes);
                 if (level.Truncated)
                 {
-                    Status = DirectoryOverflowStatus(node.Path);
+                    // Plan 47 CB-16 (#1791, W9): the tree's own line.
+                    WriteTreeStatus(DirectoryOverflowStatus(node.Path));
                 }
 
                 await Task.Yield();

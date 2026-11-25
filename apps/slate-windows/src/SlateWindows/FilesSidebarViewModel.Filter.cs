@@ -540,7 +540,7 @@ internal sealed partial class FilesSidebarViewModel
             // filter summary, nor speak a redundant count after the
             // mutation result.
             _statusToReassert = null;
-            Status = reassert;
+            WriteReassertedStatus(reassert);
         }
         else
         {

@@ -77,13 +77,13 @@ public sealed class FilesPaneKeysFirstTests
     });
 
     /// <summary>Cancel import goes off in its own press (plan 47 CB-16; the owner's answer of
-    /// 2026-11-24, "Off, keys go back"), as it once went off only when the import it stopped
-    /// settled: either way the keys go to the File actions group first.</summary>
+    /// 2026-11-24, "Off, keys go back"), while the import it stops is still running: the keys
+    /// go to the File actions group first.</summary>
     [Fact]
     public void CancelImportMovesTheKeysToItsGroupFirstWhenPressed() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
-        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true, HoldThroughTheCancel = true };
         using var pane = new FilesPane(host, import: import);
         pane.Sidebar.ImportCommand.Execute(null);
         host.Settle();
@@ -95,6 +95,11 @@ public sealed class FilesPaneKeysFirstTests
         KeysFirstRecorder.AssertTheKeysLeaveFirst("Cancel import", cancel, () =>
         {
             Press(cancel);
+            host.Settle();
+            Assert.True(pane.Sidebar.IsImportRunning, "premise: the import ended at the press");
+            Assert.False(cancel.IsEnabled, "Cancel import was still on after its press, with the import still running");
+            pane.AssertTheKeysAreOn(pane.Group("SidebarFileActionsExpander"), "the File actions group");
+            import.ReleaseTheWorker();
             PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
             host.Settle();
         });
@@ -592,7 +597,7 @@ public sealed class FilesPaneKeysFirstTests
     public void TheStatusBarsImportCancelLandsTheKeysWhereTheyCameFromFirst() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
-        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true, HoldThroughTheCancel = true };
         using var pane = new FilesPane(host, import: import);
         pane.Sidebar.ImportCommand.Execute(null);
         Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
@@ -605,6 +610,12 @@ public sealed class FilesPaneKeysFirstTests
         KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
         {
             Press(cancel);
+            host.Settle();
+            // The diff red team's low 5: off at the press, the import still running.
+            Assert.True(pane.Sidebar.IsImportRunning, "premise: the import ended at the press");
+            Assert.False(cancel.IsEnabled, "the status bar's Cancel import was still on after its press");
+            Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"at the press the keys went to {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
+            import.ReleaseTheWorker();
             PumpedDispatcher.PumpUntilDrained(pane.Sidebar.ImportCompletion, TimeSpan.FromSeconds(30));
             host.Settle();
         });
@@ -612,6 +623,28 @@ public sealed class FilesPaneKeysFirstTests
         Assert.Equal(0, import.WorkRuns);
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
         Assert.Null(host.Shell.ImportCancelCameFromForTests);
+    });
+
+    /// <summary>AGENTS.md's republish rule (the diff red team's low 7): a tree publication
+    /// during an import (the change feed refreshes after every copied file) leaves the keys on
+    /// the status bar's Cancel import, and leaves it on.</summary>
+    [Fact]
+    public void TheStatusBarsImportCancelKeepsTheKeysThroughATreePublication() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        pane.Sidebar.ImportCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+        host.Settle();
+        var cancel = LogicalById<Button>(host.Shell.ShellStatusBar, "CancelImport");
+        pane.TakeTheKeys(cancel);
+
+        pane.Sidebar.Refresh();
+        pane.SettleThePublication();
+
+        Assert.True(cancel.IsEnabled && cancel.IsVisible, "the status bar's Cancel import went off or away in a tree publication");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, cancel), $"the keys went to {Describe(Keyboard.FocusedElement)} in a tree publication");
     });
 
     /// <summary>The same, when the keys came to the status bar's Cancel import from nothing:
@@ -658,6 +691,10 @@ public sealed class FilesPaneKeysFirstTests
         var filter = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
         pane.TakeTheKeys(filter);
         pane.TakeTheKeys(cancel);
+        // The diff red team's finding 3: the summary is said after the keys have left, so
+        // the focus change cannot cut it short.
+        int saidWhenTheKeysLeft = -1;
+        cancel.LostKeyboardFocus += (_, _) => saidWhenTheKeysLeft = saidWhenTheKeysLeft < 0 ? pane.Said.Count : saidWhenTheKeysLeft;
 
         KeysFirstRecorder.AssertTheKeysLeaveFirst("the status bar's Cancel import", cancel, () =>
         {
@@ -666,6 +703,11 @@ public sealed class FilesPaneKeysFirstTests
             pane.SettleThePublication();
         });
 
+        int summary = pane.Said.FindIndex(said => said is A11yEvent.ImportFinished);
+        Assert.True(summary >= 0, "the import's summary was not said");
+        Assert.True(
+            saidWhenTheKeysLeft >= 0 && summary >= saidWhenTheKeysLeft,
+            $"the summary was said (at {summary}) before the keys left Cancel (at {saidWhenTheKeysLeft})");
         Assert.Equal(1, import.WorkRuns);
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
     });
@@ -1106,6 +1148,11 @@ public sealed class FilesPaneKeysFirstTests
 
         public bool HoldTheWorker { get; init; }
 
+        /// <summary>Plan 47 CB-16: a held worker that stays held through a cancel, until the
+        /// fact releases it, so the import is still running after Cancel import's press.
+        /// Released, it still runs no work: its token is cancelled.</summary>
+        public bool HoldThroughTheCancel { get; init; }
+
         public string SourceName => Path.GetFileName(_source);
 
         public int Picks => _picks.Count;
@@ -1135,7 +1182,7 @@ public sealed class FilesPaneKeysFirstTests
             Interlocked.Increment(ref _workersStarted);
             if (HoldTheWorker)
             {
-                await _worker.Task.WaitAsync(cancellation).ConfigureAwait(false);
+                await (HoldThroughTheCancel ? _worker.Task : _worker.Task.WaitAsync(cancellation)).ConfigureAwait(false);
             }
 
             cancellation.ThrowIfCancellationRequested();
