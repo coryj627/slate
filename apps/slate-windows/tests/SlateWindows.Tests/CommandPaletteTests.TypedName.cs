@@ -1191,30 +1191,33 @@ public sealed partial class CommandPaletteTests
         Assert.Equal("slate.file.save", palette.SelectedId);
     });
 
-    /// <summary>With the keys on a row, a typed letter goes to the list's own search, which
-    /// matches the rows' labels: the keys and the selection land together on a row whose label
-    /// starts with it, silently (the screen reader speaks the row).</summary>
+    /// <summary>With the keys on a row, a typed letter moves nothing: the list's own letter
+    /// search is off. It matched every row's type name, and searching labels instead made a
+    /// letter speak its row twice under NVDA (the palette's "Selected:" line, then the focused
+    /// row), where <c>main</c> moved nothing (CB-34's spot check, 2026-11-24).</summary>
     [Fact]
-    public void ALetterTypedInTheListLandsOnARowItsLabelStartsWith() => RunSta(() =>
+    public void ALetterTypedInTheListMovesNothing() => RunSta(() =>
     {
         using var host = new ShippedResultsList(StandardCommands());
         CommandPaletteViewModel palette = host.Palette;
         palette.Open();
         host.Settle();
-        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(palette.SelectedRow));
+        CommandPaletteRowViewModel? opened = palette.SelectedRow;
+        var row = Assert.IsType<ListBoxItem>(host.List.ItemContainerGenerator.ContainerFromItem(opened));
         Assert.True(row.Focus(), "premise: the palette's row refused the keys");
         host.Settle();
         host.ClearObservations();
 
-        TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, row, "t"));
-        host.Settle();
+        foreach (string letter in new[] { "t", "s", "q" })
+        {
+            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, row, letter));
+            host.Settle();
+        }
 
-        var keys = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
-        var landed = Assert.IsType<CommandPaletteRowViewModel>(keys.DataContext);
-        Assert.StartsWith("T", landed.Label, StringComparison.Ordinal);
-        Assert.Same(landed, palette.SelectedRow);
-        Assert.Same(landed, host.List.SelectedItem);
-        Assert.Empty(host.SelectionAnnouncements);
+        Assert.Same(row, Keyboard.FocusedElement);
+        Assert.Same(opened, palette.SelectedRow);
+        Assert.Same(opened, host.List.SelectedItem);
+        Assert.Empty(host.Harness.Announcements);
     });
 
     /// <summary>With the keys on a row in the list, a publication leaves the keys and the

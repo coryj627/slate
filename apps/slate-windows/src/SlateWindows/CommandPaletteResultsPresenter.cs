@@ -40,9 +40,10 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         _list.SelectionChanged += List_SelectionChanged;
         _list.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(List_GotKeyboardFocus));
         _list.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(List_PreviewMouseDown));
-        // #1834: a letter typed with the keys on a row goes to the list's own search, which
-        // otherwise matches every row's type name; it matches the label the row shows.
-        TextSearch.SetTextPath(_list, nameof(CommandPaletteRowViewModel.Label));
+        // #1834: no letter search in the list. It matched every row's type name, and a search
+        // over the labels moved the keys with a "Selected:" line that NVDA then repeated as the
+        // focused row; with the keys on a row a letter moves nothing, as on main.
+        _list.IsTextSearchEnabled = false;
         Refresh();
     }
 
