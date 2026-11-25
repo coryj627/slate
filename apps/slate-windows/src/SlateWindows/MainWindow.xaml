@@ -937,7 +937,9 @@
                         <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="360"
                                    AutomationProperties.AutomationId="TrashProgressStatus" />
-                        <Button Content="Cancel" Margin="8,0,8,0"
+                        <!-- Plan 47 CB-16: a status bar Cancel keeps its peer's answer while
+                             hidden, so its work ending never says the status bar went off. -->
+                        <local:StatusBarCancelButton Content="Cancel" Margin="8,0,8,0"
                                 MinHeight="24"
                                 Padding="8,0"
                                 Command="{Binding FileSidebar.CancelTrashCommand}"
@@ -960,7 +962,7 @@
                         <TextBlock Text="{Binding FileSidebar.ImportStatusLine}" VerticalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="360"
                                    AutomationProperties.AutomationId="ImportProgressStatus" />
-                        <Button Content="Cancel" Margin="8,0,8,0"
+                        <local:StatusBarCancelButton Content="Cancel" Margin="8,0,8,0"
                                 MinHeight="24"
                                 Padding="8,0"
                                 Command="{Binding FileSidebar.CancelImportCommand}"

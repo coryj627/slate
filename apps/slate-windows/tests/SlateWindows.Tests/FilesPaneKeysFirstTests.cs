@@ -7,6 +7,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using SlateWindows.FileManagement;
 using uniffi.slate_uniffi;
@@ -761,6 +762,76 @@ public sealed class FilesPaneKeysFirstTests
         Assert.True(ReferenceEquals(Keyboard.FocusedElement, filter), $"the keys are on {Describe(Keyboard.FocusedElement)}, not the filter field they came to Cancel from");
     });
 
+    /// <summary>Plan 47 CB-16 (the Narrator spot on #2061): a trash or an import that ends,
+    /// with no press, while the keys are on its status bar Cancel. The keys go back to the
+    /// status bar they came from, and its Cancel goes off as its item hides. WPF raises the
+    /// off for the Cancel's peer afterwards, at Background priority, with the button hidden;
+    /// UI Automation hands a hidden element's event to its nearest shown ancestor, the status
+    /// bar the keys are on, and Narrator said "Status bar disabled." (an in-process client saw
+    /// the status bar go off, and the status bar itself never did). WPF raises that event
+    /// only when the peer's answer changes, so the hidden Cancel's peer keeps the answer it
+    /// last gave shown.</summary>
+    [Theory]
+    [InlineData("import")]
+    [InlineData("trash")]
+    public void AWorkThatEndsUnderTheKeysNeverSaysTheStatusBarWentOff(string work) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("b.md", "# B\n"));
+        using var import = new HeldImport { HandOverAtOnce = true, HoldTheWorker = true };
+        using var pane = new FilesPane(host, import: import);
+        using var held = new ManualResetEventSlim();
+        StatusBar bar = host.Shell.ShellStatusBar;
+        Button cancel;
+        Task ended;
+        if (work == "import")
+        {
+            pane.Sidebar.ImportCommand.Execute(null);
+            Assert.True(PumpedDispatcher.PumpUntil(() => import.WorkersStarted == 1, TimeSpan.FromSeconds(10)), "premise: the import's worker never started");
+            cancel = LogicalById<Button>(bar, "CancelImport");
+        }
+        else
+        {
+            int workers = 0;
+            pane.Sidebar.TrashWorkerStartingForTesting = ignoredToken =>
+            {
+                if (Interlocked.Increment(ref workers) == 1)
+                {
+                    _ = held.Wait(TimeSpan.FromSeconds(30));
+                }
+            };
+            pane.Select("a.md");
+            pane.Sidebar.DeleteCommand.Execute(null);
+            Assert.True(PumpedDispatcher.PumpUntil(() => Volatile.Read(ref workers) == 1 && pane.Sidebar.ShowTrashProgress, TimeSpan.FromSeconds(10)), "premise: the trash never started");
+            cancel = LogicalById<Button>(bar, "CancelTrash");
+        }
+
+        host.Settle();
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(cancel);
+        Assert.True(peer.IsEnabled(), "premise: the Cancel's peer says it is off while its work runs");
+        pane.TakeTheKeys(bar);
+        pane.TakeTheKeys(cancel);
+
+        if (work == "import")
+        {
+            import.ReleaseTheWorker();
+            ended = pane.Sidebar.ImportCompletion;
+        }
+        else
+        {
+            held.Set();
+            ended = pane.Sidebar.TrashCompletion;
+        }
+
+        PumpedDispatcher.PumpUntilDrained(ended, TimeSpan.FromSeconds(30));
+        pane.SettleThePublication();
+        Assert.False(cancel.IsVisible, "premise: the Cancel still shows after its work ended");
+        Assert.False(cancel.IsEnabled, "premise: the Cancel is still on after its work ended");
+        Assert.True(ReferenceEquals(Keyboard.FocusedElement, bar), $"premise: the keys are on {Describe(Keyboard.FocusedElement)}, not the status bar they came from");
+        Assert.Same(peer, UIElementAutomationPeer.FromElement(cancel));
+
+        Assert.True(peer.IsEnabled(), "the hidden Cancel's peer says it went off, an event UI Automation hands to the status bar the keys are on");
+    });
+
     /// <summary>The trash's Cancel when its staging ends on a folder that holds items: the
     /// trash asks to confirm, which hides Cancel and then turns it off. The keys still go
     /// first to the element they came to Cancel from (red team F1: the hide had already
@@ -1014,6 +1085,7 @@ public sealed class FilesPaneKeysFirstTests
 
     private static void RunSta(Action body) =>
         StaThread.RunPumped(body, TimeSpan.FromSeconds(120), "The Files pane keys-first fact timed out.");
+
 
     /// <summary>The element under <paramref name="root"/>'s logical tree whose AutomationId is
     /// <paramref name="id"/>: a collapsed item's content is there before it has a visual tree.
