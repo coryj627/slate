@@ -90,6 +90,37 @@ public sealed class ImportOutcomeTests
         }
     });
 
+    /// <summary>A close or a shutdown asks the import to stop while its pick is still up (the
+    /// only routes that can, the pick being modal). A pick that then returns nothing is no
+    /// import and says nothing; one that returns sources copies nothing and says so, in
+    /// core's summary. On main both were silent.</summary>
+    [Fact]
+    public void ACancelDuringThePickReportsOnlyAPickThatChoseSources() => RunSta(() =>
+    {
+        foreach (bool chose in new[] { false, true })
+        {
+            var pick = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var import = new ImportSidebar(sourceFiles: 2, pick: () => pick.Task);
+            import.Sidebar.ImportCommand.Execute(null);
+            Assert.True(PumpedDispatcher.PumpUntil(() => import.Sidebar.IsImporting), "premise: the import never asked for its sources");
+
+            import.Sidebar.CancelImport();
+            pick.SetResult(chose ? import.Sources : []);
+            import.AwaitTheImportAndItsPublication();
+
+            Assert.Equal(0, import.ImportedFilesOnDisk());
+            if (!chose)
+            {
+                Assert.Empty(import.Said);
+                continue;
+            }
+
+            A11yEvent.ImportFinished finished = Assert.IsType<A11yEvent.ImportFinished>(Assert.Single(import.Said));
+            Assert.True(finished.Cancelled, "the summary did not say the import was cancelled");
+            Assert.Equal(0u, finished.CopiedFiles);
+        }
+    });
+
     /// <summary>Step 0's P1c: on main the summary was said and the Files line went to
     /// "Loading files…" at once, and stayed there.</summary>
     [Fact]
@@ -241,7 +272,10 @@ public sealed class ImportOutcomeTests
         private readonly string _source;
         private readonly VaultSession _session;
 
-        public ImportSidebar(int sourceFiles, Func<Action, CancellationToken, Task>? worker = null)
+        public ImportSidebar(
+            int sourceFiles,
+            Func<Action, CancellationToken, Task>? worker = null,
+            Func<Task<IReadOnlyList<string>>>? pick = null)
         {
             _root = NewVault();
             _source = NewSource(sourceFiles);
@@ -255,7 +289,7 @@ public sealed class ImportOutcomeTests
                 _session,
                 Said.Add,
                 vaultRoot: _root,
-                pickImportSources: () => Task.FromResult<IReadOnlyList<string>>(Directory.GetFiles(_source).Order(StringComparer.Ordinal).ToArray()),
+                pickImportSources: pick ?? (() => Task.FromResult(Sources)),
                 localAppDataRoot: _root + "-device",
                 importWorker: worker);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion, TimeSpan.FromSeconds(30));
@@ -267,10 +301,19 @@ public sealed class ImportOutcomeTests
 
         public List<A11yEvent> Said { get; } = [];
 
+        /// <summary>The files a pick chooses, in name order.</summary>
+        public IReadOnlyList<string> Sources =>
+            Directory.GetFiles(_source).Order(StringComparer.Ordinal).ToArray();
+
         /// <summary>A worker that runs nothing until its import is cancelled.</summary>
         public static async Task WaitForTheCancel(Action work, CancellationToken token)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, token).ConfigureAwait(false);
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (token.Register(() => cancelled.TrySetCanceled(token)))
+            {
+                await cancelled.Task.ConfigureAwait(false);
+            }
+
             work();
         }
 
