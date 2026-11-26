@@ -24,6 +24,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     private readonly VisualCollection _visuals;
     private readonly DrawingVisual _cards;
     private readonly DrawingVisual _edges;
+    private readonly DrawingVisual _chips;
     private readonly DrawingVisual _ring;
     private CanvasDocumentViewModel? _model;
 
@@ -50,9 +51,13 @@ internal sealed class CanvasRendererView : FrameworkElement
         _visuals = new VisualCollection(this);
         _edges = new DrawingVisual();
         _cards = new DrawingVisual();
+        _chips = new DrawingVisual();
         _ring = new DrawingVisual();
+        // Bottom to top: the connections' lines, the cards, the connections' label chips over
+        // the cards they cross (#1721), and the selection ring over everything.
         _ = _visuals.Add(_edges);
         _ = _visuals.Add(_cards);
+        _ = _visuals.Add(_chips);
         _ = _visuals.Add(_ring);
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
@@ -165,6 +170,9 @@ internal sealed class CanvasRendererView : FrameworkElement
             // So is a realization owed to the old document's key.
             _owedReveal = null;
             _owedRealization = null;
+            // What the pointer was over is the old document's; the next pointer move asks again.
+            _hoverKey = null;
+            _lastPointer = null;
             _model = value;
             _forwardPublication = null;
             if (value is not null)
@@ -218,13 +226,16 @@ internal sealed class CanvasRendererView : FrameworkElement
         _ = was;
         DrawCards(state);
         DrawEdges(state);
+        DrawChips(state);
         DrawRing(state);
         RefreshAutomationChildren();
         RetireReleasedTombstones(state);
         // The tooltip revalidates on EVERY install: the selection
         // trigger, the truncation set and the content's validity all
         // derive from the state that just landed (ID-9's
-        // becomes-invalid arm).
+        // becomes-invalid arm), and so does what lies under a still
+        // pointer (CB-36).
+        RevalidateHover();
         UpdateTooltip();
         // A reveal owed to a card the previous state lacked is paid by
         // the first install that has it (#1271, review round 2).
@@ -361,6 +372,184 @@ internal sealed class CanvasRendererView : FrameworkElement
         }
     }
 
+    // --- The connections' label chips (CB-36, #1721; CD24, the owner's answers) ---
+
+    /// <summary>A chip's text size at zoom 1 and text size factor 1, the floor it never goes
+    /// under at the lowest zoom, and the chip's height as a multiple of its text size.</summary>
+    private const double ChipFontSize = 10;
+    private const double ChipMinimumFontSize = 4;
+    private const double ChipHeightRatio = 1.6;
+
+    /// <summary>The space between a chip's outline and its text, on each side, in view
+    /// pixels.</summary>
+    private const double ChipPadding = 6;
+
+    /// <summary>The widest a chip grows, in canvas units: a longer label is cut off with an
+    /// ellipsis, and its full text shows on hover.</summary>
+    private const double ChipCap = 200;
+
+    private const double ChipCornerRadius = 3;
+
+    /// <summary>One labelled connection's chip as an install laid it out, in view
+    /// coordinates.</summary>
+    private sealed record ChipLayout(
+        string EdgeId, Rect Box, FormattedText Text, Point TextOrigin, bool CutOff, string FullLabel);
+
+    /// <summary>The chips one install drew, in paint order and by connection id, with the state
+    /// they were laid out from. The connection's bounds, the pointer and the tooltip all read
+    /// these, so what a reader is told and what is drawn come from one layout.</summary>
+    private sealed record ChipSet(
+        CanvasPresentationState? State,
+        System.Collections.Immutable.ImmutableArray<ChipLayout> InOrder,
+        System.Collections.Immutable.ImmutableDictionary<string, ChipLayout> ById)
+    {
+        internal static readonly ChipSet Empty = new(
+            null, [], System.Collections.Immutable.ImmutableDictionary<string, ChipLayout>.Empty);
+    }
+
+    private ChipSet _chipSet = ChipSet.Empty;
+
+    /// <summary>The installed state's chips, or none before that state is drawn.</summary>
+    private ChipSet CurrentChips =>
+        _chipSet.State is { } drawn && ReferenceEquals(drawn, _engine.Current) ? _chipSet : ChipSet.Empty;
+
+    /// <summary>
+    /// One chip for each windowed labelled connection, over the cards, in the scene's edge order,
+    /// so where two chips meet the later one covers the earlier (the owner's answer 2). A chip is
+    /// the board's surface fill with a 1-pixel outline in the connection's own brush (the owner's
+    /// answer 1) and the card text brush, centred on the midpoint of the line the edges layer
+    /// draws.
+    /// </summary>
+    private void DrawChips(CanvasPresentationState state)
+    {
+        using DrawingContext context = _chips.RenderOpen();
+        CanvasPopulation? population = state.Source.Loaded?.Population;
+        if (population is null)
+        {
+            _chipSet = ChipSet.Empty with { State = state };
+            return;
+        }
+        Brush fill = BrushOf("Slate.SurfaceBrush");
+        var outline = new Pen(BrushOf("Slate.Canvas.EdgeBrush"), 1.0);
+        Brush textBrush = BrushOf("Slate.Canvas.TextBrush");
+        double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        System.Collections.Immutable.ImmutableArray<ChipLayout>.Builder inOrder =
+            System.Collections.Immutable.ImmutableArray.CreateBuilder<ChipLayout>();
+        System.Collections.Immutable.ImmutableDictionary<string, ChipLayout>.Builder byId =
+            System.Collections.Immutable.ImmutableDictionary.CreateBuilder<string, ChipLayout>(StringComparer.Ordinal);
+        foreach (CanvasSceneEdge edge in population.SceneEdges)
+        {
+            // A windowed edge is a labelled one with both cards (the topology's rule, DD-2), so a
+            // chip is drawn exactly where the connection is an element on the board.
+            if (!state.Topology.Placements.TryGetValue(CanvasPeerKey.Edge(edge.EdgeId), out CanvasPeerPlacement? placement)
+                || placement.Cell != CanvasPeerCell.Materialized
+                || LayOutChip(state, population, edge, textBrush, pixelsPerDip) is not { } chip)
+            {
+                continue;
+            }
+            // Snap the 1-pixel outline to the device pixels it is centred between.
+            context.PushGuidelineSet(new GuidelineSet(
+                [chip.Box.Left + 0.5, chip.Box.Right + 0.5], [chip.Box.Top + 0.5, chip.Box.Bottom + 0.5]));
+            context.DrawRoundedRectangle(fill, outline, chip.Box, ChipCornerRadius, ChipCornerRadius);
+            context.DrawText(chip.Text, chip.TextOrigin);
+            context.Pop();
+            inOrder.Add(chip);
+            byId[chip.EdgeId] = chip;
+        }
+        _chipSet = new ChipSet(state, inOrder.ToImmutable(), byId.ToImmutable());
+    }
+
+    /// <summary>
+    /// A labelled connection's chip in <paramref name="state"/>: its text on one line at the card
+    /// typeface, 10 times the text size factor times the zoom and never under 4 (contract 34 D11);
+    /// as wide as its text plus padding, up to 200 canvas units, past which the text is cut off
+    /// with an ellipsis; 1.6 times its text size tall; centred on the midpoint of the line between
+    /// the two cards' centres, which for a self-loop is its card's centre. Null for an edge with
+    /// no label text or a missing card.
+    /// </summary>
+    private ChipLayout? LayOutChip(
+        CanvasPresentationState state,
+        CanvasPopulation population,
+        CanvasSceneEdge edge,
+        Brush textBrush,
+        double pixelsPerDip)
+    {
+        if (edge.Label is not { } label
+            || ChipText(label) is not { Length: > 0 } line
+            || !population.SceneByNode.TryGetValue(edge.FromNode, out CanvasSceneNode? from)
+            || !population.SceneByNode.TryGetValue(edge.ToNode, out CanvasSceneNode? to))
+        {
+            return null;
+        }
+        double zoom = state.Viewport.Zoom;
+        CanvasRect fromRect = state.NodeRect(from);
+        CanvasRect toRect = state.NodeRect(to);
+        double midX = (fromRect.X + (fromRect.Width / 2) + toRect.X + (toRect.Width / 2)) / 2;
+        double midY = (fromRect.Y + (fromRect.Height / 2) + toRect.Y + (toRect.Height / 2)) / 2;
+        var centre = new Point((midX * zoom) + state.Viewport.PanX, (midY * zoom) + state.Viewport.PanY);
+        double fontSize = Math.Max(ChipMinimumFontSize, ChipFontSize * TextScaleService.CurrentFactor * zoom);
+        double maxTextWidth = Math.Max(1, (ChipCap * zoom) - (2 * ChipPadding));
+        var typeface = new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var text = new FormattedText(
+            line,
+            System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            fontSize,
+            textBrush,
+            pixelsPerDip);
+        double whole = text.WidthIncludingTrailingWhitespace;
+        bool cutOff = whole > maxTextWidth;
+        if (cutOff)
+        {
+            text.MaxTextWidth = maxTextWidth;
+            text.MaxLineCount = 1;
+            text.Trimming = TextTrimming.CharacterEllipsis;
+        }
+        double width = cutOff ? maxTextWidth + (2 * ChipPadding) : whole + (2 * ChipPadding);
+        double height = fontSize * ChipHeightRatio;
+        var box = new Rect(centre.X - (width / 2), centre.Y - (height / 2), width, height);
+        var origin = new Point(box.X + ChipPadding, box.Y + ((height - text.Height) / 2));
+        return new ChipLayout(edge.EdgeId, box, text, origin, cutOff, label);
+    }
+
+    /// <summary>A label as one line: each line break (CR, LF, CRLF, NEL, the Unicode line and
+    /// paragraph separators) and each tab reads as one space, and the ends are trimmed.</summary>
+    internal static string ChipText(string label)
+    {
+        var line = new System.Text.StringBuilder(label.Length);
+        for (int index = 0; index < label.Length; index++)
+        {
+            char c = label[index];
+            if (c == '\r' && index + 1 < label.Length && label[index + 1] == '\n')
+            {
+                continue;
+            }
+            _ = line.Append(c is '\r' or '\n' or '\u0085' or '\u2028' or '\u2029' or '\t' ? ' ' : c);
+        }
+        return line.ToString().Trim();
+    }
+
+    /// <summary>A labelled connection's chip as the installed state draws it, in view
+    /// coordinates; null when the connection draws no chip there (off the window, unlabelled,
+    /// gone, or a state not yet drawn). Its element's bounds (#1721).</summary>
+    internal Rect? ChipBoxFor(string edgeId) =>
+        CurrentChips.ById.TryGetValue(edgeId, out ChipLayout? chip) ? chip.Box : null;
+
+    /// <summary>The topmost chip at a view point (the last drawn), or null.</summary>
+    private ChipLayout? ChipAt(Point view)
+    {
+        System.Collections.Immutable.ImmutableArray<ChipLayout> chips = CurrentChips.InOrder;
+        for (int index = chips.Length - 1; index >= 0; index--)
+        {
+            if (chips[index].Box.Contains(view))
+            {
+                return chips[index];
+            }
+        }
+        return null;
+    }
+
     /// <summary>D8: the ring is SCREEN-SPACE — minimum two
     /// device-independent pixels at any zoom, never scaled into
     /// sub-pixelhood — and derives from the same installed state as
@@ -462,7 +651,10 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>D9: hit-testing is core's DOCUMENT order — topmost
     /// wins by walking the scene order backwards; groups sit behind
     /// members because core inserts them so. The renderer never
-    /// re-sorts.</summary>
+    /// re-sorts. Cards only: a connection's chip drawn over a card takes
+    /// the pointer's hover and a reader's point, but a click or a
+    /// right-click on it acts on the card under it (CB-36, the owner's
+    /// answer).</summary>
     internal string? HitTest(Point view)
     {
         if (_engine.Current is not { } state
@@ -748,10 +940,10 @@ internal sealed class CanvasRendererView : FrameworkElement
             ? edge
             : null;
 
-    /// <summary>The card an edge peer's Invoke selects and its realization
-    /// falls back to — contract 34 D5's end-style table, total and
-    /// selection-independent: the arrow's head when exactly one end has an
-    /// arrow, else the to-node (document order).</summary>
+    /// <summary>The card an edge peer's Invoke selects — contract 34 D5's
+    /// end-style table, total and selection-independent: the arrow's head
+    /// when exactly one end has an arrow, else the to-node (document
+    /// order).</summary>
     internal static string DesignatedEndpoint(CanvasSceneEdge edge) =>
         edge.FromArrow && !edge.ToArrow ? edge.FromNode : edge.ToNode;
 
@@ -870,7 +1062,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>A realization asked for while the installed scene was not
     /// yet the document's applied one: its pan is computed from the first
     /// installed state that IS, never from the scene being replaced, whose
-    /// geometry or designated endpoint may already be wrong (codex round 4).
+    /// geometry or label may already be wrong (codex round 4).
     /// Dropped when the board moves to another document, and when the key is
     /// gone by the time that state installs.</summary>
     private (CanvasDocumentViewModel Document, CanvasPeerKey Key)? _owedRealization;
@@ -893,11 +1085,12 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>The realize half: retained-commit plus the pan that
     /// brings the peer into the window (D4 — a realization is a
     /// selection made ON this surface for pan purposes: it always
-    /// scrolls into view). Never a zoom: for a labelled edge (#1277) the
-    /// pan contains its union rect when that fits the view at the current
-    /// zoom, and otherwise its designated endpoint's card — the card its
-    /// Invoke selects — which windows the edge too, since D3 materializes
-    /// an edge whose union meets the window.</summary>
+    /// scrolls into view). Never a zoom: for a labelled edge the pan
+    /// contains its endpoints' union together with its chip when that
+    /// fits the view at the current zoom, and otherwise its chip alone
+    /// (CB-36, #1721), which is the edge's element on screen and windows
+    /// the edge too, since the chip's centre lies on the line inside the
+    /// union.</summary>
     internal void Realize(CanvasPeerKey key)
     {
         if (_model is not { } document
@@ -939,10 +1132,10 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>The rect a realization pans to contain — a card's own, or
-    /// an edge's union with its designated endpoint's rect as the fallback
-    /// when the union is larger than the view. Both are the INSTALLED
-    /// state's effective rects, so a realization during a move or resize
-    /// preview targets what the board draws (codex).</summary>
+    /// an edge's union with its chip, and the chip alone as the fallback
+    /// when that is larger than the view. All are the INSTALLED state's
+    /// effective rects, so a realization during a move or resize preview
+    /// targets what the board draws (codex).</summary>
     private sealed record RealizeTarget(
         double X, double Y, double Width, double Height, CanvasRect Fallback)
     {
@@ -950,7 +1143,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             Width * viewport.Zoom <= viewport.ViewWidth && Height * viewport.Zoom <= viewport.ViewHeight;
     }
 
-    private static RealizeTarget? RealizationTarget(
+    private RealizeTarget? RealizationTarget(
         CanvasPresentationState state, CanvasPopulation population, CanvasPeerKey key)
     {
         if (!key.IsEdge)
@@ -969,8 +1162,26 @@ internal sealed class CanvasRendererView : FrameworkElement
         (double x, double y, double width, double height) = CanvasPeerTopology.EdgeUnion(
             state.NodeRect(population.SceneByNode[edge.FromNode]),
             state.NodeRect(population.SceneByNode[edge.ToNode]));
-        return new RealizeTarget(
-            x, y, width, height, state.NodeRect(population.SceneByNode[DesignatedEndpoint(edge)]));
+        // The chip as this state draws it, wherever the window is: an edge being realized is
+        // usually off it, so there is no drawn chip to read. Core names only an edge whose label
+        // has text, so a named edge always has one; the designated endpoint stays the answer if not.
+        if (LayOutChip(state, population, edge, Brushes.Transparent, VisualTreeHelper.GetDpi(this).PixelsPerDip)
+            is not { } chip)
+        {
+            return new RealizeTarget(
+                x, y, width, height, state.NodeRect(population.SceneByNode[DesignatedEndpoint(edge)]));
+        }
+        CanvasViewportState viewport = state.Viewport;
+        var chipRect = new CanvasRect(
+            (chip.Box.X - viewport.PanX) / viewport.Zoom,
+            (chip.Box.Y - viewport.PanY) / viewport.Zoom,
+            chip.Box.Width / viewport.Zoom,
+            chip.Box.Height / viewport.Zoom);
+        double left = Math.Min(x, chipRect.X);
+        double top = Math.Min(y, chipRect.Y);
+        double right = Math.Max(x + width, chipRect.X + chipRect.Width);
+        double bottom = Math.Max(y + height, chipRect.Y + chipRect.Height);
+        return new RealizeTarget(left, top, right - left, bottom - top, chipRect);
     }
 
     private static CanvasViewportState PanToContain(
@@ -1390,70 +1601,94 @@ internal sealed class CanvasRendererView : FrameworkElement
     private readonly System.Windows.Controls.TextBlock _tooltipText;
     private readonly System.Collections.Generic.HashSet<string> _truncated =
         new(StringComparer.Ordinal);
-    private string? _hoverNode;
+    /// <summary>What the pointer is over: a card, or a connection's chip (CB-36). A key, since a
+    /// card and a connection may share an id.</summary>
+    private CanvasPeerKey? _hoverKey;
+
+    /// <summary>The view point the pointer last moved to, while it is on the board: each install
+    /// asks it again, so a card or chip that moves out from under a still pointer stops being
+    /// hovered (CB-36). Null after the pointer leaves, after Esc, and after a rebind.</summary>
+    private Point? _lastPointer;
+
     private bool _pointerOnTooltip;
 
     /// <summary>The three 1.4.13 conditions, as ONE rule (round 4's
     /// matrix): the tooltip is OPEN while any trigger is active — the
     /// SELECTION on a truncated card (the keyboard trigger: cards are
     /// peers, and the arrows' selection is the keyboard's presence) or
-    /// the POINTER on the card or on the tooltip itself (hoverable) —
-    /// and it closes only when every trigger has departed, Esc
-    /// dismisses it through the surface rung (DD-3), or the content
-    /// stops being valid (the card gone, or no longer
-    /// truncated).</summary>
+    /// the POINTER on the card, on a cut-off chip (CB-36, #1721), or on
+    /// the tooltip itself (hoverable) — and it closes only when every
+    /// trigger has departed, Esc dismisses it through the surface rung
+    /// (DD-3), or the content stops being valid (the card or chip gone,
+    /// out of the window, or no longer cut off), whichever trigger holds it.</summary>
     private void UpdateTooltip()
     {
-        string? subject = _tooltipGate.Allows ? TooltipSubject() : null;
-        if (subject is null)
+        CanvasPeerKey? subject = _tooltipGate.Allows ? TooltipSubject() : null;
+        if (subject is not { } key)
         {
             _tooltip.IsOpen = false;
-            _tooltipTextSubject = null;
+            _tooltipSubject = null;
             return;
         }
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || !population.SceneByNode.TryGetValue(subject, out CanvasSceneNode? node))
+        if (key.IsEdge)
         {
-            _tooltip.IsOpen = false;
-            return;
+            ChipLayout chip = CurrentChips.ById[key.Id];
+            _tooltipText.Text = chip.FullLabel;
+            _tooltip.HorizontalOffset = chip.Box.Left;
+            _tooltip.VerticalOffset = chip.Box.Bottom;
         }
-        _tooltipTextSubject = subject;
-        _tooltipText.Text = node.Title;
-        double zoom = _engine.Current.Viewport.Zoom;
-        _tooltip.HorizontalOffset = (node.X * zoom) + _engine.Current.Viewport.PanX;
-        _tooltip.VerticalOffset =
-            ((node.Y + node.Height) * zoom) + _engine.Current.Viewport.PanY;
+        else
+        {
+            CanvasPresentationState state = _engine.Current!;
+            CanvasSceneNode node = state.Source.Loaded!.Population.SceneByNode[key.Id];
+            _tooltipText.Text = node.Title;
+            double zoom = state.Viewport.Zoom;
+            _tooltip.HorizontalOffset = (node.X * zoom) + state.Viewport.PanX;
+            _tooltip.VerticalOffset = ((node.Y + node.Height) * zoom) + state.Viewport.PanY;
+        }
+        _tooltipSubject = key;
         _tooltip.IsOpen = true;
     }
 
-    /// <summary>The active trigger's card, or null: the selection on a
-    /// truncated card wins; else the hovered truncated card; else —
-    /// PERSISTENT — the pointer sitting on the open tooltip keeps its
-    /// current subject alive.</summary>
-    private string? TooltipSubject()
+    /// <summary>The active trigger's subject, or null: the selection on a
+    /// truncated card wins; else what the pointer is over (a cut-off chip,
+    /// drawn over the cards, before a truncated card); else — PERSISTENT —
+    /// the pointer sitting on the open tooltip keeps its current subject
+    /// alive. Every branch passes the same validity check.</summary>
+    private CanvasPeerKey? TooltipSubject()
     {
-        string? selection = _engine.Current?.Selection;
-        if (selection is not null && _truncated.Contains(selection))
+        if (_engine.Current?.Selection is { } selection && IsValidTooltipSubject(CanvasPeerKey.Card(selection)))
         {
-            return selection;
+            return CanvasPeerKey.Card(selection);
         }
-        if (_hoverNode is { } hovered && _truncated.Contains(hovered))
+        if (_hoverKey is { } hovered && IsValidTooltipSubject(hovered))
         {
             return hovered;
         }
-        if (_pointerOnTooltip && _tooltip.IsOpen && _tooltipText.Text.Length > 0)
+        if (_pointerOnTooltip && _tooltip.IsOpen && _tooltipSubject is { } held && IsValidTooltipSubject(held))
         {
-            return _tooltipTextSubject;
+            return held;
         }
         return null;
     }
 
-    private string? _tooltipTextSubject;
+    /// <summary>Whether a tooltip subject is still showable in the installed state: a card drawn
+    /// and truncated in the last install, or a chip drawn and cut off in it (contract 34 ID-9's
+    /// becomes-invalid arm).</summary>
+    private bool IsValidTooltipSubject(CanvasPeerKey key) =>
+        key.IsEdge
+            ? CurrentChips.ById.TryGetValue(key.Id, out ChipLayout? chip) && chip.CutOff
+            : _truncated.Contains(key.Id)
+                && _engine.Current?.Source.Loaded?.Population.SceneByNode.ContainsKey(key.Id) == true;
+
+    private CanvasPeerKey? _tooltipSubject;
     private readonly ShellPopupGate _tooltipGate;
 
     /// <summary>Esc's answer, called by the surface rung (DD-3: the
     /// tooltip is the most transient — first inside the rung, after
-    /// CD-47's panel pre-emption).</summary>
+    /// CD-47's panel pre-emption). It forgets the pointer's place too, so
+    /// a later install does not bring the dismissed tooltip back; the next
+    /// pointer move does.</summary>
     internal bool DismissTooltip()
     {
         if (!_tooltip.IsOpen)
@@ -1461,7 +1696,8 @@ internal sealed class CanvasRendererView : FrameworkElement
             return false;
         }
         _tooltip.IsOpen = false;
-        _hoverNode = null;
+        _hoverKey = null;
+        _lastPointer = null;
         _pointerOnTooltip = false;
         return true;
     }
@@ -1469,19 +1705,42 @@ internal sealed class CanvasRendererView : FrameworkElement
     protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        string? hovered = HitTest(e.GetPosition(this));
-        if (!string.Equals(hovered, _hoverNode, StringComparison.Ordinal))
-        {
-            _hoverNode = hovered;
-            UpdateTooltip();
-        }
+        HoverAt(e.GetPosition(this));
     }
 
     protected override void OnMouseLeave(System.Windows.Input.MouseEventArgs e)
     {
         base.OnMouseLeave(e);
-        _hoverNode = null;
+        _hoverKey = null;
+        _lastPointer = null;
         UpdateTooltip();
+    }
+
+    /// <summary>The pointer at a view point: a chip under it is hovered before the card under
+    /// the chip, since chips are drawn over cards (CB-36).</summary>
+    private void HoverAt(Point view)
+    {
+        _lastPointer = view;
+        CanvasPeerKey? hovered = HoverTargetAt(view);
+        if (hovered != _hoverKey)
+        {
+            _hoverKey = hovered;
+            UpdateTooltip();
+        }
+    }
+
+    private CanvasPeerKey? HoverTargetAt(Point view) =>
+        ChipAt(view) is { } chip
+            ? CanvasPeerKey.Edge(chip.EdgeId)
+            : HitTest(view) is { } node ? CanvasPeerKey.Card(node) : null;
+
+    /// <summary>An install moved the scene: what is under the still pointer is asked again.</summary>
+    private void RevalidateHover()
+    {
+        if (_lastPointer is { } pointer)
+        {
+            _hoverKey = HoverTargetAt(pointer);
+        }
     }
 
     /// <summary>The hover trigger's seams — dispositioned instruments:
@@ -1489,27 +1748,20 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// journey owns the physical half.</summary>
     internal void PointerEnteredForTests(string nodeId)
     {
-        _hoverNode = nodeId;
+        _hoverKey = CanvasPeerKey.Card(nodeId);
         UpdateTooltip();
     }
 
     internal void PointerLeftForTests()
     {
-        _hoverNode = null;
+        _hoverKey = null;
+        _lastPointer = null;
         _pointerOnTooltip = false;
         UpdateTooltip();
     }
 
     /// <summary>The pointer at a view point, as <see cref="OnMouseMove"/> passes it.</summary>
-    internal void PointerMovedForTests(Point view)
-    {
-        string? hovered = HitTest(view);
-        if (!string.Equals(hovered, _hoverNode, StringComparison.Ordinal))
-        {
-            _hoverNode = hovered;
-            UpdateTooltip();
-        }
-    }
+    internal void PointerMovedForTests(Point view) => HoverAt(view);
 
     /// <summary>The pointer on or off the open tooltip, as its border's enter and leave set it.</summary>
     internal void PointerOnTooltipForTests(bool on)
@@ -1522,8 +1774,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     internal Point TooltipOffsetForTests => new(_tooltip.HorizontalOffset, _tooltip.VerticalOffset);
 
     /// <summary>The chips layer's drawing as the last install painted it, one child per chip in
-    /// paint order (#1721). There is no chips layer before CB-36's chips.</summary>
-    internal Drawing? ChipsDrawingForTests => null;
+    /// paint order (#1721).</summary>
+    internal Drawing? ChipsDrawingForTests => _chips.Drawing;
 
     internal bool TooltipIsOpenForTests => _tooltip.IsOpen;
 

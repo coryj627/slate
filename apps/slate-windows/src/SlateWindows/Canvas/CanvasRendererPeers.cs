@@ -58,17 +58,17 @@ internal sealed class CanvasRendererAutomationPeer :
             ? _view.MaterializedPeers()
             : [];
 
-    /// <summary>The peer under a screen point: a card before any edge, and
-    /// only inside the board. A labelled edge's rectangle is the union of its
-    /// endpoints' (#1277), so the platform's last-child-first walk would
-    /// answer the edge for every point on an endpoint card; and peers
-    /// materialize up to a view beyond the board, so an unclipped walk would
-    /// answer a card or an edge for a point over the sidebar or the editor
-    /// beside it. Each child is tested against its rectangle clipped to the
-    /// board's; an edge answers only a point on the board no card covers.
-    /// A point off the board — or any point while the board is hidden — is
-    /// not the board's at all: null, so the parent's walk goes on to the
-    /// sibling that is there (codex round 5).</summary>
+    /// <summary>The peer under a screen point, as the board paints it: a
+    /// labelled edge's chip before any card, since chips are drawn over the
+    /// cards (#1721), the later chip first; then the topmost card; and only
+    /// inside the board. An edge's rectangle is its chip, so a point on its
+    /// bare line, or on an endpoint card beside the chip, is not the edge's.
+    /// Peers materialize up to a view beyond the board, so an unclipped walk
+    /// would answer a card or an edge for a point over the sidebar or the
+    /// editor beside it: each child is tested against its rectangle clipped
+    /// to the board's. A point off the board — or any point while the board
+    /// is hidden — is not the board's at all: null, so the parent's walk goes
+    /// on to the sibling that is there (codex round 5).</summary>
     protected override AutomationPeer GetPeerFromPointCore(System.Windows.Point point)
     {
         System.Windows.Rect board = GetBoundingRectangle();
@@ -77,8 +77,8 @@ internal sealed class CanvasRendererAutomationPeer :
             return null!;
         }
         System.Collections.Generic.List<AutomationPeer> children = GetChildren() ?? [];
-        foreach (AutomationPeer child in Enumerable.Reverse(children.OfType<CanvasCardAutomationPeer>())
-            .Concat<AutomationPeer>(Enumerable.Reverse(children.OfType<CanvasEdgeAutomationPeer>())))
+        foreach (AutomationPeer child in Enumerable.Reverse(children.OfType<CanvasEdgeAutomationPeer>())
+            .Concat<AutomationPeer>(Enumerable.Reverse(children.OfType<CanvasCardAutomationPeer>())))
         {
             System.Windows.Rect visible = child.GetBoundingRectangle();
             visible.Intersect(board);
@@ -500,6 +500,15 @@ internal sealed class CanvasEdgeAutomationPeer :
             Document.AppliedPublication!.Loaded!.Population, Key.Id)!;
         View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(applied), announceWhenSeated: true);
     }
+
+    /// <summary>The chip the board draws for this edge (#1721, CD24), in screen coordinates, as
+    /// a card reports its drawn rectangle; empty off the window. A windowed edge whose chip lies
+    /// past the board's edge reports it there and reads on screen, as a card in the window's
+    /// margin does.</summary>
+    protected override System.Windows.Rect GetBoundingRectangleCore() =>
+        Materialized && View.ChipBoxFor(Key.Id) is { } chip
+            ? View.ViewToScreen(chip)
+            : System.Windows.Rect.Empty;
 
     protected override string GetHelpTextCore() => string.Empty;
 

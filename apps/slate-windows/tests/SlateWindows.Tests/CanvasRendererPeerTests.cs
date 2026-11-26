@@ -145,9 +145,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
         CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
         Assert.Equal(before.Zoom, after.Zoom);
         DrawnChip chip = Assert.Single(Chips(board.Renderer));
-        Assert.True(
-            chip.Box.Left >= 0 && chip.Box.Top >= 0 && chip.Box.Right <= after.ViewWidth && chip.Box.Bottom <= after.ViewHeight,
-            $"the realized edge's chip sits at {chip.Box}, outside the {after.ViewWidth}×{after.ViewHeight} view (D4).");
+        AssertBoxInView(after, chip.Box, "the realized edge's chip");
         Assert.Same(edge, board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
         Assert.False(edge.IsOffscreen());
 
@@ -181,9 +179,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
         CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
         DrawnChip chip = Assert.Single(Chips(board.Renderer));
         Assert.True(chip.Box.Width > 60, $"premise: the chip ({chip.Box.Width} wide) is not wider than its cards.");
-        Assert.True(
-            chip.Box.Left >= 0 && chip.Box.Top >= 0 && chip.Box.Right <= after.ViewWidth && chip.Box.Bottom <= after.ViewHeight,
-            $"the realized edge's chip sits at {chip.Box}, outside the {after.ViewWidth}×{after.ViewHeight} view.");
+        AssertBoxInView(after, chip.Box, "the realized edge's chip");
         AssertInView(after, 20_000, 0, 60, 240);
     });
 
@@ -642,10 +638,13 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
     /// <summary>D3/D4 between the document's apply and the board's install: a
     /// realization asked for in that moment waits for the scene the document
-    /// applied and pans by ITS geometry — here a direction change that moved
-    /// the designated endpoint of an edge longer than the view — and a search
-    /// for an edge the document already deleted hands nothing back and moves
-    /// nothing (codex round 4).</summary>
+    /// applied and pans by ITS geometry — here a relabel that widens the chip
+    /// of an edge longer than the view, so a pan by the installed chip would
+    /// leave the applied one hanging past the view's edge (plan 47 CB-36: the
+    /// realization pans to the chip; before it, a direction change moved the
+    /// designated endpoint it panned to) — and a search for an edge the
+    /// document already deleted hands nothing back and moves nothing (codex
+    /// round 4).</summary>
     [Fact]
     public void ARealizationWaitsForTheSceneTheDocumentApplied() => RunSta(() =>
     {
@@ -658,15 +657,14 @@ public sealed class CanvasRendererPeerTests : IDisposable
         CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
         var realize = Assert.IsAssignableFrom<IVirtualizedItemProvider>(edge.GetPattern(PatternInterface.VirtualizedItem));
         const string Gone = "Text card \"Home\" connects to Text card \"Left\", labelled \"gone\"";
+        const string Wide = "a label far too long to fit one chip of two hundred canvas units at all";
         CanvasViewportState before = board.Renderer.Engine.CommittedViewport;
 
-        // The designated endpoint was Left (the arrow's head); the direction
-        // change makes it Right, the from-node.
-        _ = board.Document.CanvasEditConnection("e1", "spans", CanvasConnectionDirection.FromTarget);
+        _ = board.Document.CanvasEditConnection("e1", Wide, CanvasConnectionDirection.ToTarget);
         _ = board.Document.CanvasDeleteConnection("e2");
         CanvasPopulation installed = board.Renderer.Engine.Current!.Source.Loaded!.Population;
         Assert.True(
-            !installed.SceneByEdge["e1"].FromArrow && installed.SceneByEdge.ContainsKey("e2"),
+            installed.SceneByEdge["e1"].Label == "spans" && installed.SceneByEdge.ContainsKey("e2"),
             "premise: the board has not installed the document's edits yet.");
 
         Assert.Null(((IItemContainerProvider)board.Peer).FindItemByProperty(
@@ -678,7 +676,9 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
         CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
         Assert.Equal(before.Zoom, after.Zoom);
-        AssertInView(after, 120_000, 40, 200, 100);
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+        Assert.True(chip.Text.EndsWith('…'), $"premise: the drawn chip \"{chip.Text}\" is not the applied label's.");
+        AssertBoxInView(after, chip.Box, "the realized edge's applied chip");
         Assert.False(edge.IsOffscreen());
     });
 
@@ -1314,13 +1314,17 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
         List<DrawnChip> chips = Chips(board.Renderer);
         Assert.Equal(new[] { "near", "margin" }, chips.Select(chip => chip.Text));
+        // The board's visual children, bottom to top: the lines, the cards, the chips, the ring. A
+        // drawing visual hands out a new copy of its drawing at each read, so each layer is known
+        // by what it holds.
         Assert.Equal(4, System.Windows.Media.VisualTreeHelper.GetChildrenCount(board.Renderer));
-        Assert.Same(
-            board.Renderer.ChipsDrawingForTests,
-            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 2)).Drawing);
-        Assert.Same(
-            board.Renderer.CardsDrawingForTests,
-            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 1)).Drawing);
+        Assert.Equal(
+            board.Renderer.ChipsDrawingForTests!.Bounds,
+            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 2)).Drawing.Bounds);
+        Assert.Equal(
+            board.Renderer.CardsDrawingForTests!.Bounds,
+            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 1)).Drawing.Bounds);
+        Assert.NotEqual(board.Renderer.ChipsDrawingForTests!.Bounds, board.Renderer.CardsDrawingForTests!.Bounds);
         Rect visible = new(0, 0, board.Renderer.ActualWidth, board.Renderer.ActualHeight);
         Assert.False(visible.Contains(chips[1].Box), "premise: the margin edge's chip lies inside the board.");
         // A windowed edge whose chip lies past the board is a child that reads on screen, as a card
@@ -1567,6 +1571,18 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 && top + (height * viewport.Zoom) <= viewport.ViewHeight,
             $"the rect ({x}, {y}, {width}×{height}) sits at view ({left}, {top}) in the "
             + $"{viewport.ViewWidth}×{viewport.ViewHeight} view at zoom {viewport.Zoom}.");
+    }
+
+    /// <summary>A drawn box, in view coordinates, wholly inside the view. The pan that brings a
+    /// box in is the smallest one, which leaves it flush with the view's edge, so the edge is
+    /// allowed a hundredth of a pixel of rounding.</summary>
+    private static void AssertBoxInView(CanvasViewportState viewport, Rect box, string what)
+    {
+        const double Rounding = 0.01;
+        Assert.True(
+            box.Left >= -Rounding && box.Top >= -Rounding
+                && box.Right <= viewport.ViewWidth + Rounding && box.Bottom <= viewport.ViewHeight + Rounding,
+            $"{what} sits at {box}, outside the {viewport.ViewWidth}×{viewport.ViewHeight} view (D4).");
     }
 
     private Board Open(string path, string? theme = null)

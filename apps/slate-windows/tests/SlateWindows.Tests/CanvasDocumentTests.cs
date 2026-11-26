@@ -5492,7 +5492,11 @@ public sealed class CanvasDocumentTests : IDisposable
         host.UpdateLayout();
         PumpUntil(() => surface.VisualForTests.Engine.Current is { Source.Loaded: not null } state && state.Viewport.ViewWidth > 0);
         surface.VisualForTests.Engine.CommitViewport(view => view.WithZoom(1, 0, 0).PannedTo(0, 0));
-        PumpUntil(() => surface.VisualForTests.Engine.Current!.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport));
+        // The board's landing seats a card, and a seated truncated card shows its title by the
+        // keyboard trigger, which outranks the pointer: the pointer facts start with no seat.
+        document.SeatSelectionSilently(null);
+        PumpUntil(() => surface.VisualForTests.Engine.Current is { Selection: null } state
+            && state.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport));
         return (document, surface, host);
     }
 
