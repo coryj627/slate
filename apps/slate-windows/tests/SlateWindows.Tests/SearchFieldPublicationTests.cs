@@ -148,7 +148,8 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("Quick Open's publications left layout pending as they ended");
     });
 
-    /// <summary>Search's every publication: the posted Searching state and the results it
+    /// <summary>Search's every publication: the open itself (read strictly), the posted
+    /// Searching state and the results it
     /// publishes, from Idle and over results, zero results, an error, the idle transition an
     /// emptied field ends in, and Escape's close through the window's key route.</summary>
     [Fact]
@@ -173,7 +174,11 @@ public sealed class SearchFieldPublicationTests
                 idle |= overlay.State == SearchOverlayState.Idle;
             }
         };
-        search.Open();
+        Clean(host);
+        overlay.Open();
+        findings.Expect(overlay.IsOpen, "premise: search did not open");
+        findings.NothingPending("the open's own operation", surface);
+        host.Settle();
         Assert.True(field.Focus(), "premise: the field refused the keys");
         host.Settle();
 
@@ -267,7 +272,8 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("Search's scope changes left layout pending as they ended");
     });
 
-    /// <summary>Search's Clear recent searches, as its click runs it, from the keys on the
+    /// <summary>Search's open with remembered searches, which shows them in its own operation,
+    /// and then its Clear recent searches, as its click runs it, from the keys on the
     /// button: the field takes the keys, the remembered searches are forgotten, and the idle
     /// panel swaps the recents for the hint, all in the click's operation. Read strictly: the
     /// field took the keys before the publication was laid out.</summary>
@@ -282,12 +288,16 @@ public sealed class SearchFieldPublicationTests
             ?? throw new InvalidOperationException("SearchOverlayViewModel._source is gone"));
         source.RecordRecent("alpha");
         source.RecordRecent("beta");
-        search.Open();
+        var findings = new Findings();
+        Clean(host);
+        overlay.Open();
         Assert.True(overlay.ShowsRecents, "premise: the idle overlay does not show the remembered searches");
+        findings.NothingPending("the open's own operation, with its remembered searches", host.Shell.SearchOverlay);
+        host.Settle();
+        host.Settle();
         Button clear = Descendants<Button>(host.Shell).Single(button => AutomationProperties.GetAutomationId(button) == "SearchOverlayClearRecents");
         Assert.True(clear.Focus(), "premise: Clear recent searches refused the keys");
         host.Settle();
-        var findings = new Findings();
 
         Clean(host);
         clear.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, clear));
@@ -1020,49 +1030,128 @@ public sealed class SearchFieldPublicationTests
         }
     });
 
-    /// <summary>At twice the text size, in a short window, the picker sheets outgrow it and
-    /// scroll in their own outer viewer. Showing a row of the sheet's list (a keystroke whose
-    /// publication chooses the selection) scrolls only the list: the sheet's outer viewer holds
-    /// still. The size comes from the shell's type ramp (TextScaleTests' seam), never the
-    /// system's setting. Move To's sheet is not held here: its arrows scroll the sheet's outer
-    /// viewer to the selected row on main as on this branch (recorded, for the owner).</summary>
+    /// <summary>At twice the text size, in a short window, the Move To and picker sheets
+    /// outgrow it and scroll in their own outer viewer. With the keys in the filter, a
+    /// keystroke whose publication chooses the selection shows it by scrolling the list only:
+    /// the sheet's outer viewer holds still. (Move To's arrows still let the sheet follow the
+    /// selection, as on main.) The size comes from the shell's type ramp (TextScaleTests'
+    /// seam), never the system's setting.</summary>
     [Theory]
+    [InlineData("Move To")]
     [InlineData("Card picker")]
     [InlineData("File picker")]
     public void TheSheetHoldsStillWhileItsListShowsARowAtTwiceTheTextSize(string member) => Sta(() =>
     {
-        using var host = new ShownShell([("board.canvas", Board(60)), .. Topics(60)]);
+        using var host = new ShownShell(member == "Move To" ? NestedFolders(60) : [("board.canvas", Board(60)), .. Topics(60)]);
         WindowActivation.Activate(host.Shell);
         host.Shell.Height = 480;
         TypeRamp.Apply(host.Shell.Resources.MergedDictionaries.First(layer => layer.Contains(TypeRamp.Body.SizeKey)), 2);
         host.Settle();
-        CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
-        (ICanvasPickerSheet sheet, ListBox list) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
-        TextBox field = host.Shell.CanvasCardPickerFilterBox;
-        string[] queries = member == "Card picker" ? ["item 1", string.Empty, "item 2", string.Empty] : ["topic-1", string.Empty, "topic-2", string.Empty];
-        Assert.True(field.Focus(), "premise: the field refused the keys");
-        host.Settle();
-        host.Settle();
-        DependencyObject? at = VisualTreeHelper.GetParent(list);
-        while (at is not null and not ScrollViewer)
+        var cleanup = new Stack<IDisposable>();
+        try
         {
-            at = VisualTreeHelper.GetParent(at);
-        }
+            TextBox field;
+            ScrollViewer outer;
+            string[] queries;
+            Func<string?> selection;
+            if (member == "Move To")
+            {
+                var files = new FilesSidebar(host);
+                cleanup.Push(files);
+                MoveToPickerViewModel picker = files.OpenMoveTo();
+                SettleUntil(host, () => picker.State == MoveToLoadState.Ready, "Move To never finished loading");
+                field = host.Shell.MoveToFilterTextBox;
+                outer = Assert.IsType<ScrollViewer>(host.Shell.MoveToOverlay.Child);
+                queries = ["dir-3", string.Empty, "dir-5", string.Empty];
+                selection = () => picker.SelectedRow?.Destination;
+            }
+            else
+            {
+                CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
+                (ICanvasPickerSheet sheet, _) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
+                field = host.Shell.CanvasCardPickerFilterBox;
+                outer = Assert.IsType<ScrollViewer>(host.Shell.CanvasCardPickerOverlay.Child);
+                queries = member == "Card picker" ? ["item 1", string.Empty, "item 2", string.Empty] : ["topic-1", string.Empty, "topic-2", string.Empty];
+                selection = () => SheetSelection(sheet)?.ToString();
+            }
 
-        var outer = Assert.IsType<ScrollViewer>(at);
-        Assert.True(outer.ScrollableHeight > 0, $"premise: the {member} sheet does not outgrow the window at twice the text size");
-        double offset = outer.VerticalOffset;
-        var findings = new Findings();
-        foreach (string query in queries)
-        {
-            field.Text = query;
-            string label = $"typed '{query}' (the picker selects {SheetSelection(sheet)})";
-            findings.Expect(outer.VerticalOffset == offset, $"{label}: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset} (of {outer.ScrollableHeight})");
+            Assert.True(field.Focus(), "premise: the field refused the keys");
             host.Settle();
-            findings.Expect(outer.VerticalOffset == offset, $"{label}, after everything queued: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset}");
+            host.Settle();
+            Assert.True(outer.ScrollableHeight > 0, $"premise: the {member} sheet does not outgrow the window at twice the text size");
+            double offset = outer.VerticalOffset;
+            var findings = new Findings();
+            foreach (string query in queries)
+            {
+                field.Text = query;
+                string label = $"typed '{query}' (it selects {selection()})";
+                findings.Expect(outer.VerticalOffset == offset, $"{label}: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset} (of {outer.ScrollableHeight})");
+                host.Settle();
+                findings.Expect(outer.VerticalOffset == offset, $"{label}, after everything queued: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset}");
+            }
+
+            findings.AssertNone($"The {member} sheet moved while its list showed a row at twice the text size");
+        }
+        finally
+        {
+            while (cleanup.TryPop(out IDisposable? disposable))
+            {
+                disposable.Dispose();
+            }
+        }
+    });
+
+    /// <summary>At twice the text size, in a short window, Move To's sheet outgrows the window
+    /// and scrolls in its own outer viewer. Opening it and landing its folder pages keeps that
+    /// viewer at its top, where the field that takes the keys is: a page that takes the
+    /// selection from none to the first row lays the list out and shows nothing, since the
+    /// list is at its top anyway. Main keeps the sheet at its top.</summary>
+    [Fact]
+    public void MoveToHoldsItsSheetStillAsItOpensAtTwiceTheTextSize() => Sta(() =>
+    {
+        using var host = new ShownShell(NestedFolders(60));
+        WindowActivation.Activate(host.Shell);
+        host.Shell.Height = 480;
+        TypeRamp.Apply(host.Shell.Resources.MergedDictionaries.First(layer => layer.Contains(TypeRamp.Body.SizeKey)), 2);
+        host.Settle();
+        using var files = new FilesSidebar(host);
+        var findings = new Findings();
+        var outer = Assert.IsType<ScrollViewer>(host.Shell.MoveToOverlay.Child);
+
+        Clean(host);
+        MoveToPickerViewModel picker = files.OpenMoveTo();
+        findings.Expect(outer.VerticalOffset == 0, $"the opening's own operation: the sheet's outer viewer is at {outer.VerticalOffset}");
+        bool rows = false;
+        picker.PropertyChanged += (_, e) => rows |= e.PropertyName == nameof(MoveToPickerViewModel.Rows);
+        int pages = 0;
+        void Completed(object? sender, DispatcherHookEventArgs e)
+        {
+            if (rows)
+            {
+                rows = false;
+                pages++;
+                findings.Expect(outer.VerticalOffset == 0, $"folder page {pages}: the sheet's outer viewer is at {outer.VerticalOffset} as the page ends");
+            }
         }
 
-        findings.AssertNone($"The {member} sheet moved while its list showed a row at twice the text size");
+        DispatcherHooks hooks = Dispatcher.CurrentDispatcher.Hooks;
+        hooks.OperationCompleted += Completed;
+        try
+        {
+            Assert.True(PumpedDispatcher.PumpUntil(() => picker.State == MoveToLoadState.Ready, TimeSpan.FromSeconds(30)), "Move To never finished loading");
+        }
+        finally
+        {
+            hooks.OperationCompleted -= Completed;
+        }
+
+        host.Settle();
+        host.Settle();
+        Assert.True(outer.ScrollableHeight > 0, "premise: the Move To sheet does not outgrow the window at twice the text size");
+        findings.Expect(pages >= 3, $"premise: only {pages} folder pages landed");
+        findings.Expect(outer.VerticalOffset == 0, $"after everything queued: the sheet's outer viewer is at {outer.VerticalOffset}");
+
+        findings.AssertNone("Move To's sheet moved as it opened and its folders landed");
     });
 
     // ------------------------------------------------------------------ fixtures

@@ -101,8 +101,10 @@ public sealed class SearchFieldCensus
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToKeepsTheViewWhileFoldersLoad)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToKeepsTheKeysOnARowWhileFoldersLoad)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToHoldsItsSheetStillAsItOpensAtTwiceTheTextSize)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.TheSheetHoldsStillWhileItsListShowsARowAtTwiceTheTextSize)}",
         ], Member: "MoveTo"),
         new("CanvasCardPickerFilter", "CanvasCardPickerRows",
         [
