@@ -120,8 +120,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// thing each operation the pipeline posts does: the Searching state or the idle
     /// transition a debounced keystroke starts, and the results, zero results or error a
     /// search publishes; and as the last thing <see cref="SetScope"/> does, whose scope
-    /// change shows or hides the chip and can clear the rows. The view lays the list out
-    /// there, before TSF can be granted its lock
+    /// change shows or hides the chip and can clear the rows, <see cref="ClearRecents"/>, and
+    /// the reader's <see cref="Close"/>. The view lays the list out there, before TSF can be
+    /// granted its lock
     /// (<see cref="PublishedList"/>).</summary>
     internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 
@@ -346,13 +347,31 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// </summary>
     public void Close()
     {
-        if (!IsOpen)
+        if (!CloseAndNotify())
         {
             return;
         }
 
+        // CB-35: the reader's close (Escape, the Close button, the chord's toggle), laid out
+        // at its end as the palette's Dismiss lays out its collapse. The focus restore the
+        // dismissal queues runs later, at Input.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
+    }
+
+    /// <summary>The close itself, and its dismissal notification; false when the overlay was
+    /// not open. A supersession and a vault transition close through this alone: they run
+    /// inside another surface's opening or the vault's teardown, ahead of its own landing, so
+    /// they settle nothing here (CB-35).</summary>
+    private bool CloseAndNotify()
+    {
+        if (!IsOpen)
+        {
+            return false;
+        }
+
         CloseCore();
         Dismissed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>The teardown half of <see cref="Close"/> without the
@@ -396,7 +415,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         SearchScope preserved = Scope;
-        Close();
+        _ = CloseAndNotify();
         Scope = preserved;
     }
 
@@ -415,7 +434,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// </summary>
     public void ResetForVaultTransition()
     {
-        Close();
+        _ = CloseAndNotify();
         Scope = new SearchScope.Vault();
         Query = string.Empty;
     }
@@ -645,6 +664,8 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     {
         _source.ClearRecents();
         Recents = _source.LoadRecents();
+        // CB-35: the recents section gives way to the hint; laid out last.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     public void Dispose()

@@ -332,17 +332,20 @@ public partial class MainWindow
 
     private void SearchOverlayClearRecents_Click(object sender, RoutedEventArgs e)
     {
-        _viewModel.Search.ClearRecents();
         // The recents section may collapse under the focused button;
         // the field is the surviving focus target (mac's clear button
-        // sets focus = .field for the same reason).
+        // sets focus = .field for the same reason). CB-35: the field
+        // takes the keys first, as SidebarFilterClear_Click gives them,
+        // so the clear's own publication is the last thing laid out.
         SearchOverlaySearchTextBox.Focus();
+        _viewModel.Search.ClearRecents();
     }
 
     private void SearchOverlayClearTagScope_Click(object sender, RoutedEventArgs e)
     {
-        _viewModel.Search.ClearScope();
+        // CB-35: the keys first, then the scope change, which lays out last.
         SearchOverlaySearchTextBox.Focus();
+        _viewModel.Search.ClearScope();
     }
 
     /// <summary>
