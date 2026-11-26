@@ -5722,6 +5722,44 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>Plan 47 CB-36 (Codex round 1): between a rebind and the other canvas's first
+    /// install the board still holds the canvas it left. The pointer moving onto that canvas's
+    /// chip then shows nothing; once the other canvas installs, the chip now under the pointer
+    /// shows its own label.</summary>
+    [Fact]
+    public void APointerOnThePreviousCanvassChipDuringARebindShowsNothing() => RunSta(() =>
+    {
+        const string Elsewhere = LongLabel + " on another canvas";
+        WriteChipCanvas("chipleft.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        WriteChipCanvas("chipnext.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", Elsewhere)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipleft.canvas");
+        CanvasDocumentViewModel other = NewDocument("chipnext.canvas");
+        other.Load();
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+
+            surface.Model = other;
+            Assert.True(
+                ReferenceEquals(surface.VisualForTests.InstalledDocument, document),
+                "premise: the other canvas installed before the pointer moved.");
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+            Assert.False(
+                surface.VisualForTests.TooltipIsOpenForTests,
+                $"the pointer showed \"{surface.VisualForTests.TooltipTextForTests}\" from the canvas the board left.");
+
+            host.UpdateLayout();
+            PumpUntil(() => ReferenceEquals(surface.VisualForTests.InstalledDocument, other)
+                && surface.VisualForTests.IsVisible
+                && ChipBoxes(surface.VisualForTests).Count == 1);
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "the other canvas's chip under the pointer showed nothing.");
+            Assert.Equal(Elsewhere, surface.VisualForTests.TooltipTextForTests);
+        }
+        other.Shutdown();
+        document.Shutdown();
+    });
+
     /// <summary>Plan 47 CB-36, found and fixed here (contract 34 D11 and ID-9): with the pointer
     /// resting on a truncated card's tooltip, a title edited until it fits closes the tooltip at the
     /// install. The pointer-on-tooltip branch used to return its old subject unchecked.</summary>

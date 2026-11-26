@@ -1689,12 +1689,13 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     /// <summary>Whether a tooltip subject is still showable in the installed state: a card drawn
     /// and truncated in the last install, or a chip drawn and cut off in it (contract 34 ID-9's
-    /// becomes-invalid arm).</summary>
+    /// becomes-invalid arm). Nothing is, while the installed state is not the bound document's:
+    /// after a rebind the board still holds the canvas it left until the other one installs.</summary>
     private bool IsValidTooltipSubject(CanvasPeerKey key) =>
-        key.IsEdge
+        BoundPopulation is { } population
+        && (key.IsEdge
             ? CurrentChips.ById.TryGetValue(key.Id, out ChipLayout? chip) && chip.CutOff
-            : _truncated.Contains(key.Id)
-                && _engine.Current?.Source.Loaded?.Population.SceneByNode.ContainsKey(key.Id) == true;
+            : _truncated.Contains(key.Id) && population.SceneByNode.ContainsKey(key.Id));
 
     private CanvasPeerKey? _tooltipSubject;
     private readonly ShellPopupGate _tooltipGate;
