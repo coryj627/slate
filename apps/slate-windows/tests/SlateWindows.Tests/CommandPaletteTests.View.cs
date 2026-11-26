@@ -47,57 +47,29 @@ public sealed partial class CommandPaletteTests
         using var host = new ShippedResultsList(commands);
         host.Palette.Open();
         host.Settle();
-        Assert.Empty(PendingLayout(host.List));
+        Assert.Empty(PendingLayout.Under(host.List));
 
         // A selection far below the fold, which its query keeps: its scroll comes after the
         // rows, and is the last thing the publication changes.
         host.Palette.SelectLast();
-        Assert.Empty(PendingLayout(host.List));
+        Assert.Empty(PendingLayout.Under(host.List));
         host.Palette.Query = "Row";
 
         // With the inline lane the publication has run, and nothing has been pumped.
         Assert.Equal("slate.view.row189", host.Palette.SelectedId);
-        Assert.Empty(PendingLayout(host.List));
+        Assert.Empty(PendingLayout.Under(host.List));
 
         // The scroll has happened: one the list had to defer leaves the row unrealized, and
         // would dirty all this again later.
         Assert.NotNull(host.List.ItemContainerGenerator.ContainerFromItem(host.Palette.SelectedRow));
         PumpedDispatcher.Drain();
-        Assert.Empty(PendingLayout(host.List));
+        Assert.Empty(PendingLayout.Under(host.List));
 
         // A query nothing matches ends with no selection, so its rows are all it changes.
         host.Palette.Query = "no such row";
         Assert.Null(host.Palette.SelectedRow);
-        Assert.Empty(PendingLayout(host.List));
+        Assert.Empty(PendingLayout.Under(host.List));
     });
-
-    /// <summary>Everything in the list still waiting on a layout pass: a viewer's arrangement
-    /// can be pending while the list's own flags read valid.</summary>
-    private static string[] PendingLayout(DependencyObject root)
-    {
-        var pending = new List<string>();
-        void Walk(DependencyObject parent)
-        {
-            // Nothing lays out what's collapsed, so it never reads valid.
-            if (parent is UIElement { Visibility: not Visibility.Visible })
-            {
-                return;
-            }
-
-            if (parent is UIElement element && !(element.IsMeasureValid && element.IsArrangeValid))
-            {
-                pending.Add(element.GetType().Name);
-            }
-
-            for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
-            {
-                Walk(System.Windows.Media.VisualTreeHelper.GetChild(parent, index));
-            }
-        }
-
-        Walk(root);
-        return pending.ToArray();
-    }
 
     [Fact]
     public void TheShippedListAnnouncesOnlyTheViewModelsSelection() => RunSta(() =>
