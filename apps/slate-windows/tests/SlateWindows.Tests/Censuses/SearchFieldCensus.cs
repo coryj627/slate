@@ -6,12 +6,20 @@
 // field that holds the keys while that same list republishes in the background: TSF can be
 // granted its lock between dispatcher operations, and a list publication that leaves layout
 // pending then has its layout and automation events run inside the lock. A member names its
-// list and the facts that hold its publications to the palette's flush, or the issue that will
-// (CB-35b, #2070, undated, so a slipped CB-35b does not turn main red). Every other field is
-// exempt, with its reason. The census is keyed by type, not by tag or name: every element of a
-// TextBoxBase type in the shell's XAML, every one built in its code, and every control whose
-// template hosts one as a part (a DatePicker's DatePickerTextBox, an editable ComboBox's
-// PART_EditableTextBox). It reads sources only, binding them through ShellCompilation.
+// list and the facts that hold its publications to the palette's flush, each a fact that
+// exercises that member, or the issue that will (CB-35b, #2070, undated, so a slipped CB-35b
+// does not turn main red). Every other field is exempt, with its reason.
+//
+// The census is keyed by type, not by tag or name. A site is:
+// - every element of a TextBoxBase type in the shell's XAML, its type resolved through the
+//   XAML namespace's mapping (a clr-namespace, or a URI the referenced assemblies map with
+//   XmlnsDefinition), and every one built in its code;
+// - every control whose template hosts one as a part: a DatePicker's DatePickerTextBox, and a
+//   ComboBox's PART_EditableTextBox wherever IsEditable can be other than false (its attribute,
+//   a style's setter, or code that sets or binds it);
+// - every DataGridTextColumn whose editing box is WPF's own TextBox (one that does not build
+//   its own in GenerateEditingElement, where the box it builds is the site instead).
+// It reads sources only, binding them through ShellCompilation.
 
 using System.Reflection;
 using System.Xml;
@@ -19,14 +27,23 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "search-fields")]
 public sealed class SearchFieldCensus
 {
-    private const string Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
     private const string Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+    /// <summary>The XAML namespaces whose elements are not the UI's: the language's own, the
+    /// markup-compatibility one and the designer's.</summary>
+    private static readonly string[] LanguageNamespaces =
+    [
+        Xaml,
+        "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        "http://schemas.microsoft.com/expression/blend/2008",
+    ];
 
     /// <summary>CB-35b's issue: the grids and the canvas tree.</summary>
     private const string Cb35b = "#2070";
@@ -35,8 +52,15 @@ public sealed class SearchFieldCensus
 
     /// <summary>One text field: its site key, and either the list it filters or selects with
     /// the facts that hold that list's publications (or the issue that will), or the reason it
-    /// is no member.</summary>
-    internal sealed record Row(string Site, string? List = null, string[]? Facts = null, string? Deferred = null, string? Exempt = null);
+    /// is no member. A held member names the word its facts are named by
+    /// (<see cref="Exercises"/>).</summary>
+    internal sealed record Row(
+        string Site,
+        string? List = null,
+        string[]? Facts = null,
+        string? Deferred = null,
+        string? Exempt = null,
+        string? Member = null);
 
     internal static readonly Row[] Table =
     [
@@ -45,39 +69,49 @@ public sealed class SearchFieldCensus
         [
             $"{nameof(CommandPaletteTests)}.{nameof(CommandPaletteTests.TheRowsAreLaidOutInTheOperationThatPublishesThem)}",
             $"{nameof(CommandPaletteTests)}.{nameof(CommandPaletteTests.ALetterTypedInTheListMovesNothing)}",
-        ]),
+        ], Member: "CommandPalette"),
         new("QuickSwitcherSearch", "QuickSwitcherResults",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenLeavesNothingPendingWhenItPublishes)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenKeepsAReRankedSelectionInView)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenKeepsTheViewThroughASilentReRank)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
-        ]),
+            $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+        ], Member: "QuickOpen"),
         new("SearchOverlaySearch", "SearchOverlayResults",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchLeavesNothingPendingWhenItPublishes)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchsScopeChangeLeavesNothingPending)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.SearchsClearRecentsLeavesNothingPending)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchsFirstResultsLeaveNoScrollDeferred)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
-        ]),
+            $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+        ], Member: "Search"),
         new("SidebarFilter", "SidebarFilterResults",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFilterLeavesNothingPendingWhenItPublishes)}",
-        ]),
+            $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersFailureLeavesNothingPending)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+        ], Member: "FilesFilter"),
         new("MoveToFilter", "MoveToList",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToLeavesNothingPendingWhenItPublishes)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToKeepsTheViewWhileFoldersLoad)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToKeepsTheKeysOnARowWhileFoldersLoad)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
-        ]),
+            $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+        ], Member: "MoveTo"),
         new("CanvasCardPickerFilter", "CanvasCardPickerRows",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.ThePickersLeaveNothingPendingWhenTheyPublish)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.APickerKeepsASelectionWhenItsFilterDropsTheRow)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
-        ]),
+            $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.TheSheetHoldsStillWhileItsListShowsARowAtTwiceTheTextSize)}",
+        ], Member: "Picker"),
 
         // CB-35b's members: the grids and the canvas tree.
         new("BibliographySearch", "BibliographyEntriesGrid", Deferred: Cb35b),
@@ -117,7 +151,7 @@ public sealed class SearchFieldCensus
         new("EditorEmbedPreview.cs#text", Exempt: "an embed preview's read-only text; it filters nothing"),
         new("Canvas/CanvasSurfaceView.cs#_whereAmIReadback", Exempt: "a read-only readback of the canvas selection; it filters nothing"),
         new("Graph/GraphSurfaceView.cs#_whereAmIReadback", Exempt: "a read-only readback of the graph selection; it filters nothing"),
-        new("Grids/AccessibleDataGrid.cs#editor", Exempt: "one cell's editor; it edits that cell and filters nothing"),
+        new("Grids/AccessibleDataGrid.cs#editor", Exempt: "one cell's editor, the grid's text columns' own box; it edits that cell and filters nothing"),
         new("Panels/HistorySurfaceView.cs#box", Exempt: "a restore's destination path; it filters nothing"),
     ];
 
@@ -128,15 +162,18 @@ public sealed class SearchFieldCensus
     public void EverySearchFieldIsClassified()
     {
         CSharpCompilation compilation = ShellCompilation.Compilation;
-        List<Site> xaml = [.. ShellXaml().SelectMany(document => XamlSites(document.File, document.Document, compilation))];
+        IReadOnlyDictionary<string, string[]> mapped = XmlnsDefinitions(compilation);
+        (string File, XDocument Document)[] documents = [.. ShellXaml()];
+        List<Site> xaml = [.. documents.SelectMany(document => XamlSites(document.File, document.Document, compilation, mapped))];
         List<Site> code = [.. CodeSites(compilation, ShellCompilation.Sources.Select(source => (source.Relative, source.Source.Root.SyntaxTree)))];
         Assert.True(xaml.Count >= 30, $"only {xaml.Count} text fields were found in the shell's XAML; the scrape is broken.");
         Assert.True(code.Count >= 10, $"only {code.Count} text fields were found in the shell's code; the scrape is broken.");
 
         var problems = new List<string>();
+        problems.AddRange(UnreadNamespaces(documents, compilation, mapped));
         problems.AddRange(Unlisted([.. xaml, .. code], Table));
         problems.AddRange(Stale([.. xaml, .. code], Table));
-        problems.AddRange(Malformed(Table, typeof(SearchFieldCensus).Assembly, ListIds()));
+        problems.AddRange(Malformed(Table, typeof(SearchFieldCensus).Assembly, ListIds(documents)));
 
         Assert.True(
             problems.Count == 0,
@@ -180,8 +217,9 @@ public sealed class SearchFieldCensus
     }
 
     /// <summary>Each row is one of three things: a member held here (its list an AutomationId
-    /// the shell declares, and at least one fact, each a fact of this test assembly), a member
-    /// CB-35b will hold (its list, and the issue), or exempt (a one-line reason, nothing else).</summary>
+    /// the shell declares, and at least one fact, each a fact of this test assembly that
+    /// exercises the member), a member CB-35b will hold (its list, and the issue), or exempt (a
+    /// one-line reason, nothing else).</summary>
     internal static IEnumerable<string> Malformed(IReadOnlyList<Row> table, Assembly tests, IReadOnlySet<string> listIds)
     {
         foreach (Row row in table)
@@ -195,9 +233,9 @@ public sealed class SearchFieldCensus
                     yield return $"SearchFieldCensus.Table: '{row.Site}' is exempt with no one-line reason";
                 }
 
-                if (row.List is not null || row.Facts is not null || deferred)
+                if (row.List is not null || row.Facts is not null || deferred || row.Member is not null)
                 {
-                    yield return $"SearchFieldCensus.Table: '{row.Site}' is exempt and also names a list, facts or an issue";
+                    yield return $"SearchFieldCensus.Table: '{row.Site}' is exempt and also names a list, facts, a member or an issue";
                 }
 
                 continue;
@@ -234,22 +272,33 @@ public sealed class SearchFieldCensus
                 continue;
             }
 
+            if (string.IsNullOrWhiteSpace(row.Member))
+            {
+                yield return $"SearchFieldCensus.Table: the member '{row.Site}' names no member word for its facts";
+                continue;
+            }
+
             foreach (string fact in facts)
             {
-                if (!IsFact(tests, fact))
+                if (FactNamed(tests, fact) is not { } method)
                 {
                     yield return $"SearchFieldCensus.Table: the member '{row.Site}' names '{fact}', which is no fact of the test assembly";
+                }
+                else if (!Exercises(method, row.Member))
+                {
+                    yield return $"SearchFieldCensus.Table: the member '{row.Site}' names '{fact}', which does not exercise {row.Member}: "
+                        + $"neither its name nor a data row of it names {row.Member}, and its class is not {row.Member}Tests";
                 }
             }
         }
     }
 
-    private static bool IsFact(Assembly tests, string fact)
+    private static MethodInfo? FactNamed(Assembly tests, string fact)
     {
         int dot = fact.LastIndexOf('.');
         if (dot <= 0)
         {
-            return false;
+            return null;
         }
 
         string type = fact[..dot];
@@ -257,7 +306,26 @@ public sealed class SearchFieldCensus
         return tests.GetTypes()
             .Where(candidate => candidate.Name == type)
             .SelectMany(candidate => candidate.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-            .Any(candidate => candidate.Name == method && candidate.GetCustomAttributes<FactAttribute>(inherit: true).Any());
+            .FirstOrDefault(candidate => candidate.Name == method && candidate.GetCustomAttributes<FactAttribute>(inherit: true).Any());
+    }
+
+    /// <summary>The rule a member's fact is held to: the member's word (its spaces taken out,
+    /// any case) is in the fact's name, or in the first argument of one of its data rows, or
+    /// the fact's class is the member's own (<c>{member}Tests</c>).</summary>
+    internal static bool Exercises(MethodInfo fact, string member)
+    {
+        static bool Names(string? text, string member) =>
+            text is not null && text.Replace(" ", string.Empty, StringComparison.Ordinal).Contains(member, StringComparison.OrdinalIgnoreCase);
+
+        if (Names(fact.Name, member) || fact.DeclaringType?.Name == member + "Tests")
+        {
+            return true;
+        }
+
+        return fact.GetCustomAttributes(inherit: true)
+            .Where(attribute => attribute.GetType().Name == "InlineDataAttribute")
+            .Select(attribute => attribute.GetType().GetProperty("Data")?.GetValue(attribute) as object?[])
+            .Any(data => data is { Length: > 0 } && Names(data[0] as string, member));
     }
 
     // ---- reading the XAML ---------------------------------------------------------------
@@ -278,47 +346,99 @@ public sealed class SearchFieldCensus
         || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Every AutomationId the shell's XAML gives an element.</summary>
-    private static HashSet<string> ListIds() =>
+    private static HashSet<string> ListIds(IEnumerable<(string File, XDocument Document)> documents) =>
     [
-        .. ShellXaml()
+        .. documents
             .SelectMany(document => document.Document.Descendants())
             .Select(element => Attribute(element, "AutomationProperties.AutomationId"))
             .OfType<string>(),
     ];
 
-    /// <summary>The text fields <paramref name="document"/> declares: each element whose type,
-    /// bound in <paramref name="compilation"/>, is a <c>TextBoxBase</c>, and each whose
-    /// template hosts one as a part.</summary>
-    internal static IEnumerable<Site> XamlSites(string file, XDocument document, CSharpCompilation compilation)
+    /// <summary>Every URI XAML namespace the compilation's assemblies map with
+    /// <c>XmlnsDefinition</c>, to the CLR namespaces it holds: WPF's presentation namespace
+    /// among them, and any a referenced library or the shell itself declares.</summary>
+    internal static IReadOnlyDictionary<string, string[]> XmlnsDefinitions(CSharpCompilation compilation)
     {
-        INamedTypeSymbol textBoxBase = compilation.GetTypeByMetadataName("System.Windows.Controls.Primitives.TextBoxBase")
-            ?? throw new Xunit.Sdk.XunitException("TextBoxBase did not bind.");
+        var mapped = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        IEnumerable<IAssemblySymbol> assemblies = compilation.References
+            .Select(compilation.GetAssemblyOrModuleSymbol)
+            .OfType<IAssemblySymbol>()
+            .Append(compilation.Assembly);
+        foreach (AttributeData attribute in assemblies.SelectMany(assembly => assembly.GetAttributes()))
+        {
+            if (attribute.AttributeClass?.ToDisplayString() == "System.Windows.Markup.XmlnsDefinitionAttribute"
+                && attribute.ConstructorArguments is [{ Value: string uri }, { Value: string clr }, ..])
+            {
+                if (!mapped.TryGetValue(uri, out HashSet<string>? spaces))
+                {
+                    mapped[uri] = spaces = new HashSet<string>(StringComparer.Ordinal);
+                }
+
+                _ = spaces.Add(clr);
+            }
+        }
+
+        return mapped.ToDictionary(pair => pair.Key, pair => pair.Value.Order(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+    }
+
+    /// <summary>Every URI XAML namespace the shell's elements are in, other than the language's
+    /// own, whose elements the census resolves none of: an element there would go unseen.</summary>
+    internal static IEnumerable<string> UnreadNamespaces(
+        IEnumerable<(string File, XDocument Document)> documents, CSharpCompilation compilation, IReadOnlyDictionary<string, string[]> mapped)
+    {
+        foreach (IGrouping<string, XElement> space in documents
+            .SelectMany(document => document.Document.Descendants())
+            .Where(element => !element.Name.LocalName.Contains('.', StringComparison.Ordinal)
+                && !element.Name.NamespaceName.StartsWith("clr-namespace:", StringComparison.Ordinal)
+                && !LanguageNamespaces.Contains(element.Name.NamespaceName))
+            .GroupBy(element => element.Name.NamespaceName))
+        {
+            if (!space.Any(element => XamlType(element, compilation, mapped) is not null))
+            {
+                yield return $"the census resolves no element of the XAML namespace '{space.Key}' ({space.Count()} elements): "
+                    + "a text field there would go unseen; map it";
+            }
+        }
+    }
+
+    /// <summary>The text fields <paramref name="document"/> declares: each element whose type,
+    /// bound in <paramref name="compilation"/>, is a <c>TextBoxBase</c> or a
+    /// <c>DataGridTextColumn</c> with WPF's own editing box, each whose template hosts one as
+    /// a part, and each style setter that can make a combo box editable.</summary>
+    internal static IEnumerable<Site> XamlSites(
+        string file, XDocument document, CSharpCompilation compilation, IReadOnlyDictionary<string, string[]> mapped)
+    {
+        Types types = Types.Of(compilation);
         foreach (XElement element in document.Descendants())
         {
-            if (XamlType(element, compilation) is not { } type)
+            if (element.Name.LocalName == "Setter"
+                && Attribute(element, "Property") is { } property
+                && (property == "IsEditable" || property.EndsWith(".IsEditable", StringComparison.Ordinal))
+                && !IsFalse(Attribute(element, "Value")))
+            {
+                yield return new Site(file, LineOf(element), XamlKey(file, element));
+                continue;
+            }
+
+            if (XamlType(element, compilation, mapped) is not { } type)
             {
                 continue;
             }
 
-            if (DerivesFrom(type, textBoxBase) || HostsAPart(type, textBoxBase, Attribute(element, "IsEditable")))
+            if (types.IsTextField(type)
+                || types.HostsAPart(type, Attribute(element, "IsEditable") is { } editable ? !IsFalse(editable) : false))
             {
                 yield return new Site(file, LineOf(element), XamlKey(file, element));
             }
         }
     }
 
-    private static readonly string[] PresentationNamespaces =
-    [
-        "System.Windows.Controls",
-        "System.Windows.Controls.Primitives",
-        "System.Windows.Documents",
-        "System.Windows",
-    ];
+    private static bool IsFalse(string? value) => string.Equals(value?.Trim(), "False", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>An element's type: the presentation namespace's WPF types, or a
-    /// <c>clr-namespace:</c> mapping's. Property elements and the XAML language's own
-    /// elements have none.</summary>
-    private static INamedTypeSymbol? XamlType(XElement element, CSharpCompilation compilation)
+    /// <summary>An element's type: a <c>clr-namespace:</c> mapping's, or a URI namespace's
+    /// through the assemblies' <c>XmlnsDefinition</c>s. Property elements and the XAML
+    /// language's own elements have none.</summary>
+    private static INamedTypeSymbol? XamlType(XElement element, CSharpCompilation compilation, IReadOnlyDictionary<string, string[]> mapped)
     {
         string local = element.Name.LocalName;
         if (local.Contains('.', StringComparison.Ordinal))
@@ -327,16 +447,14 @@ public sealed class SearchFieldCensus
         }
 
         string space = element.Name.NamespaceName;
-        if (space == Presentation)
+        const string ClrNamespace = "clr-namespace:";
+        if (space.StartsWith(ClrNamespace, StringComparison.Ordinal))
         {
-            return PresentationNamespaces
-                .Select(candidate => compilation.GetTypeByMetadataName($"{candidate}.{local}"))
-                .FirstOrDefault(type => type is not null);
+            return compilation.GetTypeByMetadataName($"{space[ClrNamespace.Length..].Split(';')[0]}.{local}");
         }
 
-        const string ClrNamespace = "clr-namespace:";
-        return space.StartsWith(ClrNamespace, StringComparison.Ordinal)
-            ? compilation.GetTypeByMetadataName($"{space[ClrNamespace.Length..].Split(';')[0]}.{local}")
+        return mapped.TryGetValue(space, out string[]? spaces)
+            ? spaces.Select(candidate => compilation.GetTypeByMetadataName($"{candidate}.{local}")).FirstOrDefault(type => type is not null)
             : null;
     }
 
@@ -375,49 +493,60 @@ public sealed class SearchFieldCensus
     // ---- reading the code ---------------------------------------------------------------
 
     /// <summary>The text fields the shell's code builds: each object creation of a
-    /// <c>TextBoxBase</c> type or of a control whose template hosts one as a part, and each
-    /// template factory made for one.</summary>
+    /// <c>TextBoxBase</c> type, of a <c>DataGridTextColumn</c> with WPF's own editing box, or
+    /// of a control whose template hosts one as a part; each template factory made for one;
+    /// and each place the code sets or binds a combo box's <c>IsEditable</c> to anything but
+    /// false.</summary>
     internal static IEnumerable<Site> CodeSites(CSharpCompilation compilation, IEnumerable<(string Relative, SyntaxTree Tree)> trees)
     {
-        INamedTypeSymbol textBoxBase = compilation.GetTypeByMetadataName("System.Windows.Controls.Primitives.TextBoxBase")
-            ?? throw new Xunit.Sdk.XunitException("TextBoxBase did not bind.");
+        Types types = Types.Of(compilation);
         INamedTypeSymbol factory = compilation.GetTypeByMetadataName("System.Windows.FrameworkElementFactory")
             ?? throw new Xunit.Sdk.XunitException("FrameworkElementFactory did not bind.");
         foreach ((string relative, SyntaxTree tree) in trees)
         {
             SemanticModel model = compilation.GetSemanticModel(tree);
             string file = relative.Replace('\\', '/');
-            foreach (BaseObjectCreationExpressionSyntax creation in tree.GetRoot().DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
             {
-                if (model.GetTypeInfo(creation).Type is not INamedTypeSymbol created)
+                int line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                switch (node)
                 {
-                    continue;
-                }
+                    case BaseObjectCreationExpressionSyntax creation when model.GetTypeInfo(creation).Type is INamedTypeSymbol created:
+                        if (types.IsTextField(created) || types.HostsAPart(created, EditableIn(creation)))
+                        {
+                            yield return new Site(file, line, $"{file}#{NameGiven(creation, line)}");
+                        }
+                        else if (SymbolEqualityComparer.Default.Equals(created, factory)
+                            && creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression is TypeOfExpressionSyntax made
+                            && model.GetTypeInfo(made.Type).Type is INamedTypeSymbol type
+                            && (types.IsTextField(type) || types.HostsAPart(type, editable: true)))
+                        {
+                            yield return new Site(file, line, $"{file}#factory@{line}");
+                        }
 
-                int line = creation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                if (DerivesFrom(created, textBoxBase) || HostsAPart(created, textBoxBase, EditableIn(creation)))
-                {
-                    yield return new Site(file, line, $"{file}#{NameGiven(creation, line)}");
-                }
-                else if (SymbolEqualityComparer.Default.Equals(created, factory)
-                    && creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression is TypeOfExpressionSyntax made
-                    && model.GetTypeInfo(made.Type).Type is INamedTypeSymbol type
-                    && (DerivesFrom(type, textBoxBase) || HostsAPart(type, textBoxBase, "True")))
-                {
-                    yield return new Site(file, line, $"{file}#factory@{line}");
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when model.GetOperation(assignment) is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation { Property.Name: "IsEditable" } target } set
+                            && types.IsComboBox(target.Property.ContainingType)
+                            && set.Value.ConstantValue is not { HasValue: true, Value: false }
+                            && assignment.Parent is not InitializerExpressionSyntax:
+                        yield return new Site(file, line, $"{file}#IsEditable@{line}");
+                        break;
+                    case IdentifierNameSyntax { Identifier.ValueText: "IsEditableProperty" } identifier
+                        when model.GetSymbolInfo(identifier).Symbol is IFieldSymbol field && types.IsComboBox(field.ContainingType):
+                        yield return new Site(file, line, $"{file}#IsEditableProperty@{line}");
+                        break;
                 }
             }
         }
     }
 
-    /// <summary>"True" when an object initializer sets IsEditable to true.</summary>
-    private static string? EditableIn(BaseObjectCreationExpressionSyntax creation) =>
+    /// <summary>Whether an object initializer sets IsEditable to anything but false.</summary>
+    private static bool EditableIn(BaseObjectCreationExpressionSyntax creation) =>
         creation.Initializer?.Expressions
             .OfType<AssignmentExpressionSyntax>()
             .Any(assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "IsEditable" }
-                && assignment.Right.IsKind(SyntaxKind.TrueLiteralExpression)) == true
-            ? "True"
-            : null;
+                && !assignment.Right.IsKind(SyntaxKind.FalseLiteralExpression)) == true;
 
     /// <summary>The name a code-built field is given: the variable it initialises, or the
     /// field or property it is assigned to.</summary>
@@ -431,36 +560,75 @@ public sealed class SearchFieldCensus
 
     // ---- types --------------------------------------------------------------------------
 
-    private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol baseType)
+    /// <summary>The WPF types the census reads sites by, bound in one compilation.</summary>
+    private sealed record Types(INamedTypeSymbol TextBoxBase, INamedTypeSymbol TextColumn, INamedTypeSymbol ComboBox)
     {
-        for (ITypeSymbol? at = type; at is not null; at = at.BaseType)
+        internal static Types Of(CSharpCompilation compilation) => new(
+            Bind(compilation, "System.Windows.Controls.Primitives.TextBoxBase"),
+            Bind(compilation, "System.Windows.Controls.DataGridTextColumn"),
+            Bind(compilation, "System.Windows.Controls.ComboBox"));
+
+        private static INamedTypeSymbol Bind(CSharpCompilation compilation, string name) =>
+            compilation.GetTypeByMetadataName(name) ?? throw new Xunit.Sdk.XunitException($"{name} did not bind.");
+
+        /// <summary>A text field itself: a <c>TextBoxBase</c>, or a grid text column whose
+        /// editing box is WPF's own TextBox. A column type that builds its own box in a
+        /// <c>GenerateEditingElement</c> of the shell's source is not: the box it builds is
+        /// the site, where the code creates it.</summary>
+        internal bool IsTextField(INamedTypeSymbol type)
         {
-            if (SymbolEqualityComparer.Default.Equals(at, baseType))
+            if (DerivesFrom(type, TextBoxBase))
             {
                 return true;
             }
+
+            if (!DerivesFrom(type, TextColumn))
+            {
+                return false;
+            }
+
+            for (INamedTypeSymbol? at = type; at is not null && !SymbolEqualityComparer.Default.Equals(at, TextColumn); at = at.BaseType)
+            {
+                if (at.GetMembers("GenerateEditingElement").OfType<IMethodSymbol>().Any(method => method.IsOverride && method.Locations.Any(location => location.IsInSource)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
-        return false;
-    }
+        internal bool IsComboBox(ITypeSymbol? type) => type is not null && DerivesFrom(type, ComboBox);
 
-    /// <summary>Whether the type's template hosts a text field as a part: a
-    /// <c>TemplatePart</c> declared on it or a base whose type is a <c>TextBoxBase</c>. A
-    /// combo box's editable text part lives only while it is editable.</summary>
-    private static bool HostsAPart(INamedTypeSymbol type, INamedTypeSymbol textBoxBase, string? isEditable)
-    {
-        bool combo = false;
-        bool hosts = false;
-        for (INamedTypeSymbol? at = type; at is not null; at = at.BaseType)
+        /// <summary>Whether the type's template hosts a text field as a part: a
+        /// <c>TemplatePart</c> declared on it or a base whose type is a <c>TextBoxBase</c>. A
+        /// combo box's editable text part lives only while it is editable.</summary>
+        internal bool HostsAPart(INamedTypeSymbol type, bool editable)
         {
-            combo |= at.ToDisplayString() == "System.Windows.Controls.ComboBox";
-            hosts |= at.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.Name == "TemplatePartAttribute"
-                && attribute.NamedArguments.Any(argument => argument.Key == "Type"
-                    && argument.Value.Value is INamedTypeSymbol part
-                    && DerivesFrom(part, textBoxBase)));
+            bool hosts = false;
+            for (INamedTypeSymbol? at = type; at is not null; at = at.BaseType)
+            {
+                hosts |= at.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.Name == "TemplatePartAttribute"
+                    && attribute.NamedArguments.Any(argument => argument.Key == "Type"
+                        && argument.Value.Value is INamedTypeSymbol part
+                        && DerivesFrom(part, TextBoxBase)));
+            }
+
+            return hosts && (!IsComboBox(type) || editable);
         }
 
-        return hosts && (!combo || string.Equals(isEditable, "True", StringComparison.OrdinalIgnoreCase));
+        private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol baseType)
+        {
+            for (ITypeSymbol? at = type; at is not null; at = at.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(at, baseType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 }

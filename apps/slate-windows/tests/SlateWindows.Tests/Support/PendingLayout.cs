@@ -147,8 +147,10 @@ internal static class PendingLayout
 
     /// <summary>Every visible element in <paramref name="root"/> still waiting on a layout
     /// pass, by its type and the nearest ancestor that has a name, for a fact's message;
-    /// nothing under <paramref name="excluded"/>.</summary>
-    internal static IEnumerable<string> Named(DependencyObject root, DependencyObject? excluded = null)
+    /// nothing under <paramref name="excluded"/>, and no element <paramref name="allowed"/>
+    /// answers true for (its own descendants are still read).</summary>
+    internal static IEnumerable<string> Named(
+        DependencyObject root, DependencyObject? excluded = null, Func<UIElement, bool>? allowed = null)
     {
         var pending = new List<string>();
         void Walk(DependencyObject parent, string holder)
@@ -159,7 +161,9 @@ internal static class PendingLayout
             }
 
             string here = parent is FrameworkElement { Name.Length: > 0 } named ? named.Name : holder;
-            if (parent is UIElement element && !(element.IsMeasureValid && element.IsArrangeValid))
+            if (parent is UIElement element
+                && !(element.IsMeasureValid && element.IsArrangeValid)
+                && allowed?.Invoke(element) != true)
             {
                 pending.Add($"{element.GetType().Name} in {here}");
             }

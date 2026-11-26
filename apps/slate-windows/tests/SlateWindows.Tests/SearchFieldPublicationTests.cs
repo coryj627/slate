@@ -84,8 +84,10 @@ public sealed class SearchFieldPublicationTests
 
     // ------------------------------------------------------------------ nothing pending
 
-    /// <summary>Quick Open's every publication: the opening rank, each keystroke's clear and the
-    /// rank it posts, the rescan's silent re-rank, and a rank that fails.</summary>
+    /// <summary>Quick Open's every publication: the open itself, the opening rank, each
+    /// keystroke's clear and the rank it posts, the rescan's silent re-rank, a rank that fails,
+    /// and Escape's dismissal through the window's key route. The open and the dismissal are
+    /// read strictly: neither changes the field's text.</summary>
     [Fact]
     public void QuickOpenLeavesNothingPendingWhenItPublishes() => Sta(() =>
     {
@@ -104,6 +106,7 @@ public sealed class SearchFieldPublicationTests
 
         Clean(host);
         switcher.Open();
+        findings.NothingPending("the open's own operation", list);
         Watch(findings, new Stage("the opening rank", () => added, () => findings.NothingPending("the opening rank's publication", list)));
         SettleUntil(host, () => !switcher.IsRanking && switcher.Results.Count == QuickSwitcherViewModel.DisplayCap, "the opening rank");
         Assert.True(field.Focus(), "premise: the field refused the keys");
@@ -136,12 +139,18 @@ public sealed class SearchFieldPublicationTests
         findings.NothingPendingButTheField("typed a query whose rank fails: the keystroke's clear", list, field);
         Watch(findings, new Stage("the failed rank", () => failed, () => findings.NothingPending("the failed rank's publication", list)));
 
+        host.Settle();
+        Clean(host);
+        Press(field, Key.Escape);
+        findings.Expect(!switcher.IsOpen, "premise: Escape did not dismiss Quick Open");
+        findings.NothingPending("Escape: the dismissal", list);
+
         findings.AssertNone("Quick Open's publications left layout pending as they ended");
     });
 
     /// <summary>Search's every publication: the posted Searching state and the results it
-    /// publishes, from Idle and over results, zero results, an error, and the idle transition
-    /// an emptied field ends in.</summary>
+    /// publishes, from Idle and over results, zero results, an error, the idle transition an
+    /// emptied field ends in, and Escape's close through the window's key route.</summary>
     [Fact]
     public void SearchLeavesNothingPendingWhenItPublishes() => Sta(() =>
     {
@@ -193,16 +202,23 @@ public sealed class SearchFieldPublicationTests
         field.Text = string.Empty;
         Watch(findings, new Stage("emptied: the idle transition", () => idle, () => findings.NothingPending("emptied: the idle transition", surface)));
 
+        search.Show("gamma", 60);
+        Clean(host);
+        Press(field, Key.Escape);
+        findings.Expect(!overlay.IsOpen, "premise: Escape did not close search");
+        findings.NothingPending("Escape: the close", surface);
+
         findings.AssertNone("Search's publications left layout pending as they ended");
     });
 
     /// <summary>Search's scope changes over results, which publish in the operation that makes
-    /// them: the tag chip's Clear, as its click runs it (the rows cleared and the Searching
-    /// state shown, then the field given the keys), and a tag activated from the reading view
+    /// them: the tag chip's Clear, as its click runs it from the keys on the button (the field
+    /// given the keys, then the rows cleared and the Searching state shown), and a tag
+    /// activated from the reading view
     /// over the open overlay's results (the lifecycle admits it to an open overlay; a reader
     /// reaches it by invoking a reading-view tag through UI Automation, behind the overlay).
-    /// Each is read as a text change is: the field may still lay out its own text, so nothing
-    /// may be pending under the list or in the window outside the field.</summary>
+    /// Neither changes the field's text, and the chip's Clear gives the field the keys before
+    /// it clears the scope, so each is read strictly: nothing at all may be pending.</summary>
     [Fact]
     public void SearchsScopeChangeLeavesNothingPending() => Sta(() =>
     {
@@ -210,7 +226,7 @@ public sealed class SearchFieldPublicationTests
         WindowActivation.Activate(host.Shell);
         using var search = new SearchOverlay(host);
         SearchOverlayViewModel overlay = search.Overlay;
-        ListBox list = host.Shell.SearchOverlayResults;
+        FrameworkElement surface = host.Shell.SearchOverlay;
         TextBox field = host.Shell.SearchOverlaySearchTextBox;
         var findings = new Findings();
 
@@ -226,14 +242,17 @@ public sealed class SearchFieldPublicationTests
         }
 
         ListTag("tagged");
+        // The reader on the chip's Clear, as Tab leaves the keys before Space or a click.
         Button clear = Descendants<Button>(host.Shell).Single(button => AutomationProperties.GetAutomationId(button) == "SearchOverlayClearTagScope");
+        Assert.True(clear.Focus(), "premise: the chip's Clear refused the keys");
+        host.Settle();
         Clean(host);
         clear.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, clear));
         findings.Expect(
             overlay.TagScopeName is null && overlay.State == SearchOverlayState.Searching,
             $"premise: the chip's Clear left the scope {overlay.TagScopeName ?? "vault"} in {overlay.State}");
         findings.Expect(ReferenceEquals(Keyboard.FocusedElement, field), "premise: the chip's Clear did not give the field the keys");
-        findings.NothingPendingButTheField("the tag chip's Clear over the tag's results", list, field);
+        findings.NothingPending("the tag chip's Clear over the tag's results", surface);
         SettleUntil(host, () => overlay.State == SearchOverlayState.Idle, "the cleared scope never went back to Idle");
 
         ListTag("tagged");
@@ -242,10 +261,41 @@ public sealed class SearchFieldPublicationTests
         findings.Expect(
             overlay.TagScopeName == "other" && overlay.State == SearchOverlayState.Searching,
             $"premise: the tag activation left the scope {overlay.TagScopeName ?? "vault"} in {overlay.State}");
-        findings.NothingPendingButTheField("another tag activated over the open overlay's results", list, field);
+        findings.NothingPending("another tag activated over the open overlay's results", surface);
         SettleUntil(host, () => overlay.State == SearchOverlayState.Results && overlay.Rows.Count > 0, "search never listed the tag other");
 
         findings.AssertNone("Search's scope changes left layout pending as they ended");
+    });
+
+    /// <summary>Search's Clear recent searches, as its click runs it, from the keys on the
+    /// button: the field takes the keys, the remembered searches are forgotten, and the idle
+    /// panel swaps the recents for the hint, all in the click's operation. Read strictly: the
+    /// field took the keys before the publication was laid out.</summary>
+    [Fact]
+    public void SearchsClearRecentsLeavesNothingPending() => Sta(() =>
+    {
+        using var host = new ShownShell(Topics(20));
+        WindowActivation.Activate(host.Shell);
+        using var search = new SearchOverlay(host);
+        SearchOverlayViewModel overlay = search.Overlay;
+        var source = (ISearchSource)(typeof(SearchOverlayViewModel).GetField("_source", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(overlay)
+            ?? throw new InvalidOperationException("SearchOverlayViewModel._source is gone"));
+        source.RecordRecent("alpha");
+        source.RecordRecent("beta");
+        search.Open();
+        Assert.True(overlay.ShowsRecents, "premise: the idle overlay does not show the remembered searches");
+        Button clear = Descendants<Button>(host.Shell).Single(button => AutomationProperties.GetAutomationId(button) == "SearchOverlayClearRecents");
+        Assert.True(clear.Focus(), "premise: Clear recent searches refused the keys");
+        host.Settle();
+        var findings = new Findings();
+
+        Clean(host);
+        clear.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, clear));
+        findings.Expect(overlay.Recents.Count == 0 && overlay.ShowsIdleHint, $"premise: the click left {overlay.Recents.Count} remembered searches");
+        findings.Expect(ReferenceEquals(Keyboard.FocusedElement, host.Shell.SearchOverlaySearchTextBox), "premise: the click did not give the field the keys");
+        findings.NothingPending("Clear recent searches", host.Shell.SearchOverlay);
+
+        findings.AssertNone("Search's Clear recent searches left layout pending as it ended");
     });
 
     /// <summary>The Files filter's every publication: the keystroke that swaps the tree for the
@@ -293,6 +343,33 @@ public sealed class SearchFieldPublicationTests
         findings.NothingPending("Escape: the clear", swap);
 
         findings.AssertNone("The Files filter's publications left layout pending as they ended");
+    });
+
+    /// <summary>A filter run whose worker fails reports it on the status line, in the
+    /// operation its failure posts; that publication ends laid out too.</summary>
+    [Fact]
+    public void FilesFiltersFailureLeavesNothingPending() => Sta(() =>
+    {
+        using var host = new ShownShell(Topics(20));
+        WindowActivation.Activate(host.Shell);
+        using var files = new FilesSidebar(
+            host,
+            filterWorker: (_, _) => Task.FromException(new InvalidOperationException("CB-35's planted filter failure")));
+        FilesSidebarViewModel sidebar = files.Model;
+        var swap = (FrameworkElement)VisualTreeHelper.GetParent(host.Shell.FilterResultsList);
+        TextBox field = host.Shell.SidebarFilterTextBox;
+        Assert.True(field.Focus(), "premise: the filter refused the keys");
+        host.Settle();
+        bool failed = false;
+        sidebar.PropertyChanged += (_, e) => failed |= e.PropertyName == nameof(FilesSidebarViewModel.Status)
+            && sidebar.Status == "Could not filter files.";
+        var findings = new Findings();
+
+        Clean(host);
+        field.Text = "topic";
+        Watch(findings, new Stage("the failed filter run", () => failed, () => findings.NothingPending("the failed filter run's report", swap)));
+
+        findings.AssertNone("The Files filter's failure report left layout pending as it ended");
     });
 
     /// <summary>Move To's every publication: the opening, each folder page and the complete
@@ -483,6 +560,48 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("A re-ranked selection was not kept in view");
     });
 
+    /// <summary>A silent re-rank that keeps the reader's result where it was keeps the reader's
+    /// view: a reader who scrolled away from the selected row is not pulled back to it as a
+    /// change-feed page or a rescan re-ranks the list in place (spec Design 2, M-I). A re-rank
+    /// that moves the row shows it (<see cref="QuickOpenKeepsAReRankedSelectionInView"/>).</summary>
+    [Fact]
+    public void QuickOpenKeepsTheViewThroughASilentReRank() => Sta(() =>
+    {
+        using var host = new ShownShell(Topics(60));
+        WindowActivation.Activate(host.Shell);
+        using var quickOpen = new QuickOpen(host, notes: 60);
+        quickOpen.Open();
+        QuickSwitcherViewModel switcher = quickOpen.Switcher;
+        ListBox list = host.Shell.QuickSwitcherResultsList;
+        switcher.SelectedRow = switcher.Results[3];
+        host.Settle();
+        // The reader scrolls the list some twenty rows down, past the selected row.
+        ScrollViewer viewer = Descendants<ScrollViewer>(list).First();
+        viewer.ScrollToVerticalOffset(20);
+        host.Settle();
+        host.Settle();
+        double offset = viewer.VerticalOffset;
+        Assert.True(offset >= 19, $"premise: the reader's scroll reached offset {offset}");
+        string path = switcher.SelectedRow!.Path;
+        var findings = new Findings();
+        bool added = false;
+        switcher.Results.CollectionChanged += (_, e) => added |= e.Action == NotifyCollectionChangedAction.Add;
+
+        Clean(host);
+        Task reRank = switcher.ReRankForRescanAsync(CancellationToken.None);
+        Watch(findings, new Stage("the silent re-rank", () => added, () =>
+        {
+            findings.Expect(
+                switcher.SelectedRow is { } kept && kept.Path == path && switcher.Results.IndexOf(kept) == 3,
+                $"premise: the re-rank did not keep {path} at row 3");
+            findings.Expect(viewer.VerticalOffset == offset, $"as the re-rank's publication ends, the view moved from {offset} to {viewer.VerticalOffset}");
+        }));
+        SettleUntil(host, () => reRank.IsCompleted, "the silent re-rank");
+        findings.Expect(viewer.VerticalOffset == offset, $"after everything queued has run, the view moved from {offset} to {viewer.VerticalOffset}");
+
+        findings.AssertNone("A silent re-rank pulled the reader's view back to the row it kept");
+    });
+
     /// <summary>From an overlay whose list has never generated a row, the first results: the
     /// selected row is realized as the publication ends (DS-10's check), and no
     /// <c>ItemsControl.OnBringItemIntoView</c> is left deferred to the Loaded pass.</summary>
@@ -599,6 +718,67 @@ public sealed class SearchFieldPublicationTests
             findings.Shown("typed 'dir-3': the keystroke's publication", list, picker.SelectedRow);
 
             findings.AssertNone("Move To's view did not hold while folders loaded");
+        }
+        finally
+        {
+            _ = gate.Release(1_000);
+            files.Model.BeforeMoveToPageForTesting = null;
+        }
+    });
+
+    /// <summary>The AGENTS.md republish rule for Move To: a reader whose keys are on a
+    /// destination row while folder pages land keeps them there. Each page replaces every row,
+    /// and the keys end on the fresh row of the same destination, never on the list or the
+    /// window.</summary>
+    [Fact]
+    public void MoveToKeepsTheKeysOnARowWhileFoldersLoad() => Sta(() =>
+    {
+        using var host = new ShownShell(NestedFolders(60));
+        WindowActivation.Activate(host.Shell);
+        using var files = new FilesSidebar(host);
+        using var gate = new SemaphoreSlim(0);
+        files.Model.BeforeMoveToPageForTesting = (parent, _) =>
+        {
+            if (parent.Length > 0 && !gate.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException("the fact never let this folder listing run");
+            }
+        };
+        try
+        {
+            ListBox list = host.Shell.MoveToList;
+            MoveToPickerViewModel picker = files.OpenMoveTo();
+            SettleUntil(host, () => picker.Rows.Count >= 60, "the root's folder page never landed");
+            // The reader's arrows in the list: the keys and the selection on the fourth row.
+            picker.SelectedRow = picker.Rows[3];
+            host.Settle();
+            list.UpdateLayout();
+            var row = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(3));
+            Assert.True(row.Focus(), "premise: the fourth row refused the keys");
+            host.Settle();
+            string destination = picker.SelectedRow!.Destination;
+            string KeysOn() =>
+                Keyboard.FocusedElement is ListBoxItem { DataContext: MoveToRowViewModel kept } item
+                    && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), list)
+                    ? kept.Destination
+                    : Keyboard.FocusedElement?.GetType().Name ?? "nothing";
+            Assert.Equal(destination, KeysOn());
+            var findings = new Findings();
+            bool rows = false;
+            picker.PropertyChanged += (_, e) => rows |= e.PropertyName == nameof(MoveToPickerViewModel.Rows);
+
+            for (int page = 1; page <= 3; page++)
+            {
+                int count = picker.Rows.Count;
+                rows = false;
+                gate.Release();
+                string label = $"folder page {page}";
+                Watch(findings, new Stage(label, () => rows && picker.Rows.Count > count, () => { }));
+                host.Settle();
+                findings.Expect(KeysOn() == destination, $"{label}: after the page the keys are on {KeysOn()}, not {destination}'s row");
+            }
+
+            findings.AssertNone("Move To's keys did not stay on the reader's row while folders loaded");
         }
         finally
         {
@@ -743,6 +923,148 @@ public sealed class SearchFieldPublicationTests
         Assert.True(sheet.Confirm(), $"{member}: Enter picked nothing after the filter");
     });
 
+    /// <summary>One real keystroke per text field: a letter typed through
+    /// <c>TextCompositionManager</c> into the field, as the keyboard delivers it (step 0's
+    /// typing), rather than the field's text set whole. Real typing reaches the binding from
+    /// inside the field's own text-container change, before its TextChanged. Read at the
+    /// keystroke's end as a text change is: nothing under the list, and nothing in the window
+    /// outside the field.</summary>
+    [Theory]
+    [InlineData("Quick Open")]
+    [InlineData("Search")]
+    [InlineData("Files filter")]
+    [InlineData("Move To")]
+    [InlineData("Card picker")]
+    [InlineData("File picker")]
+    public void AKeystrokeInTheFieldLeavesNothingPendingButTheField(string member) => Sta(() =>
+    {
+        using var host = new ShownShell(member switch
+        {
+            "Move To" => NestedFolders(20),
+            "Card picker" or "File picker" => [("board.canvas", Board(20)), .. Topics(20)],
+            _ => Topics(20),
+        });
+        WindowActivation.Activate(host.Shell);
+        var cleanup = new Stack<IDisposable>();
+        try
+        {
+            TextBox field;
+            DependencyObject list;
+            Func<string> text;
+            string letter;
+            switch (member)
+            {
+                case "Quick Open":
+                    var quickOpen = new QuickOpen(host, notes: 20);
+                    cleanup.Push(quickOpen);
+                    quickOpen.Open();
+                    field = host.Shell.QuickSwitcherSearchTextBox;
+                    list = host.Shell.QuickSwitcherResultsList;
+                    text = () => quickOpen.Switcher.Query;
+                    letter = "t";
+                    break;
+                case "Search":
+                    var search = new SearchOverlay(host);
+                    cleanup.Push(search);
+                    search.Open();
+                    field = host.Shell.SearchOverlaySearchTextBox;
+                    list = host.Shell.SearchOverlayResults;
+                    text = () => search.Overlay.Query;
+                    letter = "a";
+                    break;
+                case "Files filter":
+                    var files = new FilesSidebar(host);
+                    cleanup.Push(files);
+                    field = host.Shell.SidebarFilterTextBox;
+                    list = VisualTreeHelper.GetParent(host.Shell.FilterResultsList);
+                    text = () => files.Model.FilterText;
+                    letter = "t";
+                    break;
+                case "Move To":
+                    var moving = new FilesSidebar(host);
+                    cleanup.Push(moving);
+                    MoveToPickerViewModel picker = moving.OpenMoveTo();
+                    SettleUntil(host, () => picker.State == MoveToLoadState.Ready, "Move To never finished loading");
+                    field = host.Shell.MoveToFilterTextBox;
+                    list = host.Shell.MoveToList;
+                    text = () => picker.FilterText;
+                    letter = "d";
+                    break;
+                default:
+                    CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
+                    (ICanvasPickerSheet sheet, ListBox rows) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
+                    field = host.Shell.CanvasCardPickerFilterBox;
+                    list = rows;
+                    text = () => sheet.Filter;
+                    letter = member == "Card picker" ? "i" : "t";
+                    break;
+            }
+
+            Assert.True(field.Focus(), "premise: the field refused the keys");
+            host.Settle();
+            var findings = new Findings();
+
+            Clean(host);
+            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, field, letter));
+            Assert.Equal(letter, text());
+            findings.NothingPendingButTheField($"{member}: '{letter}' typed into the field", list, field);
+
+            findings.AssertNone($"{member}'s keystroke left layout pending as it ended");
+        }
+        finally
+        {
+            while (cleanup.TryPop(out IDisposable? disposable))
+            {
+                disposable.Dispose();
+            }
+        }
+    });
+
+    /// <summary>At twice the text size, in a short window, the picker sheets outgrow it and
+    /// scroll in their own outer viewer. Showing a row of the sheet's list (a keystroke whose
+    /// publication chooses the selection) scrolls only the list: the sheet's outer viewer holds
+    /// still. The size comes from the shell's type ramp (TextScaleTests' seam), never the
+    /// system's setting. Move To's sheet is not held here: its arrows scroll the sheet's outer
+    /// viewer to the selected row on main as on this branch (recorded, for the owner).</summary>
+    [Theory]
+    [InlineData("Card picker")]
+    [InlineData("File picker")]
+    public void TheSheetHoldsStillWhileItsListShowsARowAtTwiceTheTextSize(string member) => Sta(() =>
+    {
+        using var host = new ShownShell([("board.canvas", Board(60)), .. Topics(60)]);
+        WindowActivation.Activate(host.Shell);
+        host.Shell.Height = 480;
+        TypeRamp.Apply(host.Shell.Resources.MergedDictionaries.First(layer => layer.Contains(TypeRamp.Body.SizeKey)), 2);
+        host.Settle();
+        CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
+        (ICanvasPickerSheet sheet, ListBox list) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
+        TextBox field = host.Shell.CanvasCardPickerFilterBox;
+        string[] queries = member == "Card picker" ? ["item 1", string.Empty, "item 2", string.Empty] : ["topic-1", string.Empty, "topic-2", string.Empty];
+        Assert.True(field.Focus(), "premise: the field refused the keys");
+        host.Settle();
+        host.Settle();
+        DependencyObject? at = VisualTreeHelper.GetParent(list);
+        while (at is not null and not ScrollViewer)
+        {
+            at = VisualTreeHelper.GetParent(at);
+        }
+
+        var outer = Assert.IsType<ScrollViewer>(at);
+        Assert.True(outer.ScrollableHeight > 0, $"premise: the {member} sheet does not outgrow the window at twice the text size");
+        double offset = outer.VerticalOffset;
+        var findings = new Findings();
+        foreach (string query in queries)
+        {
+            field.Text = query;
+            string label = $"typed '{query}' (the picker selects {SheetSelection(sheet)})";
+            findings.Expect(outer.VerticalOffset == offset, $"{label}: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset} (of {outer.ScrollableHeight})");
+            host.Settle();
+            findings.Expect(outer.VerticalOffset == offset, $"{label}, after everything queued: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset}");
+        }
+
+        findings.AssertNone($"The {member} sheet moved while its list showed a row at twice the text size");
+    });
+
     // ------------------------------------------------------------------ fixtures
 
     /// <summary>Quick Open over the shell's own overlay, attached through the lifecycle's
@@ -851,11 +1173,15 @@ public sealed class SearchFieldPublicationTests
     {
         private readonly ShownShell _host;
 
-        public FilesSidebar(ShownShell host)
+        public FilesSidebar(ShownShell host, Func<Action, CancellationToken, Task>? filterWorker = null)
         {
             _host = host;
             Model = new FilesSidebarViewModel(
-                host.Session, Announced.Add, vaultRoot: host.Root, localAppDataRoot: Path.Combine(host.Root, "device-state"));
+                host.Session,
+                Announced.Add,
+                vaultRoot: host.Root,
+                localAppDataRoot: Path.Combine(host.Root, "device-state"),
+                filterWorker: filterWorker);
             PumpedDispatcher.PumpUntilDrained(Model.TreeRefreshCompletion);
             SetLifecycleProperty(host, nameof(VaultLifecycleViewModel.FileSidebar), Model);
             host.Settle();
@@ -951,8 +1277,12 @@ public sealed class SearchFieldPublicationTests
         /// <summary>A text change's reading, straight after the keystroke. A field lays out its
         /// own text after its binding has written the change through, so its own text view is
         /// still pending there however the publication ends, in every WPF text field, the
-        /// palette's included: TSF's <c>GetTextExt</c> lays that out by design. Nothing else may
-        /// be: nothing under the list, and nothing in the window outside the field.</summary>
+        /// palette's included: TSF's <c>GetTextExt</c> lays that out by design. A real
+        /// keystroke also moves the caret, and the caret asks the scroll viewers the field sits
+        /// in to bring it into view, which leaves each of them its own pending arrange (measured
+        /// on Move To, the pickers and the Files pane: the viewer alone, none of its content).
+        /// Nothing else may be pending: nothing under the list, and nothing in the window
+        /// outside the field but the scroll viewers that hold it.</summary>
         public void NothingPendingButTheField(string label, DependencyObject list, FrameworkElement field)
         {
             string[] under = PendingLayout.Under(list);
@@ -961,13 +1291,20 @@ public sealed class SearchFieldPublicationTests
                 return;
             }
 
-            string[] beyond = [.. PendingLayout.Named(Window.GetWindow(field)!, excluded: field)];
+            string[] beyond =
+            [
+                .. PendingLayout.Named(
+                    Window.GetWindow(field)!,
+                    excluded: field,
+                    allowed: element => element is ScrollViewer viewer && viewer.IsAncestorOf(field)),
+            ];
             if (under.Length > 0 || beyond.Length > 0)
             {
                 _found.Add($"{label}: {under.Length} under the list ({string.Join(", ", under)}); "
                     + $"{beyond.Length} outside the field ({string.Join(", ", beyond.Take(8))})");
             }
         }
+
         /// <summary>The row realized, showing, and inside its list's viewport, now.</summary>
         public void Shown(string label, ListBox list, object? row)
         {
