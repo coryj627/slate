@@ -12,9 +12,9 @@ namespace SlateWindows.Reading;
 /// <summary>
 /// A decorator over WPF's own text provider that answers the UIA
 /// <c>StyleId</c> text attribute for heading paragraphs, and shapes two
-/// range answers WPF gets wrong (CB-21, #1330): <c>GetChildren</c> is an
-/// array, never null, and <c>GetBoundingRectangles</c> covers the visible
-/// lines only (<see cref="HeadingStyleTextRange"/>).
+/// range answers (CB-21, #1330): <c>GetChildren</c> is an array where WPF
+/// answers null, and <c>GetBoundingRectangles</c> asks WPF only about the
+/// part of a range near the view (<see cref="HeadingStyleTextRange"/>).
 ///
 /// Why it exists: NVDA speaks heading level during LINEAR reading from
 /// the `StyleId` text attribute — `AutomationProperties.HeadingLevel`
@@ -112,11 +112,12 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 {
     private readonly ITextRangeProvider _inner;
 
-    // WPF's own provider, for its visible ranges; null for a range made without one, which
-    // then answers its rectangles as WPF does.
+    // WPF's own provider, for its visible ranges. Every range the provider hands out carries
+    // it (Wrap, Clone, FindAttribute, FindText); null only where a test builds a bare range,
+    // which then answers its rectangles as WPF does.
     private readonly ITextProvider? _view;
 
-    public HeadingStyleTextRange(ITextRangeProvider inner, ITextProvider? view = null)
+    public HeadingStyleTextRange(ITextRangeProvider inner, ITextProvider? view)
     {
         _inner = inner;
         _view = view;
@@ -624,12 +625,17 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     /// <summary>
     /// CB-21 (#1330): the rectangles of the range's visible lines, UI Automation's contract,
-    /// as WPF answers them. WPF walks every line of the range before it clips each to the view,
-    /// which took 5 s on a 2,000-item note once Narrator asked for a select-all's rectangles (it
-    /// asks once <see cref="GetChildren"/> answers an array). So WPF is asked only for the part
-    /// of the range that its visible ranges cover, and nothing when the range lies wholly
-    /// outside them; the rectangles are the ones WPF clips the whole range to. A caret, or a
-    /// range made without a provider, is WPF's own answer.
+    /// exactly as WPF answers them, without WPF's cost. WPF walks every line of the range before
+    /// it clips each to the view: 1.7 to 2.6 s for a select-all on a 2,000-item note, which
+    /// Narrator asks for once <see cref="GetChildren"/> answers an array. So WPF is asked only
+    /// for the part of the range that its visible ranges cover, widened by a line at each edge,
+    /// and nothing when the range lies wholly outside that span. The widening is needed because
+    /// WPF's visible ranges are two hit tests at the view's corners, and right-to-left text puts
+    /// a corner's hit at the far end of its line (a Hebrew top line came back as its last
+    /// character's sliver without it). Lines the widening adds outside the view are clipped by
+    /// WPF as before. A caret, or a range made without a provider, is WPF's own answer, and so is
+    /// a view whose corners WPF can't order (a view about one line tall over right-to-left text,
+    /// where WPF's visible ranges throw).
     /// </summary>
     public double[] GetBoundingRectangles()
     {
@@ -639,16 +645,27 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             return _inner.GetBoundingRectangles();
         }
 
-        // WPF's visible ranges need the layout its rectangles need, so a layout WPF can't answer
-        // from fails here as it would there. No visible range at all: WPF's own answer stands.
-        ITextRangeProvider[]? visible = _view.GetVisibleRanges();
+        ITextRangeProvider[]? visible;
+        try
+        {
+            visible = _view.GetVisibleRanges();
+        }
+        catch (ArgumentException)
+        {
+            return _inner.GetBoundingRectangles();
+        }
+
+        // WPF always answers one range here (an empty one at the start when nothing shows);
+        // anything else keeps WPF's own answer.
         if (visible is not { Length: > 0 })
         {
             return _inner.GetBoundingRectangles();
         }
 
-        ITextRangeProvider first = visible[0];
-        ITextRangeProvider last = visible[^1];
+        ITextRangeProvider first = visible[0].Clone();
+        first.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Line, -1);
+        ITextRangeProvider last = visible[^1].Clone();
+        last.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1);
         if (_inner.CompareEndpoints(TextPatternRangeEndpoint.End, first, TextPatternRangeEndpoint.Start) <= 0
             || _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, last, TextPatternRangeEndpoint.End) >= 0)
         {

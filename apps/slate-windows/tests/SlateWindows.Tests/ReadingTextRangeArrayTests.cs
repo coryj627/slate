@@ -88,9 +88,11 @@ public sealed class ReadingTextRangeArrayTests
         Assert.Equal(wpfs.Length, served.Length);
         for (int index = 0; index < wpfs.Length; index++)
         {
-            // WPF hands out one provider per peer; with no client connected a slot can be null.
+            // In process, with no client connected, WPF answers its child slots without names
+            // (measured), so a slot is matched by what it holds and, where it has one, its name.
             Assert.True(
-                ReferenceEquals(wpfs[index], served[index]) || Name(wpfs[index]) == Name(served[index]),
+                ReferenceEquals(wpfs[index], served[index])
+                    || (wpfs[index] is not null && served[index] is not null && Name(wpfs[index]) == Name(served[index])),
                 $"child {index}: WPF answers '{Name(wpfs[index])}', the decorator '{Name(served[index])}'");
         }
     });
@@ -210,6 +212,137 @@ public sealed class ReadingTextRangeArrayTests
     private static string TextOf(Paragraph paragraph) =>
         new TextRange(paragraph.ContentStart, paragraph.ContentEnd).Text.Trim();
 
+    public static TheoryData<string> Fixtures => new() { "ltr", "rtl", "mixed", "wrap", "table" };
+
+    private static string Fixture(string kind) => kind switch
+    {
+        "ltr" => "# Long\n\n" + Repeat(120, index => $"Paragraph {index}.\n\n") + "End mark.\n",
+        "rtl" => "# Long\n\n" + Repeat(120, index => $"פסקה מספר {index} כאן בעברית.\n\n") + "End mark.\n",
+        "mixed" => "# Long\n\n" + Repeat(120, index => $"Paragraph {index} ends in שלום עולם\n\n") + "End mark.\n",
+        "wrap" => "# Long\n\n" + Repeat(40, index => $"Paragraph {index}: " + string.Concat(Enumerable.Repeat("lorem ipsum dolor sit amet ", 12 + (index % 9))) + "\n\n") + "End mark.\n",
+        "table" => "# Table\n\nIntro.\n\n| A | B | C |\n|---|---|---|\n" + Repeat(60, index => (index % 3) switch
+        {
+            0 => $"| r{index} " + string.Concat(Enumerable.Repeat("long first column words ", 6)) + $"| s{index} | t{index} |\n",
+            1 => $"| r{index} | s{index} | " + string.Concat(Enumerable.Repeat("long last column words ", 6)) + "|\n",
+            _ => $"| r{index} | " + string.Concat(Enumerable.Repeat("middle words ", 10)) + $"| t{index} |\n",
+        }) + "\nEnd mark.\n",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    private static string Repeat(int count, Func<int, string> line) =>
+        string.Concat(Enumerable.Range(1, count).Select(line));
+
+    /// <summary>The decorator's rectangles are WPF's own at every scroll offset over two
+    /// paragraph pitches, in 4-DIP steps, so each edge of the view cuts a line at some offset:
+    /// for the select-all and for every line from three above the view to three below it, over
+    /// left-to-right, right-to-left, mixed, wrapped and table text. WPF's visible ranges are two
+    /// hit tests at the view's corners, and right-to-left text puts those at the far end of a
+    /// line, so the decorator gives them a line's slack at each edge (the diff red team's
+    /// finding: without it a Hebrew top line came back as a 9 px sliver).</summary>
+    [Theory]
+    [MemberData(nameof(Fixtures))]
+    public void TheRectanglesAreWpfsOwnAtEveryScrollOffset(string kind) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", Fixture(kind)));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
+        surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
+        host.Settle();
+        var all = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+        var wrong = new List<string>();
+        int compared = 0;
+        for (double offset = 0; offset <= 160; offset += 4)
+        {
+            surface.ScrollToVerticalOffset(offset);
+            host.Settle();
+            if (!SameAsWpf(all, out string? why))
+            {
+                wrong.Add($"offset {offset}, the select-all: {why}");
+            }
+
+            ITextRangeProvider[] visible = provider.GetVisibleRanges();
+            ITextRangeProvider cursor = visible[0].Clone();
+            cursor.MoveEndpointByRange(TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
+            cursor.Move(TextUnit.Line, -3);
+            int past = 0;
+            for (int step = 0; step < 120; step++)
+            {
+                var line = Assert.IsType<HeadingStyleTextRange>(cursor.Clone());
+                line.ExpandToEnclosingUnit(TextUnit.Line);
+                compared++;
+                if (!SameAsWpf(line, out string? lineWhy))
+                {
+                    wrong.Add($"offset {offset}, the line '{Shown(line.GetText(30))}': {lineWhy}");
+                }
+
+                if ((line.CompareEndpoints(TextPatternRangeEndpoint.Start, visible[^1], TextPatternRangeEndpoint.End) > 0 && ++past > 3)
+                    || cursor.Move(TextUnit.Line, 1) == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        Assert.True(compared > 100, $"premise: only {compared} lines were compared");
+        Assert.True(wrong.Count == 0, $"{wrong.Count} answers differ from WPF's ({kind}): " + string.Join("; ", wrong.Take(8)));
+    });
+
+    /// <summary>A reading view about one line tall over right-to-left text: WPF's visible
+    /// ranges throw there (their top-left hit lies after their bottom-right one), and the
+    /// decorator answers WPF's own rectangles rather than the throw.</summary>
+    [Fact]
+    public void AViewOneLineTallOverRightToLeftTextAnswersWpfsRectangles() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Long\n\n" + Repeat(60, index => $"פסקה מספר {index} כאן בעברית\n\n") + "End mark.\n"));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
+        surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
+        host.Settle();
+        var all = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+        surface.Height = 36;
+        host.Settle();
+        var wrong = new List<string>();
+        for (double offset = 60; offset <= 400; offset += 2)
+        {
+            surface.ScrollToVerticalOffset(offset);
+            host.Settle();
+            try
+            {
+                if (!SameAsWpf(all, out string? why))
+                {
+                    wrong.Add($"offset {offset}: {why}");
+                }
+            }
+            catch (ArgumentException exception)
+            {
+                wrong.Add($"offset {offset}: threw {exception.Message}");
+            }
+        }
+
+        Assert.True(wrong.Count == 0, $"{wrong.Count} offsets went wrong: " + string.Join("; ", wrong.Take(6)));
+    });
+
+    private static bool SameAsWpf(HeadingStyleTextRange range, out string? why)
+    {
+        double[] wpfs = range.Inner.GetBoundingRectangles();
+        double[] served = range.GetBoundingRectangles();
+        why = null;
+        if (wpfs.Length != served.Length)
+        {
+            why = $"WPF answers {wpfs.Length / 4} rectangles, the decorator {served.Length / 4}";
+            return false;
+        }
+
+        for (int index = 0; index < wpfs.Length; index++)
+        {
+            if (Math.Abs(wpfs[index] - served[index]) > 0.5)
+            {
+                why = $"value {index} is {served[index]:F1}, WPF's is {wpfs[index]:F1}";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>The reading surface's scroll viewport in screen pixels, the space WPF's rectangles
     /// are in.</summary>
     private static Rect ViewOnScreen(ReadingSurface surface)
@@ -237,10 +370,13 @@ public sealed class ReadingTextRangeArrayTests
         return kept.ToArray();
     }
 
-    /// <summary>WB-11's 2,000-item note: the select-all range's rectangles come back without WPF
-    /// walking every line of the note (1.8 to 2.5 s on <c>main</c>).</summary>
+    /// <summary>WB-11's 2,000-item note: a range over the whole note answers its rectangles
+    /// without WPF walking every line of it (1.7 to 2.6 s in process on <c>main</c>, 5 s with
+    /// this fact's first measurement), however the range was made: the selection, a clone of it
+    /// (clients clone constantly), the document range, and ranges grown from a found text, a
+    /// found attribute and a point.</summary>
     [Fact]
-    public void ASelectAllOnALongNoteAnswersItsRectanglesQuickly() => RunSta(() =>
+    public void ARangeOverALongNoteAnswersItsRectanglesQuickly() => RunSta(() =>
     {
         using var host = new ShownShell(("big-list.md", ListNote(1996)));
         (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "big-list.md", "Closing paragraph.");
@@ -248,21 +384,47 @@ public sealed class ReadingTextRangeArrayTests
         host.Settle();
         ITextRangeProvider all = provider.GetSelection()[0];
         Assert.Contains("item 1996", all.GetText(-1), StringComparison.Ordinal);
+        ITextRangeProvider document = provider.DocumentRange;
+        Rect view = ViewOnScreen(surface);
 
-        var clock = Stopwatch.StartNew();
-        double[] rectangles = all.GetBoundingRectangles();
-        clock.Stop();
+        var ranges = new List<(string Name, ITextRangeProvider Range)>
+        {
+            ("the select-all selection", all),
+            ("a clone of the selection", all.Clone()),
+            ("the document range", document),
+            ("a found text grown to the note's end", ToTheEnd(document.FindText("Intro line.", false, false), document)),
+            ("a found heading grown to the note's end", ToTheEnd(document.FindAttribute(HeadingStyleTextProvider.StyleIdAttribute, HeadingStyleTextProvider.StyleIdHeading1, false), document)),
+            ("a found upright run grown to the note's end", ToTheEnd(document.FindAttribute(TextPattern.IsItalicAttribute.Id, false, false), document)),
+            ("a point's range grown to the note's end", ToTheEnd(provider.RangeFromPoint(new Point(view.Left + 40, view.Top + 40)), document)),
+        };
+        var slow = new List<string>();
+        foreach ((string name, ITextRangeProvider range) in ranges)
+        {
+            var clock = Stopwatch.StartNew();
+            double[] rectangles = range.GetBoundingRectangles();
+            clock.Stop();
+            if (rectangles.Length == 0 || clock.ElapsedMilliseconds >= 500)
+            {
+                slow.Add($"{name}: {rectangles.Length / 4} rectangles in {clock.ElapsedMilliseconds} ms");
+            }
+        }
 
-        Assert.True(rectangles.Length > 0, "premise: the view shows part of the selection");
-        Assert.True(
-            clock.ElapsedMilliseconds < 500,
-            $"The select-all range's rectangles took {clock.ElapsedMilliseconds} ms on a 2,000-item note.");
+        Assert.True(slow.Count == 0, "On a 2,000-item note: " + string.Join("; ", slow));
     });
 
+    private static ITextRangeProvider ToTheEnd(ITextRangeProvider? range, ITextRangeProvider document)
+    {
+        Assert.NotNull(range);
+        range.MoveEndpointByRange(TextPatternRangeEndpoint.End, document, TextPatternRangeEndpoint.End);
+        return range;
+    }
+
     /// <summary>The text range types the app itself defines are the two that a fact holds to
-    /// array answers: this one's and the editor's (<c>EditorSemanticTextRangeTests</c>). A third
-    /// fails here until it joins a fact. WPF's own adaptor, which every WPF text field still
-    /// serves, is not one of the app's types.</summary>
+    /// array answers: this one's, and the editor's, whose children arrays
+    /// <c>EditorSemanticTextRangeTests</c> pins (its rectangles are AvalonEdit's and have no fact:
+    /// that test's windowless host has no layout, and AvalonEdit throws there). A third fails
+    /// here until it joins a fact. WPF's own adaptor, which every WPF text field still serves
+    /// (#2067), is not one of the app's types.</summary>
     [Fact]
     public void TheAppsOwnTextRangeTypesAreCoveredByAnArrayFact()
     {

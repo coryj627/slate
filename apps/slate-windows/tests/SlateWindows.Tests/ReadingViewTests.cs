@@ -907,7 +907,7 @@ public sealed partial class ReadingViewTests
                 System.Windows.Automation.Peers.PatternInterface.Text));
             var raw = Assert.IsType<HeadingStyleTextRange>(provider.DocumentRange).Inner;
             var opaque = new OpaqueTextRange(raw);
-            var decorated = new HeadingStyleTextRange(opaque);
+            var decorated = new HeadingStyleTextRange(opaque, null);
             Assert.Same(opaque.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute),
                 decorated.GetAttributeValue(HeadingStyleTextProvider.StyleIdAttribute));
             Assert.Null(decorated.FindAttribute(HeadingStyleTextProvider.StyleNameAttribute,
@@ -1392,12 +1392,12 @@ public sealed partial class ReadingViewTests
                     HeadingStyleTextProvider.StyleNameAttribute })
                 {
                     ITextRangeProvider raw = rawSpan();
-                    object? value = new HeadingStyleTextRange(raw).GetAttributeValue(attribute);
+                    object? value = new HeadingStyleTextRange(raw, null).GetAttributeValue(attribute);
                     object? expected = OriginalSyntheticAttribute(raw.Clone(), attribute);
                     Assert.True(Equals(expected, value),
                         $"Raw span {label}, attribute {attribute}: expected {expected}, actual {value}");
                     _ = raw.GetText(-1);
-                    Assert.True(Equals(value, new HeadingStyleTextRange(raw).GetAttributeValue(attribute)),
+                    Assert.True(Equals(value, new HeadingStyleTextRange(raw, null).GetAttributeValue(attribute)),
                         $"Raw span {label}, attribute {attribute}: the answer changed once WPF normalized it");
                     compared++;
                 }
@@ -1411,7 +1411,7 @@ public sealed partial class ReadingViewTests
                     foreach (bool backward in new[] { false, true })
                     {
                         ITextRangeProvider raw = rawSpan();
-                        ITextRangeProvider? found = new HeadingStyleTextRange(raw).FindAttribute(attribute, value, backward);
+                        ITextRangeProvider? found = new HeadingStyleTextRange(raw, null).FindAttribute(attribute, value, backward);
                         ITextRangeProvider? expected = OriginalFindSynthetic(rawSpan(), attribute, value, backward);
                         Assert.True((expected is null) == (found is null),
                             $"Raw span {label}, find {attribute}/{value}, backward={backward}: "
