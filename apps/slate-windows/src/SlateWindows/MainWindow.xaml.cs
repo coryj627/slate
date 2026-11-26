@@ -1750,7 +1750,8 @@ public partial class MainWindow : Window
         QuickSwitcherViewModel switcher = _viewModel.QuickSwitcher!;
         if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
         {
-            switcher.Dismiss();
+            // CB-35: the reader's dismissal, laid out at its end.
+            switcher.DismissByTheReader();
             e.Handled = true;
             return;
         }
