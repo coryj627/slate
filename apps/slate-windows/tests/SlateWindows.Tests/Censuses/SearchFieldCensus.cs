@@ -56,6 +56,7 @@ public sealed class SearchFieldCensus
         new("SearchOverlaySearch", "SearchOverlayResults",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchLeavesNothingPendingWhenItPublishes)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.SearchsScopeChangeLeavesNothingPending)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.SearchsFirstResultsLeaveNoScrollDeferred)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",

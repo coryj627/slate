@@ -196,6 +196,58 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("Search's publications left layout pending as they ended");
     });
 
+    /// <summary>Search's scope changes over results, which publish in the operation that makes
+    /// them: the tag chip's Clear, as its click runs it (the rows cleared and the Searching
+    /// state shown, then the field given the keys), and a tag activated from the reading view
+    /// over the open overlay's results (the lifecycle admits it to an open overlay; a reader
+    /// reaches it by invoking a reading-view tag through UI Automation, behind the overlay).
+    /// Each is read as a text change is: the field may still lay out its own text, so nothing
+    /// may be pending under the list or in the window outside the field.</summary>
+    [Fact]
+    public void SearchsScopeChangeLeavesNothingPending() => Sta(() =>
+    {
+        using var host = new ShownShell(TaggedTopics(20));
+        WindowActivation.Activate(host.Shell);
+        using var search = new SearchOverlay(host);
+        SearchOverlayViewModel overlay = search.Overlay;
+        ListBox list = host.Shell.SearchOverlayResults;
+        TextBox field = host.Shell.SearchOverlaySearchTextBox;
+        var findings = new Findings();
+
+        void ListTag(string tag)
+        {
+            overlay.OpenTagScoped(tag);
+            SettleUntil(
+                host,
+                () => overlay.State == SearchOverlayState.Results && overlay.Rows.Count > 0 && overlay.TagScopeName == tag,
+                $"search never listed the tag {tag}");
+            Assert.True(field.Focus(), "premise: the field refused the keys");
+            host.Settle();
+        }
+
+        ListTag("tagged");
+        Button clear = Descendants<Button>(host.Shell).Single(button => AutomationProperties.GetAutomationId(button) == "SearchOverlayClearTagScope");
+        Clean(host);
+        clear.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, clear));
+        findings.Expect(
+            overlay.TagScopeName is null && overlay.State == SearchOverlayState.Searching,
+            $"premise: the chip's Clear left the scope {overlay.TagScopeName ?? "vault"} in {overlay.State}");
+        findings.Expect(ReferenceEquals(Keyboard.FocusedElement, field), "premise: the chip's Clear did not give the field the keys");
+        findings.NothingPendingButTheField("the tag chip's Clear over the tag's results", list, field);
+        SettleUntil(host, () => overlay.State == SearchOverlayState.Idle, "the cleared scope never went back to Idle");
+
+        ListTag("tagged");
+        Clean(host);
+        overlay.OpenTagScoped("other");
+        findings.Expect(
+            overlay.TagScopeName == "other" && overlay.State == SearchOverlayState.Searching,
+            $"premise: the tag activation left the scope {overlay.TagScopeName ?? "vault"} in {overlay.State}");
+        findings.NothingPendingButTheField("another tag activated over the open overlay's results", list, field);
+        SettleUntil(host, () => overlay.State == SearchOverlayState.Results && overlay.Rows.Count > 0, "search never listed the tag other");
+
+        findings.AssertNone("Search's scope changes left layout pending as they ended");
+    });
+
     /// <summary>The Files filter's every publication: the keystroke that swaps the tree for the
     /// list, each filter run it posts, the keystroke that empties the field and swaps back, and
     /// the field's Escape clear.</summary>
@@ -1094,6 +1146,13 @@ public sealed class SearchFieldPublicationTests
 
     private static (string Path, string Text)[] Topics(int count) =>
         [.. Enumerable.Range(0, count).Select(index => ($"topic-{index:D2}.md", $"# Topic {index:D2}\n\nalpha beta gamma {index:D2}\n"))];
+
+    /// <summary>Notes that all carry the tag <c>tagged</c>, and every second one the tag
+    /// <c>other</c>.</summary>
+    private static (string Path, string Text)[] TaggedTopics(int count) =>
+        [.. Enumerable.Range(0, count).Select(index => (
+            $"topic-{index:D2}.md",
+            $"# Topic {index:D2}\n\nalpha beta gamma {index:D2} #tagged{(index % 2 == 0 ? " #other" : string.Empty)}\n"))];
 
     /// <summary>Three notes and <paramref name="count"/> folders, each with a folder inside: the
     /// root's listing is one page, and each folder's own listing is another.</summary>
