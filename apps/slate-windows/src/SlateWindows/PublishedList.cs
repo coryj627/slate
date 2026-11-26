@@ -48,13 +48,40 @@ internal static class PublishedList
         Settle(list);
     }
 
-    /// <summary>A publication's end on the view's side: shown when the publication chose the
-    /// list's selection, else laid out only, so a reader's own scroll is kept.</summary>
+    /// <summary><see cref="Show"/>, with the scroll kept inside the list. The list's own
+    /// scroll viewer handles the row's bring-into-view and raises another from itself, which
+    /// a scroll viewer around the list then follows: at twice the text size Move To's sheet
+    /// moved under the field the reader types in (measured, 0 to 29.5). That second request is
+    /// stopped at the list while the publication shows its row. The arrows keep
+    /// <see cref="Show"/>, so the sheet follows the selection a reader moves.</summary>
+    internal static void ShowInside(ListBox list, object? row)
+    {
+        RequestBringIntoViewEventHandler keep = (_, e) =>
+        {
+            if (e.TargetObject is ScrollViewer viewer && ReferenceEquals(viewer.TemplatedParent, list))
+            {
+                e.Handled = true;
+            }
+        };
+        list.AddHandler(FrameworkElement.RequestBringIntoViewEvent, keep);
+        try
+        {
+            Show(list, row);
+        }
+        finally
+        {
+            list.RemoveHandler(FrameworkElement.RequestBringIntoViewEvent, keep);
+        }
+    }
+
+    /// <summary>A publication's end on the view's side: shown inside the list when the
+    /// publication chose the list's selection, else laid out only, so a reader's own scroll is
+    /// kept.</summary>
     internal static void Published(ListBox list, RowsPublishedEventArgs published, object? selected)
     {
         if (published.ChoseTheSelection)
         {
-            Show(list, selected);
+            ShowInside(list, selected);
         }
         else
         {
