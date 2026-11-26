@@ -90,6 +90,12 @@ internal sealed class CanvasRendererView : FrameworkElement
         tooltipBorder.MouseEnter += (_, _) => _pointerOnTooltip = true;
         tooltipBorder.MouseLeave += (_, _) =>
         {
+            // A leave the pointer never made (the popup moved or laid out again under it) keeps
+            // the tooltip (CB-36).
+            if (PointerIsOnTheTooltip())
+            {
+                return;
+            }
             _pointerOnTooltip = false;
             UpdateTooltip();
         };
@@ -1724,12 +1730,37 @@ internal sealed class CanvasRendererView : FrameworkElement
         HoverAt(e.GetPosition(this));
     }
 
+    /// <summary>HOVERABLE (1.4.13): when the pointer crosses from a card or chip onto the tooltip
+    /// below it, the board's leave can arrive before the tooltip's own enter, so the pointer's
+    /// place decides: on the open tooltip, it holds the tooltip as that enter will (CB-36, found
+    /// with the real pointer). Anywhere else the hover ends.</summary>
     protected override void OnMouseLeave(System.Windows.Input.MouseEventArgs e)
     {
         base.OnMouseLeave(e);
+        if (PointerIsOnTheTooltip())
+        {
+            _pointerOnTooltip = true;
+        }
         _hoverKey = null;
         _lastPointer = null;
         UpdateTooltip();
+    }
+
+    /// <summary>Whether the pointer stands on the open tooltip's chrome now, read from where the
+    /// pointer is rather than from the events: the board's leave and the tooltip's enter and
+    /// leave arrive in either order across the popup's window, and a popup that moves or lays out
+    /// again can raise a leave the pointer never made.</summary>
+    private bool PointerIsOnTheTooltip()
+    {
+        if (!_tooltip.IsOpen
+            || _tooltip.Child is not FrameworkElement chrome
+            || PresentationSource.FromVisual(chrome) is null
+            || RestingPointerHold.PointerForTests() is not { } screen)
+        {
+            return false;
+        }
+        Point at = chrome.PointFromScreen(new Point(screen.X, screen.Y));
+        return at.X >= 0 && at.Y >= 0 && at.X < chrome.ActualWidth && at.Y < chrome.ActualHeight;
     }
 
     /// <summary>The pointer at a view point: a chip under it is hovered before the card under

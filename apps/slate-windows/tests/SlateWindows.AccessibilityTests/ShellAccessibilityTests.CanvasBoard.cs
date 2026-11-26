@@ -285,10 +285,10 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>
     /// Plan 47 CB-36 (#1721, the owner's answer 3), with the real pointer and no seat: the pointer
-    /// on a truncated card shows its title; on a cut-off chip drawn over that card it shows the
-    /// connection's full label instead; and the pointer moved from the chip down onto the tooltip
-    /// keeps it open. Before CB-36 the board drew no chips, and the chip's point showed the card's
-    /// title.
+    /// on a truncated card shows its title, and stepped down onto that tooltip keeps it open; on a
+    /// cut-off chip drawn over the card it shows the connection's full label instead, and stepped
+    /// down onto that tooltip keeps it open. Before CB-36 the board drew no chips, the chip's point
+    /// showed the card's title, and a tooltip closed as the pointer crossed onto it.
     /// </summary>
     [Fact]
     [Trait("gate", "W-C")]
@@ -361,6 +361,20 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(5)).Success,
                 "premise: the pointer on the card away from the chip showed no title, so the card is not truncated.");
 
+            // HOVERABLE (1.4.13), the card's tooltip, found and fixed here: the pointer stepped a pixel
+            // at a time from the card, beside the chip, down onto the title's tooltip keeps it open.
+            // The board's leave used to come before the tooltip's enter and close it. Had it closed,
+            // the pointer would rest on bare board below the card, which shows nothing.
+            System.Drawing.Rectangle titleRect = (TooltipText(automation, process.Id, LongTitle)
+                ?? throw new Xunit.Sdk.XunitException("premise: the card's tooltip went before it was read."))
+                .Properties.BoundingRectangle.Value;
+            StepDown(cardRect.X + 6, cardRect.Y + 6, titleRect.Y + (titleRect.Height / 2));
+            Assert.True(
+                Retry.WhileFalse(
+                    () => TooltipText(automation, process.Id, LongLabel, LongTitle)?.Properties.Name.ValueOrDefault == LongTitle,
+                    TimeSpan.FromSeconds(3)).Success,
+                "the card's tooltip closed as the pointer moved onto it (1.4.13: hoverable).");
+
             Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), chip.Y + (chip.Height / 2)));
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(400));
             string shown = "(nothing)";
@@ -375,11 +389,7 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(tip is not null, $"the pointer on the chip over the card showed {shown}, not the connection's label (#1721).");
 
             System.Drawing.Rectangle tipRect = tip.Properties.BoundingRectangle.Value;
-            for (int y = chip.Y + (chip.Height / 2); y <= tipRect.Y + (tipRect.Height / 2); y += 3)
-            {
-                Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), y));
-            }
-            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
+            StepDown(chip.X + (chip.Width / 2), chip.Y + (chip.Height / 2), tipRect.Y + (tipRect.Height / 2));
             // The tooltip lies below the chip: had it closed, the pointer would rest on the card or
             // on bare board, which show the title or nothing, so a read that keeps finding the
             // label is the tooltip that stayed.
@@ -407,6 +417,17 @@ public sealed partial class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>The real pointer stepped down one pixel at a time, as a slow hand moves it, so it
+    /// crosses the row where an element ends and its tooltip begins.</summary>
+    private static void StepDown(int x, int fromY, int toY)
+    {
+        for (int y = fromY; y <= toY; y++)
+        {
+            Mouse.MoveTo(new System.Drawing.Point(x, y));
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
     }
 
     /// <summary>The board's tooltip text, if its popup shows one of the given texts. UI Automation
