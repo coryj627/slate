@@ -5736,16 +5736,11 @@ public sealed class CanvasDocumentTests : IDisposable
             Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: hovering the truncated card opened nothing.");
             surface.VisualForTests.PointerOntoTheTooltipForTests();
             Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the pointer on the tooltip did not keep it open.");
-            CanvasPublication before = document.AppliedPublication!;
 
-            File.WriteAllText(
-                Path.Combine(_fixture.Root, "longtitle.canvas"),
-                "{\"nodes\":[{\"id\":\"long\",\"type\":\"text\",\"text\":\"Now short\",\"x\":0,\"y\":0,\"width\":240,\"height\":140},"
-                + "{\"id\":\"short\",\"type\":\"text\",\"text\":\"Short\",\"x\":300,\"y\":0,\"width\":240,\"height\":140}],\"edges\":[]}");
-            Task reload = document.ReloadAsync();
-            PumpedDispatcher.PumpUntilDrained(reload, TimeSpan.FromSeconds(10));
-            PumpUntil(() => !ReferenceEquals(document.AppliedPublication, before)
-                && ReferenceEquals(surface.VisualForTests.Engine.Current!.Source, document.AppliedPublication));
+            // An edit in place, which keeps the board shown; a reload hides it while it loads, and
+            // hiding closes the tooltip by the popup's own rules.
+            Assert.True(document.CanvasCommitCardEdit("long", "Now short"), "premise: the card edit was refused.");
+            PumpUntil(() => surface.VisualForTests.Engine.Current!.Source.Loaded!.Population.SceneByNode["long"].Title == "Now short");
 
             Assert.False(
                 surface.VisualForTests.TooltipIsOpenForTests,
