@@ -10,8 +10,11 @@ using System.Windows.Documents;
 namespace SlateWindows.Reading;
 
 /// <summary>
-/// A forwarding decorator over WPF's own text provider that answers the
-/// UIA <c>StyleId</c> text attribute for heading paragraphs.
+/// A decorator over WPF's own text provider that answers the UIA
+/// <c>StyleId</c> text attribute for heading paragraphs, and shapes two
+/// range answers WPF gets wrong (CB-21, #1330): <c>GetChildren</c> is an
+/// array, never null, and <c>GetBoundingRectangles</c> covers the visible
+/// lines only (<see cref="HeadingStyleTextRange"/>).
 ///
 /// Why it exists: NVDA speaks heading level during LINEAR reading from
 /// the `StyleId` text attribute — `AutomationProperties.HeadingLevel`
@@ -99,18 +102,24 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
         return wrapped;
     }
 
-    private static ITextRangeProvider Wrap(ITextRangeProvider? range) =>
-        range is null ? null! : new HeadingStyleTextRange(range);
+    private ITextRangeProvider Wrap(ITextRangeProvider? range) =>
+        range is null ? null! : new HeadingStyleTextRange(range, _inner);
 }
 
-/// <summary>One wrapped range. Forwards everything; answers StyleId.</summary>
+/// <summary>One wrapped range. Forwards everything but three answers: StyleId (and
+/// StyleName), <see cref="GetChildren"/> and <see cref="GetBoundingRectangles"/>.</summary>
 internal sealed class HeadingStyleTextRange : ITextRangeProvider
 {
     private readonly ITextRangeProvider _inner;
 
-    public HeadingStyleTextRange(ITextRangeProvider inner)
+    // WPF's own provider, for its visible ranges; null for a range made without one, which
+    // then answers its rectangles as WPF does.
+    private readonly ITextProvider? _view;
+
+    public HeadingStyleTextRange(ITextRangeProvider inner, ITextProvider? view = null)
     {
         _inner = inner;
+        _view = view;
     }
 
     internal ITextRangeProvider Inner => _inner;
@@ -442,7 +451,7 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     // --- pure forwarding, with unwrap where the base casts ------------
 
-    public ITextRangeProvider Clone() => new HeadingStyleTextRange(_inner.Clone());
+    public ITextRangeProvider Clone() => new HeadingStyleTextRange(_inner.Clone(), _view);
 
     public bool Compare(ITextRangeProvider range) => _inner.Compare(Unwrap(range));
 
@@ -597,23 +606,66 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
                 }
             }
             ITextRangeProvider? found = match is null ? null : query.RangeOf(match);
-            return found is null ? null : new HeadingStyleTextRange(found);
+            return found is null ? null : new HeadingStyleTextRange(found, _view);
         }
         if (attribute == HeadingStyleTextProvider.FontNameAttribute && value is string name)
         {
             value = ShippedFontNames.SourceOf(name);
         }
         ITextRangeProvider? foundInner = _inner.FindAttribute(attribute, value, backward);
-        return foundInner is null ? null : new HeadingStyleTextRange(foundInner);
+        return foundInner is null ? null : new HeadingStyleTextRange(foundInner, _view);
     }
 
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase)
     {
         ITextRangeProvider? found = _inner.FindText(text, backward, ignoreCase);
-        return found is null ? null : new HeadingStyleTextRange(found);
+        return found is null ? null : new HeadingStyleTextRange(found, _view);
     }
 
-    public double[] GetBoundingRectangles() => _inner.GetBoundingRectangles();
+    /// <summary>
+    /// CB-21 (#1330): the rectangles of the range's visible lines, UI Automation's contract,
+    /// as WPF answers them. WPF walks every line of the range before it clips each to the view,
+    /// which took 5 s on a 2,000-item note once Narrator asked for a select-all's rectangles (it
+    /// asks once <see cref="GetChildren"/> answers an array). So WPF is asked only for the part
+    /// of the range that its visible ranges cover, and nothing when the range lies wholly
+    /// outside them; the rectangles are the ones WPF clips the whole range to. A caret, or a
+    /// range made without a provider, is WPF's own answer.
+    /// </summary>
+    public double[] GetBoundingRectangles()
+    {
+        if (_view is null
+            || _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.End) == 0)
+        {
+            return _inner.GetBoundingRectangles();
+        }
+
+        // WPF's visible ranges need the layout its rectangles need, so a layout WPF can't answer
+        // from fails here as it would there. No visible range at all: WPF's own answer stands.
+        ITextRangeProvider[]? visible = _view.GetVisibleRanges();
+        if (visible is not { Length: > 0 })
+        {
+            return _inner.GetBoundingRectangles();
+        }
+
+        ITextRangeProvider first = visible[0];
+        ITextRangeProvider last = visible[^1];
+        if (_inner.CompareEndpoints(TextPatternRangeEndpoint.End, first, TextPatternRangeEndpoint.Start) <= 0
+            || _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, last, TextPatternRangeEndpoint.End) >= 0)
+        {
+            return [];
+        }
+
+        ITextRangeProvider part = _inner.Clone();
+        if (part.CompareEndpoints(TextPatternRangeEndpoint.Start, first, TextPatternRangeEndpoint.Start) < 0)
+        {
+            part.MoveEndpointByRange(TextPatternRangeEndpoint.Start, first, TextPatternRangeEndpoint.Start);
+        }
+        if (part.CompareEndpoints(TextPatternRangeEndpoint.End, last, TextPatternRangeEndpoint.End) > 0)
+        {
+            part.MoveEndpointByRange(TextPatternRangeEndpoint.End, last, TextPatternRangeEndpoint.End);
+        }
+        return part.GetBoundingRectangles();
+    }
 
     public IRawElementProviderSimple GetEnclosingElement() => _inner.GetEnclosingElement();
 
@@ -639,7 +691,14 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public void ScrollIntoView(bool alignToTop) => _inner.ScrollIntoView(alignToTop);
 
-    public IRawElementProviderSimple[] GetChildren() => _inner.GetChildren();
+    /// <summary>
+    /// CB-21 (#1330): an array, never null. WPF's adaptor answers null when the range holds no
+    /// element that is an automation child, and Narrator abandons a selection's announcement on
+    /// that null (measured: Ctrl+A was silent, and with an empty array it says "body selected").
+    /// UI Automation's classic client API hands every client an empty array either way, so only
+    /// the provider can see the difference. A range that holds children keeps WPF's array.
+    /// </summary>
+    public IRawElementProviderSimple[] GetChildren() => _inner.GetChildren() ?? [];
 
     private static ITextRangeProvider Unwrap(ITextRangeProvider range) =>
         range is HeadingStyleTextRange wrapped ? wrapped.Inner : range;
