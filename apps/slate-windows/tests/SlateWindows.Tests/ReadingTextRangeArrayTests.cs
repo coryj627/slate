@@ -391,9 +391,12 @@ public sealed class ReadingTextRangeArrayTests
         (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
         Rect view = ViewOnScreen(surface);
         var document = Assert.IsType<HeadingStyleTextRange>(provider.DocumentRange);
+        Assert.True(
+            document.Inner.GetBoundingRectangles().Length == 0,
+            "premise: WPF's own answer for a table-first note's document range is no longer empty");
 
         double[] served = document.GetBoundingRectangles();
-        Assert.True(served.Length > 0, $"the document range answered no rectangle (WPF's own answers {document.Inner.GetBoundingRectangles().Length / 4})");
+        Assert.True(served.Length > 0, "the document range answered no rectangle, as WPF's own does");
         Assert.True(
             Meeting(served, view).Length == served.Length,
             $"{(served.Length - Meeting(served, view).Length) / 4} of {served.Length / 4} rectangles lie outside the view {view}");
