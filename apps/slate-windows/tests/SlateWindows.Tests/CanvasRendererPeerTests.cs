@@ -112,15 +112,16 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.Equal("a", board.Document.Selection.Selected);
     });
 
-    /// <summary>D3/D4 with a union wider than the view: no pan at the
-    /// current zoom contains it, so the realization brings the designated
-    /// endpoint — the card Invoke selects — wholly into view, never zooms,
-    /// and Invoke then selects that card with one announcement and no
-    /// further pan.</summary>
+    /// <summary>D3/D4 with a union wider than the view: no pan at the current zoom contains it.
+    /// Plan 47 CB-36 (#1721, the lead's ruling 4): the edge's element is its chip, so the
+    /// realization brings the chip, at the line's midpoint, wholly into view and never zooms (D4:
+    /// a realization always scrolls into view). Invoke then selects the end-style table's
+    /// endpoint with one announcement and pans to it, as a move made on the board does. Before
+    /// CB-36 the realization panned to that endpoint, and the element realized was the union.</summary>
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
-    public void AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint(bool fromArrow, bool toArrow) => RunSta(() =>
+    public void AnEdgeLongerThanTheViewportRealizesOnItsChip(bool fromArrow, bool toArrow) => RunSta(() =>
     {
         // The designated endpoint is the LEFT card in both rows: the
         // to-node for (false,true), the from-node for (true,false).
@@ -143,7 +144,10 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
         CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
         Assert.Equal(before.Zoom, after.Zoom);
-        AssertInView(after, 20_000, 40, 200, 100);
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+        Assert.True(
+            chip.Box.Left >= 0 && chip.Box.Top >= 0 && chip.Box.Right <= after.ViewWidth && chip.Box.Bottom <= after.ViewHeight,
+            $"the realized edge's chip sits at {chip.Box}, outside the {after.ViewWidth}×{after.ViewHeight} view (D4).");
         Assert.Same(edge, board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
         Assert.False(edge.IsOffscreen());
 
@@ -154,8 +158,33 @@ public sealed class CanvasRendererPeerTests : IDisposable
         board.Announcer.FlushForTests();
         Assert.Equal("left", board.Document.Selection.Selected);
         Assert.Single(_announced);
-        CanvasViewportState invoked = board.Renderer.Engine.Current!.Viewport;
-        Assert.Equal((after.PanX, after.PanY, after.Zoom), (invoked.PanX, invoked.PanY, invoked.Zoom));
+        AssertInView(board.Renderer.Engine.Current!.Viewport, 20_000, 40, 200, 100);
+    });
+
+    /// <summary>Plan 47 CB-36 (the lead's ruling 4): a short edge with a long label has a chip wider
+    /// than its union, so the realization contains the union and the chip together: the element
+    /// and both its cards are in view.</summary>
+    [Fact]
+    public void AShortEdgesLongLabelIsInViewAfterItsRealization() => RunSta(() =>
+    {
+        WriteCanvas(
+            "narrow.canvas",
+            [Card("home", "Home", 40, 40), Card("top", "Top", 20_000, 0, 60, 40), Card("low", "Low", 20_000, 200, 60, 40)],
+            [Edge("e1", "top", "low", "a label much wider than its two narrow cards")]);
+        using Board board = Open("narrow.canvas");
+        board.ZoomTo(1);
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
+
+        ((IVirtualizedItemProvider)edge).Realize();
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e1")) == CanvasPeerCell.Materialized);
+
+        CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+        Assert.True(chip.Box.Width > 60, $"premise: the chip ({chip.Box.Width} wide) is not wider than its cards.");
+        Assert.True(
+            chip.Box.Left >= 0 && chip.Box.Top >= 0 && chip.Box.Right <= after.ViewWidth && chip.Box.Bottom <= after.ViewHeight,
+            $"the realized edge's chip sits at {chip.Box}, outside the {after.ViewWidth}×{after.ViewHeight} view.");
+        AssertInView(after, 20_000, 0, 60, 240);
     });
 
     /// <summary>D5's end-style table, every cell: Invoke selects the
@@ -251,10 +280,10 @@ public sealed class CanvasRendererPeerTests : IDisposable
         AssertInView(after, 20_000, 40, 500, 100);
     });
 
-    /// <summary>A labelled edge's rectangle is its endpoints' union, so it
-    /// covers them: a point on an endpoint card is the CARD (a reader's
-    /// mouse or touch hears the card), and only a point no card covers is
-    /// the edge's.</summary>
+    /// <summary>A point on an endpoint card is the CARD (a reader's mouse or touch hears the card).
+    /// Plan 47 CB-36 (#1721): the edge's rectangle is its drawn chip, on the line between the
+    /// cards, so it covers neither card; a point on the chip is the edge; a point of the old
+    /// union rectangle that is on neither card nor chip is the board.</summary>
     [Fact]
     public void APointOnAnEndpointCardIsTheCardNotTheEdge() => RunSta(() =>
     {
@@ -271,12 +300,48 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
         Rect a = alpha.GetBoundingRectangle();
         Rect b = beta.GetBoundingRectangle();
-        Rect union = edge.GetBoundingRectangle();
-        Assert.True(union.Contains(a) && union.Contains(b), "premise: the edge's rectangle covers both cards.");
-        Assert.Same(alpha, board.Peer.GetPeerFromPoint(new Point(a.X + (a.Width / 2), a.Y + (a.Height / 2))));
-        Assert.Same(beta, board.Peer.GetPeerFromPoint(new Point(b.X + (b.Width / 2), b.Y + (b.Height / 2))));
-        // Between the cards: the top-right corner of the union, on neither.
-        Assert.Same(edge, board.Peer.GetPeerFromPoint(new Point(union.Right - 2, union.Top + 2)));
+        Rect chip = edge.GetBoundingRectangle();
+        Point aCentre = new(a.X + (a.Width / 2), a.Y + (a.Height / 2));
+        Point bCentre = new(b.X + (b.Width / 2), b.Y + (b.Height / 2));
+        Assert.False(chip.Contains(aCentre) || chip.Contains(bCentre), "premise: the edge's rectangle covers a card's centre.");
+        Assert.Same(alpha, board.Peer.GetPeerFromPoint(aCentre));
+        Assert.Same(beta, board.Peer.GetPeerFromPoint(bCentre));
+        Assert.Same(edge, board.Peer.GetPeerFromPoint(new Point(chip.X + (chip.Width / 2), chip.Y + (chip.Height / 2))));
+        // The union's top-right corner: on neither card nor the chip, so the board's.
+        Rect union = Rect.Union(a, b);
+        Assert.Same(board.Peer, board.Peer.GetPeerFromPoint(new Point(union.Right - 2, union.Top + 2)));
+    });
+
+    /// <summary>Plan 47 CB-36 (#1721): the point walk follows what is drawn. A chip is drawn over
+    /// the cards, so a point on a chip is its connection even over a card (here a self-loop's chip
+    /// on its own card); a point on that card away from the chip is the card; a point on a
+    /// connection's bare line, away from its chip, is the board itself.</summary>
+    [Fact]
+    public void APointOnAChipIsTheConnectionAndOnTheBareLineIsTheBoard() => RunSta(() =>
+    {
+        WriteCanvas(
+            "chippoint.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 600, 40), Card("c", "Gamma", 40, 300)],
+            [Edge("spans", "a", "b", "spans"), Edge("loop", "c", "c", "loops")]);
+        using Board board = Open("chippoint.canvas");
+        board.ZoomTo(1);
+        List<AutomationPeer> children = board.Children();
+        CanvasCardAutomationPeer gamma = children.OfType<CanvasCardAutomationPeer>().Single(card => card.Key.Id == "c");
+        CanvasEdgeAutomationPeer spans = children.OfType<CanvasEdgeAutomationPeer>().Single(edge => edge.Key.Id == "spans");
+        CanvasEdgeAutomationPeer loop = children.OfType<CanvasEdgeAutomationPeer>().Single(edge => edge.Key.Id == "loop");
+        Rect loopChip = loop.GetBoundingRectangle();
+        Rect spansChip = spans.GetBoundingRectangle();
+        Rect card = gamma.GetBoundingRectangle();
+        Assert.True(card.Contains(loopChip), "premise: the self-loop's chip does not sit on its card.");
+
+        Assert.Same(loop, board.Peer.GetPeerFromPoint(new Point(loopChip.X + (loopChip.Width / 2), loopChip.Y + (loopChip.Height / 2))));
+        Assert.Same(gamma, board.Peer.GetPeerFromPoint(new Point(card.X + 4, card.Y + 4)));
+        Assert.Same(spans, board.Peer.GetPeerFromPoint(new Point(spansChip.X + (spansChip.Width / 2), spansChip.Y + (spansChip.Height / 2))));
+        // The line from Alpha's centre to Beta's runs at their centres' height; a point on it
+        // between Alpha and the chip is on no card and no chip.
+        Point onTheLine = board.Renderer.ViewToScreen(new Rect(new Point(300, 90), new Size(0, 0))).TopLeft;
+        Assert.False(spansChip.Contains(onTheLine), "premise: the line's point lies on the chip.");
+        Assert.Same(board.Peer, board.Peer.GetPeerFromPoint(onTheLine));
     });
 
     /// <summary>Peers materialize up to a view beyond the board, and an edge's
@@ -290,18 +355,23 @@ public sealed class CanvasRendererPeerTests : IDisposable
         WriteCanvas(
             "wide.canvas",
             [Card("a", "Alpha", 40, 40), Card("b", "Beta", 6_000, 40)],
-            [Edge("e1", "a", "b", "spans")]);
+            [Edge("e1", "a", "b", "a label long enough to straddle the edge")]);
         using Board board = Open("wide.canvas");
         board.ZoomTo(1);
+        // Plan 47 CB-36 (#1721): the edge's rectangle is its chip, at the line's midpoint
+        // (x 3,120 here). Pan the board until the chip straddles its right edge.
+        double width = board.Renderer.ActualWidth;
+        board.PanTo(width - 3_120, 0);
         CanvasEdgeAutomationPeer edge = Assert.Single(board.Children().OfType<CanvasEdgeAutomationPeer>());
         Rect bounds = board.Peer.GetBoundingRectangle();
-        Rect union = edge.GetBoundingRectangle();
-        var beside = new Point(bounds.Right + 20, union.Top + (union.Height / 2));
+        Rect chip = edge.GetBoundingRectangle();
+        var beside = new Point(bounds.Right + (chip.Right - bounds.Right) / 2, chip.Top + (chip.Height / 2));
         Assert.True(
-            union.Contains(beside),
-            $"premise: the edge's union {union} reaches past the board {bounds} to {beside}.");
+            chip.Contains(beside) && !bounds.Contains(beside),
+            $"premise: the edge's chip {chip} reaches past the board {bounds} to {beside}.");
 
         Assert.Null(board.Peer.GetPeerFromPoint(beside));
+        Assert.Same(edge, board.Peer.GetPeerFromPoint(new Point(bounds.Right - 2, chip.Top + (chip.Height / 2))));
 
         // Through the window, onto the sibling switcher button above the board.
         AutomationPeer window = UIElementAutomationPeer.CreatePeerForElement(board.Window);
@@ -1253,6 +1323,12 @@ public sealed class CanvasRendererPeerTests : IDisposable
             ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 1)).Drawing);
         Rect visible = new(0, 0, board.Renderer.ActualWidth, board.Renderer.ActualHeight);
         Assert.False(visible.Contains(chips[1].Box), "premise: the margin edge's chip lies inside the board.");
+        // A windowed edge whose chip lies past the board is a child that reads on screen, as a card
+        // in the window's margin does, and reports its chip (Call 3).
+        CanvasEdgeAutomationPeer margin = Assert.Single(
+            board.Children().OfType<CanvasEdgeAutomationPeer>(), edge => edge.Key == CanvasPeerKey.Edge("margin"));
+        Assert.False(margin.IsOffscreen(), "a windowed edge whose chip lies past the board read offscreen.");
+        Assert.False(board.Peer.GetBoundingRectangle().IntersectsWith(margin.GetBoundingRectangle()));
         foreach (DrawnChip chip in chips)
         {
             Assert.Same(board.Window.FindResource("Slate.SurfaceBrush"), chip.Fill);

@@ -283,6 +283,127 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// Plan 47 CB-36 (#1721, the owner's answer 3), with the real pointer: a cut-off chip drawn
+    /// over a truncated card takes the pointer, so its tooltip shows the connection's full label,
+    /// not the card's title; and the pointer moved from the chip down onto the tooltip keeps it
+    /// open. Before CB-36 the board drew no chips, and the same point showed the card's title.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void CanvasBoard_APointerOnAChipOverACardShowsTheChipsLabel()
+    {
+        const string LongTitle = "A card title far too long to fit in two short lines of this narrow card at all";
+        const string LongLabel = "a connection label far too long to fit in one chip of two hundred units";
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-canvas-chip-hover-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        // One truncated card with a self-loop: the loop's chip sits on the card's centre.
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "hover.canvas"),
+            "{\"nodes\":[{\"id\":\"c\",\"type\":\"text\",\"text\":\"" + LongTitle
+            + "\",\"x\":40,\"y\":40,\"width\":260,\"height\":90}],\"edges\":["
+            + "{\"id\":\"loop\",\"fromNode\":\"c\",\"toNode\":\"c\",\"toEnd\":\"arrow\",\"label\":\"" + LongLabel + "\"}]}");
+
+        Process? process = null;
+        try
+        {
+            // FlaUI's Mouse makes this process DPI-aware on first use: touch it before reading any
+            // rectangle, so rectangles and pointer moves share one coordinate space.
+            _ = Mouse.Position;
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-canvas-chip-hover-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo) ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "Canvas chip hover"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process, automation, Path.Combine(logDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            OpenCanvasFromTree(window, automation, "hover");
+            WaitForElement(window, "CanvasShowVisual", TimeSpan.FromSeconds(20)).AsRadioButton().IsChecked = true;
+            AutomationElement board = WaitForElement(window, "CanvasVisualBoard", TimeSpan.FromSeconds(20));
+            AutomationElement loop = Retry.WhileNull(
+                () => board.FindAllChildren(finder => finder.ByControlType(ControlType.Custom)).FirstOrDefault(),
+                TimeSpan.FromSeconds(20)).Result
+                ?? throw new Xunit.Sdk.XunitException("premise: the self-loop is not one of the board's children.");
+            AssertAxeClean(process, "canvas-board-chips");
+
+            System.Drawing.Rectangle chip = loop.Properties.BoundingRectangle.Value;
+            window.SetForeground();
+            Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), chip.Y + (chip.Height / 2)));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(400));
+            string shown = "(nothing)";
+            AutomationElement? tip = Retry.WhileNull(
+                () =>
+                {
+                    AutomationElement? text = TooltipText(automation, process.Id, LongLabel, LongTitle);
+                    shown = text?.Properties.Name.ValueOrDefault ?? "(nothing)";
+                    return text?.Properties.Name.ValueOrDefault == LongLabel ? text : null;
+                },
+                TimeSpan.FromSeconds(5)).Result;
+            Assert.True(tip is not null, $"the pointer on the chip over the card showed {shown}, not the connection's label (#1721).");
+
+            System.Drawing.Rectangle tipRect = tip.Properties.BoundingRectangle.Value;
+            for (int y = chip.Y + (chip.Height / 2); y <= tipRect.Y + (tipRect.Height / 2); y += 3)
+            {
+                Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), y));
+            }
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
+            Assert.True(
+                TooltipText(automation, process.Id, LongLabel, LongTitle)?.Properties.Name.ValueOrDefault == LongLabel,
+                "the chip's tooltip closed as the pointer moved onto it (1.4.13: hoverable).");
+        }
+        catch (Exception)
+        {
+            PreserveEvidence(nameof(CanvasBoard_APointerOnAChipOverACardShowsTheChipsLabel), logDirectory);
+            throw;
+        }
+        finally
+        {
+            Mouse.MoveTo(new System.Drawing.Point(5, 5));
+            process?.Kill(entireProcessTree: true);
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The board's tooltip text, if its popup shows one of the given texts. UI Automation
+    /// lists an owned popup window under its owner, so the search runs under the process's
+    /// windows.</summary>
+    private static AutomationElement? TooltipText(UIA3Automation automation, int processId, params string[] texts)
+    {
+        try
+        {
+            foreach (AutomationElement top in automation.GetDesktop().FindAllChildren(automation.ConditionFactory.ByProcessId(processId)))
+            {
+                AutomationElement? hit = top.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.Text))
+                    .FirstOrDefault(element => texts.Contains(element.Properties.Name.ValueOrDefault));
+                if (hit is not null)
+                {
+                    return hit;
+                }
+            }
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+        }
+        return null;
+    }
+
     /// <summary>The names of the board's children, read again from the board each time; an empty
     /// set while a transient fault stands.</summary>
     private static HashSet<string> BoardChildNames(AutomationElement board)
