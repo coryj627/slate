@@ -901,6 +901,8 @@ internal sealed class CanvasCardPickerViewModel
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
+    public event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     internal CanvasCardPickerRequest Request { get; }
 
     internal CanvasCardPickerModel Model { get; }
@@ -930,15 +932,19 @@ internal sealed class CanvasCardPickerViewModel
         {
             _filter = value ?? string.Empty;
             Rows = Model.Visible(_filter);
-            if (SelectedRow is null || !Rows.Contains(SelectedRow))
+            // CB-35: the rows first. The list's two-way selection writes null back when its
+            // items drop the selected row, so the choice is made after it, and raised last.
+            PropertyChanged?.Invoke(
+                this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Rows)));
+            bool chose = SelectedRow is null || !Rows.Contains(SelectedRow);
+            if (chose)
             {
                 SelectedRow = Rows.IsEmpty ? null : Rows[0];
             }
             PropertyChanged?.Invoke(
-                this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Rows)));
-            PropertyChanged?.Invoke(
                 this,
                 new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedRow)));
+            RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(chose));
         }
     }
 

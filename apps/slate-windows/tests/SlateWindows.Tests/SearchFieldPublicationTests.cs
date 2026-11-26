@@ -114,7 +114,7 @@ public sealed class SearchFieldPublicationTests
             Clean(host);
             added = false;
             field.Text = query;
-            findings.NothingPending($"typed '{query}': the keystroke's clear", list);
+            findings.NothingPendingButTheField($"typed '{query}': the keystroke's clear", list, field);
             Watch(findings, new Stage($"typed '{query}'", () => added, () => findings.NothingPending($"typed '{query}': the rank's publication", list)));
             SettleUntil(host, () => !switcher.IsRanking, $"the rank of '{query}'");
         }
@@ -133,7 +133,7 @@ public sealed class SearchFieldPublicationTests
         Clean(host);
         failed = false;
         field.Text = FailingQuery;
-        findings.NothingPending("typed a query whose rank fails: the keystroke's clear", list);
+        findings.NothingPendingButTheField("typed a query whose rank fails: the keystroke's clear", list, field);
         Watch(findings, new Stage("the failed rank", () => failed, () => findings.NothingPending("the failed rank's publication", list)));
 
         findings.AssertNone("Quick Open's publications left layout pending as they ended");
@@ -220,7 +220,7 @@ public sealed class SearchFieldPublicationTests
             Clean(host);
             added = false;
             field.Text = query;
-            findings.NothingPending($"typed '{query}': the keystroke", swap);
+            findings.NothingPendingButTheField($"typed '{query}': the keystroke", swap, field);
             Watch(findings, new Stage($"typed '{query}'", () => added, () => findings.NothingPending($"typed '{query}': the filter's publication", swap)));
             SettleUntil(host, () => !sidebar.IsFiltering, $"the filter of '{query}'");
         }
@@ -231,7 +231,7 @@ public sealed class SearchFieldPublicationTests
 
         Clean(host);
         field.Text = string.Empty;
-        findings.NothingPending("emptied: the keystroke that swaps back to the tree", swap);
+        findings.NothingPendingButTheField("emptied: the keystroke that swaps back to the tree", swap, field);
         host.Settle();
 
         Type("topic-3");
@@ -280,7 +280,7 @@ public sealed class SearchFieldPublicationTests
         {
             Clean(host);
             field.Text = query;
-            findings.NothingPending($"typed '{query}': the keystroke's rebuild", list);
+            findings.NothingPendingButTheField($"typed '{query}': the keystroke's rebuild", list, field);
             host.Settle();
         }
 
@@ -308,7 +308,7 @@ public sealed class SearchFieldPublicationTests
             {
                 Clean(host);
                 field.Text = query;
-                findings.NothingPending($"{kind} picker: typed '{query}'", list);
+                findings.NothingPendingButTheField($"{kind} picker: typed '{query}'", list, field);
                 host.Settle();
             }
 
@@ -883,6 +883,26 @@ public sealed class SearchFieldPublicationTests
             }
         }
 
+        /// <summary>A text change's reading, straight after the keystroke. A field lays out its
+        /// own text after its binding has written the change through, so its own text view is
+        /// still pending there however the publication ends, in every WPF text field, the
+        /// palette's included: TSF's <c>GetTextExt</c> lays that out by design. Nothing else may
+        /// be: nothing under the list, and nothing in the window outside the field.</summary>
+        public void NothingPendingButTheField(string label, DependencyObject list, FrameworkElement field)
+        {
+            string[] under = PendingLayout.Under(list);
+            if (PendingLayout.InTheDispatcher(list.Dispatcher).Length == 0 && under.Length == 0)
+            {
+                return;
+            }
+
+            string[] beyond = [.. PendingLayout.Named(Window.GetWindow(field)!, excluded: field)];
+            if (under.Length > 0 || beyond.Length > 0)
+            {
+                _found.Add($"{label}: {under.Length} under the list ({string.Join(", ", under)}); "
+                    + $"{beyond.Length} outside the field ({string.Join(", ", beyond.Take(8))})");
+            }
+        }
         /// <summary>The row realized, showing, and inside its list's viewport, now.</summary>
         public void Shown(string label, ListBox list, object? row)
         {

@@ -38,6 +38,15 @@ internal sealed partial class FilesSidebarViewModel
     private (string Query, string? ScopeTag, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
+
+    /// <summary>Plan 47 CB-35 (#1837): the filter's list was published, raised as the last
+    /// thing the publication does: a keystroke's swap or clear at the true end of
+    /// <see cref="FilterText"/>'s setter, after its status writes; the field's clear at the end
+    /// of <see cref="ClearFilter"/>; a filter run at the end of the operation it posts. Never
+    /// from <see cref="ScheduleFilter"/>: a tree publication calls it in the middle of its own
+    /// operation. The view lays the list out there, before TSF can be granted its lock
+    /// (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? FilterRowsPublished;
     internal Task FilterCompletion
     {
         get
@@ -83,6 +92,9 @@ internal sealed partial class FilesSidebarViewModel
                     // command: seen and heard once (codex PR 2 round 2).
                     ShowAndSpeakFilterCleared();
                 }
+
+                // CB-35: the swap, the clear and the status line, at the true end of the setter.
+                FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
             }
         }
     }
@@ -140,6 +152,8 @@ internal sealed partial class FilesSidebarViewModel
         ApplyTagActivation(string.Empty, scopeTag: null);
         ReleaseTagSelection();
         ShowAndSpeakFilterCleared();
+        // CB-35: the field's Escape and Clear swap back to the tree as typing does.
+        FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     /// <summary>A filter clear — Clear Sidebar Filter, or the field emptied
@@ -395,6 +409,8 @@ internal sealed partial class FilesSidebarViewModel
                             && string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal))
                         {
                             ApplyFilterOutcome(query, scopeTag, outcome, automatic);
+                            // CB-35: last, after the outcome's rows and its status writes.
+                            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                         }
 
                         applied.TrySetResult();

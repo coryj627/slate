@@ -116,6 +116,13 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// (divergence SD-2, wired in phase 2).</summary>
     public event EventHandler? Dismissed;
 
+    /// <summary>Plan 47 CB-35 (#1837): the results panel was published, raised as the last
+    /// thing each operation the pipeline posts does: the Searching state or the idle
+    /// transition a debounced keystroke starts, and the results, zero results or error a
+    /// search publishes. The view lays the list out there, before TSF can be granted its lock
+    /// (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     /// <summary>The whole pending pipeline for the latest keystroke —
     /// awaited by tests, then the captured context is drained.</summary>
     internal Task SearchCompletion { get; private set; } = Task.CompletedTask;
@@ -695,6 +702,10 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 {
                     dispatched.SetException(exception);
                 }
+
+                // CB-35: the Searching state's visibility flip, or the idle transition, laid
+                // out last in the operation that made it.
+                RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
             },
             null);
         if (await dispatched.Task is Task search)
@@ -758,7 +769,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 failure = exception;
             }
 
-            Publish(trimmed, cancel, sessionAtDispatch, scope, resultSet, failure);
+            _ = Publish(trimmed, cancel, sessionAtDispatch, scope, resultSet, failure);
             return null;
         }
 
@@ -784,7 +795,15 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         _uiContext!.Post(
-            _ => Publish(query, cancel, sessionAtDispatch, scope, resultSet, failure),
+            _ =>
+            {
+                // CB-35: last in the posted operation, after PublishResults and its summary,
+                // or after PublishError; a stale or cancelled answer published nothing.
+                if (Publish(query, cancel, sessionAtDispatch, scope, resultSet, failure) is { } published)
+                {
+                    RowsPublished?.Invoke(this, published);
+                }
+            },
             null);
     }
 
@@ -799,8 +818,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// session, query and open-flag all still pass while the landing
     /// rows belong to a scope the user just dismissed), and the
     /// open-flag guards a result resurrecting a closed overlay.
+    /// Answers what it published (CB-35): whether the results chose a
+    /// row to select, or null when a stale or cancelled answer
+    /// published nothing.
     /// </summary>
-    private void Publish(
+    private RowsPublishedEventArgs? Publish(
         string query,
         CancelToken cancel,
         object? sessionAtDispatch,
@@ -818,7 +840,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             || !Equals(Scope, scopeAtDispatch)
             || !IsOpen)
         {
-            return;
+            return null;
         }
 
         // Contract S6: cancellation is a user action, not a failure —
@@ -826,7 +848,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         // change, no summary, no announcement.
         if (failure is VaultException.Cancelled)
         {
-            return;
+            return null;
         }
 
         // Terminal outcome for the current search: release the native
@@ -837,10 +859,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         if (failure is not null)
         {
             PublishError(failure);
-            return;
+            return RowsPublishedEventArgs.SelectionKept;
         }
 
         PublishResults(resultSet!, query);
+        return RowsPublishedEventArgs.Of(SelectedIndex >= 0);
     }
 
     private void PublishResults(QueryResultSet resultSet, string query)

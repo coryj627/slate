@@ -21,6 +21,7 @@ namespace SlateWindows;
 public partial class MainWindow
 {
     private IInputElement? _focusBeforeMoveTo;
+    private MoveToPickerViewModel? _observedMoveToPicker;
 
     /// <summary>Spoken when the verb asks for the picker beneath an
     /// unrelated sheet — the template dialog-busy copy's shape.</summary>
@@ -70,6 +71,7 @@ public partial class MainWindow
             return;
         }
 
+        ObserveMoveToPicker(sidebar.MoveToSheet);
         if (sidebar.MoveToSheet is { } picker)
         {
             _focusBeforeMoveTo ??= CapturePreSheetFocus();
@@ -85,6 +87,31 @@ public partial class MainWindow
             RestoreFocusAfterMoveTo();
         }
     }
+
+    /// <summary>Plan 47 CB-35 (#1837): the sheet's rows are laid out in the operation that
+    /// publishes them (<see cref="PublishedList"/>), from the sheet that shows; one that goes
+    /// is let go.</summary>
+    private void ObserveMoveToPicker(MoveToPickerViewModel? picker)
+    {
+        if (ReferenceEquals(_observedMoveToPicker, picker))
+        {
+            return;
+        }
+
+        if (_observedMoveToPicker is not null)
+        {
+            _observedMoveToPicker.RowsPublished -= MoveToPicker_RowsPublished;
+        }
+
+        _observedMoveToPicker = picker;
+        if (picker is not null)
+        {
+            picker.RowsPublished += MoveToPicker_RowsPublished;
+        }
+    }
+
+    private void MoveToPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(MoveToList, e, (sender as MoveToPickerViewModel)?.SelectedRow);
 
     private void RestoreFocusAfterMoveTo()
     {
@@ -152,7 +179,8 @@ public partial class MainWindow
                 ? System.Math.Min(index + 1, picker.Rows.Count - 1)
                 : System.Math.Max(index - 1, 0);
             picker.SelectedRow = picker.Rows[next];
-            MoveToList.ScrollIntoView(picker.SelectedRow);
+            // CB-35: the row the arrow selected, shown and laid out as the key ends.
+            PublishedList.Show(MoveToList, picker.SelectedRow);
             e.Handled = true;
             return;
         }

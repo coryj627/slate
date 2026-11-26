@@ -33,6 +33,7 @@ public partial class MainWindow
         search.PropertyChanged += Search_PropertyChanged;
         search.PropertyChanged += ModalSource_PropertyChanged;
         search.Dismissed += Search_Dismissed;
+        search.RowsPublished += Search_RowsPublished;
         // W5-2 SD-4: reading-view tag activation opens the overlay from
         // the view-model side, and must respect the same modal decision
         // the Ctrl+Shift+F chord does — never open beneath a sheet.
@@ -60,6 +61,13 @@ public partial class MainWindow
     }
 
     private void Search_Dismissed(object? sender, EventArgs e) => RestoreFocusAfterSearch();
+
+    /// <summary>Plan 47 CB-35 (#1837): the results panel laid out in the operation that
+    /// published it, and the selection the results chose shown in that same operation, once
+    /// the list shows: a list that has never generated a row defers a scroll asked of it
+    /// while it is collapsed to its Loaded pass (<see cref="PublishedList"/>).</summary>
+    private void Search_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(SearchOverlayResults, e, SearchOverlayResults.SelectedItem);
 
     /// <summary>
     /// Hands the search overlay's captured pre-open focus to a caller
@@ -195,10 +203,13 @@ public partial class MainWindow
                     return;
                 case Key.Down:
                     search.MoveSelection(1);
+                    // CB-35: the row the arrow selected, shown and laid out as the key ends.
+                    PublishedList.Show(SearchOverlayResults, SearchOverlayResults.SelectedItem);
                     e.Handled = true;
                     return;
                 case Key.Up:
                     search.MoveSelection(-1);
+                    PublishedList.Show(SearchOverlayResults, SearchOverlayResults.SelectedItem);
                     e.Handled = true;
                     return;
             }
@@ -282,16 +293,6 @@ public partial class MainWindow
         }
 
         return false;
-    }
-
-    private void SearchOverlayResults_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        // Selection lives on the view model (a two-way SelectedIndex
-        // binding); the view only keeps the selected row visible.
-        if (SearchOverlayResults.SelectedItem is object selected)
-        {
-            SearchOverlayResults.ScrollIntoView(selected);
-        }
     }
 
     private void SearchOverlayResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)

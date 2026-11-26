@@ -89,6 +89,12 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenRequested;
     public event EventHandler? Dismissed;
 
+    /// <summary>Plan 47 CB-35 (#1837): the results were published, raised as the last thing
+    /// the publication does: a keystroke's clear at the end of <see cref="Query"/>'s setter, a
+    /// rank at the end of the operation it posts. The view lays the list out there, before TSF
+    /// can be granted its lock (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     internal Task RankCompletion { get; private set; } = Task.CompletedTask;
 
     // W7-7 PR 7 (codex PR 7 round 3, finding 5): the rank the coordinator
@@ -106,6 +112,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             if (SetField(ref _query, value))
             {
                 ScheduleRefresh();
+                // CB-35: the keystroke's clear (and an inline rank) at the true end of the setter.
+                RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(SelectedRow is not null));
             }
         }
     }
@@ -487,6 +495,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         && string.Equals(Query, query, StringComparison.Ordinal))
                     {
                         ApplyRanked(ranked, query, generation, silent);
+                        // CB-35: last in the posted operation, after ApplyRanked's selection,
+                        // count and waiters. A rank chooses the selection, a silent one too (it
+                        // re-seats the kept path on a fresh row), so the view shows it.
+                        RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(SelectedRow is not null));
                     }
                 },
                 null);
@@ -517,6 +529,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         RaiseCommandStates();
                         HostLog.Write(HostDiagnosticEvent.QuickOpenRankingFailed, exception);
                         SettleRescanRankWaiters(generation, exception);
+                        // CB-35: the failure changed the summary line; last, as a rank's is.
+                        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                     }
                 },
                 null);

@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
     private FilesSidebarViewModel? _observedFileSidebar;
+    private Canvas.ICanvasPickerSheet? _observedCanvasPicker;
     private bool _quickSwitcherCommitted;
 
     /// <summary>XB-11: true while the window's own close decides. That close
@@ -575,6 +576,7 @@ public partial class MainWindow : Window
                 FileSidebar_TreeSelectionRestored;
             _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
             _observedFileSidebar.PropertyChanged -= ModalSource_PropertyChanged;
+            _observedFileSidebar.FilterRowsPublished -= FileSidebar_FilterRowsPublished;
             _observedFileSidebar.MoveToOpenAdmission = null;
             _observedFileSidebar.MoveToOwnsModal = null;
         }
@@ -597,7 +599,11 @@ public partial class MainWindow : Window
                 && OpenModalSurface == ModalSurface.MoveTo;
             sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
             sidebar.PropertyChanged += ModalSource_PropertyChanged;
+            sidebar.FilterRowsPublished += FileSidebar_FilterRowsPublished;
         }
+
+        // CB-35: the Move-To sheet observed is the shown sidebar's, or none.
+        ObserveMoveToPicker(sidebar?.MoveToSheet);
 
         // A vault transition mid-pick never runs the restore (the sheet
         // dies with the discarded sidebar), so the captured token must
@@ -607,6 +613,12 @@ public partial class MainWindow : Window
             _focusBeforeMoveTo = null;
         }
     }
+
+    /// <summary>Plan 47 CB-35 (#1837): the Files filter's list, and the tree it swaps with,
+    /// laid out in the operation that published them (<see cref="PublishedList"/>). The
+    /// filter pushes no selection, so nothing scrolls.</summary>
+    private void FileSidebar_FilterRowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Settle(FilterResultsList);
 
     /// <summary>Restore keyboard focus to the files tree after a
     /// mutation's publication discarded the focused container (red
@@ -699,6 +711,8 @@ public partial class MainWindow : Window
         }
 
         _observedWorkspace = workspace;
+        // CB-35: the picker sheet observed is the shown workspace's, or none.
+        ObserveCanvasPicker(workspace?.CanvasCardPickerSheet);
         if (workspace is not null)
         {
             // DS-14: a pane that steps aside with the keys in it says so.
@@ -723,6 +737,31 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Plan 47 CB-35 (#1837): the picker sheet's rows laid out in the keystroke that
+    /// filters them, and the row a filter chose shown there (<see cref="PublishedList"/>),
+    /// from the sheet that shows; one that goes is let go.</summary>
+    private void ObserveCanvasPicker(Canvas.ICanvasPickerSheet? picker)
+    {
+        if (ReferenceEquals(_observedCanvasPicker, picker))
+        {
+            return;
+        }
+
+        if (_observedCanvasPicker is not null)
+        {
+            _observedCanvasPicker.RowsPublished -= CanvasPicker_RowsPublished;
+        }
+
+        _observedCanvasPicker = picker;
+        if (picker is not null)
+        {
+            picker.RowsPublished += CanvasPicker_RowsPublished;
+        }
+    }
+
+    private void CanvasPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(CanvasCardPickerRows, e, CanvasCardPickerRows.SelectedItem);
+
     /// <summary>§G2 TG2-1 (G2-4, IG2-45): the ONE focus-delivery seam for
     /// the canvas sheets — a prompt or picker that just became current
     /// (opened, or swapped in by a staged prompt's Advanced) takes
@@ -736,6 +775,11 @@ public partial class MainWindow : Window
         {
             return;
         }
+        if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardPickerSheet))
+        {
+            ObserveCanvasPicker(workspace.CanvasCardPickerSheet);
+        }
+
         if (e.PropertyName == nameof(WorkspaceViewModel.CanvasPromptSheet)
             && workspace.CanvasPromptSheet is { } prompt)
         {
@@ -864,6 +908,7 @@ public partial class MainWindow : Window
             _observedQuickSwitcher.PropertyChanged -= QuickSwitcher_PropertyChanged;
             _observedQuickSwitcher.PropertyChanged -= ModalSource_PropertyChanged;
             _observedQuickSwitcher.OpenRequested -= QuickSwitcher_OpenRequested;
+            _observedQuickSwitcher.RowsPublished -= QuickSwitcher_RowsPublished;
         }
 
         _observedQuickSwitcher = switcher;
@@ -872,8 +917,16 @@ public partial class MainWindow : Window
             switcher.PropertyChanged += QuickSwitcher_PropertyChanged;
             switcher.PropertyChanged += ModalSource_PropertyChanged;
             switcher.OpenRequested += QuickSwitcher_OpenRequested;
+            switcher.RowsPublished += QuickSwitcher_RowsPublished;
         }
     }
+
+    /// <summary>Plan 47 CB-35 (#1837): Quick Open's results laid out in the operation that
+    /// published them, and the row a rank chose shown there: a silent re-rank re-seats the
+    /// reader's path on a fresh row, which the list would otherwise leave unrealized
+    /// (<see cref="PublishedList"/>).</summary>
+    private void QuickSwitcher_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(QuickSwitcherResultsList, e, (sender as QuickSwitcherViewModel)?.SelectedRow);
 
     private void QuickSwitcher_PropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
     {
@@ -1705,6 +1758,9 @@ public partial class MainWindow : Window
         if (e.Key == Key.Down && modifiers == ModifierKeys.None)
         {
             switcher.MoveSelection(1);
+            // CB-35: the row the arrow selected, shown and laid out as the key ends. Nothing
+            // else scrolls Quick Open's list, so a reader's highlight left the screen.
+            PublishedList.Show(QuickSwitcherResultsList, switcher.SelectedRow);
             e.Handled = true;
             return;
         }
@@ -1712,6 +1768,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Up && modifiers == ModifierKeys.None)
         {
             switcher.MoveSelection(-1);
+            PublishedList.Show(QuickSwitcherResultsList, switcher.SelectedRow);
             e.Handled = true;
             return;
         }
@@ -2014,17 +2071,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.Key == Key.Down && Keyboard.Modifiers == ModifierKeys.None)
-        {
-            switcher.MoveSelection(1);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Up && Keyboard.Modifiers == ModifierKeys.None)
-        {
-            switcher.MoveSelection(-1);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+        // CB-35: no arrow branch here. The window's tunnelling route takes Down and Up first
+        // while Quick Open is open (HandleQuickSwitcherKey) and marks them handled, so the
+        // field's own handler never saw them.
+        if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
         {
             switcher.Dismiss();
             e.Handled = true;

@@ -139,6 +139,38 @@ internal static class PendingLayout
             : $"{under.Length} under the list ("
                 + string.Join(", ", under.GroupBy(name => name).Select(group => $"{group.Key} x{group.Count()}"))
                 + ")";
-        return (global.Length == 0 ? "the dispatcher's queue is clean" : string.Join(" and ", global)) + "; " + subtree;
+        string window = Window.GetWindow(root) is { } shell && global.Length > 0
+            ? "; in the window: " + string.Join(", ", Named(shell).Take(8).DefaultIfEmpty("nothing visible"))
+            : string.Empty;
+        return (global.Length == 0 ? "the dispatcher's queue is clean" : string.Join(" and ", global)) + "; " + subtree + window;
+    }
+
+    /// <summary>Every visible element in <paramref name="root"/> still waiting on a layout
+    /// pass, by its type and the nearest ancestor that has a name, for a fact's message;
+    /// nothing under <paramref name="excluded"/>.</summary>
+    internal static IEnumerable<string> Named(DependencyObject root, DependencyObject? excluded = null)
+    {
+        var pending = new List<string>();
+        void Walk(DependencyObject parent, string holder)
+        {
+            if (parent is UIElement { Visibility: not Visibility.Visible } || ReferenceEquals(parent, excluded))
+            {
+                return;
+            }
+
+            string here = parent is FrameworkElement { Name.Length: > 0 } named ? named.Name : holder;
+            if (parent is UIElement element && !(element.IsMeasureValid && element.IsArrangeValid))
+            {
+                pending.Add($"{element.GetType().Name} in {here}");
+            }
+
+            for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                Walk(VisualTreeHelper.GetChild(parent, index), here);
+            }
+        }
+
+        Walk(root, "the root");
+        return pending;
     }
 }
