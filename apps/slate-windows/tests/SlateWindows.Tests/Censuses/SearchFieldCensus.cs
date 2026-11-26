@@ -95,6 +95,7 @@ public sealed class SearchFieldCensus
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFilterLeavesNothingPendingWhenItPublishes)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersFailureLeavesNothingPending)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersTagActivationLeavesNothingPending)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersTagsTreeRepublishRaisesNothing)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
         ], Member: "FilesFilter"),
         new("MoveToFilter", "MoveToList",
