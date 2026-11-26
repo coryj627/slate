@@ -143,8 +143,11 @@ internal sealed class MoveToPickerViewModel : BindableBase
     /// <see cref="PublishFolders"/> or <see cref="FailLoading"/>. The sidebar's posted
     /// delegate announces the complete publication's or the failure's status after it, a
     /// notification that changes no layout. A keystroke chooses the
-    /// selection; a background page keeps it unless the selected destination moved, so a
-    /// reader who scrolled while folders load keeps the view (<see cref="PublishedList"/>).</summary>
+    /// selection; a background page keeps it unless the reader already had a selection and
+    /// the destination it selects moved, so a reader who scrolled while folders load keeps
+    /// the view. A page that takes the selection from none to the first row only settles:
+    /// the list is at its top, and showing it would scroll the sheet around the list
+    /// (<see cref="PublishedList"/>).</summary>
     internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 
     public MoveToLoadState State => _state;
@@ -381,8 +384,10 @@ internal sealed class MoveToPickerViewModel : BindableBase
         }
 
         // CB-35: last. A keystroke chose the selection; a page moved it only when the
-        // destination it selects is another.
-        bool moved = SelectedRow?.Kind != previous?.Kind || SelectedRow?.Destination != previous?.Destination;
+        // reader had a selection and the destination it selects is another. A page that
+        // selects the first row where there was none settles only.
+        bool moved = previous is not null
+            && (SelectedRow?.Kind != previous.Kind || SelectedRow?.Destination != previous.Destination);
         RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(announceCount || moved));
     }
 
