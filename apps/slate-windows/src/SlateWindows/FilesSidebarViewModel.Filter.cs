@@ -111,15 +111,30 @@ internal sealed partial class FilesSidebarViewModel
 
     public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText) || _scopeTag is not null;
 
-    /// <summary>One filter change for a tag activation (core's answer) or
-    /// a clear: the field's text and the scope together, one run.</summary>
+    /// <summary>A tag activation (core's answer), from the Tags tree's selection or the
+    /// editor's tag: the field's text and the scope together, one run. Plan 47 CB-35 (#1837):
+    /// an activation that changed the filter raises <see cref="FilterRowsPublished"/> as its
+    /// last step, after the swap, the run's start and the command states. One that changes
+    /// nothing raises nothing: the Tags tree's re-selection of the applied tag inside its own
+    /// publication (<c>ApplyTags</c>) is such an activation, so no tree publication lays out
+    /// in its middle.</summary>
     private void ApplyTagActivation(string filterText, string? scopeTag)
+    {
+        if (WriteTagFilter(filterText, scopeTag))
+        {
+            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
+        }
+    }
+
+    /// <summary>One filter change for a tag activation or a clear: the field's text and the
+    /// scope together, one run. Answers whether anything changed.</summary>
+    private bool WriteTagFilter(string filterText, string? scopeTag)
     {
         bool textChanged = !string.Equals(_filterText, filterText, StringComparison.Ordinal);
         bool scopeChanged = !string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal);
         if (!textChanged && !scopeChanged)
         {
-            return;
+            return false;
         }
 
         // Written past the FilterText setter, whose emptied-field rule
@@ -139,6 +154,7 @@ internal sealed partial class FilesSidebarViewModel
         OnPropertyChanged(nameof(IsFilterActive));
         ScheduleFilter();
         RaiseCommandStates();
+        return true;
     }
 
     /// <summary>Clear Sidebar Filter: the text and the scope in one change,
@@ -150,7 +166,7 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        ApplyTagActivation(string.Empty, scopeTag: null);
+        _ = WriteTagFilter(string.Empty, scopeTag: null);
         ReleaseTagSelection();
         ShowAndSpeakFilterCleared();
         // CB-35: the field's Escape and Clear swap back to the tree as typing does.
