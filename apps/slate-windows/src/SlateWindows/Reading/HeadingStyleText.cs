@@ -79,6 +79,10 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
         _viewOnScreen = viewOnScreen;
     }
 
+    /// <summary>WPF's own provider, for tests that compare the decorator's answers with
+    /// WPF's.</summary>
+    internal ITextProvider Inner => _inner;
+
     /// <summary>WPF's visible ranges, or, where WPF's own throw because its two corner hits
     /// come out of order (a view about one line tall over right-to-left text), the span between
     /// the view's corners put in order here. Null when neither can be had.</summary>
@@ -106,6 +110,18 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
                 (start, end) = (end, start);
             }
             start.MoveEndpointByRange(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.End);
+
+            // A view that shows no line (it sits between two paragraphs, where these throws come
+            // from) answers a collapsed range at its top hit: the hits snap to a neighbouring
+            // paragraph, which is not on screen.
+            ITextRangeProvider lines = start.Clone();
+            lines.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Line, -1);
+            lines.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1);
+            if (!ShowsALine(lines.GetBoundingRectangles()))
+            {
+                start.MoveEndpointByRange(TextPatternRangeEndpoint.End, start, TextPatternRangeEndpoint.Start);
+            }
+
             return [start];
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -114,13 +130,32 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
         }
     }
 
+    /// <summary>Whether WPF's (x, y, width, height) quads, already clipped to the view, hold a
+    /// line with area: WPF keeps a line that only touches the view's edge as zero high.</summary>
+    private static bool ShowsALine(double[] rectangles)
+    {
+        for (int index = 0; index + 3 < rectangles.Length; index += 4)
+        {
+            if (rectangles[index + 2] > 0 && rectangles[index + 3] > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public ITextRangeProvider DocumentRange => Wrap(_inner.DocumentRange);
 
     public SupportedTextSelection SupportedTextSelection => _inner.SupportedTextSelection;
 
     public ITextRangeProvider[] GetSelection() => WrapAll(_inner.GetSelection());
 
-    public ITextRangeProvider[] GetVisibleRanges() => WrapAll(_inner.GetVisibleRanges());
+    /// <summary>WPF's visible ranges, or where they throw (a view about one line tall over
+    /// right-to-left text), the span <see cref="VisibleSpans"/> orders from the view's corners;
+    /// no range when neither can be had. A screen reader asking what is on screen gets an
+    /// answer, never E_INVALIDARG (the merge judge's M1 on #2072).</summary>
+    public ITextRangeProvider[] GetVisibleRanges() => WrapAll(VisibleSpans());
 
     public ITextRangeProvider RangeFromChild(IRawElementProviderSimple childElement) =>
         Wrap(_inner.RangeFromChild(childElement));
@@ -668,12 +703,14 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// exactly as WPF answers them, without WPF's cost. WPF walks every line of the range before
     /// it clips each to the view: 1.7 to 2.6 s for a select-all on a 2,000-item note, which
     /// Narrator asks for once <see cref="GetChildren"/> answers an array. So WPF is asked only
-    /// for the part of the range that its visible ranges cover, widened by a line at each edge,
-    /// and nothing when the range lies wholly outside that span. The widening is needed because
-    /// WPF's visible ranges are two hit tests at the view's corners, and right-to-left text puts
-    /// a corner's hit at the far end of its line (a Hebrew top line came back as its last
-    /// character's sliver without it). Lines the widening adds outside the view are clipped by
-    /// WPF as before. Where the corners come out of order and WPF's visible ranges throw (a view
+    /// for the part of the range that its visible ranges cover, each end moved out by one of
+    /// WPF's Line units, and nothing when the range lies wholly outside that span. WPF's Line
+    /// move takes an end inside a line to that line's own start (or end), and an end already on
+    /// a line boundary one line further, so each end of the span lands on a whole line. The move
+    /// is needed because WPF's visible ranges are two hit tests at the view's corners, and
+    /// right-to-left text puts a corner's hit at the far end of its line (a Hebrew top line came
+    /// back as its last character's sliver without it). A line the move adds outside the view is
+    /// clipped by WPF as before. Where the corners come out of order and WPF's visible ranges throw (a view
     /// about one line tall over right-to-left text), the provider orders them itself
     /// (<see cref="HeadingStyleTextProvider.VisibleSpans"/>). A caret, a range made without a
     /// provider, and a view with no span at all keep WPF's own answer.

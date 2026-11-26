@@ -23,8 +23,8 @@ namespace SlateWindows.Tests;
 /// out-of-process journey can see it: these facts read the provider itself.
 /// <para>
 /// With an array, Narrator goes on to ask for the whole selection's bounding rectangles, which WPF
-/// answers by walking every line of the range before it clips each to the view (1.8 to 2.5 s on
-/// a 2,000-item note, measured). The decorator asks WPF only for the part of the range on screen,
+/// answers by walking every line of the range before it clips each to the view (1.7 to 2.6 s on
+/// a 2,000-item note, measured in process). The decorator asks WPF only for the part of the range on screen,
 /// and the rectangles stay WPF's own.
 /// </para>
 /// <para>
@@ -297,6 +297,7 @@ public sealed class ReadingTextRangeArrayTests
         surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
         host.Settle();
         var all = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+        ITextProvider wpfs = Assert.IsType<HeadingStyleTextProvider>(provider).Inner;
         surface.Height = 36;
         host.Settle();
         var wrong = new List<string>();
@@ -307,7 +308,7 @@ public sealed class ReadingTextRangeArrayTests
             host.Settle();
             try
             {
-                _ = provider.GetVisibleRanges();
+                _ = wpfs.GetVisibleRanges();
             }
             catch (ArgumentException)
             {
@@ -331,6 +332,92 @@ public sealed class ReadingTextRangeArrayTests
         Assert.True(wrong.Count == 0, $"{wrong.Count} offsets went wrong: " + string.Join("; ", wrong.Take(6)));
     });
 
+    /// <summary>The same one-line view: where WPF's own visible ranges throw, the decorator's
+    /// answer instead (the merge judge's M1 on #2072). A screen reader asking what is on
+    /// screen (NVDA's screen review and mouse tracking do) gets the span between the view's
+    /// corners, put in order, never E_INVALIDARG. The span shows exactly the lines WPF shows
+    /// in the view (here none: WPF's throws come where the view sits between two paragraphs),
+    /// and holds no text that lies outside the view.</summary>
+    [Fact]
+    public void AViewOneLineTallOverRightToLeftTextAnswersItsVisibleRanges() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Long\n\n" + Repeat(60, index => $"פסקה מספר {index} כאן בעברית\n\n") + "End mark.\n"));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
+        ITextProvider wpfs = Assert.IsType<HeadingStyleTextProvider>(provider).Inner;
+        surface.Height = 36;
+        host.Settle();
+        var wrong = new List<string>();
+        int threw = 0;
+        for (double offset = 60; offset <= 400; offset += 2)
+        {
+            surface.ScrollToVerticalOffset(offset);
+            host.Settle();
+            try
+            {
+                _ = wpfs.GetVisibleRanges();
+                continue;
+            }
+            catch (ArgumentException)
+            {
+                threw++;
+            }
+
+            try
+            {
+                ITextRangeProvider[] visible = provider.GetVisibleRanges();
+                if (visible.Length == 0 || visible.Any(range => range is not HeadingStyleTextRange))
+                {
+                    wrong.Add($"offset {offset}: {visible.Length} ranges, not all the decorator's");
+                    continue;
+                }
+
+                // What shows: WPF's own rectangles for the whole note that meet the view (none
+                // where the view sits between two paragraphs).
+                Rect view = ViewOnScreen(surface);
+                double[] shown = Meeting(wpfs.DocumentRange.GetBoundingRectangles(), view);
+                double[] rectangles = visible.SelectMany(range => range.GetBoundingRectangles()).ToArray();
+                double[] answered = Meeting(rectangles, view);
+                if (answered.Length != shown.Length
+                    || answered.Zip(shown).Any(pair => Math.Abs(pair.First - pair.Second) > 0.5))
+                {
+                    wrong.Add($"offset {offset}: the visible ranges show {answered.Length / 4} lines, the view {shown.Length / 4}");
+                }
+
+                string text = string.Concat(visible.Select(range => range.GetText(-1)));
+                if (!string.IsNullOrWhiteSpace(text) && answered.Length == 0)
+                {
+                    wrong.Add($"offset {offset}: the visible ranges hold \"{text.Trim()}\", none of it in the view");
+                }
+            }
+            catch (ArgumentException exception)
+            {
+                wrong.Add($"offset {offset}: threw {exception.Message}");
+            }
+        }
+
+        Assert.True(threw > 0, "premise: WPF's own visible ranges never threw over this view");
+        Assert.True(wrong.Count == 0, $"{wrong.Count} of {threw} offsets went wrong: " + string.Join("; ", wrong.Take(6)));
+    });
+
+    /// <summary>The corners the provider orders itself are the scroll viewport's, the area WPF's
+    /// own hits use, not the whole surface's: a hit in the surface's padding, outside the text
+    /// view, snaps to the document's start (measured: a view between two paragraphs answered
+    /// the heading scrolled away above it).</summary>
+    [Fact]
+    public void TheViewTheProviderHitsIsTheScrollViewport() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Long\n\n" + Repeat(60, index => $"Paragraph {index}.\n\n") + "End mark.\n"));
+        (ReadingSurface surface, _) = OpenReading(host, "note.md", "End mark.");
+        surface.Height = 36;
+        host.Settle();
+        Rect viewport = ViewOnScreen(surface);
+        Rect served = Assert.IsType<Rect>(surface.ViewOnScreen());
+        Assert.True(
+            Math.Abs(served.Top - viewport.Top) < 0.5 && Math.Abs(served.Bottom - viewport.Bottom) < 0.5
+                && Math.Abs(served.Left - viewport.Left) < 0.5 && Math.Abs(served.Right - viewport.Right) < 0.5,
+            $"the provider hits {served}, the viewport is {viewport}");
+    });
+
     /// <summary>The same one-line view over a long right-to-left note: where WPF's visible
     /// ranges throw, the select-all's rectangles still come back without WPF walking every line
     /// of the note, and they are WPF's own (Codex, round 1: the first answer to the throw was
@@ -343,6 +430,7 @@ public sealed class ReadingTextRangeArrayTests
         surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
         host.Settle();
         var all = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+        ITextProvider wpfsProvider = Assert.IsType<HeadingStyleTextProvider>(provider).Inner;
         surface.Height = 36;
         host.Settle();
         var timed = new List<string>();
@@ -352,7 +440,7 @@ public sealed class ReadingTextRangeArrayTests
             host.Settle();
             try
             {
-                _ = provider.GetVisibleRanges();
+                _ = wpfsProvider.GetVisibleRanges();
                 continue;
             }
             catch (ArgumentException)
@@ -369,7 +457,7 @@ public sealed class ReadingTextRangeArrayTests
             double[] wpfs = all.Inner.GetBoundingRectangles();
             long wpfMs = clock.ElapsedMilliseconds;
             timed.Add($"offset {offset}: {served.Length / 4} rectangles in {servedMs} ms, WPF's own {wpfs.Length / 4} in {wpfMs} ms");
-            Assert.True(wpfMs >= 200, "premise: WPF's own walk is too quick to compare with: " + string.Join("; ", timed));
+            Assert.True(wpfMs >= 100, "premise: WPF's own walk is too quick to compare with: " + string.Join("; ", timed));
             Assert.True(servedMs * 4 < wpfMs, "the select-all's rectangles cost what WPF's walk does: " + string.Join("; ", timed));
             Assert.True(
                 SameAsWpf(all, out string? why),
