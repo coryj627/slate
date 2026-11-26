@@ -703,6 +703,7 @@ public partial class MainWindow : Window
             _observedWorkspace.CanvasNodeLandingRequested -= Workspace_CanvasNodeLandingRequested;
             _observedWorkspace.PropertyChanged -= Workspace_CanvasSheetChanged;
             _observedWorkspace.PropertyChanged -= ModalSource_PropertyChanged;
+            _observedWorkspace.PropertyChanged -= Workspace_CanvasPickerOpened;
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
@@ -734,6 +735,18 @@ public partial class MainWindow : Window
             WireWorkspaceBases(workspace);
             WireWorkspaceTemplates(workspace);
             WireWorkspaceGraph(workspace);
+            // CB-35: subscribed once the notification that showed this workspace has ended, so
+            // it runs after ModalSource_PropertyChanged, every other observer and WPF's own
+            // binding listener on the workspace, whose triggers turn the main menu off for a
+            // sheet in it: a canvas picker's opening is laid out as its true last step.
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (ReferenceEquals(_observedWorkspace, workspace))
+                {
+                    workspace.PropertyChanged -= Workspace_CanvasPickerOpened;
+                    workspace.PropertyChanged += Workspace_CanvasPickerOpened;
+                }
+            });
         }
     }
 
@@ -761,6 +774,20 @@ public partial class MainWindow : Window
 
     private void CanvasPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
         PublishedList.Published(CanvasCardPickerRows, e, CanvasCardPickerRows.SelectedItem);
+
+    /// <summary>Plan 47 CB-35 (#1837): a canvas picker's opening laid out as its last step. Its
+    /// landing lays the sheet out as it lands (<see cref="Workspace_CanvasSheetChanged"/>), but
+    /// <see cref="ModalSource_PropertyChanged"/> runs after it and shows the menu and status
+    /// scrims, and the opening's call ends with this notification. Its rows publish later,
+    /// through <see cref="CanvasPicker_RowsPublished"/>.</summary>
+    private void Workspace_CanvasPickerOpened(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardPickerSheet)
+            && sender is WorkspaceViewModel { CanvasCardPickerSheet: not null })
+        {
+            PublishedList.Settle(CanvasCardPickerRows);
+        }
+    }
 
     /// <summary>§G2 TG2-1 (G2-4, IG2-45): the ONE focus-delivery seam for
     /// the canvas sheets — a prompt or picker that just became current
@@ -1282,6 +1309,9 @@ public partial class MainWindow : Window
             if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
             {
                 _viewModel.Workspace.CloseCanvasCardPicker();
+                // CB-35: the reader's cancel laid out at its end: the sheet's collapse and the
+                // scrims. No result lands after it.
+                SettleAReadersCancel(CanvasCardPickerRows);
                 e.Handled = true;
             }
             else if (e.Key == Key.Enter && modifiers == ModifierKeys.None)
