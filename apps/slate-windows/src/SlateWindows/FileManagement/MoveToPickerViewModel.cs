@@ -285,7 +285,23 @@ internal sealed class MoveToPickerViewModel : BindableBase
             && parameter is MoveToRowViewModel row && Rows.Contains(row));
 
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
-        _ => { if (!_retired) { _cancelled(); } }, _ => !_retired);
+        _ =>
+        {
+            if (!_retired)
+            {
+                _cancelled();
+                // CB-35: last, after the sheet closed and this picker was retired.
+                CancelEnded?.Invoke(this, EventArgs.Empty);
+            }
+        },
+        _ => !_retired);
+
+    /// <summary>Plan 47 CB-35 (#1837): the reader's cancel (Escape, or the Cancel button) has
+    /// run to its end, raised as the last thing <see cref="CancelCommand"/> does: after the
+    /// sheet closed, which collapses it and its scrims, and after the sidebar retired this
+    /// picker. The view lays that out there, before TSF can be granted its lock
+    /// (<see cref="PublishedList"/>). No result lands after a cancel.</summary>
+    internal event EventHandler? CancelEnded;
 
     /// <summary>Each row's name among the rows it sits with, by the one
     /// sibling rule — naming code, which NamingComparesOnlyBySpeechKey holds

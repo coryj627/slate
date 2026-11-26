@@ -107,11 +107,40 @@ public partial class MainWindow
         if (picker is not null)
         {
             picker.RowsPublished += MoveToPicker_RowsPublished;
+            // Kept past the close, which lets the picker go before its cancel ends; the
+            // handler lets it go itself.
+            picker.CancelEnded -= MoveToPicker_CancelEnded;
+            picker.CancelEnded += MoveToPicker_CancelEnded;
         }
     }
 
     private void MoveToPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
         PublishedList.Published(MoveToList, e, (sender as MoveToPickerViewModel)?.SelectedRow);
+
+    /// <summary>Plan 47 CB-35 (#1837): the reader's cancel of Move To, Escape or Cancel, laid
+    /// out at its end: the sheet's collapse, the scrims and the retired picker.</summary>
+    private void MoveToPicker_CancelEnded(object? sender, EventArgs e)
+    {
+        if (sender is MoveToPickerViewModel picker)
+        {
+            picker.CancelEnded -= MoveToPicker_CancelEnded;
+        }
+
+        SettleAReadersCancel(MoveToList);
+    }
+
+    /// <summary>Plan 47 CB-35 (#1837): a reader's cancel of a sheet laid out as its last step.
+    /// Not while a surface is still open: the close can land that surface in its own
+    /// notification (<see cref="LandAnOpeningThatWaited"/>), and nothing settles after a
+    /// landing. The focus restore that follows a cancel is queued for a later
+    /// operation.</summary>
+    private void SettleAReadersCancel(FrameworkElement anchor)
+    {
+        if (OpenModalSurface is null)
+        {
+            PublishedList.Settle(anchor);
+        }
+    }
 
     private void RestoreFocusAfterMoveTo()
     {
