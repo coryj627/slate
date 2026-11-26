@@ -76,6 +76,7 @@ public sealed class SearchFieldCensus
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenShowsTheRowTheArrowsSelect)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenKeepsAReRankedSelectionInView)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpenKeepsTheViewThroughASilentReRank)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.QuickOpensRefreshStartsLeaveNothingPending)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
         ], Member: "QuickOpen"),
@@ -93,6 +94,7 @@ public sealed class SearchFieldCensus
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFilterLeavesNothingPendingWhenItPublishes)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersFailureLeavesNothingPending)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.FilesFiltersTagActivationLeavesNothingPending)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
         ], Member: "FilesFilter"),
         new("MoveToFilter", "MoveToList",

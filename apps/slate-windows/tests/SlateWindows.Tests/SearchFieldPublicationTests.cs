@@ -148,6 +148,52 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("Quick Open's publications left layout pending as they ended");
     });
 
+    /// <summary>Quick Open's refreshes that start outside its query and its open, with the
+    /// keys in its field: a Slate-owned file change from the funnel (read straight after
+    /// <see cref="QuickSwitcherViewModel.ApplyFileChanges"/> returns; the funnel's later
+    /// dependents are the residual, #1955), which clears the rows and the selection, and the
+    /// silent re-ranks a rescan and a change-feed page start, which put the summary line on
+    /// ranking. Each rank is held, so each start is read at the end of the operation that
+    /// started it, strictly: none of them changes the field's text.</summary>
+    [Fact]
+    public void QuickOpensRefreshStartsLeaveNothingPending() => Sta(() =>
+    {
+        using var host = new ShownShell(Topics(60));
+        WindowActivation.Activate(host.Shell);
+        using var quickOpen = new QuickOpen(host, notes: 60);
+        quickOpen.Open();
+        QuickSwitcherViewModel switcher = quickOpen.Switcher;
+        ListBox list = host.Shell.QuickSwitcherResultsList;
+        Assert.True(host.Shell.QuickSwitcherSearchTextBox.Focus(), "premise: the field refused the keys");
+        host.Settle();
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        switcher.RankDelayForTests = cancellation => held.Task.WaitAsync(cancellation);
+        var findings = new Findings();
+
+        void Start(string label, Func<Task?> start)
+        {
+            held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Clean(host);
+            Task? published = start();
+            findings.Expect(switcher.IsRanking, $"premise: {label} started no rank");
+            findings.NothingPending($"{label}: the operation that starts its refresh", list);
+            held.SetResult();
+            SettleUntil(host, () => !switcher.IsRanking && (published?.IsCompleted ?? true), $"{label}: its rank never published");
+        }
+
+        Start("a Slate-owned file change", () =>
+        {
+            switcher.ApplyFileChanges([(new FileChangeEvent(FileChangeKind.Created, "topic-new.md", null), true)]);
+            return null;
+        });
+        Start("a rescan's silent re-rank", () => switcher.ReRankForRescanAsync(CancellationToken.None));
+        Start("a change-feed page", () => switcher.ApplyRecordsAsync(
+            [new ChangeRecord("made.md", ChangeEntry.File, ChangeEffect.Present, null, null, ChangeCount.Created, null, null, true, 1)],
+            CancellationToken.None));
+
+        findings.AssertNone("Quick Open's refresh starts left layout pending as they ended");
+    });
+
     /// <summary>Search's every publication: the open itself (read strictly), the posted
     /// Searching state and the results it
     /// publishes, from Idle and over results, zero results, an error, the idle transition an
@@ -353,6 +399,72 @@ public sealed class SearchFieldPublicationTests
         findings.NothingPending("Escape: the clear", swap);
 
         findings.AssertNone("The Files filter's publications left layout pending as they ended");
+    });
+
+    /// <summary>A tag activation writes the Files filter: the field's text and scope, the
+    /// tree and list swap, the status line. With the keys in the filter field, a tag
+    /// selected in the Tags tree through UI Automation (its row's SelectionItem pattern), and
+    /// one the editor activates, are each read at the end of the operation that activated
+    /// them, with nothing pumped after it, by the text-change rule: the field's text
+    /// changed.</summary>
+    [Fact]
+    public void FilesFiltersTagActivationLeavesNothingPending() => Sta(() =>
+    {
+        using var host = new ShownShell(TaggedTopics(20));
+        WindowActivation.Activate(host.Shell);
+        using var files = new FilesSidebar(host);
+        FilesSidebarViewModel sidebar = files.Model;
+        sidebar.ShowTags = true;
+        host.Settle();
+        TreeView tags = Descendants<TreeView>(host.Shell).Single(tree => AutomationProperties.GetAutomationId(tree) == "SidebarTagTree");
+        SettleUntil(host, () => tags.HasItems, "premise: the Tags tree never listed the notes' tags");
+        var swap = (FrameworkElement)VisualTreeHelper.GetParent(host.Shell.FilterResultsList);
+        TextBox field = host.Shell.SidebarFilterTextBox;
+        Assert.True(field.Focus(), "premise: the filter refused the keys");
+        host.Settle();
+        var findings = new Findings();
+
+        void Activated(string label, string tag, Action activate)
+        {
+            Clean(host);
+            string before = sidebar.FilterText;
+            activate();
+            findings.Expect(sidebar.FilterText != before && sidebar.FilterText.Contains(tag, StringComparison.Ordinal), $"premise: {label} left the filter at '{sidebar.FilterText}'");
+            findings.Expect(ReferenceEquals(Keyboard.FocusedElement, field), $"premise: {label} took the keys from the filter field");
+            findings.NothingPendingButTheField($"{label}: the activation's operation", swap, field);
+            SettleUntil(host, () => !sidebar.IsFiltering, $"{label}: its filter never ran");
+        }
+
+        foreach (string name in new[] { "tagged", "other" })
+        {
+            SidebarTagViewModel tag = sidebar.Tags.Single(candidate => candidate.Full == name);
+            var row = Assert.IsAssignableFrom<TreeViewItem>(tags.ItemContainerGenerator.ContainerFromItem(tag));
+            var select = Assert.IsAssignableFrom<System.Windows.Automation.Provider.ISelectionItemProvider>(
+                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(row)
+                    .GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem));
+            Activated($"the Tags tree's '{name}' selected through UI Automation", name, select.Select);
+        }
+
+        // The editor's path, wired as the lifecycle wires an opened vault's workspace: the
+        // workspace's EditorTagActivated reaches the lifecycle, which activates the tag.
+        MethodInfo editorTag = typeof(WorkspaceViewModel).GetMethod("ActivateEditorTag", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("WorkspaceViewModel.ActivateEditorTag is gone");
+        var relay = (EventHandler<string>)Delegate.CreateDelegate(
+            typeof(EventHandler<string>),
+            host.Lifecycle,
+            typeof(VaultLifecycleViewModel).GetMethod("Workspace_EditorTagActivated", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new InvalidOperationException("VaultLifecycleViewModel.Workspace_EditorTagActivated is gone"));
+        host.Workspace.EditorTagActivated += relay;
+        try
+        {
+            Activated("the editor's 'tagged'", "tagged", () => editorTag.Invoke(host.Workspace, ["tagged"]));
+        }
+        finally
+        {
+            host.Workspace.EditorTagActivated -= relay;
+        }
+
+        findings.AssertNone("The Files filter's tag activations left layout pending as they ended");
     });
 
     /// <summary>A filter run whose worker fails reports it on the status line, in the
