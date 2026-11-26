@@ -2196,6 +2196,49 @@ internal sealed class ReadingSurface : RichTextBox
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new ReadingSurfacePeer(this);
+
+    /// <summary>CB-21 (#1330): the surface's scroll viewport on screen, the area its text shows
+    /// in, in the device pixels UI Automation's points use, or null when it isn't shown. The Text
+    /// pattern orders WPF's two corner hits with it where WPF's own visible ranges throw. It is
+    /// the viewport and not the whole surface: a hit in the surface's padding, outside the text
+    /// view, snaps to the document's start (measured: a view between two paragraphs answered the
+    /// heading scrolled away above it).</summary>
+    internal Rect? ViewOnScreen()
+    {
+        if (!IsVisible || PresentationSource.FromVisual(this) is null
+            || Viewport() is not { ActualWidth: >= 1, ActualHeight: >= 1 } viewport)
+        {
+            return null;
+        }
+
+        return new Rect(
+            viewport.PointToScreen(new Point(0, 0)),
+            viewport.PointToScreen(new Point(viewport.ActualWidth, viewport.ActualHeight)));
+    }
+
+    /// <summary>The scroll content presenter of the surface's own scroll viewer: the first one
+    /// below the surface, breadth first, so a scroll viewer inside the document comes later.</summary>
+    private ScrollContentPresenter? Viewport()
+    {
+        var pending = new Queue<DependencyObject>();
+        pending.Enqueue(this);
+        while (pending.Count > 0)
+        {
+            DependencyObject node = pending.Dequeue();
+            if (node is ScrollContentPresenter presenter)
+            {
+                return presenter;
+            }
+
+            int count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(node);
+            for (int index = 0; index < count; index++)
+            {
+                pending.Enqueue(System.Windows.Media.VisualTreeHelper.GetChild(node, index));
+            }
+        }
+
+        return null;
+    }
 }
 
 /// <summary>
@@ -2246,7 +2289,7 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
             if (_text is null || !ReferenceEquals(_innerText, text))
             {
                 _innerText = text;
-                _text = new HeadingStyleTextProvider(text);
+                _text = new HeadingStyleTextProvider(text, _surface.ViewOnScreen);
             }
             return _text;
         }
