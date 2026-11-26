@@ -379,6 +379,26 @@ public sealed class ReadingTextRangeArrayTests
         Assert.True(timed.Count > 0, "premise: WPF's visible ranges never threw over this view");
     });
 
+    /// <summary>A note that begins with a table: WPF answers the document range no rectangle
+    /// at all (Codex, round 1, measured), where UI Automation's contract is the visible lines.
+    /// The decorator answers the visible lines: rectangles, every one of them meeting the
+    /// view.</summary>
+    [Fact]
+    public void ATableFirstNotesDocumentRangeAnswersItsVisibleLines() => RunSta(() =>
+    {
+        string cell = string.Concat(Enumerable.Repeat("long first column words ", 60));
+        using var host = new ShownShell(("note.md", $"| A | B | C |\n|---|---|---|\n| {cell}| b | c |\n\nEnd mark.\n"));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
+        Rect view = ViewOnScreen(surface);
+        var document = Assert.IsType<HeadingStyleTextRange>(provider.DocumentRange);
+
+        double[] served = document.GetBoundingRectangles();
+        Assert.True(served.Length > 0, $"the document range answered no rectangle (WPF's own answers {document.Inner.GetBoundingRectangles().Length / 4})");
+        Assert.True(
+            Meeting(served, view).Length == served.Length,
+            $"{(served.Length - Meeting(served, view).Length) / 4} of {served.Length / 4} rectangles lie outside the view {view}");
+    });
+
     private static bool SameAsWpf(HeadingStyleTextRange range, out string? why)
     {
         double[] wpfs = range.Inner.GetBoundingRectangles();
