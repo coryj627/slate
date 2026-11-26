@@ -91,10 +91,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     /// <summary>Plan 47 CB-35 (#1837): the results were published, raised as the last thing
     /// the publication does: the open's first clear at the end of <see cref="Open"/>, a
-    /// keystroke's clear at the end of <see cref="Query"/>'s setter, a rank or its failure at
-    /// the end of the operation it posts, and the reader's own dismissal at the end of
-    /// <see cref="DismissByTheReader"/>. The view lays the list out there, before TSF can be
-    /// granted its lock (<see cref="PublishedList"/>).</summary>
+    /// keystroke's clear at the end of <see cref="Query"/>'s setter, a refresh's start at the
+    /// end of <see cref="ApplyFileChanges"/> and of <see cref="RepublishSilentlyAsync"/>, a
+    /// rank or its failure at the end of the operation it posts, and the reader's own
+    /// dismissal at the end of <see cref="DismissByTheReader"/>. The view lays the list out
+    /// there, before TSF can be granted its lock (<see cref="PublishedList"/>).</summary>
     internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 
     internal Task RankCompletion { get; private set; } = Task.CompletedTask;
@@ -295,6 +296,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         if (IsOpen)
         {
             ScheduleRefresh();
+            // CB-35: last. The refresh's start cleared the rows and the selection and put
+            // the summary on ranking; laid out here, in the funnel's operation. What the
+            // funnel's later dependents change in that operation is the residual (#1955).
+            RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
         }
     }
 
@@ -372,6 +377,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         ScheduleRefresh(silent: true);
+        // CB-35: the start's summary line, laid out as the last thing Quick Open does in the
+        // operation that starts it. A change-feed page's operation ends at its caller's await;
+        // a rescan's goes on to start the workspace's re-sync, which is the residual (#1955).
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
         return published.Task;
     }
 
