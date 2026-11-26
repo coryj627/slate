@@ -106,6 +106,7 @@ public sealed class SearchFieldCensus
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToKeepsTheKeysOnARowWhileFoldersLoad)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToHoldsItsSheetStillAsItOpensAtTwiceTheTextSize)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToSheetFollowsTheArrowsAtTwiceTheTextSize)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.MoveToLeavesNothingPendingAsTheReaderCancels)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.TheSheetHoldsStillWhileItsListShowsARowAtTwiceTheTextSize)}",
@@ -113,6 +114,7 @@ public sealed class SearchFieldCensus
         new("CanvasCardPickerFilter", "CanvasCardPickerRows",
         [
             $"{Publication}.{nameof(SearchFieldPublicationTests.ThePickersLeaveNothingPendingWhenTheyPublish)}",
+            $"{Publication}.{nameof(SearchFieldPublicationTests.ThePickersLeaveNothingPendingAsTheyOpenAndAsTheReaderCancels)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.APickerKeepsASelectionWhenItsFilterDropsTheRow)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.ALetterOnASearchListMovesNothing)}",
             $"{Publication}.{nameof(SearchFieldPublicationTests.AKeystrokeInTheFieldLeavesNothingPendingButTheField)}",

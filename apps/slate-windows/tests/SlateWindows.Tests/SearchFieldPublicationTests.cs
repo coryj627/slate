@@ -689,6 +689,94 @@ public sealed class SearchFieldPublicationTests
         findings.AssertNone("The pickers' publications left layout pending as they ended");
     });
 
+    /// <summary>The canvas card and file pickers' opening and the reader's Escape, each read
+    /// strictly at the end of the operation that ran it, with nothing pumped or laid out
+    /// after it. The card picker opens in its command's own call; the file picker in the
+    /// operation its listing posts, read at that operation's end through the dispatcher's
+    /// hook. Escape reaches the window's key route from the picker's field.</summary>
+    [Fact]
+    public void ThePickersLeaveNothingPendingAsTheyOpenAndAsTheReaderCancels() => Sta(() =>
+    {
+        using var host = new ShownShell([("board.canvas", Board(60)), .. Topics(60)]);
+        WindowActivation.Activate(host.Shell);
+        CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
+        FrameworkElement sheet = host.Shell.CanvasCardPickerOverlay;
+        TextBox field = host.Shell.CanvasCardPickerFilterBox;
+        var findings = new Findings();
+        foreach (Picker kind in new[] { Picker.Card, Picker.File })
+        {
+            canvas.SeatSelectionSilently("c00");
+            host.Settle();
+            Clean(host);
+            if (kind == Picker.Card)
+            {
+                canvas.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo);
+                findings.Expect(host.Workspace.CanvasCardPickerSheet is not null, $"premise: the {kind} picker did not open in its command's call");
+                findings.NothingPending($"{kind} picker: the opening's own operation", sheet);
+            }
+            else
+            {
+                canvas.RequestVaultPick(CanvasVaultPickPurpose.Note, host.Workspace.ActiveGroup.ActiveTab);
+                Watch(findings, new Stage(
+                    $"{kind} picker: the opening",
+                    () => host.Workspace.CanvasCardPickerSheet is not null,
+                    () => findings.NothingPending($"{kind} picker: the operation that opened it", sheet)));
+            }
+
+            findings.Expect(ReferenceEquals(Keyboard.FocusedElement, field), $"premise: the {kind} picker's opening did not give its field the keys");
+            host.Settle();
+            Clean(host);
+            Press(field, Key.Escape);
+            findings.Expect(host.Workspace.CanvasCardPickerSheet is null, $"premise: Escape did not close the {kind} picker");
+            findings.NothingPending($"{kind} picker: Escape's cancel", sheet);
+            host.Settle();
+        }
+
+        findings.AssertNone("The pickers' openings and cancels left layout pending as they ended");
+    });
+
+    /// <summary>Move To's cancels by the reader: Escape from its filter, through the sheet's
+    /// key route, read straight after the key; and its Cancel button invoked through UI
+    /// Automation, read at the end of the operation the invoke posts. Each is read strictly,
+    /// with nothing pumped or laid out after it. No result lands after a cancel.</summary>
+    [Fact]
+    public void MoveToLeavesNothingPendingAsTheReaderCancels() => Sta(() =>
+    {
+        using var host = new ShownShell(NestedFolders(20));
+        WindowActivation.Activate(host.Shell);
+        using var files = new FilesSidebar(host);
+        FrameworkElement sheet = host.Shell.MoveToOverlay;
+        TextBox field = host.Shell.MoveToFilterTextBox;
+        var findings = new Findings();
+
+        void Open()
+        {
+            MoveToPickerViewModel picker = files.OpenMoveTo();
+            SettleUntil(host, () => picker.State == MoveToLoadState.Ready, "Move To never finished loading");
+            Assert.True(field.Focus(), "premise: the filter refused the keys");
+            host.Settle();
+            Clean(host);
+        }
+
+        Open();
+        Press(field, Key.Escape);
+        findings.Expect(files.Model.MoveToSheet is null, "premise: Escape did not cancel Move To");
+        findings.NothingPending("Escape's cancel", sheet);
+        host.Settle();
+
+        Open();
+        var cancel = Assert.IsAssignableFrom<System.Windows.Automation.Provider.IInvokeProvider>(
+            System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(host.Shell.MoveToCancelButton)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke));
+        cancel.Invoke();
+        Watch(findings, new Stage(
+            "the Cancel button",
+            () => files.Model.MoveToSheet is null,
+            () => findings.NothingPending("the Cancel button's cancel, invoked through UI Automation", sheet)));
+
+        findings.AssertNone("Move To's cancels left layout pending as they ended");
+    });
+
     // ------------------------------------------------------------------ the arrows' row in view
 
     /// <summary>Each Down and Up through the window's key route: the selected result realized
