@@ -1170,6 +1170,171 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.DoesNotContain(CanvasPeerKey.Card("far"), board.Renderer.Engine.Current!.Retained);
     });
 
+    /// <summary>Plan 47 CB-36 (#1721, CD24): a labelled edge's element reports its drawn chip's
+    /// rectangle as its bounds, not its endpoints' union. The chip sits on the midpoint of the
+    /// line the board draws between the cards' centres (here cards of different sizes, so that
+    /// point is not the union's centre), at the text size factor; a self-loop's chip sits on its
+    /// card's centre. Off the window the element is empty, as before.</summary>
+    [Theory]
+    [InlineData(1.0, false)]
+    [InlineData(1.5, false)]
+    [InlineData(1.0, true)]
+    public void ALabelledEdgesBoundsAreItsDrawnChip(double factor, bool selfLoop) => RunSta(() => WithTextScale(factor, () =>
+    {
+        WriteCanvas(
+            "chip.canvas",
+            [Card("a", "Alpha", 40, 40, 200, 100), Card("b", "Beta", 400, 200, 300, 160)],
+            [Edge("e1", "a", selfLoop ? "a" : "b", "supports")]);
+        using Board board = Open("chip.canvas", "Slate.Light.xaml");
+        board.ZoomTo(1);
+        CanvasViewportState view = board.Renderer.Engine.Current!.Viewport;
+        CanvasEdgeAutomationPeer edge = Assert.Single(board.Children().OfType<CanvasEdgeAutomationPeer>());
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+
+        Point midpoint = selfLoop
+            ? new Point(140, 90)
+            : new Point((140 + 550) / 2.0, (90 + 280) / 2.0);
+        Point centre = new(chip.Box.X + (chip.Box.Width / 2), chip.Box.Y + (chip.Box.Height / 2));
+        Point expected = new((midpoint.X * view.Zoom) + view.PanX, (midpoint.Y * view.Zoom) + view.PanY);
+        Assert.True(
+            Math.Abs(centre.X - expected.X) <= 1 && Math.Abs(centre.Y - expected.Y) <= 1,
+            $"the chip is centred at {centre}, not on the line's midpoint {expected}.");
+        Assert.Equal(10 * factor * 1.6, chip.Box.Height, 2);
+        Rect bounds = edge.GetBoundingRectangle();
+        Rect drawn = board.Renderer.ViewToScreen(chip.Box);
+        Assert.True(
+            Math.Abs(bounds.X - drawn.X) <= 0.5 && Math.Abs(bounds.Y - drawn.Y) <= 0.5
+                && Math.Abs(bounds.Width - drawn.Width) <= 0.5 && Math.Abs(bounds.Height - drawn.Height) <= 0.5,
+            $"the edge reports {bounds}; its chip is drawn at {drawn} (#1721).");
+
+        board.PanTo(-50_000, -50_000);
+        Assert.True(edge.GetBoundingRectangle().IsEmpty, "an edge off the window reported a rectangle.");
+    }));
+
+    /// <summary>Plan 47 CB-36 (#1721, the owner's answer 1): the chips layer draws one chip for each
+    /// windowed labelled edge, in the scene's edge order, between the cards and the selection ring:
+    /// a fill of the board's surface, a 1-pixel outline in the connection's own brush, and the
+    /// canvas text brush. An unlabelled edge, a blank label, an edge to a missing card and an
+    /// edge off the window draw none; a windowed edge whose chip lies past the board's edge draws
+    /// one. Brushes are compared by identity with the theme's own, since the connection brush and
+    /// the card border share a colour.</summary>
+    [Fact]
+    public void TheChipsLayerDrawsOneChipPerWindowedLabelledEdgeAboveTheCardsAndBelowTheRing() => RunSta(() =>
+    {
+        WriteCanvas(
+            "layer.canvas",
+            [
+                Card("a", "Alpha", 40, 40), Card("b", "Beta", 400, 40),
+                Card("c", "Gamma", 40, 300), Card("d", "Delta", 400, 300),
+                Card("m1", "Margin one", 1_100, 40), Card("m2", "Margin two", 1_500, 40),
+                Card("f1", "Far one", 20_000, 40), Card("f2", "Far two", 20_400, 40),
+            ],
+            [
+                Edge("near", "a", "b", "near"),
+                Edge("plain", "c", "d", null),
+                Edge("blank", "a", "c", "   "),
+                Edge("lost", "a", "nowhere", "lost"),
+                Edge("margin", "m1", "m2", "margin"),
+                Edge("far", "f1", "f2", "far"),
+            ]);
+        using Board board = Open("layer.canvas", "Slate.Light.xaml");
+        board.ZoomTo(1);
+        board.Document.SeatSelectionSilently("a");
+        board.SettleUntil(() => board.Renderer.Engine.Current!.Selection == "a");
+
+        List<DrawnChip> chips = Chips(board.Renderer);
+        Assert.Equal(new[] { "near", "margin" }, chips.Select(chip => chip.Text));
+        Assert.Equal(4, System.Windows.Media.VisualTreeHelper.GetChildrenCount(board.Renderer));
+        Assert.Same(
+            board.Renderer.ChipsDrawingForTests,
+            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 2)).Drawing);
+        Assert.Same(
+            board.Renderer.CardsDrawingForTests,
+            ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 1)).Drawing);
+        Rect visible = new(0, 0, board.Renderer.ActualWidth, board.Renderer.ActualHeight);
+        Assert.False(visible.Contains(chips[1].Box), "premise: the margin edge's chip lies inside the board.");
+        foreach (DrawnChip chip in chips)
+        {
+            Assert.Same(board.Window.FindResource("Slate.SurfaceBrush"), chip.Fill);
+            Assert.Same(board.Window.FindResource("Slate.Canvas.EdgeBrush"), chip.Outline?.Brush);
+            Assert.Equal(1.0, chip.Outline!.Thickness);
+            Assert.All(chip.Glyphs, glyph => Assert.Same(board.Window.FindResource("Slate.Canvas.TextBrush"), glyph.ForegroundBrush));
+        }
+    });
+
+    /// <summary>Plan 47 CB-36 (#1721, contract 34 D11): a chip's text is the card typeface at
+    /// base 10 times the text size factor times the zoom, never under 4 (the Mac's floor, which
+    /// keeps a chip at the lowest zoom above a reader's smallest box), and the chip is 1.6 times
+    /// that tall.</summary>
+    [Theory]
+    [InlineData(1.0, 1.0, 10.0)]
+    [InlineData(1.5, 1.0, 15.0)]
+    [InlineData(1.0, 2.0, 20.0)]
+    [InlineData(1.0, 0.1, 4.0)]
+    public void AChipsTextFollowsTheTextSizeAndTheZoomWithAFloor(double factor, double zoom, double size) => RunSta(() => WithTextScale(factor, () =>
+    {
+        WriteCanvas("size.canvas", [Card("a", "Alpha", 40, 40), Card("b", "Beta", 400, 40)], [Edge("e1", "a", "b", "spans")]);
+        using Board board = Open("size.canvas", "Slate.Light.xaml");
+        board.ZoomTo(zoom);
+
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+
+        Assert.Equal(size, chip.FontSize, 2);
+        Assert.Equal(size * 1.6, chip.Box.Height, 2);
+    }));
+
+    /// <summary>Plan 47 CB-36 (#1721): a chip is one line. A long label is cut off with an
+    /// ellipsis at 200 canvas units; line breaks and tabs in a label read as spaces and its ends
+    /// are trimmed, so a label with a break or trailing spaces draws whole on one line.</summary>
+    [Fact]
+    public void ALongLabelIsCutOffAndABrokenOneDrawsOnOneLine() => RunSta(() =>
+    {
+        WriteCanvas(
+            "label.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 400, 40), Card("c", "Gamma", 40, 300), Card("d", "Delta", 400, 300),
+                Card("e", "Epsilon", 40, 560), Card("f", "Zeta", 400, 560)],
+            [
+                Edge("long", "a", "b", "a label far too long to fit one chip of two hundred canvas units at all"),
+                Edge("broken", "c", "d", "spans\\nmore\\tthan"),
+                Edge("trailing", "e", "f", "\\nlead   "),
+            ]);
+        using Board board = Open("label.canvas", "Slate.Light.xaml");
+        board.ZoomTo(1);
+
+        List<DrawnChip> chips = Chips(board.Renderer);
+
+        Assert.Equal(3, chips.Count);
+        Assert.EndsWith("…", chips[0].Text, StringComparison.Ordinal);
+        Assert.Equal(200, chips[0].Box.Width, 1);
+        Assert.Equal("spans more than", chips[1].Text);
+        Assert.Equal("lead", chips[2].Text);
+        Assert.True(chips[2].Box.Width < 200, "a short label filled the cap.");
+    });
+
+    /// <summary>Plan 47 CB-36 (the owner's answer 2): chips draw in the scene's edge order, so where
+    /// twin connections' chips meet, the later one covers the earlier, on every run. Both
+    /// connections stay elements, each reporting its own chip.</summary>
+    [Fact]
+    public void ALaterChipCoversAnEarlierOne() => RunSta(() =>
+    {
+        WriteCanvas(
+            "twins.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 400, 40)],
+            [Edge("e1", "a", "b", "abcd"), Edge("e2", "b", "a", "dcba")]);
+        using Board board = Open("twins.canvas", "Slate.Light.xaml");
+        board.ZoomTo(1);
+
+        List<DrawnChip> chips = Chips(board.Renderer);
+
+        Assert.Equal(new[] { "abcd", "dcba" }, chips.Select(chip => chip.Text));
+        Assert.True(
+            Math.Abs(chips[0].Box.X - chips[1].Box.X) <= 0.5 && Math.Abs(chips[0].Box.Width - chips[1].Box.Width) <= 0.5,
+            $"premise: the twins' chips differ ({chips[0].Box} and {chips[1].Box}).");
+        CanvasEdgeAutomationPeer[] edges = [.. board.Children().OfType<CanvasEdgeAutomationPeer>()];
+        Assert.Equal(2, edges.Length);
+        Assert.All(edges, edge => Assert.False(edge.GetBoundingRectangle().IsEmpty));
+    });
+
     // --- Fixture -----------------------------------------------------------
 
     private const string FarEdge =
@@ -1233,6 +1398,78 @@ public sealed class CanvasRendererPeerTests : IDisposable
     private static string Card(string id, string text, int x, int y) =>
         $"{{\"id\":\"{id}\",\"type\":\"text\",\"text\":\"{text}\",\"x\":{x},\"y\":{y},\"width\":200,\"height\":100}}";
 
+    private static string Card(string id, string text, int x, int y, int width, int height) =>
+        $"{{\"id\":\"{id}\",\"type\":\"text\",\"text\":\"{text}\",\"x\":{x},\"y\":{y},\"width\":{width},\"height\":{height}}}";
+
+    /// <summary>One chip as the chips layer drew it: its box (the rounded rectangle), the
+    /// brushes and pen it was drawn with, its glyph runs, and the characters they spell.</summary>
+    private sealed record DrawnChip(
+        Rect Box,
+        System.Windows.Media.Brush? Fill,
+        System.Windows.Media.Pen? Outline,
+        IReadOnlyList<System.Windows.Media.GlyphRunDrawing> Glyphs)
+    {
+        internal string Text => string.Concat(Glyphs.SelectMany(glyph => glyph.GlyphRun.Characters));
+
+        internal double FontSize => Glyphs.Count == 0 ? 0 : Glyphs[0].GlyphRun.FontRenderingEmSize;
+    }
+
+    /// <summary>The chips layer's chips in paint order: one child group per chip, its first
+    /// rectangle drawing the box.</summary>
+    private static List<DrawnChip> Chips(CanvasRendererView renderer)
+    {
+        var chips = new List<DrawnChip>();
+        if (renderer.ChipsDrawingForTests is not System.Windows.Media.DrawingGroup layer)
+        {
+            return chips;
+        }
+        foreach (System.Windows.Media.Drawing chip in layer.Children)
+        {
+            System.Windows.Media.GeometryDrawing? box = null;
+            var glyphs = new List<System.Windows.Media.GlyphRunDrawing>();
+            void Walk(System.Windows.Media.Drawing drawing)
+            {
+                switch (drawing)
+                {
+                    case System.Windows.Media.DrawingGroup group:
+                        foreach (System.Windows.Media.Drawing child in group.Children)
+                        {
+                            Walk(child);
+                        }
+                        break;
+                    case System.Windows.Media.GeometryDrawing { Geometry: System.Windows.Media.RectangleGeometry } geometry when box is null:
+                        box = geometry;
+                        break;
+                    case System.Windows.Media.GlyphRunDrawing glyph:
+                        glyphs.Add(glyph);
+                        break;
+                }
+            }
+            Walk(chip);
+            if (box is not null)
+            {
+                chips.Add(new DrawnChip(((System.Windows.Media.RectangleGeometry)box.Geometry).Rect, box.Brush, box.Pen, glyphs));
+            }
+        }
+        return chips;
+    }
+
+    /// <summary>A text scale factor for the body, restored after it.</summary>
+    private static void WithTextScale(double factor, Action body)
+    {
+        TextScaleService? previous = TextScaleService.Current;
+        using var service = new TextScaleService(() => factor);
+        TextScaleService.Current = service;
+        try
+        {
+            body();
+        }
+        finally
+        {
+            TextScaleService.Current = previous;
+        }
+    }
+
     private static string Edge(
         string id, string from, string to, string? label, bool fromArrow = false, bool toArrow = true) =>
         $"{{\"id\":\"{id}\",\"fromNode\":\"{from}\",\"toNode\":\"{to}\","
@@ -1256,12 +1493,12 @@ public sealed class CanvasRendererPeerTests : IDisposable
             + $"{viewport.ViewWidth}×{viewport.ViewHeight} view at zoom {viewport.Zoom}.");
     }
 
-    private Board Open(string path)
+    private Board Open(string path, string? theme = null)
     {
         var announcer = new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1));
         var document = new CanvasDocumentViewModel(_session, path, announcer, synchronousForTests: true);
         document.Load();
-        return new Board(document, announcer, ownsDocument: true);
+        return new Board(document, announcer, ownsDocument: true, theme);
     }
 
     private CanvasDocumentViewModel OpenDocument(string path)
@@ -1282,7 +1519,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
         private readonly CanvasSurfaceView _surface;
         private readonly bool _ownsDocument;
 
-        internal Board(CanvasDocumentViewModel document, CanvasAnnouncer announcer, bool ownsDocument)
+        internal Board(CanvasDocumentViewModel document, CanvasAnnouncer announcer, bool ownsDocument, string? theme = null)
         {
             Document = document;
             Announcer = announcer;
@@ -1299,6 +1536,15 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 WindowStyle = WindowStyle.None,
                 ShowActivated = false,
             };
+            if (theme is not null)
+            {
+                // The app's own theme dictionary, so the board draws with real brushes: an
+                // unthemed host draws every brush transparent.
+                _window.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri($"pack://application:,,,/SlateWindows;component/Themes/{theme}", UriKind.Absolute),
+                });
+            }
             _window.Show();
             document.ShowSurface(CanvasSurfaceKind.Visual);
             _window.UpdateLayout();

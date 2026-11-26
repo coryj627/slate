@@ -104,6 +104,10 @@ public sealed class ThemeTokenContrastTests
             ("canvas-ring/fill6", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.Fill6Color"),
             ("canvas-ring/groupfill", "Slate.Canvas.SelectionRingColor", "Slate.Canvas.GroupFillColor"),
             ("canvas-ring/window", "Slate.Canvas.SelectionRingColor", "Slate.WindowBackgroundColor"),
+            // Plan 47 CB-36 (#1721): a connection's label chip is the surface fill with the canvas
+            // text on it, and the selection ring now draws over chips too.
+            ("canvas-text/surface", "Slate.Canvas.TextColor", "Slate.SurfaceColor"),
+            ("canvas-ring/surface", "Slate.Canvas.SelectionRingColor", "Slate.SurfaceColor"),
         };
 
         foreach ((string name, string textKey, string backgroundKey) in pairs)
@@ -267,6 +271,29 @@ public sealed class ThemeTokenContrastTests
         }
         // The hollow ghost's surface IS the window: the outline carries it.
         Assert.Equal(colors["Slate.WindowBackgroundColor"], colors["Slate.Graph.SurfaceColor"]);
+    }
+
+    /// <summary>Plan 47 CB-36 (#1721, the owner's answer 1): a label chip's 1-pixel outline is the
+    /// connection's own colour, and it is what sets the chip off the board, since the chip's fill
+    /// (the surface) and the board (the window) are too close to separate (APCA 0). The outline
+    /// keeps the graphical-mark floor (|Lc| > 15, the graph outline's) against the board, the
+    /// chip's fill, and every card fill a chip can sit over.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void AChipsOutlineStandsOffTheBoardTheChipAndEveryCardFill(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        var backgrounds = new List<string> { "Slate.WindowBackgroundColor", "Slate.SurfaceColor", "Slate.Canvas.GroupFillColor" };
+        for (int preset = 1; preset <= 6; preset++)
+        {
+            backgrounds.Add($"Slate.Canvas.Fill{preset}Color");
+        }
+        foreach (string background in backgrounds)
+        {
+            double contrast = Math.Abs(ApcaLc(colors["Slate.Canvas.EdgeColor"], colors[background]));
+            Assert.True(contrast > 15, $"{fileName} canvas-chip-outline/{background} measured |Lc| {contrast:F2}; expected > 15.");
+        }
     }
 
     private static IReadOnlyDictionary<string, Rgb> ReadColors(string fileName)

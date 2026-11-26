@@ -1500,6 +1500,31 @@ internal sealed class CanvasRendererView : FrameworkElement
         UpdateTooltip();
     }
 
+    /// <summary>The pointer at a view point, as <see cref="OnMouseMove"/> passes it.</summary>
+    internal void PointerMovedForTests(Point view)
+    {
+        string? hovered = HitTest(view);
+        if (!string.Equals(hovered, _hoverNode, StringComparison.Ordinal))
+        {
+            _hoverNode = hovered;
+            UpdateTooltip();
+        }
+    }
+
+    /// <summary>The pointer on or off the open tooltip, as its border's enter and leave set it.</summary>
+    internal void PointerOnTooltipForTests(bool on)
+    {
+        _pointerOnTooltip = on;
+        UpdateTooltip();
+    }
+
+    /// <summary>Where the tooltip sits, relative to the board.</summary>
+    internal Point TooltipOffsetForTests => new(_tooltip.HorizontalOffset, _tooltip.VerticalOffset);
+
+    /// <summary>The chips layer's drawing as the last install painted it, one child per chip in
+    /// paint order (#1721). There is no chips layer before CB-36's chips.</summary>
+    internal Drawing? ChipsDrawingForTests => null;
+
     internal bool TooltipIsOpenForTests => _tooltip.IsOpen;
 
     internal System.Windows.Controls.Border TooltipChromeForTests => (System.Windows.Controls.Border)_tooltip.Child;

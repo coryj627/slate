@@ -5431,6 +5431,311 @@ public sealed class CanvasDocumentTests : IDisposable
         + "two constrained lines of a two-hundred-and-forty-pixel card at "
         + "any believable text scale, existing purely to be truncated";
 
+    private const string LongLabel =
+        "a connection label far too long to fit in one chip of two hundred canvas units at any zoom";
+
+    private static string ChipCard(string id, string text, int x, int y) =>
+        "{\"id\":\"" + id + "\",\"type\":\"text\",\"text\":\"" + text + "\",\"x\":" + x + ",\"y\":" + y
+        + ",\"width\":240,\"height\":140}";
+
+    private static string ChipEdge(string id, string from, string to, string label) =>
+        "{\"id\":\"" + id + "\",\"fromNode\":\"" + from + "\",\"toNode\":\"" + to + "\",\"toEnd\":\"arrow\",\"label\":\"" + label + "\"}";
+
+    private void WriteChipCanvas(string name, string[] nodes, string[] edges) => File.WriteAllText(
+        Path.Combine(_fixture.Root, name),
+        "{\"nodes\":[" + string.Join(",", nodes) + "],\"edges\":[" + string.Join(",", edges) + "]}");
+
+    /// <summary>The boxes the chips layer drew, in paint order (view coordinates).</summary>
+    private static List<Rect> ChipBoxes(CanvasRendererView renderer)
+    {
+        var boxes = new List<Rect>();
+        if (renderer.ChipsDrawingForTests is not System.Windows.Media.DrawingGroup layer)
+        {
+            return boxes;
+        }
+        foreach (System.Windows.Media.Drawing chip in layer.Children)
+        {
+            Rect? box = null;
+            void Walk(System.Windows.Media.Drawing drawing)
+            {
+                if (drawing is System.Windows.Media.DrawingGroup group)
+                {
+                    foreach (System.Windows.Media.Drawing child in group.Children)
+                    {
+                        Walk(child);
+                    }
+                }
+                else if (box is null && drawing is System.Windows.Media.GeometryDrawing { Geometry: System.Windows.Media.RectangleGeometry rectangle })
+                {
+                    box = rectangle.Rect;
+                }
+            }
+            Walk(chip);
+            if (box is { } found)
+            {
+                boxes.Add(found);
+            }
+        }
+        return boxes;
+    }
+
+    private static Point CentreOf(Rect rect) => new(rect.X + (rect.Width / 2), rect.Y + (rect.Height / 2));
+
+    /// <summary>Opens a canvas on a hosted visual board and waits for its first install.</summary>
+    private (CanvasDocumentViewModel Document, CanvasSurfaceView Surface, HostedWindow Host) OpenChipBoard(string name)
+    {
+        CanvasDocumentViewModel document = NewDocument(name);
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is { Source.Loaded: not null } state && state.Viewport.ViewWidth > 0);
+        surface.VisualForTests.Engine.CommitViewport(view => view.WithZoom(1, 0, 0).PannedTo(0, 0));
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport));
+        return (document, surface, host);
+    }
+
+    /// <summary>Plan 47 CB-36 (#1721, the owner's answer 3): the pointer on a cut-off chip shows the
+    /// connection's full label in the board's tooltip, flush below the chip, and Esc's surface
+    /// rung dismisses it; an install with the pointer still keeps it dismissed.</summary>
+    [Fact]
+    public void HoveringACutOffChipShowsItsFullLabelBelowItAndEscDismissesIt() => RunSta(() =>
+    {
+        WriteChipCanvas("chiptip.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chiptip.canvas");
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "the pointer on a cut-off chip did not open the tooltip.");
+            Assert.Equal(LongLabel, surface.VisualForTests.TooltipTextForTests);
+            Assert.Equal(chip.Left, surface.VisualForTests.TooltipOffsetForTests.X, 1);
+            Assert.Equal(chip.Bottom, surface.VisualForTests.TooltipOffsetForTests.Y, 1);
+            Assert.True(((ICanvasSurfacePresenter)surface).DismissTransientRegion(), "Esc's surface rung did not consume the chip's tooltip.");
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the tooltip survived its own dismissal.");
+            // An install that leaves the chip under the still pointer (half a pixel of pan).
+            surface.VisualForTests.Engine.CommitViewport(view => view.PannedTo(0.5, 0));
+            PumpUntil(() => surface.VisualForTests.Engine.Current!.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport));
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "an install brought back the tooltip Esc dismissed.");
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36 (the owner's answer 3): a chip that fits has no tooltip, and a fitting
+    /// chip over a truncated card takes the pointer from the card, so neither shows.</summary>
+    [Fact]
+    public void AChipThatFitsShowsNoTooltipEvenOverATruncatedCard() => RunSta(() =>
+    {
+        WriteChipCanvas("chipfits.canvas", [ChipCard("long", LongTitle, 0, 0), ChipCard("b", "B", 600, 0)],
+            [ChipEdge("e1", "long", "long", "ok"), ChipEdge("e2", "b", "b", "fits")]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipfits.canvas");
+        using (host)
+        {
+            List<Rect> chips = ChipBoxes(surface.VisualForTests);
+            Assert.Equal(2, chips.Count);
+
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chips[1]));
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "a chip that fits opened a tooltip.");
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chips[0]));
+            Assert.False(
+                surface.VisualForTests.TooltipIsOpenForTests,
+                $"the pointer on a fitting chip over a truncated card opened \"{surface.VisualForTests.TooltipTextForTests}\".");
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36: a cut-off chip over a truncated card takes the pointer: its label
+    /// shows, not the card's title; and a card and a connection that share an id never mix.</summary>
+    [Fact]
+    public void AChipOverATruncatedCardWinsTheHoverAndSharedIdsNeverMix() => RunSta(() =>
+    {
+        WriteChipCanvas("chipover.canvas",
+            [ChipCard("x", LongTitle, 0, 0), ChipCard("p", "P", 0, 400), ChipCard("q", "Q", 600, 400)],
+            [ChipEdge("loop", "x", "x", LongLabel), ChipEdge("x", "p", "q", LongLabel + " too")]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipover.canvas");
+        using (host)
+        {
+            List<Rect> chips = ChipBoxes(surface.VisualForTests);
+            Assert.Equal(2, chips.Count);
+
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chips[0]));
+            Assert.Equal(LongLabel, surface.VisualForTests.TooltipTextForTests);
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chips[1]));
+            Assert.Equal(LongLabel + " too", surface.VisualForTests.TooltipTextForTests);
+            surface.VisualForTests.PointerMovedForTests(new Point(10, 10));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the truncated card \"x\" opened nothing.");
+            Assert.Equal(LongTitle, surface.VisualForTests.TooltipTextForTests);
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36: a chip's tooltip keeps the board's popup rules: a hidden board, a
+    /// modal surface and an inactive window each hide it, and it comes back with them.</summary>
+    [Fact]
+    public void AChipTooltipFollowsTheBoardsPopupRules() => RunSta(() =>
+    {
+        WriteChipCanvas("chipgate.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipgate.canvas");
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the chip's tooltip did not open.");
+
+            document.ShowSurface(CanvasSurfaceKind.Outline);
+            host.UpdateLayout();
+            PumpUntil(() => !surface.VisualForTests.IsVisible);
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the hidden board's chip tooltip is still on screen.");
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            host.UpdateLayout();
+            PumpUntil(() => surface.VisualForTests.IsVisible);
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "showing the board again did not bring the chip's tooltip back.");
+
+            Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+            try
+            {
+                CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                CanvasSurfaceView.RaiseShellOverlayChanged();
+                Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the chip's tooltip is still over the sheet.");
+            }
+            finally
+            {
+                CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+                CanvasSurfaceView.RaiseShellOverlayChanged();
+            }
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "closing the sheet did not bring the chip's tooltip back.");
+
+            Window window = Window.GetWindow(surface);
+            WindowActivation.Deactivate(window);
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the chip's tooltip stayed above other applications.");
+            WindowActivation.Activate(window);
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not bring the chip's tooltip back.");
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36 (contract 34 ID-9's becomes-invalid arm): a chip's tooltip closes at
+    /// the install that makes its content invalid: the label edited until it fits, the connection
+    /// deleted, or the board panned until the connection leaves the window.</summary>
+    [Theory]
+    [InlineData("edited to fit")]
+    [InlineData("deleted")]
+    [InlineData("panned away")]
+    public void AChipTooltipClosesWhenItsContentStopsBeingValid(string change) => RunSta(() =>
+    {
+        WriteChipCanvas("chipgone.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipgone.canvas");
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+            surface.VisualForTests.PointerOnTooltipForTests(true);
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the chip's tooltip did not open.");
+
+            switch (change)
+            {
+                case "edited to fit":
+                    _ = document.CanvasEditConnection("e1", "ok", CanvasConnectionDirection.ToTarget);
+                    break;
+                case "deleted":
+                    _ = document.CanvasDeleteConnection("e1");
+                    break;
+                default:
+                    surface.VisualForTests.Engine.CommitViewport(view => view.PannedTo(-60_000, -60_000));
+                    break;
+            }
+
+            PumpUntil(() => !surface.VisualForTests.TooltipIsOpenForTests);
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36: a republish of the same canvas (a watcher's reload) with the pointer
+    /// still on a cut-off chip keeps the chip's tooltip and its text.</summary>
+    [Fact]
+    public void ARepublishKeepsAChipTooltipUnderAStillPointer() => RunSta(() =>
+    {
+        WriteChipCanvas("chipreload.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipreload.canvas");
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the chip's tooltip did not open.");
+            CanvasPublication before = document.AppliedPublication!;
+
+            WriteChipCanvas("chipreload.canvas",
+                [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0), ChipCard("c", "C", 0, 600)],
+                [ChipEdge("e1", "a", "b", LongLabel)]);
+            Task reload = document.ReloadAsync();
+            PumpedDispatcher.PumpUntilDrained(reload, TimeSpan.FromSeconds(10));
+            PumpUntil(() => !ReferenceEquals(document.AppliedPublication, before)
+                && ReferenceEquals(surface.VisualForTests.Engine.Current!.Source, document.AppliedPublication));
+
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "the republish closed the chip's tooltip under a still pointer.");
+            Assert.Equal(LongLabel, surface.VisualForTests.TooltipTextForTests);
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36, found and fixed here (contract 34 D11 and ID-9): with the pointer
+    /// resting on a truncated card's tooltip, a title edited until it fits closes the tooltip at the
+    /// install. The pointer-on-tooltip branch used to return its old subject unchecked.</summary>
+    [Fact]
+    public void ATitleEditedToFitClosesItsTooltipUnderThePointer() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("longtitle.canvas");
+        using (host)
+        {
+            surface.VisualForTests.PointerMovedForTests(new Point(20, 20));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: hovering the truncated card opened nothing.");
+            surface.VisualForTests.PointerOnTooltipForTests(true);
+            surface.VisualForTests.PointerMovedForTests(new Point(270, 400));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the pointer on the tooltip did not keep it open.");
+            CanvasPublication before = document.AppliedPublication!;
+
+            File.WriteAllText(
+                Path.Combine(_fixture.Root, "longtitle.canvas"),
+                "{\"nodes\":[{\"id\":\"long\",\"type\":\"text\",\"text\":\"Now short\",\"x\":0,\"y\":0,\"width\":240,\"height\":140},"
+                + "{\"id\":\"short\",\"type\":\"text\",\"text\":\"Short\",\"x\":300,\"y\":0,\"width\":240,\"height\":140}],\"edges\":[]}");
+            Task reload = document.ReloadAsync();
+            PumpedDispatcher.PumpUntilDrained(reload, TimeSpan.FromSeconds(10));
+            PumpUntil(() => !ReferenceEquals(document.AppliedPublication, before)
+                && ReferenceEquals(surface.VisualForTests.Engine.Current!.Source, document.AppliedPublication));
+
+            Assert.False(
+                surface.VisualForTests.TooltipIsOpenForTests,
+                $"the tooltip still shows \"{surface.VisualForTests.TooltipTextForTests}\" for a title that now fits.");
+        }
+        document.Shutdown();
+    });
+
+    /// <summary>Plan 47 CB-36, found and fixed here: an install that moves a truncated card out from
+    /// under a still pointer ends its hover, so its tooltip closes; the hover used to outlive the
+    /// card's leaving.</summary>
+    [Fact]
+    public void AnInstallThatMovesACardFromUnderAStillPointerEndsItsHover() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("longtitle.canvas");
+        using (host)
+        {
+            surface.VisualForTests.PointerMovedForTests(new Point(20, 20));
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: hovering the truncated card opened nothing.");
+
+            // The card moves 500 units left: still windowed, drawn and truncated, no longer under (20, 20).
+            surface.VisualForTests.Engine.CommitViewport(view => view.PannedTo(-500, 0));
+
+            PumpUntil(() => surface.VisualForTests.Engine.Current!.Viewport.SameGeometry(surface.VisualForTests.Engine.CommittedViewport));
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the tooltip outlived the card's leaving the still pointer.");
+        }
+        document.Shutdown();
+    });
+
     private void WriteLongTitleCanvas() => File.WriteAllText(
         Path.Combine(_fixture.Root, "longtitle.canvas"),
         "{\"nodes\":[{\"id\":\"long\",\"type\":\"text\",\"text\":\""
