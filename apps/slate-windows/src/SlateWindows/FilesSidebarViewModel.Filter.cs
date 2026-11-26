@@ -42,7 +42,8 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>Plan 47 CB-35 (#1837): the filter's list was published, raised as the last
     /// thing the publication does: a keystroke's swap or clear at the true end of
     /// <see cref="FilterText"/>'s setter, after its status writes; the field's clear at the end
-    /// of <see cref="ClearFilter"/>; a filter run at the end of the operation it posts. Never
+    /// of <see cref="ClearFilter"/>; a filter run, or its failure's report, at the end of the
+    /// operation it posts. Never
     /// from <see cref="ScheduleFilter"/>: a tree publication calls it in the middle of its own
     /// operation. The view lays the list out there, before TSF can be granted its lock
     /// (<see cref="PublishedList"/>).</summary>
@@ -472,6 +473,8 @@ internal sealed partial class FilesSidebarViewModel
                         if (!cancellationToken.IsCancellationRequested)
                         {
                             ReportFailure("Could not filter files.");
+                            // CB-35: the failure's status line, laid out last, as a run's is.
+                            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                         }
 
                         applied.TrySetResult();
