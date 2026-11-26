@@ -119,7 +119,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// <summary>Plan 47 CB-35 (#1837): the results panel was published, raised as the last
     /// thing each operation the pipeline posts does: the Searching state or the idle
     /// transition a debounced keystroke starts, and the results, zero results or error a
-    /// search publishes. The view lays the list out there, before TSF can be granted its lock
+    /// search publishes; and as the last thing <see cref="SetScope"/> does, whose scope
+    /// change shows or hides the chip and can clear the rows. The view lays the list out
+    /// there, before TSF can be granted its lock
     /// (<see cref="PublishedList"/>).</summary>
     internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 
@@ -443,6 +445,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         ScheduleSearch();
+        // CB-35: the chip and the cleared rows, laid out last in the operation that changed
+        // the scope (the chip's Clear, a tag activated over open results).
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     /// <summary>Drop back to Vault scope and refresh under the wider
