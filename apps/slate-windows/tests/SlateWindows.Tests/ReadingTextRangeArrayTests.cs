@@ -300,10 +300,20 @@ public sealed class ReadingTextRangeArrayTests
         surface.Height = 36;
         host.Settle();
         var wrong = new List<string>();
+        int threw = 0;
         for (double offset = 60; offset <= 400; offset += 2)
         {
             surface.ScrollToVerticalOffset(offset);
             host.Settle();
+            try
+            {
+                _ = provider.GetVisibleRanges();
+            }
+            catch (ArgumentException)
+            {
+                threw++;
+            }
+
             try
             {
                 if (!SameAsWpf(all, out string? why))
@@ -317,7 +327,56 @@ public sealed class ReadingTextRangeArrayTests
             }
         }
 
+        Assert.True(threw > 0, "premise: WPF's visible ranges never threw over this view");
         Assert.True(wrong.Count == 0, $"{wrong.Count} offsets went wrong: " + string.Join("; ", wrong.Take(6)));
+    });
+
+    /// <summary>The same one-line view over a long right-to-left note: where WPF's visible
+    /// ranges throw, the select-all's rectangles still come back without WPF walking every line
+    /// of the note, and they are WPF's own (Codex, round 1: the first answer to the throw was
+    /// WPF's whole-range walk).</summary>
+    [Fact]
+    public void AOneLineViewOverALongRightToLeftNoteAnswersQuickly() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Long\n\n" + Repeat(1200, index => $"פסקה מספר {index} כאן בעברית\n\n") + "End mark.\n"));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "note.md", "End mark.");
+        surface.Selection.Select(surface.Document.ContentStart, surface.Document.ContentEnd);
+        host.Settle();
+        var all = Assert.IsType<HeadingStyleTextRange>(provider.GetSelection()[0]);
+        surface.Height = 36;
+        host.Settle();
+        var timed = new List<string>();
+        for (double offset = 60; offset <= 400 && timed.Count < 4; offset += 2)
+        {
+            surface.ScrollToVerticalOffset(offset);
+            host.Settle();
+            try
+            {
+                _ = provider.GetVisibleRanges();
+                continue;
+            }
+            catch (ArgumentException)
+            {
+                // WPF's corners come out of order here: the case under test.
+            }
+
+            // Timed against WPF's own walk over the same range at the same offset, so the
+            // comparison holds on a faster or slower machine.
+            var clock = Stopwatch.StartNew();
+            double[] served = all.GetBoundingRectangles();
+            long servedMs = clock.ElapsedMilliseconds;
+            clock.Restart();
+            double[] wpfs = all.Inner.GetBoundingRectangles();
+            long wpfMs = clock.ElapsedMilliseconds;
+            timed.Add($"offset {offset}: {served.Length / 4} rectangles in {servedMs} ms, WPF's own {wpfs.Length / 4} in {wpfMs} ms");
+            Assert.True(wpfMs >= 200, "premise: WPF's own walk is too quick to compare with: " + string.Join("; ", timed));
+            Assert.True(servedMs * 4 < wpfMs, "the select-all's rectangles cost what WPF's walk does: " + string.Join("; ", timed));
+            Assert.True(
+                SameAsWpf(all, out string? why),
+                $"offset {offset}: the decorator's rectangles are not WPF's own: {why}");
+        }
+
+        Assert.True(timed.Count > 0, "premise: WPF's visible ranges never threw over this view");
     });
 
     private static bool SameAsWpf(HeadingStyleTextRange range, out string? why)

@@ -2196,6 +2196,19 @@ internal sealed class ReadingSurface : RichTextBox
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new ReadingSurfacePeer(this);
+
+    /// <summary>CB-21 (#1330): the surface's rectangle on screen, in the device pixels UI
+    /// Automation's points use, or null when it isn't shown. The Text pattern orders WPF's two
+    /// corner hits with it where WPF's own visible ranges throw.</summary>
+    internal Rect? ViewOnScreen()
+    {
+        if (!IsVisible || ActualWidth < 1 || ActualHeight < 1 || PresentationSource.FromVisual(this) is null)
+        {
+            return null;
+        }
+
+        return new Rect(PointToScreen(new Point(0, 0)), PointToScreen(new Point(ActualWidth, ActualHeight)));
+    }
 }
 
 /// <summary>
@@ -2246,7 +2259,7 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
             if (_text is null || !ReferenceEquals(_innerText, text))
             {
                 _innerText = text;
-                _text = new HeadingStyleTextProvider(text);
+                _text = new HeadingStyleTextProvider(text, _surface.ViewOnScreen);
             }
             return _text;
         }

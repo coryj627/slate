@@ -69,9 +69,49 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
 
     private readonly ITextProvider _inner;
 
-    public HeadingStyleTextProvider(ITextProvider inner)
+    // The view's rectangle on screen, for ordering WPF's corner hits when its own visible
+    // ranges throw; null when the surface isn't shown.
+    private readonly Func<System.Windows.Rect?>? _viewOnScreen;
+
+    public HeadingStyleTextProvider(ITextProvider inner, Func<System.Windows.Rect?>? viewOnScreen = null)
     {
         _inner = inner;
+        _viewOnScreen = viewOnScreen;
+    }
+
+    /// <summary>WPF's visible ranges, or, where WPF's own throw because its two corner hits
+    /// come out of order (a view about one line tall over right-to-left text), the span between
+    /// the view's corners put in order here. Null when neither can be had.</summary>
+    internal ITextRangeProvider[]? VisibleSpans()
+    {
+        try
+        {
+            return _inner.GetVisibleRanges();
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        if (_viewOnScreen?.Invoke() is not { Width: >= 2, Height: >= 2 } view)
+        {
+            return null;
+        }
+
+        try
+        {
+            ITextRangeProvider start = _inner.RangeFromPoint(new System.Windows.Point(view.Left + 1, view.Top + 1));
+            ITextRangeProvider end = _inner.RangeFromPoint(new System.Windows.Point(view.Right - 1, view.Bottom - 1));
+            if (start.CompareEndpoints(TextPatternRangeEndpoint.Start, end, TextPatternRangeEndpoint.Start) > 0)
+            {
+                (start, end) = (end, start);
+            }
+            start.MoveEndpointByRange(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.End);
+            return [start];
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public ITextRangeProvider DocumentRange => Wrap(_inner.DocumentRange);
@@ -103,7 +143,7 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
     }
 
     private ITextRangeProvider Wrap(ITextRangeProvider? range) =>
-        range is null ? null! : new HeadingStyleTextRange(range, _inner);
+        range is null ? null! : new HeadingStyleTextRange(range, this);
 }
 
 /// <summary>One wrapped range. Forwards everything but three answers: StyleId (and
@@ -112,12 +152,12 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 {
     private readonly ITextRangeProvider _inner;
 
-    // WPF's own provider, for its visible ranges. Every range the provider hands out carries
-    // it (Wrap, Clone, FindAttribute, FindText); null only where a test builds a bare range,
-    // which then answers its rectangles as WPF does.
-    private readonly ITextProvider? _view;
+    // The provider that made the range, for the view's visible spans. Every range the provider
+    // hands out carries it (Wrap, Clone, FindAttribute, FindText); null only where a test builds
+    // a bare range, which then answers its rectangles as WPF does.
+    private readonly HeadingStyleTextProvider? _view;
 
-    public HeadingStyleTextRange(ITextRangeProvider inner, ITextProvider? view)
+    public HeadingStyleTextRange(ITextRangeProvider inner, HeadingStyleTextProvider? view)
     {
         _inner = inner;
         _view = view;
@@ -633,9 +673,10 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// WPF's visible ranges are two hit tests at the view's corners, and right-to-left text puts
     /// a corner's hit at the far end of its line (a Hebrew top line came back as its last
     /// character's sliver without it). Lines the widening adds outside the view are clipped by
-    /// WPF as before. A caret, or a range made without a provider, is WPF's own answer, and so is
-    /// a view whose corners WPF can't order (a view about one line tall over right-to-left text,
-    /// where WPF's visible ranges throw).
+    /// WPF as before. Where the corners come out of order and WPF's visible ranges throw (a view
+    /// about one line tall over right-to-left text), the provider orders them itself
+    /// (<see cref="HeadingStyleTextProvider.VisibleSpans"/>). A caret, a range made without a
+    /// provider, and a view with no span at all keep WPF's own answer.
     /// </summary>
     public double[] GetBoundingRectangles()
     {
@@ -645,18 +686,7 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             return _inner.GetBoundingRectangles();
         }
 
-        ITextRangeProvider[]? visible;
-        try
-        {
-            visible = _view.GetVisibleRanges();
-        }
-        catch (ArgumentException)
-        {
-            return _inner.GetBoundingRectangles();
-        }
-
-        // WPF always answers one range here (an empty one at the start when nothing shows);
-        // anything else keeps WPF's own answer.
+        ITextRangeProvider[]? visible = _view.VisibleSpans();
         if (visible is not { Length: > 0 })
         {
             return _inner.GetBoundingRectangles();
