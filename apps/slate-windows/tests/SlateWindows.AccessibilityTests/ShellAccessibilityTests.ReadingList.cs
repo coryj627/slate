@@ -123,8 +123,11 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>WB-11 (#1330): Ctrl+A in the reading view raises
     /// TextSelectionChanged on the surface, and the selection a client reads
-    /// back is the whole note — what Narrator needs to say the selection and
-    /// read it back.</summary>
+    /// back is the whole note. Narrator needs one thing more, which no client
+    /// can see from here: the selection's GetChildren answering an array where
+    /// WPF answers null (UI Automation hands every client an empty array
+    /// either way). CB-21 pins that at the provider, in
+    /// <c>ReadingTextRangeArrayTests</c>.</summary>
     [Fact]
     public void ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote()
     {
