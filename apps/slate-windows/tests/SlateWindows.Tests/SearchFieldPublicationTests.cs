@@ -428,9 +428,27 @@ public sealed class SearchFieldPublicationTests
         {
             Clean(host);
             string before = sidebar.FilterText;
-            activate();
+            // Read after the window's own handler, which activates the tag: what the Tags tree
+            // has pending as its selection's event ends.
+            string[]? atTheSelection = null;
+            RoutedPropertyChangedEventHandler<object> selected = (_, _) => atTheSelection = PendingLayout.Under(tags);
+            tags.SelectedItemChanged += selected;
+            try
+            {
+                activate();
+            }
+            finally
+            {
+                tags.SelectedItemChanged -= selected;
+            }
+
             findings.Expect(sidebar.FilterText != before && sidebar.FilterText.Contains(tag, StringComparison.Ordinal), $"premise: {label} left the filter at '{sidebar.FilterText}'");
             findings.Expect(ReferenceEquals(Keyboard.FocusedElement, field), $"premise: {label} took the keys from the filter field");
+            string[] tree = PendingLayout.Under(tags);
+            findings.Expect(
+                tree.Length == 0,
+                $"{label}: the Tags tree's own rows wait as the operation ends ({string.Join(", ", tree)})"
+                    + (atTheSelection is null ? string.Empty : $"; as its selection's event ended, {atTheSelection.Length} waited"));
             findings.NothingPendingButTheField($"{label}: the activation's operation", swap, field);
             SettleUntil(host, () => !sidebar.IsFiltering, $"{label}: its filter never ran");
         }
