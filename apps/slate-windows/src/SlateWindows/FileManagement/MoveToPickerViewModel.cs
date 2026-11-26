@@ -137,10 +137,12 @@ internal sealed class MoveToPickerViewModel : BindableBase
     }
 
     /// <summary>Plan 47 CB-35 (#1837): the rows were published, raised as the last thing
-    /// <see cref="RebuildRows"/> does, which is the last thing of every publication: a
-    /// keystroke's at the true end of <see cref="FilterText"/>'s setter, after its count; a
-    /// folder page, the complete publication or a failure at the end of
-    /// <see cref="PublishFolders"/> or <see cref="FailLoading"/>. A keystroke chooses the
+    /// <see cref="RebuildRows"/> does, which is the last thing this picker does in each
+    /// publication: a keystroke's at the true end of <see cref="FilterText"/>'s setter, after
+    /// its count; a folder page, the complete publication or a failure at the end of
+    /// <see cref="PublishFolders"/> or <see cref="FailLoading"/>. The sidebar's posted
+    /// delegate announces the complete publication's or the failure's status after it, a
+    /// notification that changes no layout. A keystroke chooses the
     /// selection; a background page keeps it unless the selected destination moved, so a
     /// reader who scrolled while folders load keeps the view (<see cref="PublishedList"/>).</summary>
     internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;

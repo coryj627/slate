@@ -12,17 +12,18 @@ namespace SlateWindows;
 /// granted its lock between dispatcher operations, and its <c>GetTextExt</c> then runs
 /// whatever layout and automation events it finds pending in the dispatcher, inside the lock;
 /// a UIA event raised there waits on a client reading the field until UIA gives up, about 20
-/// seconds a time (contract 28). A publication that settles as it ends leaves TSF nothing.
+/// seconds a time (contract 28). A publication that settles as it ends leaves nothing of its
+/// own pending: what its operation changes after the settle, and what other operations leave
+/// under a focused field, are not covered here (the residual, #1955).
 /// </summary>
 internal static class PublishedList
 {
     /// <summary>Lays out everything the dispatcher has pending, not only the list: the layout
     /// pass is the dispatcher's, and it is the dispatcher's whole queue that TSF would run.
     /// Guarded as <c>AccessibleDataGrid.ApplySort</c> guards its flush, by the anchor's being
-    /// loaded, or by its window's: a list inside a sheet's scroll viewer that has never shown
-    /// is not loaded until the pass that first lays the sheet out applies the viewer's
-    /// template, and Move To publishes its first rows in the operation that shows its sheet.
-    /// An anchor in no loaded window has nothing waiting on a pass.</summary>
+    /// loaded, or by its window's: Move To's list is not yet loaded in the operation that first
+    /// shows its sheet, nor in the first folder page's, and the anchor's guard alone skipped
+    /// both settles (measured). An anchor in no loaded window is skipped.</summary>
     internal static void Settle(FrameworkElement anchor)
     {
         if (anchor.IsLoaded || Window.GetWindow(anchor) is { IsLoaded: true })
