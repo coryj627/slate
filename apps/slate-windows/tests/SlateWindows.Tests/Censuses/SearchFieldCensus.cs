@@ -166,11 +166,19 @@ public sealed class SearchFieldCensus
         (string File, XDocument Document)[] documents = [.. ShellXaml()];
         List<Site> xaml = [.. documents.SelectMany(document => XamlSites(document.File, document.Document, compilation, mapped))];
         List<Site> code = [.. CodeSites(compilation, ShellCompilation.Sources.Select(source => (source.Relative, source.Source.Root.SyntaxTree)))];
-        Assert.True(xaml.Count >= 30, $"only {xaml.Count} text fields were found in the shell's XAML; the scrape is broken.");
-        Assert.True(code.Count >= 10, $"only {code.Count} text fields were found in the shell's code; the scrape is broken.");
 
         var problems = new List<string>();
         problems.AddRange(UnreadNamespaces(documents, compilation, mapped));
+        if (xaml.Count < 30)
+        {
+            problems.Add($"only {xaml.Count} text fields were found in the shell's XAML; the scrape is broken");
+        }
+
+        if (code.Count < 10)
+        {
+            problems.Add($"only {code.Count} text fields were found in the shell's code; the scrape is broken");
+        }
+
         problems.AddRange(Unlisted([.. xaml, .. code], Table));
         problems.AddRange(Stale([.. xaml, .. code], Table));
         problems.AddRange(Malformed(Table, typeof(SearchFieldCensus).Assembly, ListIds(documents)));
