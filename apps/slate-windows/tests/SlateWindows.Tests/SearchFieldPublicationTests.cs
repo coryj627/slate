@@ -505,6 +505,40 @@ public sealed class SearchFieldPublicationTests
         ArrowsShowTheirRow(host, field, host.Shell.MoveToList, () => picker.SelectedRow, downs: 25, ups: 3);
     });
 
+    /// <summary>At twice the text size, in a short window, Move To's sheet outgrows the window
+    /// and scrolls in its own outer viewer. The arrows keep main's behaviour: the sheet follows
+    /// the row they select, so the row shows on the screen as well as in the list. Only a
+    /// publication's show keeps its scroll inside the list.</summary>
+    [Fact]
+    public void MoveToSheetFollowsTheArrowsAtTwiceTheTextSize() => Sta(() =>
+    {
+        using var host = new ShownShell(NestedFolders(60));
+        WindowActivation.Activate(host.Shell);
+        host.Shell.Height = 480;
+        TypeRamp.Apply(host.Shell.Resources.MergedDictionaries.First(layer => layer.Contains(TypeRamp.Body.SizeKey)), 2);
+        host.Settle();
+        using var files = new FilesSidebar(host);
+        MoveToPickerViewModel picker = files.OpenMoveTo();
+        SettleUntil(host, () => picker.State == MoveToLoadState.Ready, "Move To never finished loading");
+        TextBox field = host.Shell.MoveToFilterTextBox;
+        Assert.True(field.Focus(), "premise: the filter refused the keys");
+        host.Settle();
+        var outer = Assert.IsType<ScrollViewer>(host.Shell.MoveToOverlay.Child);
+        Assert.True(outer.ScrollableHeight > 0, "premise: the Move To sheet does not outgrow the window at twice the text size");
+        double start = outer.VerticalOffset;
+        var findings = new Findings();
+        for (int press = 1; press <= 25; press++)
+        {
+            Press(field, Key.Down);
+            findings.Shown($"press {press} (Down)", host.Shell.MoveToList, picker.SelectedRow);
+        }
+
+        host.Settle();
+        findings.Expect(outer.VerticalOffset > start, $"the sheet's outer viewer stayed at {start} (of {outer.ScrollableHeight}) while 25 Downs walked the list");
+
+        findings.AssertNone("Move To's sheet did not follow the arrows at twice the text size");
+    });
+
     private static void ArrowsShowTheirRow(ShownShell host, UIElement field, ListBox list, Func<object?> selected, int downs, int ups)
     {
         var findings = new Findings();
@@ -1033,7 +1067,9 @@ public sealed class SearchFieldPublicationTests
     /// <summary>At twice the text size, in a short window, the Move To and picker sheets
     /// outgrow it and scroll in their own outer viewer. With the keys in the filter, a
     /// keystroke whose publication chooses the selection shows it by scrolling the list only:
-    /// the sheet's outer viewer holds still. (Move To's arrows still let the sheet follow the
+    /// the row shows inside the list, which each keystroke finds scrolled to its end, and the
+    /// sheet's outer viewer holds still. A picker's keystroke that keeps the reader's row
+    /// shows nothing. (Move To's arrows still let the sheet follow the
     /// selection, as on main.) The size comes from the shell's type ramp (TextScaleTests'
     /// seam), never the system's setting.</summary>
     [Theory]
@@ -1052,8 +1088,9 @@ public sealed class SearchFieldPublicationTests
         {
             TextBox field;
             ScrollViewer outer;
+            ListBox list;
             string[] queries;
-            Func<string?> selection;
+            Func<object?> selected;
             if (member == "Move To")
             {
                 var files = new FilesSidebar(host);
@@ -1062,17 +1099,19 @@ public sealed class SearchFieldPublicationTests
                 SettleUntil(host, () => picker.State == MoveToLoadState.Ready, "Move To never finished loading");
                 field = host.Shell.MoveToFilterTextBox;
                 outer = Assert.IsType<ScrollViewer>(host.Shell.MoveToOverlay.Child);
+                list = host.Shell.MoveToList;
                 queries = ["dir-3", string.Empty, "dir-5", string.Empty];
-                selection = () => picker.SelectedRow?.Destination;
+                selected = () => picker.SelectedRow;
             }
             else
             {
                 CanvasDocumentViewModel canvas = OpenCanvas(host, "board.canvas");
-                (ICanvasPickerSheet sheet, _) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
+                (ICanvasPickerSheet sheet, ListBox rows) = OpenPicker(host, canvas, member == "Card picker" ? Picker.Card : Picker.File);
                 field = host.Shell.CanvasCardPickerFilterBox;
                 outer = Assert.IsType<ScrollViewer>(host.Shell.CanvasCardPickerOverlay.Child);
+                list = rows;
                 queries = member == "Card picker" ? ["item 1", string.Empty, "item 2", string.Empty] : ["topic-1", string.Empty, "topic-2", string.Empty];
-                selection = () => SheetSelection(sheet)?.ToString();
+                selected = () => SheetSelection(sheet);
             }
 
             Assert.True(field.Focus(), "premise: the field refused the keys");
@@ -1080,15 +1119,39 @@ public sealed class SearchFieldPublicationTests
             host.Settle();
             Assert.True(outer.ScrollableHeight > 0, $"premise: the {member} sheet does not outgrow the window at twice the text size");
             double offset = outer.VerticalOffset;
+            ScrollViewer inner = Descendants<ScrollViewer>(list).First();
             var findings = new Findings();
+            int shows = 0;
             foreach (string query in queries)
             {
+                // The list scrolled to its end first, so showing the row the keystroke
+                // selects has to scroll the list.
+                inner.ScrollToEnd();
+                host.Settle();
+                bool scrolledAway = inner.VerticalOffset > 0;
+                object? before = selected();
                 field.Text = query;
-                string label = $"typed '{query}' (it selects {selection()})";
+                object? row = selected();
+                // A keystroke that moved the selection chose it, and its publication shows
+                // it; a picker's keystroke that kept the reader's row keeps the reader's view.
+                bool chose = !Equals(row, before);
+                shows += chose && scrolledAway ? 1 : 0;
+                string label = $"typed '{query}' (it selects {row})";
                 findings.Expect(outer.VerticalOffset == offset, $"{label}: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset} (of {outer.ScrollableHeight})");
+                if (chose)
+                {
+                    findings.Shown($"{label}: the keystroke's publication", list, row);
+                }
+
                 host.Settle();
                 findings.Expect(outer.VerticalOffset == offset, $"{label}, after everything queued: the sheet's outer viewer moved from {offset} to {outer.VerticalOffset}");
+                if (chose)
+                {
+                    findings.Shown($"{label}, after everything queued", list, row);
+                }
             }
+
+            findings.Expect(shows >= 2, $"premise: only {shows} keystrokes moved the selection in a list scrolled away from its top");
 
             findings.AssertNone($"The {member} sheet moved while its list showed a row at twice the text size");
         }
