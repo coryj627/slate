@@ -384,8 +384,9 @@ public sealed class SearchFieldPublicationTests
     }
 
     /// <summary>The rescan's silent re-rank keeps the reader's result selected far down the
-    /// list, on a fresh row: the row is realized and in view as the publication ends, and still
-    /// after everything queued has run.</summary>
+    /// list, on a fresh row, and five notes the rescan found rank ahead of it, so the row it
+    /// keeps moves down past the bottom of the view: the row is realized and in view as the
+    /// publication ends, and still after everything queued has run.</summary>
     [Fact]
     public void QuickOpenKeepsAReRankedSelectionInView() => Sta(() =>
     {
@@ -396,12 +397,22 @@ public sealed class SearchFieldPublicationTests
         QuickSwitcherViewModel switcher = quickOpen.Switcher;
         ListBox list = host.Shell.QuickSwitcherResultsList;
         switcher.SelectedRow = switcher.Results[30];
+        // From the top, the row lands at the bottom edge of the view.
         list.ScrollIntoView(switcher.SelectedRow);
         host.Settle();
         host.Settle();
         var findings = new Findings();
         findings.Shown("premise: the reader's row before the re-rank", list, switcher.SelectedRow);
         string path = switcher.SelectedRow!.Path;
+        // The rescan's scan put five notes in the index (WB-25 stage 2) that rank ahead of
+        // every topic, as QuickSwitcherRescanLandingTests' outside note does.
+        for (int note = 0; note < 5; note++)
+        {
+            _ = host.Session.CreateExclusive($"a-outside-{note}.md", "outside\n");
+        }
+
+        host.Settle();
+        Assert.Equal(path, switcher.SelectedRow?.Path);
         bool added = false;
         switcher.Results.CollectionChanged += (_, e) => added |= e.Action == NotifyCollectionChangedAction.Add;
 
@@ -410,6 +421,8 @@ public sealed class SearchFieldPublicationTests
         Watch(findings, new Stage("the silent re-rank", () => added, () =>
         {
             findings.Expect(switcher.SelectedRow?.Path == path, $"the re-rank did not keep {path} (it holds {switcher.SelectedRow?.Path})");
+            int moved = switcher.SelectedRow is { } kept ? switcher.Results.IndexOf(kept) : -1;
+            findings.Expect(moved > 30, $"premise: the kept row is at {moved}, not moved down by the notes ranked ahead of it");
             findings.Shown("as the re-rank's publication ends", list, switcher.SelectedRow);
         }));
         SettleUntil(host, () => reRank.IsCompleted, "the silent re-rank");
