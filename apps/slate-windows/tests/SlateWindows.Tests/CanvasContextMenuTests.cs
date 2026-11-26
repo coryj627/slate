@@ -638,6 +638,7 @@ public sealed class CanvasContextMenuTests
         var onTheChip = new Point(
             (110 * state.Viewport.Zoom) + state.Viewport.PanX,
             (290 * state.Viewport.Zoom) + state.Viewport.PanY);
+        Assert.True(board.ChipBoxFor("e3")?.Contains(onTheChip) == true, "premise: the revisit connection draws no chip at that point.");
         Assert.True(board.HitTest(onTheChip) == "note", "premise: the revisit chip's centre is not over the note card.");
         ContextMenu? persistent = board.ContextMenu;
 

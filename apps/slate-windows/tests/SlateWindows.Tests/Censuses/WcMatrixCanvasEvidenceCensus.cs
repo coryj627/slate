@@ -137,6 +137,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "AChipThatFitsShowsNoTooltipEvenOverATruncatedCard", "AChipOverATruncatedCardWinsTheHoverAndSharedIdsNeverMix",
                 "AChipTooltipFollowsTheBoardsPopupRules", "AChipTooltipClosesWhenItsContentStopsBeingValid",
                 "ARepublishKeepsAChipTooltipUnderAStillPointer", "AChipsOutlineStandsOffTheBoardTheChipAndEveryCardFill",
+                "ARealizationDuringAZoomPansByTheChipTheCommittedZoomDraws", "ARebindClosesAChipTooltipAndNeverShowsAnotherCanvassLabel",
                 "CanvasBoard_ALongLabelledEdgeZoomedInLeavesTheBoardAxeClean", "CanvasBoard_APointerOnAChipOverACardShowsTheChipsLabel",
                 "CanvasBoard_TheFirstNameSearchReturnsAnOffWindowItem"],
             ["canvas-visual", "canvas-board-first-search", "canvas-board-covering", "canvas-board-chips"]),

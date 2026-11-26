@@ -183,6 +183,34 @@ public sealed class CanvasRendererPeerTests : IDisposable
         AssertInView(after, 20_000, 0, 60, 240);
     });
 
+    /// <summary>Plan 47 CB-36: a realization asked for while a zoom is committed and not yet
+    /// installed pans by the chip as the committed zoom will draw it. A chip's padding does not
+    /// scale with the zoom, so the installed zoom's chip has another size in canvas units, and a
+    /// pan made by it leaves the drawn chip hanging past the view's edge.</summary>
+    [Fact]
+    public void ARealizationDuringAZoomPansByTheChipTheCommittedZoomDraws() => RunSta(() =>
+    {
+        WriteCanvas(
+            "zoom-lag.canvas",
+            [Card("home", "Home", 40, 40), Card("left", "Left", 20_000, 40), Card("right", "Right", 120_000, 40)],
+            [Edge("e1", "left", "right", "spans")]);
+        using Board board = Open("zoom-lag.canvas");
+        board.ZoomTo(4);
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
+
+        board.Renderer.Engine.CommitViewport(view => view.WithZoom(1, 0, 0).PannedTo(0, 0));
+        Assert.True(
+            board.Renderer.Engine.Current!.Viewport.Zoom == 4,
+            "premise: the zoom installed before the realization was asked for.");
+        ((IVirtualizedItemProvider)edge).Realize();
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e1")) == CanvasPeerCell.Materialized);
+
+        CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
+        Assert.Equal(1, after.Zoom);
+        DrawnChip chip = Assert.Single(Chips(board.Renderer));
+        AssertBoxInView(after, chip.Box, "the chip realized during the zoom");
+    });
+
     /// <summary>D5's end-style table, every cell: Invoke selects the
     /// arrow's head when exactly one end has an arrow, else the
     /// to-node, with one announcement.</summary>
@@ -1325,6 +1353,14 @@ public sealed class CanvasRendererPeerTests : IDisposable
             board.Renderer.CardsDrawingForTests!.Bounds,
             ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 1)).Drawing.Bounds);
         Assert.NotEqual(board.Renderer.ChipsDrawingForTests!.Bounds, board.Renderer.CardsDrawingForTests!.Bounds);
+        // The ring around the seat "a": 2 pixels outside the card, its 2-pixel pen half outside that.
+        Rect ringAround = ViewRect(board.Renderer.Engine.Current!.Viewport, new Rect(40, 40, 200, 100));
+        ringAround.Inflate(3, 3);
+        Rect top = ((System.Windows.Media.DrawingVisual)System.Windows.Media.VisualTreeHelper.GetChild(board.Renderer, 3)).Drawing.Bounds;
+        Assert.True(
+            Math.Abs(top.X - ringAround.X) <= 0.5 && Math.Abs(top.Y - ringAround.Y) <= 0.5
+                && Math.Abs(top.Width - ringAround.Width) <= 0.5 && Math.Abs(top.Height - ringAround.Height) <= 0.5,
+            $"the top layer holds {top}, not the ring around the seat at {ringAround}.");
         Rect visible = new(0, 0, board.Renderer.ActualWidth, board.Renderer.ActualHeight);
         Assert.False(visible.Contains(chips[1].Box), "premise: the margin edge's chip lies inside the board.");
         // A windowed edge whose chip lies past the board is a child that reads on screen, as a card
@@ -1364,36 +1400,41 @@ public sealed class CanvasRendererPeerTests : IDisposable
     }));
 
     /// <summary>Plan 47 CB-36 (#1721): a chip is one line. A long label is cut off with an
-    /// ellipsis at 200 canvas units; line breaks and tabs in a label read as spaces and its ends
-    /// are trimmed, so a label with a break or trailing spaces draws whole on one line.</summary>
+    /// ellipsis at 200 canvas units; every character WPF breaks a line at (CR, LF, NEL, vertical
+    /// tab, form feed, the Unicode line and paragraph separators) and each tab reads as a space,
+    /// and the ends are trimmed, so a label with a break or trailing spaces draws whole on one
+    /// line.</summary>
     [Fact]
     public void ALongLabelIsCutOffAndABrokenOneDrawsOnOneLine() => RunSta(() =>
     {
         WriteCanvas(
             "label.canvas",
             [Card("a", "Alpha", 40, 40), Card("b", "Beta", 400, 40), Card("c", "Gamma", 40, 300), Card("d", "Delta", 400, 300),
-                Card("e", "Epsilon", 40, 560), Card("f", "Zeta", 400, 560)],
+                Card("e", "Epsilon", 40, 560), Card("f", "Zeta", 400, 560), Card("g", "Eta", 40, 820), Card("h", "Theta", 400, 820)],
             [
                 Edge("long", "a", "b", "a label far too long to fit one chip of two hundred canvas units at all"),
                 Edge("broken", "c", "d", "spans\\nmore\\tthan"),
                 Edge("trailing", "e", "f", "\\nlead   "),
+                Edge("paged", "g", "h", "one\\u000btwo\\u000cthree\\u2028four"),
             ]);
         using Board board = Open("label.canvas", "Slate.Light.xaml");
         board.ZoomTo(1);
 
         List<DrawnChip> chips = Chips(board.Renderer);
 
-        Assert.Equal(3, chips.Count);
+        Assert.Equal(4, chips.Count);
         Assert.EndsWith("…", chips[0].Text, StringComparison.Ordinal);
         Assert.Equal(200, chips[0].Box.Width, 1);
         Assert.Equal("spans more than", chips[1].Text);
         Assert.Equal("lead", chips[2].Text);
         Assert.True(chips[2].Box.Width < 200, "a short label filled the cap.");
+        Assert.Equal("one two three four", chips[3].Text);
     });
 
     /// <summary>Plan 47 CB-36 (the owner's answer 2): chips draw in the scene's edge order, so where
     /// twin connections' chips meet, the later one covers the earlier, on every run. Both
-    /// connections stay elements, each reporting its own chip.</summary>
+    /// connections stay elements, each reporting its own chip, and a reader's point and the
+    /// pointer on the shared chip find the later one, the one drawn on top.</summary>
     [Fact]
     public void ALaterChipCoversAnEarlierOne() => RunSta(() =>
     {
@@ -1413,6 +1454,11 @@ public sealed class CanvasRendererPeerTests : IDisposable
         CanvasEdgeAutomationPeer[] edges = [.. board.Children().OfType<CanvasEdgeAutomationPeer>()];
         Assert.Equal(2, edges.Length);
         Assert.All(edges, edge => Assert.False(edge.GetBoundingRectangle().IsEmpty));
+        CanvasEdgeAutomationPeer later = Assert.Single(edges, edge => edge.Key == CanvasPeerKey.Edge("e2"));
+        Rect shared = later.GetBoundingRectangle();
+        Assert.Same(later, board.Peer.GetPeerFromPoint(new Point(shared.X + (shared.Width / 2), shared.Y + (shared.Height / 2))));
+        board.Renderer.PointerMovedForTests(new Point(chips[1].Box.X + (chips[1].Box.Width / 2), chips[1].Box.Y + (chips[1].Box.Height / 2)));
+        Assert.Equal(CanvasPeerKey.Edge("e2"), board.Renderer.HoverKeyForTests);
     });
 
     // --- Fixture -----------------------------------------------------------

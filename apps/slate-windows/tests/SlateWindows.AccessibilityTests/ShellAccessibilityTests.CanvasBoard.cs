@@ -284,10 +284,11 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>
-    /// Plan 47 CB-36 (#1721, the owner's answer 3), with the real pointer: a cut-off chip drawn
-    /// over a truncated card takes the pointer, so its tooltip shows the connection's full label,
-    /// not the card's title; and the pointer moved from the chip down onto the tooltip keeps it
-    /// open. Before CB-36 the board drew no chips, and the same point showed the card's title.
+    /// Plan 47 CB-36 (#1721, the owner's answer 3), with the real pointer and no seat: the pointer
+    /// on a truncated card shows its title; on a cut-off chip drawn over that card it shows the
+    /// connection's full label instead; and the pointer moved from the chip down onto the tooltip
+    /// keeps it open. Before CB-36 the board drew no chips, and the chip's point showed the card's
+    /// title.
     /// </summary>
     [Fact]
     [Trait("gate", "W-C")]
@@ -336,8 +337,30 @@ public sealed partial class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("premise: the self-loop is not one of the board's children.");
             AssertAxeClean(process, "canvas-board-chips");
 
+            // No seat: a seated truncated card shows its title by the keyboard trigger, which
+            // outranks the pointer (contract 34 D11).
+            AutomationElement card = board.FindAllChildren(finder => finder.ByControlType(ControlType.Button)).FirstOrDefault()
+                ?? throw new Xunit.Sdk.XunitException("premise: the card is not one of the board's children.");
+            if (card.Patterns.SelectionItem.Pattern.IsSelected.Value)
+            {
+                card.Patterns.SelectionItem.Pattern.RemoveFromSelection();
+            }
+            Assert.True(
+                Retry.WhileFalse(() => board.Patterns.Selection.Pattern.Selection.Value.Length == 0, TimeSpan.FromSeconds(10)).Success,
+                "premise: the board kept its seat.");
+
+            // The card is truncated: the pointer on it, away from the chip, shows its title.
+            System.Drawing.Rectangle cardRect = card.Properties.BoundingRectangle.Value;
             System.Drawing.Rectangle chip = loop.Properties.BoundingRectangle.Value;
             window.SetForeground();
+            Mouse.MoveTo(new System.Drawing.Point(cardRect.X + 6, cardRect.Y + 6));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(400));
+            Assert.True(
+                Retry.WhileFalse(
+                    () => TooltipText(automation, process.Id, LongTitle)?.Properties.Name.ValueOrDefault == LongTitle,
+                    TimeSpan.FromSeconds(5)).Success,
+                "premise: the pointer on the card away from the chip showed no title, so the card is not truncated.");
+
             Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), chip.Y + (chip.Height / 2)));
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(400));
             string shown = "(nothing)";
@@ -357,8 +380,13 @@ public sealed partial class ShellAccessibilityTests
                 Mouse.MoveTo(new System.Drawing.Point(chip.X + (chip.Width / 2), y));
             }
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
+            // The tooltip lies below the chip: had it closed, the pointer would rest on the card or
+            // on bare board, which show the title or nothing, so a read that keeps finding the
+            // label is the tooltip that stayed.
             Assert.True(
-                TooltipText(automation, process.Id, LongLabel, LongTitle)?.Properties.Name.ValueOrDefault == LongLabel,
+                Retry.WhileFalse(
+                    () => TooltipText(automation, process.Id, LongLabel, LongTitle)?.Properties.Name.ValueOrDefault == LongLabel,
+                    TimeSpan.FromSeconds(3)).Success,
                 "the chip's tooltip closed as the pointer moved onto it (1.4.13: hoverable).");
         }
         catch (Exception)

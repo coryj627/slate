@@ -10,7 +10,8 @@ namespace SlateWindows.Canvas;
 /// <summary>
 /// The visual projection (§D TD-6): a FrameworkElement drawing the
 /// installed presentation state — DrawingVisual per materialized card,
-/// the edge layer, and the screen-space selection ring — with the
+/// the edge layer, the labelled edges' chips (#1721), and the
+/// screen-space selection ring — with the
 /// engine as its ONLY data source (D1: peers and pixels read one
 /// installed state; no live authority is consulted in a draw pass).
 /// DD-1: DrawingContext, no WebView, no SVG.
@@ -170,9 +171,13 @@ internal sealed class CanvasRendererView : FrameworkElement
             // So is a realization owed to the old document's key.
             _owedReveal = null;
             _owedRealization = null;
-            // What the pointer was over is the old document's; the next pointer move asks again.
+            // What the pointer was over, and a tooltip it held open, are the old document's: the
+            // tooltip closes now, and the next pointer move or install asks again.
             _hoverKey = null;
             _lastPointer = null;
+            _pointerOnTooltip = false;
+            _tooltipSubject = null;
+            _tooltip.IsOpen = false;
             _model = value;
             _forwardPublication = null;
             if (value is not null)
@@ -416,9 +421,9 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>
     /// One chip for each windowed labelled connection, over the cards, in the scene's edge order,
     /// so where two chips meet the later one covers the earlier (the owner's answer 2). A chip is
-    /// the board's surface fill with a 1-pixel outline in the connection's own brush (the owner's
-    /// answer 1) and the card text brush, centred on the midpoint of the line the edges layer
-    /// draws.
+    /// the cards' surface fill (the board itself sits on the window background) with a 1-pixel
+    /// outline in the connection's own brush (the owner's answer 1) and the card text brush,
+    /// centred on the midpoint of the line the edges layer draws.
     /// </summary>
     private void DrawChips(CanvasPresentationState state)
     {
@@ -443,7 +448,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             // chip is drawn exactly where the connection is an element on the board.
             if (!state.Topology.Placements.TryGetValue(CanvasPeerKey.Edge(edge.EdgeId), out CanvasPeerPlacement? placement)
                 || placement.Cell != CanvasPeerCell.Materialized
-                || LayOutChip(state, population, edge, textBrush, pixelsPerDip) is not { } chip)
+                || LayOutChip(state, state.Viewport, population, edge, textBrush, pixelsPerDip) is not { } chip)
             {
                 continue;
             }
@@ -460,15 +465,17 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>
-    /// A labelled connection's chip in <paramref name="state"/>: its text on one line at the card
-    /// typeface, 10 times the text size factor times the zoom and never under 4 (contract 34 D11);
-    /// as wide as its text plus padding, up to 200 canvas units, past which the text is cut off
-    /// with an ellipsis; 1.6 times its text size tall; centred on the midpoint of the line between
-    /// the two cards' centres, which for a self-loop is its card's centre. Null for an edge with
-    /// no label text or a missing card.
+    /// A labelled connection's chip in <paramref name="state"/>'s scene, in the view coordinates of
+    /// <paramref name="viewport"/>: its text on one line at the card typeface, 10 times the text
+    /// size factor times the zoom and never under 4 (contract 34 D11); as wide as its text plus
+    /// padding, up to 200 canvas units, past which the text is cut off with an ellipsis; 1.6 times
+    /// its text size tall; centred on the midpoint of the line between the two cards' centres,
+    /// which for a self-loop is its card's centre. Null for an edge with no label text or a
+    /// missing card.
     /// </summary>
     private ChipLayout? LayOutChip(
         CanvasPresentationState state,
+        CanvasViewportState viewport,
         CanvasPopulation population,
         CanvasSceneEdge edge,
         Brush textBrush,
@@ -481,12 +488,12 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return null;
         }
-        double zoom = state.Viewport.Zoom;
+        double zoom = viewport.Zoom;
         CanvasRect fromRect = state.NodeRect(from);
         CanvasRect toRect = state.NodeRect(to);
         double midX = (fromRect.X + (fromRect.Width / 2) + toRect.X + (toRect.Width / 2)) / 2;
         double midY = (fromRect.Y + (fromRect.Height / 2) + toRect.Y + (toRect.Height / 2)) / 2;
-        var centre = new Point((midX * zoom) + state.Viewport.PanX, (midY * zoom) + state.Viewport.PanY);
+        var centre = new Point((midX * zoom) + viewport.PanX, (midY * zoom) + viewport.PanY);
         double fontSize = Math.Max(ChipMinimumFontSize, ChipFontSize * TextScaleService.CurrentFactor * zoom);
         double maxTextWidth = Math.Max(1, (ChipCap * zoom) - (2 * ChipPadding));
         var typeface = new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
@@ -513,8 +520,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         return new ChipLayout(edge.EdgeId, box, text, origin, cutOff, label);
     }
 
-    /// <summary>A label as one line: each line break (CR, LF, CRLF, NEL, the Unicode line and
-    /// paragraph separators) and each tab reads as one space, and the ends are trimmed.</summary>
+    /// <summary>A label as one line: each character WPF breaks a line at (CR, LF, CRLF, NEL,
+    /// vertical tab, form feed, the Unicode line and paragraph separators) and each tab reads as
+    /// one space, and the ends are trimmed.</summary>
     internal static string ChipText(string label)
     {
         var line = new System.Text.StringBuilder(label.Length);
@@ -525,7 +533,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             {
                 continue;
             }
-            _ = line.Append(c is '\r' or '\n' or '\u0085' or '\u2028' or '\u2029' or '\t' ? ' ' : c);
+            _ = line.Append(c is '\r' or '\n' or '\u000B' or '\u000C' or '\u0085' or '\u2028' or '\u2029' or '\t' ? ' ' : c);
         }
         return line.ToString().Trim();
     }
@@ -1117,25 +1125,33 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>The pan half of a realization, from the installed state —
-    /// which the callers have checked is the document's applied one.</summary>
+    /// which the callers have checked is the document's applied one. An
+    /// edge's chip is laid out at the viewport the pan is made in: its
+    /// padding does not scale with the zoom, so a zoom committed and not yet
+    /// installed draws it at another size in canvas units (CB-36).</summary>
     private void PanToRealize(CanvasPeerKey key)
     {
         if (BoundPopulation is not { } population
             || _engine.Current is not { } state
-            || RealizationTarget(state, population, key) is not { } target)
+            || RealizationTarget(state, state.Viewport, population, key) is null)
         {
             return;
         }
-        _engine.CommitViewport(v => target.Fits(v)
-            ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
-            : PanToContain(v, target.Fallback));
+        _engine.CommitViewport(v =>
+        {
+            RealizeTarget target = RealizationTarget(state, v, population, key)!;
+            return target.Fits(v)
+                ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
+                : PanToContain(v, target.Fallback);
+        });
     }
 
     /// <summary>The rect a realization pans to contain — a card's own, or
     /// an edge's union with its chip, and the chip alone as the fallback
     /// when that is larger than the view. All are the INSTALLED state's
     /// effective rects, so a realization during a move or resize preview
-    /// targets what the board draws (codex).</summary>
+    /// targets what the board draws (codex); the chip's size is the one
+    /// <paramref name="viewport"/>'s zoom draws.</summary>
     private sealed record RealizeTarget(
         double X, double Y, double Width, double Height, CanvasRect Fallback)
     {
@@ -1144,7 +1160,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     private RealizeTarget? RealizationTarget(
-        CanvasPresentationState state, CanvasPopulation population, CanvasPeerKey key)
+        CanvasPresentationState state, CanvasViewportState viewport, CanvasPopulation population, CanvasPeerKey key)
     {
         if (!key.IsEdge)
         {
@@ -1165,13 +1181,12 @@ internal sealed class CanvasRendererView : FrameworkElement
         // The chip as this state draws it, wherever the window is: an edge being realized is
         // usually off it, so there is no drawn chip to read. Core names only an edge whose label
         // has text, so a named edge always has one; the designated endpoint stays the answer if not.
-        if (LayOutChip(state, population, edge, Brushes.Transparent, VisualTreeHelper.GetDpi(this).PixelsPerDip)
+        if (LayOutChip(state, viewport, population, edge, Brushes.Transparent, VisualTreeHelper.GetDpi(this).PixelsPerDip)
             is not { } chip)
         {
             return new RealizeTarget(
                 x, y, width, height, state.NodeRect(population.SceneByNode[DesignatedEndpoint(edge)]));
         }
-        CanvasViewportState viewport = state.Viewport;
         var chipRect = new CanvasRect(
             (chip.Box.X - viewport.PanX) / viewport.Zoom,
             (chip.Box.Y - viewport.PanY) / viewport.Zoom,
@@ -1763,12 +1778,18 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>The pointer at a view point, as <see cref="OnMouseMove"/> passes it.</summary>
     internal void PointerMovedForTests(Point view) => HoverAt(view);
 
-    /// <summary>The pointer on or off the open tooltip, as its border's enter and leave set it.</summary>
-    internal void PointerOnTooltipForTests(bool on)
+    /// <summary>The pointer leaving the board onto the open tooltip: the tooltip's border takes
+    /// the pointer, then the board's mouse leave runs.</summary>
+    internal void PointerOntoTheTooltipForTests()
     {
-        _pointerOnTooltip = on;
+        _pointerOnTooltip = true;
+        _hoverKey = null;
+        _lastPointer = null;
         UpdateTooltip();
     }
+
+    /// <summary>What the pointer is over, as the hover holds it.</summary>
+    internal CanvasPeerKey? HoverKeyForTests => _hoverKey;
 
     /// <summary>Where the tooltip sits, relative to the board.</summary>
     internal Point TooltipOffsetForTests => new(_tooltip.HorizontalOffset, _tooltip.VerticalOffset);

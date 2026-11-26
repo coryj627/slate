@@ -196,8 +196,9 @@ internal sealed class CanvasRendererAutomationPeer :
 
 /// <summary>
 /// What every peer on the board shares (§D D3): its discriminated key, its
-/// cell in the installed state, the rectangle in SCREEN coordinates from
-/// the placement, and the virtualized-item door, exposed ALWAYS — as a
+/// cell in the installed state, the rectangle in SCREEN coordinates (a
+/// card's from its placement; an edge reports its drawn chip's, #1721),
+/// and the virtualized-item door, exposed ALWAYS — as a
 /// PLACEHOLDER the peer answers identifying properties from the descriptor
 /// index and refuses action patterns until realization. The SAME peer
 /// object serves its key across materialization round trips (stable

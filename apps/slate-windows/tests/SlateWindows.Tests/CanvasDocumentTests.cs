@@ -5636,8 +5636,8 @@ public sealed class CanvasDocumentTests : IDisposable
         {
             Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
             surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
-            surface.VisualForTests.PointerOnTooltipForTests(true);
-            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the chip's tooltip did not open.");
+            surface.VisualForTests.PointerOntoTheTooltipForTests();
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the pointer on the chip's tooltip did not keep it open.");
 
             switch (change)
             {
@@ -5685,6 +5685,43 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>Plan 47 CB-36: with the pointer resting on a chip's tooltip, moving the board to
+    /// another canvas closes the tooltip at once, and the other canvas's connection that shares the
+    /// id, cut off too, never shows its label in it.</summary>
+    [Fact]
+    public void ARebindClosesAChipTooltipAndNeverShowsAnotherCanvassLabel() => RunSta(() =>
+    {
+        const string Elsewhere = LongLabel + " on another canvas";
+        WriteChipCanvas("chipfirst.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", LongLabel)]);
+        WriteChipCanvas("chipsecond.canvas", [ChipCard("a", "A", 0, 0), ChipCard("b", "B", 600, 0)], [ChipEdge("e1", "a", "b", Elsewhere)]);
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, HostedWindow host) = OpenChipBoard("chipfirst.canvas");
+        CanvasDocumentViewModel other = NewDocument("chipsecond.canvas");
+        other.Load();
+        other.ShowSurface(CanvasSurfaceKind.Visual);
+        using (host)
+        {
+            Rect chip = Assert.Single(ChipBoxes(surface.VisualForTests));
+            surface.VisualForTests.PointerMovedForTests(CentreOf(chip));
+            surface.VisualForTests.PointerOntoTheTooltipForTests();
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the pointer on the chip's tooltip did not keep it open.");
+
+            surface.Model = other;
+            Assert.False(
+                surface.VisualForTests.TooltipIsOpenForTests,
+                $"the board moved to another canvas and kept \"{surface.VisualForTests.TooltipTextForTests}\" open.");
+            host.UpdateLayout();
+            PumpUntil(() => ReferenceEquals(surface.VisualForTests.InstalledDocument, other)
+                && surface.VisualForTests.IsVisible
+                && ChipBoxes(surface.VisualForTests).Count == 1);
+
+            Assert.False(
+                surface.VisualForTests.TooltipIsOpenForTests,
+                $"the other canvas's board shows \"{surface.VisualForTests.TooltipTextForTests}\" under no pointer.");
+        }
+        other.Shutdown();
+        document.Shutdown();
+    });
+
     /// <summary>Plan 47 CB-36, found and fixed here (contract 34 D11 and ID-9): with the pointer
     /// resting on a truncated card's tooltip, a title edited until it fits closes the tooltip at the
     /// install. The pointer-on-tooltip branch used to return its old subject unchecked.</summary>
@@ -5697,8 +5734,7 @@ public sealed class CanvasDocumentTests : IDisposable
         {
             surface.VisualForTests.PointerMovedForTests(new Point(20, 20));
             Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: hovering the truncated card opened nothing.");
-            surface.VisualForTests.PointerOnTooltipForTests(true);
-            surface.VisualForTests.PointerMovedForTests(new Point(270, 400));
+            surface.VisualForTests.PointerOntoTheTooltipForTests();
             Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the pointer on the tooltip did not keep it open.");
             CanvasPublication before = document.AppliedPublication!;
 
