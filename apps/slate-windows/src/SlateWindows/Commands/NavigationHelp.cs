@@ -21,8 +21,9 @@ internal static class NavigationHelp
         + $"Next list: {Spoken("windows.reading.nextL")}. "
         + $"Next table: {Spoken("windows.reading.nextT")}. "
         + $"Next math: {Spoken("windows.reading.nextM")}. "
-        + $"Enter speaks it, {Spoken("windows.reading.mathBraille")} its braille, "
-        + $"{Spoken("windows.reading.mathSource")} its source. "
+        + $"Next diagram: {Spoken("windows.reading.nextD")}. "
+        + $"Enter speaks either one, {Spoken("windows.reading.mathSource")} its source, "
+        + $"and {Spoken("windows.reading.mathBraille")} a formula's braille. "
         + "Tab moves through links and embedded controls. Enter activates.";
 
     /// <summary>WB-22 (#1112): the find bar's query — its own keys and the

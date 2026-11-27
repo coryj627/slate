@@ -1628,18 +1628,19 @@ public sealed class ChordTableTests
 
     }
 
-    /// <summary>#1591 (plan 45 XB-9): the reading view's math braille and
-    /// source chords, read from the arms of
-    /// <c>ReadingNavigator.Surface_PreviewKeyDown</c> that request them (the
-    /// braille activation and <c>TrySpeakMathSourceAtCaret</c>): each arm's
-    /// key and its EXACT modifier state.</summary>
+    /// <summary>#1591 (plan 45 XB-9) and plan 47 CB-20b: the reading view's
+    /// math braille chord and its source chord (a formula's or a diagram's),
+    /// read from the arms of <c>ReadingNavigator.Surface_PreviewKeyDown</c>
+    /// that request them (the braille activation and
+    /// <c>TrySpeakSourceAtCaret</c>): each arm's key and its EXACT modifier
+    /// state.</summary>
     private static HashSet<string> ReadingMathRequestChords()
     {
         MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
             .Method("Surface_PreviewKeyDown");
         IfStatementSyntax[] arms = route.DescendantNodes()
             .OfType<IfStatementSyntax>()
-            .Where(arm => CSharpSource.Invokes(arm.Condition, "_surface.TrySpeakMathSourceAtCaret")
+            .Where(arm => CSharpSource.Invokes(arm.Condition, "_surface.TrySpeakSourceAtCaret")
                 || CSharpSource.Normalize(arm.Condition).Contains(
                     "_surface.TryActivateAtCaret(brailleRequested:true)", System.StringComparison.Ordinal))
             .ToArray();
@@ -1661,6 +1662,58 @@ public sealed class ChordTableTests
 
         Assert.Equal(2, chords.Count);
         return chords;
+    }
+
+    /// <summary>#1591 (the plan 45 XB-9 review) and plan 47 CB-20b: with
+    /// keyboard focus ON a formula or a diagram (Tab), the caret arms do not
+    /// apply, so the route answers the focused element: one arm each, gated on
+    /// a first press of Return with that element focused, handing its exact
+    /// modifier state to the answer, which picks the request (the source on
+    /// Ctrl+Shift+Enter for both).</summary>
+    [Fact]
+    public void TheFocusedFormulaAndDiagramAreAnsweredOnReturn()
+    {
+        MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
+            .Method("Surface_PreviewKeyDown");
+        StatementSyntax[] top = route.Body!.Statements.ToArray();
+        // The arms stand at the method's top level, ahead of the caret arms
+        // (which apply only while the surface itself has the keys) and ahead
+        // of the chord lookup's early return.
+        int caretArms = System.Array.FindIndex(top, statement =>
+            statement is IfStatementSyntax candidate
+            && CSharpSource.Normalize(candidate.Condition).StartsWith("CaretActivationApplies(", System.StringComparison.Ordinal));
+        int chordLookup = System.Array.FindIndex(top, statement =>
+            CSharpSource.Normalize(statement).Contains("_chords.TryGetValue(", System.StringComparison.Ordinal));
+        Assert.True(caretArms > 0 && chordLookup > caretArms, "premise: the route's caret arms and chord lookup were not found");
+        foreach ((string element, string answer) in new[]
+        {
+            ("ReadingMathElement", "_surface.TryAnswerMath"),
+            ("ReadingDiagramElement", "_surface.TryAnswerDiagram"),
+        })
+        {
+            int index = System.Array.FindIndex(top, statement =>
+                statement is IfStatementSyntax candidate && CSharpSource.Invokes(candidate.Condition, answer));
+            Assert.True(index >= 0, $"no top-level arm of the route answers through {answer}");
+            Assert.True(index < caretArms, $"the {element} arm comes after the caret arms, where it never runs");
+            var arm = (IfStatementSyntax)top[index];
+            // One conjunction of exactly these terms, so no term can be
+            // negated, or-ed away or dropped.
+            string[] terms = Conjuncts(arm.Condition).Select(term => CSharpSource.Normalize(term)).ToArray();
+            Assert.Equal(4, terms.Length);
+            Assert.Equal("key==Key.Return", terms[0]);
+            Assert.Equal("!e.IsRepeat", terms[1]);
+            Assert.StartsWith($"Keyboard.FocusedElementis{element}", terms[2], System.StringComparison.Ordinal);
+            Assert.StartsWith($"{answer}(", terms[3], System.StringComparison.Ordinal);
+            Assert.EndsWith(",Keyboard.Modifiers)", terms[3], System.StringComparison.Ordinal);
+            Assert.Equal(
+                new[] { "e.Handled=true;", "return;" },
+                ((BlockSyntax)arm.Statement).Statements.Select(statement => CSharpSource.Normalize(statement)).ToArray());
+        }
+
+        static IEnumerable<ExpressionSyntax> Conjuncts(ExpressionSyntax expression) =>
+            expression is BinaryExpressionSyntax both && both.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression)
+                ? Conjuncts(both.Left).Concat(Conjuncts(both.Right))
+                : new[] { expression };
     }
 
     private static HashSet<string> GridGestureChords()

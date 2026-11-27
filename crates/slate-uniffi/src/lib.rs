@@ -10650,6 +10650,10 @@ pub enum A11yEvent {
     MathSourceSpoken {
         source: Option<String>,
     },
+    /// Plan 47 CB-20b (CD12(d)): a diagram's source, spoken on request.
+    DiagramSourceSpoken {
+        source: Option<String>,
+    },
     GridSorted {
         column: String,
         ascending: bool,
@@ -12445,6 +12449,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 text,
             },
             F::MathSourceSpoken { source } => C::MathSourceSpoken { source },
+            F::DiagramSourceSpoken { source } => C::DiagramSourceSpoken { source },
             F::GridSorted { column, ascending } => C::GridSorted { column, ascending },
             F::GridRowMoved {
                 description,
