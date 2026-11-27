@@ -52,11 +52,35 @@ namespace SlateWindows;
 /// shell's admission to that event before any instance handler sees it.
 /// </para>
 /// <para>
+/// <b>Touch, pen and a drop</b> (plan 47 CB-38, #1695). A touch's own
+/// events are taken, so no list starts a pan under the seal: a list whose
+/// <c>PanningMode</c> is not None starts a manipulation from
+/// <c>TouchDown</c>, and a drag it pans promotes no press, only
+/// <c>PreviewMouseMove</c>, which the seal does not take (step 0's probe
+/// logs). A tap's promoted press is taken as a press. A drop from another
+/// app is taken under either cause, since a window a modal prompt disabled
+/// still receives an OLE drop, and the source is told nothing moved, so OLE
+/// sends DragLeave and no Drop and a source that deletes on Move keeps its
+/// text. Pen input is promoted to the pointer routes and starts no
+/// manipulation, so a pen tap or drag needs no take of its own. A pen
+/// flick, which WPF turns into a page scroll or an application command, is
+/// not taken: with an application command and window activation it is one
+/// of the seal's three known exclusions (contract 28's route table, #2086).
+/// The seal takes no stylus preview, so <c>ShellSealAdmissionCensus</c>
+/// refuses any stylus handler in the shell. UI Automation pattern and range
+/// calls and UI Automation's <c>SetFocus</c> carry no input and stay outside
+/// the seal by the owner's decision (contract 28 PR-6, CD26).
+/// </para>
+/// <para>
 /// <b>Why input, not execution.</b> Every shell command is a view model
 /// <c>ICommand</c> run directly by its source, so no command-level routed
 /// event sees it; and the command the palette is running executes while
 /// sealed too, so a gate on execution would refuse the palette's own work.
-/// Every user route to a command starts at an input this admission takes.
+/// Every user route to a command starts at an input this admission takes,
+/// but one: an application command (a keyboard's Undo or Paste key, a pen
+/// flick), which WPF raises on the focused element outside the window's
+/// previews and <c>CommandManager</c> runs. It is a known exclusion, with a
+/// pen flick and window activation (contract 28's route table, #2086).
 /// Closing the window is not gated: a command may close the shell while it
 /// runs, and the palette already models that teardown (T8 step 6, T11).
 /// </para>
@@ -89,10 +113,11 @@ public partial class MainWindow
     /// <summary>
     /// The seal's one admission check. Returns whether the seal took the
     /// input — marked handled, so nothing after this handler acts on it —
-    /// after letting an unmodified Escape dismiss an open palette (T9).
-    /// Unsealed, it takes nothing. <paramref name="inTheShellsWindow"/> is
-    /// false for a window the shell owns (<see cref="ShellSeal"/>): an
-    /// Escape there is not on the palette, so it is taken like any key.
+    /// after letting an unmodified Escape dismiss an open palette (T9). A
+    /// taken drag tells its source that nothing moved. Unsealed, it takes
+    /// nothing. <paramref name="inTheShellsWindow"/> is false for a window
+    /// the shell owns (<see cref="ShellSeal"/>): an Escape there is not on
+    /// the palette, so it is taken like any key.
     /// </summary>
     internal bool SealTakes(RoutedEventArgs input, bool inTheShellsWindow = true)
     {
@@ -111,6 +136,14 @@ public partial class MainWindow
             HandleCommandPaletteKey(escape, ModifierKeys.None);
         }
 
+        // CB-38: OLE tells the source the effect a drag ends with; None
+        // ends the drag with DragLeave and no Drop, and DoDragDrop returns
+        // None, so a source that deletes on Move keeps its text.
+        if (input is DragEventArgs drag)
+        {
+            drag.Effects = DragDropEffects.None;
+        }
+
         input.Handled = true;
         return true;
     }
@@ -124,6 +157,18 @@ public partial class MainWindow
     private void Window_PreviewMouseUp(object sender, MouseButtonEventArgs e) => _ = SealTakes(e);
 
     private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewTouchDown(object sender, TouchEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewTouchMove(object sender, TouchEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewTouchUp(object sender, TouchEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewDragEnter(object sender, DragEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewDragOver(object sender, DragEventArgs e) => _ = SealTakes(e);
+
+    private void Window_PreviewDrop(object sender, DragEventArgs e) => _ = SealTakes(e);
 
     /// <summary>A double-click on a control in a shell — or in a modeless
     /// window it admitted (<see cref="ShellSeal"/>) — goes through that
