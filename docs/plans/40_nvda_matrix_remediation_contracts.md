@@ -1001,3 +1001,36 @@ The frozen R-9 row above is unchanged.
 ### #1666 — the canvas inspection field keeps its caret (2026-11-10)
 
 **The card inspection sheet's field reads its text from the keyboard (R-6, R-8).** In inspection mode the canvas card sheet's read-only field (`CanvasCardEditorText`, `MainWindow.xaml`) sets `IsReadOnlyCaretVisible`, as R-8's editor preview text does. It keeps a caret and answers caret navigation: the arrow, Home, End and Page keys move through the card's text, so a screen reader reads it by line, word and character. Those keys were refused at the sheet's fence since WB-5, so nothing read the text. The fence is unchanged: the field now answers the commands, so the fence lets them through. The sheet also takes the keys on its field as it opens, editing or inspecting (the window's canvas-sheet focus seam, `Workspace_CanvasSheetChanged`, already did this for the prompt and picker sheets); it opened with them left on the outline row behind it, so the field was never reached. It takes them only as the topmost surface: an editor that opens beneath another (a new card's editor arriving after Settings opened) leaves the keys to that surface and takes them when it closes (`ACardEditorOpenedUnderSettingsTakesTheKeysWhenSettingsCloses`). Escape returns them to the row. `RecoveredCanvasTests.TheInspectionFieldsCaretMovesThroughTheCardsText` and `AnEditableCardsSheetTakesTheKeysOnItsField` pin it on the real window: the sheet's focus scope holds the field once it opens, and in inspection the field answers `EditingCommands.MoveDownByLine` and its caret moves to the next line. An NVDA spot check (2026-11-10): Enter on the text card reads "Card text, read-only … First line of the card"; Down reads "Second line of the card"; Tab reaches "Close card text button"; Escape returns to the card's row. The WB-5 paragraph above is unchanged.
+
+### Plan 47 CB-39, #1670 (2026-11-27)
+
+**A Reveal in File Tree seats when its folder lists, and the newest intent wins.** WB-6's section above ends "The wait itself is #1670"; this is that wait.
+
+- **One order.** Each intent takes the next number at its gesture, under a watermark:
+  - a Reveal;
+  - a mutation's named row, or a create's rename arm;
+  - a mutation that names no row (New Canvas, a create or duplicate landing with a caveat, a template create, a graph's or a canvas's note landing, every focus restore that names none);
+  - a trash, at its gesture;
+  - the sidebar's own explicit opens;
+  - the reader's own selection;
+  - a change to the Files filter: text typed or cleared, or a tag scope applied or cleared.
+  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
+- **The wait.** Each folder load runs one step over the Reveal's path:
+  - it seats a listed target, at any depth and inside a date group (it expands a collapsed group that holds the target);
+  - it expands the next collapsed folder, and walks on in the same call through a folder already loaded;
+  - it starts a load for an expanded folder that never listed.
+  A whole-tree publication and Expand loaded folders are listing steps too.
+- **The four ends of a wait without a seat:**
+  - a newer intent;
+  - a collapse of a folder on the path;
+  - a load that ends without listing (a real failure, a failed whole-tree refresh, or a cancel by code that will not list the folder itself, such as a refused close);
+  - a fully listed or truncated level without the next segment. This end applies only with no refresh pending and after the tree's first publication.
+  Nothing is spoken when a Reveal ends unseated. The owner's call of 2026-11-27: "Silent now, file an issue (Recommended)". The core sentence is #2084.
+- **The seat.** The keys land on the row first, from wherever they are outside a modal surface, in one focus change; then the row is selected on both halves, which opens it and says "Selected: …". Land first keeps a tab switch from moving the keys to the new tab's header first. With the Files filter or a tag scope active, the seat clears the filter and its scope first, through the existing clear, which says "Filter cleared." The owner's call of 2026-11-27: "Clear the filter, land (Recommended)". This is contract 35 A-8's "focuses the tree", now delivered on Windows.
+- **Not kept** (#1955 lines):
+  - a gesture the sidebar does not hear, such as Quick Open or a link, does not end a wait, so a slow load's seat opens its note over the reader's and lands the keys;
+  - a seat under a modal surface, or with the Files pane hidden, still selects, opens, clears a filter and speaks, and only the landing is withheld;
+  - a seat during an inline rename overwrites the name;
+  - a whole-tree refresh leaves "Folder loading was canceled." on each folder whose load it cancelled, until it publishes.
+
+The frozen rows above are unchanged.
