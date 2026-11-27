@@ -1473,6 +1473,7 @@
                                     </local:LandingTreeView>
                                     <ListBox x:Name="FilterResultsList"
                                              ItemsSource="{Binding FilterResults}"
+                                             IsTextSearchEnabled="False"
                                              SelectionChanged="FilterResults_SelectionChanged"
                                              PreviewKeyDown="FilesRows_PreviewKeyDown"
                                              Visibility="{Binding IsFilterActive, Converter={StaticResource BooleanToVisibilityConverter}}"

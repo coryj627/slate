@@ -773,7 +773,12 @@ public partial class MainWindow : Window
     }
 
     private void CanvasPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
-        PublishedList.Published(CanvasCardPickerRows, e, CanvasCardPickerRows.SelectedItem);
+        PublishedList.Published(CanvasCardPickerRows, e, sender switch
+        {
+            Canvas.CanvasCardPickerViewModel card => card.SelectedRow,
+            Canvas.CanvasVaultFilePickerViewModel file => file.SelectedRow,
+            _ => null,
+        });
 
     /// <summary>Plan 47 CB-35 (#1837): a canvas picker's opening laid out as its last step. Its
     /// landing lays the sheet out as it lands (<see cref="Workspace_CanvasSheetChanged"/>), but
@@ -2107,7 +2112,9 @@ public partial class MainWindow : Window
         // field's own handler never saw them.
         if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
         {
-            switcher.Dismiss();
+            // The window's route takes Escape first as well; if this ever ran, it would close
+            // as the reader's Escape does, settling (CB-35).
+            switcher.DismissByTheReader();
             e.Handled = true;
         }
         else if (e.Key == Key.Enter)

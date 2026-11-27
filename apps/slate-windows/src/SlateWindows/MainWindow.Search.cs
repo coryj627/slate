@@ -67,7 +67,7 @@ public partial class MainWindow
     /// the list shows: a list that has never generated a row defers a scroll asked of it
     /// while it is collapsed to its Loaded pass (<see cref="PublishedList"/>).</summary>
     private void Search_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
-        PublishedList.Published(SearchOverlayResults, e, SearchOverlayResults.SelectedItem);
+        PublishedList.Published(SearchOverlayResults, e, SelectedResult(_viewModel.Search));
 
     /// <summary>
     /// Hands the search overlay's captured pre-open focus to a caller
