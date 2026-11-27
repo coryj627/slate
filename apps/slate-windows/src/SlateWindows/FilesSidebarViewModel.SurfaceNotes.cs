@@ -67,14 +67,18 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     private bool _treePublishedOnce;
 
     /// <summary>Plan 47 CB-39: where the keys were when the waiting Reveal was
-    /// asked (the focused element). A seat after the gesture's own turn lands
-    /// them only from there, from nowhere or from Files (the window's
-    /// answer).</summary>
-    private object? _revealKeysAtGesture;
+    /// asked, as the window recorded it (a place and the active tab). A seat
+    /// after the gesture's own turn hands it back to the window, which answers
+    /// where the keys may go.</summary>
+    private object? _revealGesturePlace;
 
     /// <summary>Plan 47 CB-39: set while a Reveal's own gesture runs, so a seat
     /// inside it is not a late one.</summary>
     private bool _revealGestureTurn;
+
+    /// <summary>Plan 47 CB-39: set while a seat opens its own note, which is
+    /// not the reader's open and ends no Reveal asked from its handlers.</summary>
+    private bool _seatOpening;
 
     private enum IntentKind
     {
@@ -102,7 +106,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         _pendingSurfaceSelectPath = kind == IntentKind.Reveal ? path : null;
         _pendingSelectPath = kind == IntentKind.NamedRow ? path : null;
         _pendingRenameArmPath = kind == IntentKind.RenameArm ? path : null;
-        _revealKeysAtGesture = null;
+        _revealGesturePlace = null;
     }
 
     /// <summary>A gesture that names no row, at the gesture: it drops a
@@ -128,6 +132,16 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         _ = TakeIntent();
         EndWaitingReveal();
         _pendingRenameArmPath = null;
+    }
+
+    /// <summary>Plan 47 CB-39: the window armed the inline rename (F2, or a
+    /// create's hand-off), the reader's newer gesture. A Reveal still waiting
+    /// ends, so its seat neither takes the keys out of the name field nor puts
+    /// its row's name there (the red team's M3).</summary>
+    internal void RenameArmed()
+    {
+        _ = TakeIntent();
+        EndWaitingReveal();
     }
 
     // Explicit: the canvas seam's TryCreateNote shares the parameter list
@@ -193,7 +207,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     {
         ArgumentNullException.ThrowIfNull(path);
         InstallIntent(IntentKind.Reveal, path, TakeIntent());
-        _revealKeysAtGesture = System.Windows.Input.Keyboard.FocusedElement;
+        _revealGesturePlace = AskGesturePlace();
         bool outer = _revealGestureTurn;
         _revealGestureTurn = true;
         try
@@ -339,15 +353,22 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     private void EndWaitingReveal()
     {
         _pendingSurfaceSelectPath = null;
-        _revealKeysAtGesture = null;
+        _revealGesturePlace = null;
     }
 
     /// <summary>Plan 47 CB-39: the workspace opened a note (Quick Open, a
     /// link, a surface's open; the lifecycle's handler calls this): the
     /// reader's newer gesture, so a Reveal still waiting ends, and its seat
-    /// never opens its note over the reader's. The seat's own open finds no
-    /// Reveal waiting, since the seat empties the slot first.</summary>
-    internal void NoteOpenedInTheWorkspace() => EndWaitingReveal();
+    /// never opens its note over the reader's. The seat's own open is not the
+    /// reader's: it ends no Reveal asked from the seat's own landing or open
+    /// handlers (the red team's minor 7).</summary>
+    internal void NoteOpenedInTheWorkspace()
+    {
+        if (!_seatOpening)
+        {
+            EndWaitingReveal();
+        }
+    }
 
     /// <summary>Plan 47 CB-39: a Reveal waiting on a load under
     /// <paramref name="folder"/> ends, when its path runs through it.</summary>
@@ -377,21 +398,38 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// unselected, and only then is it selected, so the selection's open
     /// switches tabs with the keys already in the tree and moves nothing
     /// (B1).</summary>
-    /// <remarks>The seat takes an intent number of its own, so a gesture's
-    /// deferred landing asked before it (F2's name field) gives way (the
-    /// merge judge's minor 1). A seat after the gesture's own turn asks the
-    /// window first whether the keys moved since the gesture: neither on the
-    /// element they were on then, nor stranded, nor in Files. Then its row is
-    /// selected silently on both halves: no filter clear, no landing, no open,
-    /// nothing said, and the reader's editor and tabs stay as they are (the
-    /// lead's ruling (a) on the judge's major 1).</remarks>
+    /// <remarks>A seat after the gesture's own turn asks the window first
+    /// where the keys may go (<see cref="LateRevealAnswer"/>). They land when
+    /// they are still in the place the gesture left them (the same editor,
+    /// header, table, tree or list, on the same tab), stranded, or already in
+    /// the Files tree. In the Files pane's fields, lists or buttons they are
+    /// the reader's own work there, and the wait ends. Anywhere else, or with
+    /// Files hidden, the row is selected silently on both halves: no filter
+    /// clear, no landing, no open, nothing said, and the reader's editor and
+    /// tabs stay as they are (the lead's ruling (a) on the merge judge's major
+    /// 1). Under an active filter or tag scope a silent seat would select a row
+    /// the filter hides, so the wait ends instead (the red team's minor 3). A
+    /// seat that selects takes an intent number of its own, so a gesture's
+    /// deferred landing asked before it gives way (the judge's minor
+    /// 1).</remarks>
     private void SeatReveal(FileTreeNodeViewModel target)
     {
         _pendingSurfaceSelectPath = null;
-        object? keysAtGesture = _revealKeysAtGesture;
-        _revealKeysAtGesture = null;
+        object? gesturePlace = _revealGesturePlace;
+        _revealGesturePlace = null;
+        LateRevealAnswer answer = _revealGestureTurn ? LateRevealAnswer.Land : AskLateReveal(target, gesturePlace);
+        if (answer == LateRevealAnswer.SelectSilently && IsFilterActive)
+        {
+            answer = LateRevealAnswer.End;
+        }
+
+        if (answer == LateRevealAnswer.End)
+        {
+            return;
+        }
+
         _ = TakeIntent();
-        if (!_revealGestureTurn && KeysMovedSinceTheGesture(target, keysAtGesture))
+        if (answer == LateRevealAnswer.SelectSilently)
         {
             ExpandAncestorsOf(target);
             SelectSilently(target);
@@ -412,7 +450,16 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             _vanishedSelection = null;
         }
 
-        SelectOnBothHalves(target);
+        bool outer = _seatOpening;
+        _seatOpening = true;
+        try
+        {
+            SelectOnBothHalves(target);
+        }
+        finally
+        {
+            _seatOpening = outer;
+        }
     }
 
     /// <summary>Opens every collapsed row above <paramref name="target"/>, a
@@ -428,21 +475,36 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         }
     }
 
-    /// <summary>Plan 47 CB-39: a late seat's question to the window (the
-    /// restore event, with <see cref="VanishedSelection.LateReveal"/>): did
-    /// the keys move since the gesture? No window answers false, and the seat
-    /// lands as before.</summary>
-    private bool KeysMovedSinceTheGesture(FileTreeNodeViewModel target, object? keysAtGesture)
+    /// <summary>Plan 47 CB-39: a Reveal's gesture asks the window where the
+    /// keys are (the restore event, with
+    /// <see cref="VanishedSelection.RevealAsked"/>). No window answers
+    /// nothing.</summary>
+    private object? AskGesturePlace()
     {
-        var question = new VanishedSelection(target, LateReveal: true, KeysAtGesture: keysAtGesture);
+        var question = new VanishedSelection(null, RevealAsked: true);
+        AskTheWindow(question);
+        return question.Place;
+    }
+
+    /// <summary>Plan 47 CB-39: a late seat asks the window where the keys may
+    /// go (the restore event, with <see cref="VanishedSelection.LateReveal"/>).
+    /// No window answers <see cref="LateRevealAnswer.Land"/>, and the seat
+    /// lands as before.</summary>
+    private LateRevealAnswer AskLateReveal(FileTreeNodeViewModel target, object? gesturePlace)
+    {
+        var question = new VanishedSelection(target, LateReveal: true, GesturePlace: gesturePlace);
+        AskTheWindow(question);
+        return question.Answer;
+    }
+
+    private void AskTheWindow(VanishedSelection question)
+    {
         _vanishedSelection = question;
         TreeSelectionRestored?.Invoke();
         if (ReferenceEquals(_vanishedSelection, question))
         {
             _vanishedSelection = null;
         }
-
-        return question.KeysMoved;
     }
 
     /// <summary>The rows above <paramref name="target"/>, outermost first.</summary>

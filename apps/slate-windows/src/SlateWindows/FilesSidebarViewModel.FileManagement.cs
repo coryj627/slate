@@ -994,23 +994,46 @@ internal sealed partial class FilesSidebarViewModel
     /// <param name="Reveal">Plan 47 CB-39: a Reveal's row, landed before it is
     /// selected; it takes the keys from wherever they are outside a modal
     /// surface.</param>
+    /// <param name="RevealAsked">Plan 47 CB-39: not a landing but a Reveal's
+    /// gesture asking where the keys are. The window lands nothing and answers
+    /// in <see cref="Place"/>.</param>
     /// <param name="LateReveal">Plan 47 CB-39: not a landing but a question
     /// from a Reveal that seats after its gesture's own turn. The window lands
-    /// nothing and answers in <see cref="KeysMoved"/>.</param>
-    /// <param name="KeysAtGesture">The focused element when that Reveal was
-    /// asked.</param>
+    /// nothing and answers in <see cref="Answer"/>.</param>
+    /// <param name="GesturePlace">The place the window recorded at that
+    /// Reveal's gesture.</param>
     internal sealed record VanishedSelection(
         FileTreeNodeViewModel? Survivor,
         bool Successor = false,
         bool Reveal = false,
+        bool RevealAsked = false,
         bool LateReveal = false,
-        object? KeysAtGesture = null)
+        object? GesturePlace = null)
     {
-        /// <summary>Plan 47 CB-39: the window's answer to a late Reveal: the
-        /// keys are neither on <see cref="KeysAtGesture"/>, nor stranded, nor
-        /// in Files, so the row is selected silently and nothing
-        /// lands.</summary>
-        public bool KeysMoved { get; set; }
+        /// <summary>Plan 47 CB-39: the window's answer to a Reveal's gesture:
+        /// where the keys are, as a place it can compare later.</summary>
+        public object? Place { get; set; }
+
+        /// <summary>Plan 47 CB-39: the window's answer to a late
+        /// Reveal.</summary>
+        public LateRevealAnswer Answer { get; set; }
+    }
+
+    /// <summary>Plan 47 CB-39: where a Reveal seating after its gesture's own
+    /// turn may put the keys.</summary>
+    internal enum LateRevealAnswer
+    {
+        /// <summary>The keys are where the gesture left them, stranded, or in
+        /// the Files tree: the seat lands them, opens and speaks.</summary>
+        Land,
+
+        /// <summary>The keys are the reader's elsewhere, or Files is hidden:
+        /// the row is selected silently.</summary>
+        SelectSilently,
+
+        /// <summary>The keys are in the Files pane's fields, lists or buttons:
+        /// the wait ends, and nothing changes.</summary>
+        End,
     }
 
     private VanishedSelection? _vanishedSelection;
