@@ -30,6 +30,12 @@ internal interface ICanvasPickerSheet
     /// <summary>True when the pick ROUTED (a verb ran or a stage opened) —
     /// the sheet closes; false keeps it, filter and highlight intact.</summary>
     bool Confirm();
+
+    /// <summary>Plan 47 CB-35 (#1837): the rows were published, raised as the last thing
+    /// <see cref="Filter"/>'s setter does, so the view lays the list out before TSF can be
+    /// granted its lock (<see cref="PublishedList"/>). A filter that dropped the selected row
+    /// chose the first row it keeps; one that kept the row kept it.</summary>
+    event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 }
 
 /// <summary>What the vault file picker is for — the admission predicate
@@ -83,6 +89,8 @@ internal sealed class CanvasVaultFilePickerViewModel
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
+    public event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     internal CanvasVaultPickRequest Request { get; }
 
     public string Title => Request.Purpose switch
@@ -115,14 +123,18 @@ internal sealed class CanvasVaultFilePickerViewModel
         {
             _filter = value ?? string.Empty;
             Rows = Project(Request.Model.Visible(_filter));
-            if (SelectedRow is null || !Rows.Contains(SelectedRow))
+            // CB-35: the rows first. The list's two-way selection writes null back when its
+            // items drop the selected row, so the choice is made after it, and raised last.
+            PropertyChanged?.Invoke(
+                this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Rows)));
+            bool chose = SelectedRow is null || !Rows.Contains(SelectedRow);
+            if (chose)
             {
                 SelectedRow = Rows.IsEmpty ? null : Rows[0];
             }
             PropertyChanged?.Invoke(
-                this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Rows)));
-            PropertyChanged?.Invoke(
                 this, new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedRow)));
+            RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(chose));
         }
     }
 
