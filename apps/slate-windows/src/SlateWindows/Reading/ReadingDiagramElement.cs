@@ -241,8 +241,9 @@ internal static class ReadingLineReserve
 /// (spoken on focus and object navigation in stock NVDA/JAWS) and
 /// localized control type "diagram". No custom-property bridge — the
 /// description IS the whole convention (mac parity: no MathML-style
-/// side channel exists for diagrams). No HelpText and no children
-/// (plan 47 CB-20b): the source is spoken on request only.
+/// side channel exists for diagrams). No HelpText (plan 47 CB-20b): the
+/// source is spoken on request only. No children either: the content is
+/// a drawing with no peer, or nothing.
 /// </summary>
 internal sealed class ReadingDiagramElementPeer : FrameworkElementAutomationPeer
 {
@@ -264,9 +265,4 @@ internal sealed class ReadingDiagramElementPeer : FrameworkElementAutomationPeer
     /// back to the ToolTip, which holds the source's first lines, and NVDA
     /// reads HelpText on Tab.</summary>
     protected override string GetHelpTextCore() => string.Empty;
-
-    /// <summary>Plan 47 CB-20b: no children. The content is a drawing with no
-    /// peer, or nothing; a later content that held text would give object
-    /// navigation a way to the source, as math's peer rules out too.</summary>
-    protected override List<AutomationPeer>? GetChildrenCore() => null;
 }
