@@ -1009,30 +1009,32 @@ The frozen R-9 row above is unchanged.
 **A Reveal in File Tree seats when its folder lists, and the newest intent wins.** WB-6's section above ends "The wait itself is #1670"; this is that wait.
 
 - **One order.** Each intent takes the next number at its gesture, under a watermark:
-  - a Reveal;
+  - a Reveal, and its seat;
   - a mutation's named row, or a create's rename arm;
   - a mutation that names no row (New Canvas, a create or duplicate landing with a caveat, a template create, a graph's or a canvas's note landing, every focus restore that names none);
   - a trash, at its gesture;
   - the sidebar's own explicit opens;
   - the reader's own selection;
+  - F2, or a create's hand-off to the name field;
   - a change to the Files filter: text typed or cleared, or a tag scope applied or cleared.
-  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
+  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. A filter change drops a waiting Reveal and a create's rename arm, and keeps a rename's or move's named row, which seats silently as before. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
 - **The wait.** Each folder load runs one step over the Reveal's path:
   - it seats a listed target, at any depth and inside a date group (it expands a collapsed group that holds the target);
   - it expands the next collapsed folder, and walks on in the same call through a folder already loaded;
   - it starts a load for an expanded folder that never listed.
   A whole-tree publication and Expand loaded folders are listing steps too.
-- **The four ends of a wait without a seat:**
+- **The ends of a wait without a seat:**
   - a newer intent;
+  - the workspace opening another note (the seat's own open excepted);
   - a collapse of a folder on the path;
-  - a load that ends without listing (a real failure, a failed whole-tree refresh, or a cancel by code that will not list the folder itself, such as a refused close);
-  - a fully listed or truncated level without the next segment. This end applies only with no refresh pending and after the tree's first publication.
+  - a load that ends without listing: a real failure, a failed whole-tree refresh, a failed Expand loaded read of the Reveal's own folder, or a cancel by code that will not list the folder itself, such as a refused close;
+  - a fully listed or truncated level without the next segment, only with no refresh pending and after the tree's first publication;
+  - a late seat that finds the keys in the Files pane off the tree (the name field, the filter field, the results, the tags, the buttons), or a filter or tag scope active where the seat would be silent.
   Nothing is spoken when a Reveal ends unseated. The owner's call of 2026-11-27: "Silent now, file an issue (Recommended)". The core sentence is #2084.
-- **The seat.** The keys land on the row first, from wherever they are outside a modal surface, in one focus change; then the row is selected on both halves, which opens it and says "Selected: …". Land first keeps a tab switch from moving the keys to the new tab's header first. With the Files filter or a tag scope active, the seat clears the filter and its scope first, through the existing clear, which says "Filter cleared." The owner's call of 2026-11-27: "Clear the filter, land (Recommended)". This is contract 35 A-8's "focuses the tree", now delivered on Windows.
+- **The seat.** In the gesture's own turn, and later while the keys are still in the gesture's place (the note header, editor, table, tree or list that held them, on the same active tab), stranded, or on the Files tree: the keys land on the row first, from outside a modal surface, in one focus change. Then the row is selected on both halves, which opens it and says "Selected: …". Land first keeps a tab switch from moving the keys to the new tab's header first. With the Files filter or a tag scope active, the seat clears the filter and its scope first, through the existing clear, which says "Filter cleared." The owner's call of 2026-11-27: "Clear the filter, land (Recommended)". This is contract 35 A-8's "focuses the tree", now delivered on Windows.
+- **A late seat after the keys moved** (another place or tab, with nothing opened, or the Files pane hidden) selects the row silently on both halves: no open, no "Selected:", no landing, the editor and its tabs untouched. The reader learns of it on returning to Files, where the keys land on that row. A later publication neither opens it nor moves the keys. When nothing in the window has the keys, the place the window would give them back to counts.
 - **Not kept** (#1955 lines):
-  - a gesture the sidebar does not hear, such as Quick Open or a link, does not end a wait, so a slow load's seat opens its note over the reader's and lands the keys;
-  - a seat under a modal surface, or with the Files pane hidden, still selects, opens, clears a filter and speaks, and only the landing is withheld;
-  - a seat during an inline rename overwrites the name;
-  - a whole-tree refresh leaves "Folder loading was canceled." on each folder whose load it cancelled, until it publishes.
+  - a whole-tree refresh leaves "Folder loading was canceled." on each folder whose load it cancelled, until it publishes;
+  - a surface outside the place list (note header, editor, table, tree, list) compares by its element, so an element rebuilt in place there reads as moved, and the seat is silent.
 
 The frozen rows above are unchanged.
