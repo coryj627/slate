@@ -28,6 +28,7 @@
 using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
+using System.Xml;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -45,10 +46,11 @@ public sealed class ShellSealAdmissionCensus
     /// <summary>The window's preview input routes the admission must hold at
     /// least: keys down and up (the Apps key opens a context menu on its
     /// release), text that arrives without a key, pointer press and
-    /// release, the wheel (a graph pans and zooms on it — codex round 7),
-    /// a touch's own events (a list pans from them before any press is
-    /// promoted, plan 47 CB-38) and the three drag previews (a drop from
-    /// another app lands in the shell, a disabled one included, CB-38).</summary>
+    /// release, the wheel (a graph pans and zooms on it, codex round 7),
+    /// a touch's own events (a list pans from them, and a drag it pans
+    /// promotes no press, plan 47 CB-38) and the three drag previews (a drop
+    /// from another app lands in the shell, a disabled one included,
+    /// CB-38).</summary>
     private static readonly string[] RequiredGates =
     [
         "PreviewKeyDown", "PreviewKeyUp", "PreviewTextInput", "PreviewMouseDown", "PreviewMouseUp", "PreviewMouseWheel",
@@ -293,6 +295,13 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("input-override-drop", "partial class MainWindow { protected override void OnPreviewDrop(DragEventArgs e) => Run(); }")]
     [InlineData("touch-frame-hook", "class Other { void M() { Touch.FrameReported += X; } }")]
     [InlineData("stylus-plug-in-hook", "class Other : UIElement { void M() { StylusPlugIns.Add(new Plug()); } }")]
+    // CB-38: the seal takes no stylus preview, so any stylus handler in the
+    // shell, in code or in XAML, would act under it.
+    [InlineData("stylus-subscription", "class Other { void M(UIElement u) { u.PreviewStylusDown += X; } }")]
+    [InlineData("stylus-registration", "class Other { void M(UIElement u) { u.AddHandler(Stylus.StylusSystemGestureEvent, new StylusSystemGestureEventHandler(X)); } }")]
+    [InlineData("stylus-attached-registration", "class Other { void M(UIElement u) { Stylus.AddStylusButtonUpHandler(u, X); } }")]
+    [InlineData("stylus-override", "class Other : UIElement { protected override void OnStylusSystemGesture(StylusSystemGestureEventArgs e) => Run(); }")]
+    [InlineData("stylus-xaml", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Border StylusUp=\"X\" /></Window>")]
     [InlineData("owned-window-route-missing", "        owned.PreviewMouseWheel += Take;\n")]
     [InlineData("owned-window-unadmitted", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Show(); } }")]
     [InlineData("owned-window-admitted-late", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.PreviewKeyDown += (_, _) => { }; ShellSeal.Admit(window); window.Show(); } }")]
@@ -327,6 +336,9 @@ public sealed class ShellSealAdmissionCensus
                         "using System.Windows;\nnamespace SlateWindows;\n" + source,
                         (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options,
                         path: "Planted.cs"))),
+            "stylus-subscription" or "stylus-registration" or "stylus-attached-registration" or "stylus-override" =>
+                StylusOffenders([new Unit("Other.cs", Parse(source))], []),
+            "stylus-xaml" => StylusOffenders([], [("Planted.xaml", XElement.Parse(source))]),
             "shell-of-follows-owner" => OwnedWindowOffenders(PlantInto(
                 OwnedWindowGuardFile,
                 "    internal static MainWindow? ShellOf(DependencyObject element) => Window.GetWindow(element) switch",
@@ -529,6 +541,23 @@ public sealed class ShellSealAdmissionCensus
     {
         List<string> offenders = InputOverrideOffenders(WindowUnits());
         Assert.True(offenders.Count == 0, "MainWindow overrides a routed input virtual:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// Plan 47 CB-38: the seal takes a touch from its own events and a pen
+    /// through the press WPF promotes from it, and no stylus preview (a take
+    /// of the stylus previews broke the next tap in step 0). So a stylus
+    /// handler in the shell, subscribed, registered, overridden or attached
+    /// in XAML, would act under the seal; the shell has none.
+    /// </summary>
+    [Fact]
+    public void NothingInTheShellHandlesTheStylus()
+    {
+        List<string> offenders = StylusOffenders(ShellUnits(), ShellXaml());
+        Assert.True(
+            offenders.Count == 0,
+            "stylus handlers in the shell, which act under the seal because it takes no stylus preview:\n  "
+            + string.Join("\n  ", offenders));
     }
 
     /// <summary>
@@ -1307,6 +1336,100 @@ public sealed class ShellSealAdmissionCensus
         return offenders;
     }
 
+    /// <summary>Every stylus handler in the shell (see
+    /// <see cref="NothingInTheShellHandlesTheStylus"/>): a <c>+=</c> to a
+    /// stylus event, an <c>AddHandler</c> or class registration of one, a
+    /// <c>Stylus.Add…Handler</c> call, an <c>OnStylus…</c> or
+    /// <c>OnPreviewStylus…</c> override, and a XAML attribute that attaches
+    /// one.</summary>
+    private static List<string> StylusOffenders(IEnumerable<Unit> shell, IEnumerable<(string Name, XElement Root)> xaml)
+    {
+        var offenders = new List<string>();
+        foreach (Unit unit in shell)
+        {
+            foreach (AssignmentExpressionSyntax subscription in unit.Root.DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.IsKind(SyntaxKind.AddAssignmentExpression)))
+            {
+                string? target = subscription.Left switch
+                {
+                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                    MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+                    _ => null,
+                };
+                if (target is not null && IsStylusEvent(target))
+                {
+                    offenders.Add($"{unit.Name}:{Line(subscription)} subscribes to {target}");
+                }
+            }
+
+            foreach (InvocationExpressionSyntax invocation in unit.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                string callee = invocation.Expression switch
+                {
+                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                    MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+                    _ => string.Empty,
+                };
+                bool attached = callee.StartsWith("Add", StringComparison.Ordinal)
+                    && callee.EndsWith("Handler", StringComparison.Ordinal)
+                    && IsStylusEvent(callee["Add".Length..^"Handler".Length]);
+                bool registered = callee is "AddHandler" or "RegisterClassHandler"
+                    && invocation.ArgumentList.Arguments.Any(argument =>
+                        CSharpSource.Normalize(argument.Expression).Split('.').Last() is var field
+                        && field.EndsWith("Event", StringComparison.Ordinal)
+                        && IsStylusEvent(field[..^"Event".Length]));
+                if (attached || registered)
+                {
+                    offenders.Add($"{unit.Name}:{Line(invocation)} registers a stylus handler through {callee}");
+                }
+            }
+
+            foreach (MethodDeclarationSyntax method in unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Modifiers.Any(SyntaxKind.OverrideKeyword)
+                    && method.Identifier.ValueText.StartsWith("On", StringComparison.Ordinal)
+                    && IsStylusEvent(method.Identifier.ValueText["On".Length..])))
+            {
+                offenders.Add($"{unit.Name}:{Line(method)} overrides {method.Identifier.ValueText}");
+            }
+        }
+
+        foreach ((string name, XElement root) in xaml)
+        {
+            foreach (XElement element in root.DescendantsAndSelf())
+            {
+                foreach (XAttribute attribute in element.Attributes().Where(attribute => !attribute.IsNamespaceDeclaration
+                    && attribute.Name.Namespace == XNamespace.None
+                    && IsStylusEvent(attribute.Name.LocalName.Split('.').Last())))
+                {
+                    offenders.Add($"{name}:{((IXmlLineInfo)attribute).LineNumber} <{element.Name.LocalName} {attribute.Name.LocalName}=\"{attribute.Value}\">");
+                }
+            }
+        }
+
+        return offenders;
+    }
+
+    /// <summary>Whether <paramref name="name"/> names a routed event whose
+    /// arguments are a stylus's (<c>StylusEventArgs</c> and its kin).</summary>
+    private static bool IsStylusEvent(string name) => StylusEventNames.Value.Contains(name);
+
+    /// <summary>The names of the routed events whose arguments are a
+    /// stylus's, read once <c>Stylus</c> and <c>UIElement</c> have
+    /// registered theirs.</summary>
+    private static readonly Lazy<HashSet<string>> StylusEventNames = new(() =>
+    {
+        _ = Stylus.StylusDownEvent;
+        _ = UIElement.StylusDownEvent;
+        return new HashSet<string>(
+            EventManager.GetRoutedEvents()
+                .Where(routed => routed.HandlerType.GetMethod("Invoke")?.GetParameters().LastOrDefault()?.ParameterType is { } args
+                    && typeof(StylusEventArgs).IsAssignableFrom(args))
+                .Select(routed => routed.Name),
+            StringComparer.Ordinal);
+    });
+
     /// <summary>The owned-window guard.</summary>
     private const string OwnedWindowGuardFile = "ShellSeal.cs";
 
@@ -1595,6 +1718,13 @@ public sealed class ShellSealAdmissionCensus
                 && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => new Unit(Path.GetFileName(path), CSharpSource.LoadPath(path).Root));
+
+    private static IEnumerable<(string Name, XElement Root)> ShellXaml() =>
+        Directory.EnumerateFiles(SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => (Path.GetFileName(path), XDocument.Load(path, LoadOptions.SetLineInfo).Root!));
 
     private static IEnumerable<Unit> WindowUnits() =>
         Directory.EnumerateFiles(SourceText.ShellSourceRoot(), "MainWindow*.cs", SearchOption.TopDirectoryOnly)
