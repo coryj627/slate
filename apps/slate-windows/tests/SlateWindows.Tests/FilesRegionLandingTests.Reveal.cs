@@ -646,6 +646,47 @@ public sealed partial class FilesRegionLandingTests
         Assert.Equal("b", host.Sidebar.FilterText);
     });
 
+    /// <summary>The red team's minor 5: a late seat's silent arm into a date
+    /// group the reader collapsed. A surface's landed note waits for the
+    /// refresh that lists it, with the keys moved off the gesture's place
+    /// (the button above the pane to the one beside it). The refresh seats it
+    /// silently: the group opens, the row holds the selection on both halves,
+    /// and nothing moves the keys, opens or is said.</summary>
+    [Fact]
+    public void ALateSilentSeatOpensTheCollapsedDateGroupHoldingItsRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        UseDateGroups(host);
+        FileTreeNodeViewModel today = GroupHeader(host, "Today");
+        today.IsExpanded = false;
+        Settle(host);
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        Assert.IsType<NoteCreateResult.Landed>(((ISurfaceNoteCreator)host.Sidebar).TryCreateNote("g.md", "# G\n"));
+        host.Sidebar.NoteLanded("g.md");
+        host.Sidebar.SelectPathFromSurface("g.md");
+        Assert.True(host.Beside.Focus(), "premise: the button beside the pane refused the keys");
+        PumpedDispatcher.Drain();
+        host.ForgetFocusChanges();
+        host.Announced.Clear();
+
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+
+        Assert.Same(today, GroupHeader(host, "Today"));
+        Assert.True(today.IsExpanded, "the silent seat left the date group collapsed");
+        FileTreeNodeViewModel row = Row(host, "g.md");
+        Assert.Same(row, host.Sidebar.SelectedNode);
+        Assert.True(row.IsSelected, "the row's node does not hold the selection");
+        Assert.True(ContainerOf(host, row).IsSelected, "the row's container is not selected");
+        Assert.True(host.Beside.IsKeyboardFocused, "the keys left the button beside the pane");
+        Assert.Empty(host.FocusChanges);
+        Assert.Empty(log.Opened);
+        Assert.Empty(host.Announced);
+    });
+
     /// <summary>A filter keystroke while a rename's publication is pending
     /// keeps the rename's named row (the merge judge's minor 2; main kept it):
     /// the publication selects the renamed row silently, nothing opens or is

@@ -734,6 +734,9 @@ public sealed partial class FilesRegionLandingTests
 
         public Button Above { get; private set; } = null!;
 
+        /// <summary>Plan 47 CB-39: the button beside the pane, outside Files.</summary>
+        public Button Beside { get; private set; } = null!;
+
         public List<A11yEvent> Announced { get; } = [];
 
         /// <param name="nested">Adds a folder holding one note, so a selected
@@ -825,13 +828,13 @@ public sealed partial class FilesRegionLandingTests
             Assert.IsAssignableFrom<Panel>(Pane.Parent).Children.Remove(Pane);
 
             Above = new Button { Content = "Above" };
-            var beside = new Button { Content = "Beside" };
+            Beside = new Button { Content = "Beside" };
             var root = new DockPanel { DataContext = lifecycle };
             DockPanel.SetDock(Above, Dock.Top);
-            DockPanel.SetDock(beside, Dock.Right);
+            DockPanel.SetDock(Beside, Dock.Right);
             DockPanel.SetDock(Pane, Dock.Left);
             root.Children.Add(Above);
-            root.Children.Add(beside);
+            root.Children.Add(Beside);
             root.Children.Add(Pane);
             _window = new Window
             {

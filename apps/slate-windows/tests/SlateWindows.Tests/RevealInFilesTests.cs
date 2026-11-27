@@ -358,14 +358,14 @@ public sealed class RevealInFilesTests
         Assert.Empty(shell.SaidSinceMark);
     });
 
-    /// <summary>The merge judge's minor 1: the reader's row selected with the
-    /// keys on it, a Reveal waiting on a held folder, and F2 pressed in the
-    /// same pass as the folder's publication, which runs first. The seat is the
-    /// newer intent: the rename's queued focus gives way, so the name field
-    /// never takes the keys holding the revealed note's name, and Enter renames
-    /// nothing.</summary>
+    /// <summary>The merge judge's minor 1, with the red team's M3: the reader's
+    /// row selected with the keys on it, a Reveal waiting on a held folder, and
+    /// F2 pressed in the same pass as the folder's publication, which runs
+    /// first. F2 is the newer intent and ends the wait, so the publication seats
+    /// nothing: the name field takes the keys holding the reader's row's name,
+    /// never the revealed note's, and Enter renames the reader's note.</summary>
     [Fact]
-    public void F2InTheRevealsPublicationPassRenamesNothing() => StaThread.RunPumped(() =>
+    public void F2InTheRevealsPublicationPassEndsTheReveal() => StaThread.RunPumped(() =>
     {
         using var shell = new RevealShell(heldTreeWork: true);
         shell.SelectAndFocusRow("a.md");
@@ -393,17 +393,330 @@ public sealed class RevealInFilesTests
         shell.SettleLoads();
 
         Assert.DoesNotContain("n.md", nameFieldHeld);
-        if (nameField.IsKeyboardFocused)
-        {
-            nameField.Text = "renamed.md";
-        }
-
+        Assert.Equal(["a.md"], nameFieldHeld);
+        Assert.True(nameField.IsKeyboardFocused, "the name field does not hold the keys");
+        shell.AssertNeverSeated("docs/n.md");
+        nameField.Text = "renamed.md";
         _ = shell.PressWithoutPumping(Key.Enter);
         shell.SettleLoads();
 
         Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "n.md")), "Enter renamed the revealed note");
-        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a.md")), "Enter renamed the reader's note");
-        Assert.Empty(Directory.EnumerateFiles(shell.Host.Root, "renamed.md", SearchOption.AllDirectories));
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "renamed.md")), "Enter did not rename the reader's note");
+        Assert.False(File.Exists(Path.Combine(shell.Host.Root, "a.md")), "the reader's note kept its name");
+    });
+
+    /// <summary>The red team's M1: two tabs in one group share one editor, so a
+    /// tab switch leaves the keys on the same element. A Reveal asked from one
+    /// tab's editor, then Previous Tab: the keys are in another note's editor,
+    /// so the late seat selects its row silently and opens nothing over that
+    /// note.</summary>
+    [Fact]
+    public void ALateRevealAfterATabSwitchSelectsItsRowSilently() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.OpenPath("a.md");
+        shell.Host.Settle();
+        shell.Host.Workspace.OpenPath("park/here.md", WorkspaceOpenTarget.NewTab);
+        shell.Host.Settle();
+        UIElement editor = shell.Editor;
+        Assert.True(editor.Focus(), "premise: the editor did not take the keys");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        IInputElement keys = Keyboard.FocusedElement;
+
+        shell.Host.Workspace.PreviousTabCommand.Execute(null);
+        shell.Host.Settle();
+        Assert.Equal("a.md", shell.Host.Workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.Same(keys, Keyboard.FocusedElement);
+        shell.Mark();
+        string tabs = shell.Tabs;
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertSilentlySelected("docs/n.md", tabs);
+        Assert.Same(keys, Keyboard.FocusedElement);
+    });
+
+    /// <summary>The red team's M2: the keys moved into the editor after a
+    /// header segment's Reveal, then the window's keyboard focus is cleared
+    /// (as when another app is active), its logical focus still on the editor.
+    /// Null keys are not stranded while the window keeps a focused element: the
+    /// late seat selects its row silently.</summary>
+    [Fact]
+    public void ALateRevealWithTheKeysClearedSelectsItsRowSilently() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        UIElement editor = shell.Editor;
+        Assert.True(editor.Focus(), "premise: the editor did not take the keys");
+        Keyboard.ClearFocus();
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.True(
+            FocusManager.GetFocusedElement(shell.Host.Shell) is Visual logical
+                && (ReferenceEquals(logical, editor) || editor.IsAncestorOf(logical) || logical.IsAncestorOf(editor)),
+            $"premise: the window's logical focus is on {FocusManager.GetFocusedElement(shell.Host.Shell)}, not the editor");
+        shell.Mark();
+        string tabs = shell.Tabs;
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertSilentlySelected("docs/n.md", tabs);
+    });
+
+    /// <summary>The red team's M3: F2 on the reader's a.md and a new name
+    /// typed while a Reveal waits on a held folder. F2 ends the wait: the
+    /// folder's listing seats nothing, the field keeps the keys and the text,
+    /// nothing opens or is said, and Enter renames a.md.</summary>
+    [Fact]
+    public void AnInlineRenameKeepsItsFieldThroughALateReveal() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        Assert.True(shell.PressWithoutPumping(Key.F2), "premise: F2 on the selected row went unhandled");
+        PumpedDispatcher.Drain();
+        Assert.True(nameField.IsKeyboardFocused, "premise: F2 did not put the keys in the name field");
+        nameField.Text = "renamed.md";
+        shell.Mark();
+        string tabs = shell.Tabs;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(nameField.IsKeyboardFocused, "the late seat took the keys out of the name field");
+        Assert.Equal("renamed.md", nameField.Text);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+        shell.AssertNeverSeated("docs/n.md");
+        _ = shell.PressWithoutPumping(Key.Enter);
+        shell.SettleLoads();
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "renamed.md")), "Enter did not rename a.md");
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "n.md")), "Enter renamed the revealed note");
+    });
+
+    /// <summary>The red team's M3, the pane's other fields: the reader puts
+    /// the keys in the filter field while a Reveal waits. The Files pane's
+    /// fields, lists and buttons outside the tree are the reader's own work
+    /// there: the wait ends, nothing is selected, opened or said, and the keys
+    /// stay in the field.</summary>
+    [Fact]
+    public void ALateRevealWithTheKeysInTheFilterFieldEndsUnseated() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.OpenAndParkKeysInTheEditor();
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        TextBox filterField = shell.Host.Shell.SidebarFilterTextBox;
+        Assert.True(filterField.Focus(), "premise: the filter field refused the keys");
+        shell.Mark();
+        string tabs = shell.Tabs;
+        FileTreeNodeViewModel? selected = shell.Sidebar.SelectedNode;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(filterField.IsKeyboardFocused, "the late seat took the keys out of the filter field");
+        Assert.Same(selected, shell.Sidebar.SelectedNode);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+        shell.AssertNeverSeated("docs/n.md");
+    });
+
+    /// <summary>The red team's minor 1: the Connections leaf republishes while
+    /// the Reveal waits (a depth change), rebuilding its rows, and keeps the
+    /// keys in its tree on a new element. The keys are still in the place the
+    /// gesture left them, so the late seat lands them once, and the selection
+    /// is said.</summary>
+    [Fact]
+    public void ALateRevealAfterTheLeafRepublishesLandsOnce() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        ConnectionsLeafView surface = shell.KeysOnTheConnectionsRowOf("start.md", "docs/n.md", out TreeViewItem row);
+        GraphConnectionRow target = ((ConnectionsRowViewModel)row.DataContext).Row!;
+        shell.HoldTreeWork();
+        shell.Host.Workspace.Connections.Execute(GraphRowAction.Reveal, target);
+
+        shell.Host.Workspace.Connections.Deeper();
+        shell.SettleLeaf();
+        // The republish rebuilds the rows and keeps the keys in the leaf's
+        // tree, on a new element (its own landing: the selected row, else the
+        // first).
+        Assert.True(
+            Keyboard.FocusedElement is TreeViewItem now && surface.TreeForTests.IsAncestorOf(now) && !ReferenceEquals(now, row),
+            $"premise: the republish did not keep the keys in the leaf's tree on a new element; they are on {Keyboard.FocusedElement}");
+        shell.Mark();
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
+    /// <summary>The red team's minor 2: the Files pane hidden while the Reveal
+    /// waits, the keys still on the graph table. Nothing can land, so the seat
+    /// selects its row silently: no open, nothing said, and the graph tab stays
+    /// active.</summary>
+    [Fact]
+    public void ALateRevealWhileFilesIsHiddenSelectsItsRowSilently() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.OpenGraph();
+        PumpedDispatcher.PumpUntilDrained(shell.Host.Workspace.GraphDocument!.WhenAllWorkDrained());
+        shell.Host.Settle();
+        DataGrid table = ShownShell.Descendants(shell.Host.Shell).OfType<DataGrid>().First(grid => grid.IsVisible);
+        Assert.True(table.Focus() || table.IsKeyboardFocusWithin, "premise: the graph table did not take the keys");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealGraphRowFromSurface("docs/n.md"));
+        shell.Host.Workspace.IsFilesSidebarVisible = false;
+        shell.Host.Settle();
+        Assert.True(table.IsKeyboardFocusWithin, "premise: hiding Files moved the keys off the graph table");
+        shell.Mark();
+        string tabs = shell.Tabs;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(table.IsKeyboardFocusWithin, "the keys left the graph table");
+        Assert.Equal(tabs, shell.Tabs);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        FileTreeNodeViewModel revealed = shell.Row("docs/n.md");
+        Assert.Same(revealed, shell.Sidebar.SelectedNode);
+        Assert.True(revealed.IsSelected, "the revealed row's node is not selected");
+    });
+
+    /// <summary>The red team's minor 3: a filter or a tag scope active, and
+    /// the keys moved off the gesture's place. A silent seat would select a
+    /// row the filter hides while the results show the reader's, so the wait
+    /// ends instead: nothing changes, the filter stays, nothing is
+    /// said.</summary>
+    [Theory]
+    [InlineData("text")]
+    [InlineData("tag")]
+    public void ALateRevealUnderAFilterEndsUnseated(string filter) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        if (filter == "text")
+        {
+            shell.Sidebar.FilterText = "b";
+        }
+        else
+        {
+            shell.Sidebar.ActivateTag("alpha");
+        }
+
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.FilterCompletion);
+        shell.Host.Settle();
+        string filterText = shell.Sidebar.FilterText;
+        string? scopeTag = shell.Sidebar.ScopeTag;
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        UIElement editor = shell.Editor;
+        Assert.True(editor.Focus(), "premise: the editor did not take the keys");
+        shell.Mark();
+        string tabs = shell.Tabs;
+        FileTreeNodeViewModel? selected = shell.Sidebar.SelectedNode;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(shell.Sidebar.IsFilterActive, "the filter was cleared");
+        Assert.Equal(filterText, shell.Sidebar.FilterText);
+        Assert.Equal(scopeTag, shell.Sidebar.ScopeTag);
+        Assert.Same(selected, shell.Sidebar.SelectedNode);
+        Assert.True(editor.IsKeyboardFocused, "the keys left the editor");
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+        shell.AssertNeverSeated("docs/n.md");
+    });
+
+    /// <summary>The red team's minor 5, the stranded clause: the keys moved
+    /// off the header segment and then cleared, with no focused element left
+    /// in the window. Stranded keys are taken: the late seat lands them once,
+    /// opens and says the note.</summary>
+    [Fact]
+    public void ALateRevealWithTheKeysStrandedLandsThemOnce() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        Assert.True(shell.Editor.Focus(), "premise: the editor did not take the keys");
+        FocusManager.SetFocusedElement(shell.Host.Shell, null);
+        Keyboard.ClearFocus();
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.Null(FocusManager.GetFocusedElement(shell.Host.Shell));
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
+    /// <summary>The red team's minor 5, the in-Files clause: the keys moved
+    /// off the header segment onto another row of the Files tree, unselected.
+    /// Keys already in the tree are taken: the late seat lands them once on
+    /// its row.</summary>
+    [Fact]
+    public void ALateRevealWithTheKeysOnAnotherFilesRowLandsThemOnce() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.FocusRowUnselected("a.md");
+        Assert.NotEqual("a.md", shell.Sidebar.SelectedNode?.Path);
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
+    /// <summary>The red team's minor 7: a Reveal asked from inside the seat's
+    /// own landing (as the window's restore runs). The seat's own open is not
+    /// the reader's open, so it does not end that newer Reveal, which seats
+    /// after it.</summary>
+    [Fact]
+    public void ARevealAskedFromTheSeatsOwnLandingSeatsAfterIt() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.OpenAndParkKeysInTheEditor();
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        bool asked = false;
+        shell.Host.Shell.FilesTree.GotKeyboardFocus += (_, _) =>
+        {
+            if (!asked)
+            {
+                asked = true;
+                _ = shell.Host.Workspace.RevealConnectionsRowFromSurface("b.md");
+            }
+        };
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(asked, "premise: the seat's landing never reached the Files tree");
+        Assert.Equal(["docs/n.md", "b.md"], shell.OpensSinceMark);
+        Assert.Equal("b.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.True(shell.Row("b.md").IsSelected, "b.md's node does not hold the selection");
+        Assert.Equal("tree row b.md", shell.KeysAt);
     });
 
     private static void Invoke(UIElement element) =>
@@ -505,6 +818,33 @@ public sealed class RevealInFilesTests
             var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.KeyDownEvent };
             target.RaiseEvent(down);
             return down.Handled;
+        }
+
+        /// <summary>Where the keys are, described.</summary>
+        public string KeysAt => Describe(Keyboard.FocusedElement);
+
+        /// <summary>The reader puts the keys on the row at
+        /// <paramref name="path"/> without selecting it, as a landing
+        /// does.</summary>
+        public void FocusRowUnselected(string path)
+        {
+            Host.Shell.UpdateLayout();
+            TreeViewItem? container = ContainerOf(Row(path));
+            Assert.True(container is not null && LandingTreeViewItem.FocusUnselected(container), $"premise: {path}'s row did not take the keys");
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>A late seat's silent arm: since the mark nothing moved the
+        /// keys, opened or was said, the tabs are <paramref name="tabs"/>, and
+        /// the row at <paramref name="path"/> holds the selection on both
+        /// halves.</summary>
+        public void AssertSilentlySelected(string path, string tabs)
+        {
+            Assert.Empty(FocusChanges);
+            Assert.Empty(OpensSinceMark);
+            Assert.Empty(SaidSinceMark);
+            Assert.Equal(tabs, Tabs);
+            AssertSelectedOnBothHalves(path);
         }
 
         /// <summary>The row at <paramref name="path"/> holds the selection on
