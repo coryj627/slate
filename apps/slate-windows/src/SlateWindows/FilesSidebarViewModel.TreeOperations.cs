@@ -311,6 +311,9 @@ internal sealed partial class FilesSidebarViewModel
             }
             catch (VaultException exception)
             {
+                // Plan 47 CB-39: this refresh cancelled a Reveal's folder load to
+                // list the folder itself, and will not; the wait ends.
+                EndWaitingReveal();
                 SettleTreeRefreshWaiters(generation, exception);
                 ReportTreeFailure($"Could not load files: {FailureDetail.Of(exception)}", silent);
                 _treeRefreshCompletion = Task.CompletedTask;
@@ -318,6 +321,7 @@ internal sealed partial class FilesSidebarViewModel
             catch (Exception exception)
             {
                 HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                EndWaitingReveal();
                 SettleTreeRefreshWaiters(generation, exception);
                 try
                 {
@@ -551,6 +555,10 @@ internal sealed partial class FilesSidebarViewModel
                             // never publish, so its failure is not held for a
                             // publication — a later refresh must not revive it.
                             _settledTreeGeneration = generation;
+                            // Plan 47 CB-39: this refresh cancelled a Reveal's
+                            // folder load to list the folder itself, and will
+                            // not; the wait ends.
+                            EndWaitingReveal();
                             SettleTreeRefreshWaiters(generation, cause);
                             ReportTreeFailure(message, silent);
                         }
@@ -797,7 +805,9 @@ internal sealed partial class FilesSidebarViewModel
         if (wasPending)
         {
             // Plan 47 CB-39: the refresh a Reveal may be waiting for will not
-            // publish (a close, a shutdown), so its wait ends.
+            // publish (a close, a shutdown). Ending the wait is Call 15's choice:
+            // a close refused after this re-issues a refresh, which would list
+            // the folder, and a Reveal seated then is the late seat #1670 names.
             EndWaitingReveal();
         }
 
@@ -935,9 +945,15 @@ internal sealed partial class FilesSidebarViewModel
         finally
         {
             IsExpandingLoaded = false;
-            // Plan 47 CB-39: the run is over; a Reveal still waiting takes its
-            // next step, which may open a folder the run listed but did not.
-            AdvanceWaitingReveal();
+            // Plan 47 CB-39: a run that finished lets a Reveal still waiting take
+            // its next step, which may open a folder the run listed but did not.
+            // A cancelled run takes none: its canceller lists the folders itself
+            // (a refresh, a folder's own load) or ends the wait (a refused close,
+            // the shutdown), and a load started here would outlive it.
+            if (!token.IsCancellationRequested)
+            {
+                AdvanceWaitingReveal();
+            }
             bool ownsCancellation = false;
             lock (_bulkExpandCancellationGate)
             {
@@ -1052,7 +1068,20 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    public void CancelExpandLoaded() => CancelBulkExpansion();
+    /// <summary>Cancels a running Expand loaded folders run. Plan 47 CB-39: a
+    /// Reveal waiting for the run to list its folder ends. A refused close and
+    /// the shutdown cancel the run here, and ending the wait there is Call 15's
+    /// choice: a later refresh may list the folder, and a Reveal seated then is
+    /// the late seat #1670 names.</summary>
+    public void CancelExpandLoaded()
+    {
+        bool running = IsExpandingLoaded;
+        CancelBulkExpansion();
+        if (running)
+        {
+            EndWaitingReveal();
+        }
+    }
 
     private sealed record TreeRefreshOutcome(
         ObservableCollection<FileTreeNodeViewModel> RootNodes,

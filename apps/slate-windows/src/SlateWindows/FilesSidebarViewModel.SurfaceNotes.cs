@@ -50,8 +50,9 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     private bool _seatingOwnSelection;
 
     /// <summary>Plan 47 CB-39: set while <see cref="AdvanceWaitingReveal"/>
-    /// runs; a load it starts that publishes in its own turn asks for one more
-    /// pass instead of running a step inside it.</summary>
+    /// runs. A step asked from inside it (a Reveal asked from a seat's own
+    /// handlers, as the window's restore or the open runs) asks for one more
+    /// pass instead of running inside the first.</summary>
     private bool _advancingReveal;
     private bool _advanceAgain;
 

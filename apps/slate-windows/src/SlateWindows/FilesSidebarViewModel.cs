@@ -549,6 +549,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 OnPropertyChanged(nameof(SortButtonName));
             }
+            else if (e.PropertyName is nameof(FilterText) or nameof(ScopeTag))
+            {
+                // Plan 47 CB-39: a filter typed, a tag applied or a filter
+                // cleared is the reader's newer gesture. A Reveal still waiting
+                // ends, so its seat neither clears that filter nor takes the
+                // keys out of the field. A Reveal's own clear runs after its
+                // slot is empty, so it ends nothing.
+                EndWaitingReveal();
+            }
         };
 
         _session = session;

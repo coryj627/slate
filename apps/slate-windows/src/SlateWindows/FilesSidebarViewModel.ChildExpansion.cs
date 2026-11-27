@@ -123,9 +123,11 @@ internal sealed partial class FilesSidebarViewModel
     }
 
     /// <summary>Cancels every folder load. Plan 47 CB-39: a Reveal waiting on
-    /// one of them ends, since nothing lists the folder after this cancel (a
-    /// refused close, a close's cancelled refresh, the shutdown, Collapse
-    /// all).</summary>
+    /// one of them ends. The cancellers here are a refused close, a close's
+    /// cancelled refresh, the shutdown and Collapse all, and ending the wait
+    /// there is Call 15's choice: a close refused after its refresh was
+    /// cancelled re-issues one, which would list the folder, and a Reveal seated
+    /// then is the late seat #1670 names.</summary>
     internal void CancelChildExpansions() => CancelChildExpansions(listsTheFoldersItself: false);
 
     /// <param name="listsTheFoldersItself">Plan 47 CB-39: true for a canceller
