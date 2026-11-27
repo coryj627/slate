@@ -269,7 +269,7 @@
         "status": "recorded"
       },
       "DiagramSourceSpoken": {
-        "reason": "Plan 47 CB-20b (CD12(d), the twin of #1591): the Windows reading view's Ctrl+Shift+Enter speaks a diagram's source on request, at the caret or on a focused diagram, since Tab, focus and line reading speak its description. Mac offers the source on request as \"Source\" in VoiceOver's More Content menu (MermaidView.swift), which VoiceOver reads itself; no Mac construction site.",
+        "reason": "Plan 47 CB-20b (CD12(d), the twin of #1591): the Windows reading view's Ctrl+Shift+Enter speaks a diagram's source on request, at the caret or on a focused diagram, since Tab and focus speak its description, and line reading reads its source only where it is shown as text. Mac offers the source on request as \"Source\" in VoiceOver's More Content menu (MermaidView.swift), which VoiceOver reads itself; no Mac construction site.",
         "decision": "docs/plans/39_at_navigation_contracts.md",
         "status": "recorded"
       },

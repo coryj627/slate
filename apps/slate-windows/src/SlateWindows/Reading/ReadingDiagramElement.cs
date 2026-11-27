@@ -13,10 +13,12 @@ namespace SlateWindows.Reading;
 /// Tab, and object navigation speak the CORE structured description
 /// through <c>Name</c> — the mac contract verbatim: the description is
 /// never composed with prefixes, and the rendered image itself is
-/// never what AT announces. The authored source is spoken on request
-/// only (plan 47 CB-20b, the twin of #1591): the reading view's source
-/// chord speaks core's <c>DiagramSourceSpoken</c>, the analog of mac's
-/// "Source" custom content; nothing on focus carries it. The tooltip is
+/// never what AT announces. The authored source is spoken on request,
+/// never on focus (plan 47 CB-20b, the twin of #1591): the reading view's
+/// source chord speaks core's <c>DiagramSourceSpoken</c>, the analog of
+/// mac's "Source" custom content, and nothing on focus carries it; line
+/// reading reads it only where it is shown as text (a pending, failed or
+/// unmatched diagram). The tooltip is
 /// the mac 3-line/120-char preview (WCAG 1.4.13 posture, audit #254
 /// M2), for a pointer's hover only.
 /// </summary>
@@ -42,7 +44,9 @@ internal sealed class ReadingDiagramElement : ContentControl
 
     /// <summary>Canonical structured description ("Mermaid diagram."
     /// fallback applied by the builder before construction), or the
-    /// placeholder's "Diagram, rendering" until the stage completes it.</summary>
+    /// placeholder's "Diagram, rendering" until the stage completes it; a
+    /// placeholder kept because the reader is on it when its stage finds no
+    /// artifact takes the same fallback (plan 47 CB-20b).</summary>
     public string Description { get; private set; }
 
     /// <summary>#1708: the width the description run before this element can
@@ -242,8 +246,8 @@ internal static class ReadingLineReserve
 /// localized control type "diagram". No custom-property bridge — the
 /// description IS the whole convention (mac parity: no MathML-style
 /// side channel exists for diagrams). No HelpText (plan 47 CB-20b): the
-/// source is spoken on request only. No children either: the content is
-/// a drawing with no peer, or nothing.
+/// source is spoken on request, never on focus. No children either: the
+/// content is a drawing with no peer, or nothing.
 /// </summary>
 internal sealed class ReadingDiagramElementPeer : FrameworkElementAutomationPeer
 {

@@ -155,7 +155,7 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
 - **A-12 (2026-11-26, plan 47 CB-20b; CD12(d), adopted as recommended on
   2026-11-16, and the lead's rulings on the chunk's calls of the same
   day):** a diagram's source is spoken on request, never on Tab, the twin
-  of A-10's math rule. Tab, focus and object navigation speak a diagram's
+  of A-10's math rule; this ends A-11's last clause. Tab, focus and object navigation speak a diagram's
   name and role; no HelpText and no keyboard tooltip carries its source
   (the hover tooltip keeps the preview). Ctrl+Shift+Enter, the source chord
   (`windows.reading.mathSource`, its label widened to "the math block or
@@ -168,11 +168,14 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   diagram.", the builder's fallback, not by its source. The reading help
   (A-8) gains "Next diagram: {nextD}. Enter speaks either one, {mathSource}
   its source, and {mathBraille} a formula's braille.", each chord from its
-  row. Two places still speak source text without a request, by name: a
+  row; its Enter clause is the caret's, since Enter with focus on a diagram
+  does nothing. Two places still speak source text without a request, by name: a
   failed diagram of an unknown kind keeps core's description, which holds up
-  to 160 characters of its source (#2078); and a chord landing or Enter at
-  the caret on a pending or unmatched diagram reads its source, the content
-  in range there, as an unmatched formula's does. Census:
+  to 160 characters of its source (#2078); and a chord landing, or Enter or
+  Ctrl+Enter at the caret, on a pending or unmatched diagram reads its
+  source, the content in range there, as an unmatched formula's does. Line
+  reading reads a source only where it is shown as text (a pending, failed
+  or unmatched diagram). Census:
   `ReadingEmbeddedElementCensus` (no embedded element carries HelpText).
 
 ## Review record

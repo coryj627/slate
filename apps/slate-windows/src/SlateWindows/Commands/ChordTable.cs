@@ -1712,8 +1712,9 @@ internal static class ChordTable
             ChordScope.Reading,
             "#1591 (plan 45 XB-9) and plan 47 CB-20b: a math block's or a diagram's "
             + "authored source, spoken on request by Reading/ReadingNavigator.cs while "
-            + "the caret is on the block or keyboard focus is on its element, never on "
-            + "focus or by line reading. The id is math's, kept when diagrams joined. "
+            + "the caret is on the block or keyboard focus is on its element; never when "
+            + "focus arrives, and line reading reads a source only where it is shown as "
+            + "text. The id is math's, kept when diagrams joined. "
             + "No mac twin (mac reads both from VoiceOver's More Content menu, "
             + "MathView.swift and MermaidView.swift); no command object."));
 

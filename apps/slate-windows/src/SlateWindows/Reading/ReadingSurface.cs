@@ -505,8 +505,10 @@ internal sealed class ReadingSurface : RichTextBox
     /// kept — the reader may be on it, hold the caret beside it or anchor a
     /// selection at it — and the paragraph's text is edited around them in
     /// one change. The caret and the selection are remapped onto the same
-    /// characters. A late diagram says nothing (WD11): the element's name
-    /// change is a property change, not speech.
+    /// characters. A late diagram posts no announcement (WD11). A reader on
+    /// the element hears its name change, so a placeholder kept with no
+    /// artifact takes the builder's fallback name, never its source (plan 47
+    /// CB-20b).
     /// </summary>
     internal void CompleteDiagrams(IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)
     {
@@ -1463,10 +1465,10 @@ internal sealed class ReadingSurface : RichTextBox
 
     /// <summary>
     /// #1591 (plan 45 XB-9) and plan 47 CB-20b: Ctrl+Shift+Enter on a math
-    /// block or a diagram speaks its authored source, the one route to it,
-    /// since line reading and focus speak the speech or the description.
-    /// The sentence is core's. Returns false off both, so the key falls
-    /// through.
+    /// block or a diagram speaks its authored source on request: focus
+    /// speaks the speech or the description, and line reading reads a source
+    /// only where it is shown as text. The sentence is core's. Returns false
+    /// off both, so the key falls through.
     /// </summary>
     internal bool TrySpeakSourceAtCaret()
     {
@@ -1543,11 +1545,12 @@ internal sealed class ReadingSurface : RichTextBox
 
     /// <summary>Plan 47 CB-20b: core's sentence for a diagram's source, from
     /// the fence's interior the paragraph carries; a blank one has none.</summary>
-    private static void AnnounceDiagramSource(ReadingContentViewModel model, Paragraph paragraph) =>
+    private static void AnnounceDiagramSource(ReadingContentViewModel model, Paragraph paragraph)
+    {
+        string? source = ReadingSemantics.DiagramSourceOf(paragraph);
         model.Announce(new uniffi.slate_uniffi.A11yEvent.DiagramSourceSpoken(
-            string.IsNullOrWhiteSpace(ReadingSemantics.DiagramSourceOf(paragraph))
-                ? null
-                : ReadingSemantics.DiagramSourceOf(paragraph)));
+            string.IsNullOrWhiteSpace(source) ? null : source));
+    }
 
     private static void AnnounceMathSpeech(ReadingContentViewModel model, Paragraph paragraph) =>
         model.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(

@@ -12167,20 +12167,25 @@ mod tests {
     fn multiline_templates_carry_no_stray_whitespace() {
         // The templates written with line-continuation backslashes must
         // render as single-space prose. A source spoken on request is the
-        // one payload whose line breaks are the author's content, kept as
-        // the note has them (plan 47 CB-20b; a formula's source can span
-        // lines too), so only its newline check is waived.
+        // one payload that is the author's text, line breaks and indents
+        // kept as the note has them (plan 47 CB-20b; a formula's source can
+        // span lines too), so the template around it is what is checked.
         for event in corpus() {
             let text = event.render();
-            let authored_lines = matches!(
-                event,
-                A11yEvent::MathSourceSpoken { .. } | A11yEvent::DiagramSourceSpoken { .. }
-            );
+            let template = match &event {
+                A11yEvent::MathSourceSpoken {
+                    source: Some(source),
+                }
+                | A11yEvent::DiagramSourceSpoken {
+                    source: Some(source),
+                } => text.replacen(source.trim(), "", 1),
+                _ => text,
+            };
+            assert!(!template.contains('\n'), "newline leaked into {event:?}");
             assert!(
-                authored_lines || !text.contains('\n'),
-                "newline leaked into {event:?}"
+                !template.contains("  "),
+                "double space leaked into {event:?}"
             );
-            assert!(!text.contains("  "), "double space leaked into {event:?}");
         }
     }
 }

@@ -51,6 +51,12 @@ public sealed partial class ReadingDiagramTests
                     Judge("pending");
                     harness.Land();
                     Judge("landed");
+                    // Premise: the seam failed the known kind, so the row is
+                    // a failed diagram and not a second drawn one.
+                    ReadingDiagramElement knownFailed = FindDiagramElements(harness.Surface.Document)
+                        .Single(element => AutomationProperties.GetName(element) == "Flowchart with 1 step.");
+                    Assert.Null(knownFailed.Content);
+                    Assert.Contains("Diagram could not be rendered", harness.PatternText(), StringComparison.Ordinal);
 
                     Assert.True(wrong.Count == 0, "A diagram carries its source to Tab:\n  " + string.Join("\n  ", wrong));
                     Assert.Equal(
@@ -328,6 +334,9 @@ public sealed partial class ReadingDiagramTests
             harness.Land();
             ReadingDiagramElement element = harness.Placeholder();
             Assert.True(element.Focus(), "premise: the diagram takes focus");
+            // The route reads the live keyboard: a modifier held on the shared
+            // desktop would make this another request.
+            Assert.Equal(ModifierKeys.None, Keyboard.Modifiers);
             harness.Announced.Clear();
             var enter = new KeyEventArgs(
                 Keyboard.PrimaryDevice, PresentationSource.FromVisual(element)!, 0, Key.Return)

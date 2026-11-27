@@ -1675,22 +1675,45 @@ public sealed class ChordTableTests
     {
         MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
             .Method("Surface_PreviewKeyDown");
+        StatementSyntax[] top = route.Body!.Statements.ToArray();
+        // The arms stand at the method's top level, ahead of the caret arms
+        // (which apply only while the surface itself has the keys) and ahead
+        // of the chord lookup's early return.
+        int caretArms = System.Array.FindIndex(top, statement =>
+            statement is IfStatementSyntax candidate
+            && CSharpSource.Normalize(candidate.Condition).StartsWith("CaretActivationApplies(", System.StringComparison.Ordinal));
+        int chordLookup = System.Array.FindIndex(top, statement =>
+            CSharpSource.Normalize(statement).Contains("_chords.TryGetValue(", System.StringComparison.Ordinal));
+        Assert.True(caretArms > 0 && chordLookup > caretArms, "premise: the route's caret arms and chord lookup were not found");
         foreach ((string element, string answer) in new[]
         {
             ("ReadingMathElement", "_surface.TryAnswerMath"),
             ("ReadingDiagramElement", "_surface.TryAnswerDiagram"),
         })
         {
-            IfStatementSyntax arm = Assert.Single(
-                route.DescendantNodes().OfType<IfStatementSyntax>(),
-                candidate => CSharpSource.Invokes(candidate.Condition, answer));
-            string condition = CSharpSource.Normalize(arm.Condition);
-            Assert.Contains("key==Key.Return", condition, System.StringComparison.Ordinal);
-            Assert.Contains("!e.IsRepeat", condition, System.StringComparison.Ordinal);
-            Assert.Contains($"Keyboard.FocusedElementis{element}", condition, System.StringComparison.Ordinal);
-            Assert.Contains($"{answer}(", condition, System.StringComparison.Ordinal);
-            Assert.Contains(",Keyboard.Modifiers)", condition, System.StringComparison.Ordinal);
+            int index = System.Array.FindIndex(top, statement =>
+                statement is IfStatementSyntax candidate && CSharpSource.Invokes(candidate.Condition, answer));
+            Assert.True(index >= 0, $"no top-level arm of the route answers through {answer}");
+            Assert.True(index < caretArms, $"the {element} arm comes after the caret arms, where it never runs");
+            var arm = (IfStatementSyntax)top[index];
+            // One conjunction of exactly these terms, so no term can be
+            // negated, or-ed away or dropped.
+            string[] terms = Conjuncts(arm.Condition).Select(term => CSharpSource.Normalize(term)).ToArray();
+            Assert.Equal(4, terms.Length);
+            Assert.Equal("key==Key.Return", terms[0]);
+            Assert.Equal("!e.IsRepeat", terms[1]);
+            Assert.StartsWith($"Keyboard.FocusedElementis{element}", terms[2], System.StringComparison.Ordinal);
+            Assert.StartsWith($"{answer}(", terms[3], System.StringComparison.Ordinal);
+            Assert.EndsWith(",Keyboard.Modifiers)", terms[3], System.StringComparison.Ordinal);
+            Assert.Equal(
+                new[] { "e.Handled=true;", "return;" },
+                ((BlockSyntax)arm.Statement).Statements.Select(statement => CSharpSource.Normalize(statement)).ToArray());
         }
+
+        static IEnumerable<ExpressionSyntax> Conjuncts(ExpressionSyntax expression) =>
+            expression is BinaryExpressionSyntax both && both.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression)
+                ? Conjuncts(both.Left).Concat(Conjuncts(both.Right))
+                : new[] { expression };
     }
 
     private static HashSet<string> GridGestureChords()

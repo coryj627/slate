@@ -407,8 +407,10 @@ public sealed class ReadingEmbeddedElementCensus
     }
 
     /// <summary>Plan 47 CB-20b (the twin of #1591): no embedded element
-    /// carries HelpText, which a reader hears on Tab, so a source can reach
-    /// Tab only through a name. An element with no peer passes.</summary>
+    /// carries HelpText, which a reader hears on Tab, as its property or
+    /// through its peer (an element with no peer is judged on its property
+    /// alone). The keyboard tooltip and the name are held by the diagram's
+    /// own facts.</summary>
     private static void NoHelpText(UIElement child, string where, List<string> wrong)
     {
         string property = AutomationProperties.GetHelpText(child);
