@@ -101,12 +101,13 @@ internal sealed class CanvasPeerTopology
     /// <summary>
     /// The window derivation. Cards materialize when their rectangle
     /// intersects the viewport plus one viewport's margin on every
-    /// side (D4). EDGES materialize by their RENDERED bounds — the
-    /// bounding box of both endpoints' rectangles, which contains the
-    /// straight path and its label chip — never by endpoint
-    /// membership, so a long edge crossing the window materializes
-    /// while both its endpoints sit outside (obligation ID-4's
-    /// arrangement). A retained key that did not materialize carries a
+    /// side (D4). EDGES materialize by the bounding box of both
+    /// endpoints' rectangles, which contains the straight path and its
+    /// label chip's centre — never by endpoint membership, so a long
+    /// edge crossing the window materializes while both its endpoints
+    /// sit outside (obligation ID-4's arrangement). A windowed edge's
+    /// chip is drawn and is its element's bounds (#1721), even where
+    /// it reaches past the bounding box. A retained key that did not materialize carries a
     /// tombstone; an unretained, unmaterialized key has no entry at
     /// all — the UNREALIZED cell is the descriptor index's to answer.
     /// </summary>
@@ -199,9 +200,10 @@ internal sealed class CanvasPeerTopology
                 : new CanvasRect(node.X, node.Y, node.Width, node.Height);
     }
 
-    /// <summary>An edge's RENDERED bounds: the bounding box of its two
-    /// endpoints' rectangles, which contains the straight path. The one
-    /// union the topology windows by and a realization pans to (#1277).</summary>
+    /// <summary>The bounding box of an edge's two endpoints' rectangles,
+    /// which contains the straight path. The one union the topology
+    /// windows by, and which a realization pans to with the edge's chip
+    /// (#1277, #1721).</summary>
     internal static (double X, double Y, double Width, double Height) EdgeUnion(
         CanvasRect from, CanvasRect to)
     {

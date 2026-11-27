@@ -18,6 +18,8 @@ public sealed partial class TypeRampCensus
         ("EditorInteractions.cs", "MinimumFontSize = 8", "that preference's bounds"),
         ("EditorInteractions.cs", "MaximumFontSize = 40", "that preference's bounds"),
         (@"Graph\GraphDiagramView.cs", "LabelFontSize = 11", "drawn labels, already scaled by text size and zoom"),
+        (@"Canvas\CanvasRendererView.cs", "ChipFontSize = 10", "drawn connection label chips, scaled by text size and zoom (contract 34 D11's base 10)"),
+        (@"Canvas\CanvasRendererView.cs", "ChipMinimumFontSize = 4", "the drawn chips' floor at the lowest zoom (plan 47 CB-36)"),
     ];
 
     /// <summary>The app's one window that never shows text: it reads a system
