@@ -251,7 +251,7 @@ public sealed class ShellSealAdmissionCensus
     [Fact]
     public void NothingInTheShellListensPastAHandledInputOrAheadOfTheRoutes()
     {
-        List<string> offenders = PastHandledOffenders(ShellUnits());
+        List<string> offenders = [.. PastHandledOffenders(ShellUnits()), .. PastHandledSetterOffenders(ShellCompilation.Compilation, ShellXaml())];
         Assert.True(
             offenders.Count == 0,
             "listeners that act on input the seal's admission took, or see it before the window does:\n  "
@@ -296,12 +296,29 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("touch-frame-hook", "class Other { void M() { Touch.FrameReported += X; } }")]
     [InlineData("stylus-plug-in-hook", "class Other : UIElement { void M() { StylusPlugIns.Add(new Plug()); } }")]
     // CB-38: the seal takes no stylus preview, so any stylus handler in the
-    // shell, in code or in XAML, would act under it.
-    [InlineData("stylus-subscription", "class Other { void M(UIElement u) { u.PreviewStylusDown += X; } }")]
-    [InlineData("stylus-registration", "class Other { void M(UIElement u) { u.AddHandler(Stylus.StylusSystemGestureEvent, new StylusSystemGestureEventHandler(X)); } }")]
-    [InlineData("stylus-attached-registration", "class Other { void M(UIElement u) { Stylus.AddStylusButtonUpHandler(u, X); } }")]
-    [InlineData("stylus-override", "class Other : UIElement { protected override void OnStylusSystemGesture(StylusSystemGestureEventArgs e) => Run(); }")]
+    // shell, in code or in XAML, would act under it. The code rows are bound
+    // through the shell's compilation (codex round 1 on CB-38): a conditional
+    // registration, an event held in a local, an event the census cannot
+    // resolve under a handler that could take a stylus event, and an
+    // EventSetter built in code; in XAML an attribute and a style's
+    // EventSetter, plain or owner-qualified.
+    [InlineData("stylus-subscription", "class PlantedSubscription { void M(UIElement u) { u.PreviewStylusDown += X; } void X(object sender, StylusDownEventArgs e) { } }")]
+    [InlineData("stylus-registration", "class PlantedRegistration { void M(UIElement u) { u.AddHandler(Stylus.StylusSystemGestureEvent, new StylusSystemGestureEventHandler(X)); } void X(object sender, StylusSystemGestureEventArgs e) { } }")]
+    [InlineData("stylus-attached-registration", "class PlantedAttached { void M(UIElement u) { Stylus.AddStylusButtonUpHandler(u, X); } void X(object sender, StylusButtonEventArgs e) { } }")]
+    [InlineData("stylus-override", "class PlantedOverride : UIElement { protected override void OnStylusSystemGesture(StylusSystemGestureEventArgs e) { } }")]
+    [InlineData("stylus-conditional-registration", "class PlantedConditional { void M(UIElement? u) { u?.AddHandler(Stylus.PreviewStylusDownEvent, new StylusDownEventHandler(X)); } void X(object sender, StylusDownEventArgs e) { } }")]
+    [InlineData("stylus-event-variable", "class PlantedVariable { void M(UIElement u) { RoutedEvent route = Stylus.PreviewStylusDownEvent; u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }")]
+    [InlineData("stylus-unresolved-event", "class PlantedUnresolved { void M(UIElement u, RoutedEvent route) { u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }")]
+    [InlineData("stylus-code-setter", "class PlantedSetter { Style M() { var style = new Style(typeof(Border)); style.Setters.Add(new EventSetter(UIElement.PreviewStylusDownEvent, new StylusDownEventHandler(X))); return style; } void X(object sender, StylusDownEventArgs e) { } }")]
     [InlineData("stylus-xaml", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Border StylusUp=\"X\" /></Window>")]
+    [InlineData("stylus-xaml-setter", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"Border\"><EventSetter Event=\"PreviewStylusDown\" Handler=\"X\" /></Style></Window.Resources></Window>")]
+    [InlineData("stylus-xaml-qualified-setter", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"Border\"><EventSetter Event=\"Stylus.PreviewStylusDown\" Handler=\"X\" /></Style></Window.Resources></Window>")]
+    // CB-38: a style's setter runs after the window's admission and sees no
+    // input it took, unless it listens past handled; then a touch's and a
+    // drop's events act under the seal like any other input.
+    [InlineData("past-handled-xaml-setter-touch", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"ListBoxItem\"><EventSetter Event=\"PreviewTouchDown\" Handler=\"X\" HandledEventsToo=\"True\" /></Style></Window.Resources></Window>")]
+    [InlineData("past-handled-xaml-setter-drop", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"ListBoxItem\"><EventSetter Event=\"Drop\" Handler=\"X\" HandledEventsToo=\"True\" /></Style></Window.Resources></Window>")]
+    [InlineData("past-handled-code-setter", "class PlantedPastHandledSetter { Style M() { var style = new Style(typeof(ListBoxItem)); style.Setters.Add(new EventSetter(UIElement.TouchDownEvent, new EventHandler<TouchEventArgs>(X)) { HandledEventsToo = true }); return style; } void X(object? sender, TouchEventArgs e) { } }")]
     [InlineData("owned-window-route-missing", "        owned.PreviewMouseWheel += Take;\n")]
     [InlineData("owned-window-unadmitted", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Show(); } }")]
     [InlineData("owned-window-admitted-late", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.PreviewKeyDown += (_, _) => { }; ShellSeal.Admit(window); window.Show(); } }")]
@@ -336,9 +353,14 @@ public sealed class ShellSealAdmissionCensus
                         "using System.Windows;\nnamespace SlateWindows;\n" + source,
                         (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options,
                         path: "Planted.cs"))),
-            "stylus-subscription" or "stylus-registration" or "stylus-attached-registration" or "stylus-override" =>
-                StylusOffenders([new Unit("Other.cs", Parse(source))], []),
-            "stylus-xaml" => StylusOffenders([], [("Planted.xaml", XElement.Parse(source))]),
+            "stylus-subscription" or "stylus-registration" or "stylus-attached-registration" or "stylus-override"
+                or "stylus-conditional-registration" or "stylus-event-variable" or "stylus-unresolved-event" or "stylus-code-setter" =>
+                PlantedOnly(StylusOffenders(WithPlanted(source), [])),
+            "stylus-xaml" or "stylus-xaml-setter" or "stylus-xaml-qualified-setter" =>
+                PlantedOnly(StylusOffenders(NoShellCode, [("Planted.xaml", XElement.Parse(source))])),
+            "past-handled-code-setter" => PlantedOnly(PastHandledSetterOffenders(WithPlanted(source), [])),
+            "past-handled-xaml-setter-touch" or "past-handled-xaml-setter-drop" =>
+                PlantedOnly(PastHandledSetterOffenders(NoShellCode, [("Planted.xaml", XElement.Parse(source))])),
             "shell-of-follows-owner" => OwnedWindowOffenders(PlantInto(
                 OwnedWindowGuardFile,
                 "    internal static MainWindow? ShellOf(DependencyObject element) => Window.GetWindow(element) switch",
@@ -553,11 +575,43 @@ public sealed class ShellSealAdmissionCensus
     [Fact]
     public void NothingInTheShellHandlesTheStylus()
     {
-        List<string> offenders = StylusOffenders(ShellUnits(), ShellXaml());
+        List<string> offenders = StylusOffenders(ShellCompilation.Compilation, ShellXaml());
         Assert.True(
             offenders.Count == 0,
             "stylus handlers in the shell, which act under the seal because it takes no stylus preview:\n  "
             + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// The stylus and setter rules refuse what they cannot prove harmless,
+    /// and no more (codex round 1 on CB-38): an event the census cannot
+    /// resolve is judged by its handler, so a handler for a key's arguments
+    /// passes and one for any routed event's does not; an event that
+    /// resolves is judged by its value, whatever handler it is given; and a
+    /// setter past handled for an event that carries no input passes.
+    /// </summary>
+    [Theory]
+    [InlineData("unresolved, a key handler", "class PlantedKeys { void M(UIElement u, RoutedEvent route) { u.AddHandler(route, new KeyEventHandler(X)); } void X(object sender, KeyEventArgs e) { } }", false)]
+    [InlineData("unresolved, a routed event handler", "class PlantedRouted { void M(UIElement u, RoutedEvent route) { u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }", true)]
+    [InlineData("a key event, a routed event handler", "class PlantedKnown { void M(UIElement u) { u.AddHandler(Keyboard.KeyDownEvent, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }", false)]
+    [InlineData("a key event held in a local", "class PlantedLocal { void M(UIElement u) { RoutedEvent route = Keyboard.KeyDownEvent; u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }", false)]
+    [InlineData("a stylus event in a shell field", "class PlantedField { static readonly RoutedEvent Route = Stylus.StylusUpEvent; void M(UIElement u) { u.AddHandler(Route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }", true)]
+    [InlineData("a key event or a stylus event", "class PlantedEither { void M(UIElement u, bool pen) { u.AddHandler(pen ? Stylus.StylusUpEvent : Keyboard.KeyUpEvent, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }", true)]
+    public void TheStylusRuleJudgesAnEventByItsValueAndOtherwiseByItsHandler(string form, string source, bool refused)
+    {
+        List<string> found = PlantedOnly(StylusOffenders(WithPlanted(source), []));
+        Assert.True((found.Count > 0) == refused, $"{form}: {(refused ? "not refused" : "refused: " + string.Join("; ", found))}");
+    }
+
+    [Fact]
+    public void ASetterPastHandledForAnEventThatCarriesNoInputPasses()
+    {
+        Assert.Empty(PlantedOnly(PastHandledSetterOffenders(
+            WithPlanted("class PlantedLoaded { Style M() { var style = new Style(typeof(Border)); style.Setters.Add(new EventSetter(FrameworkElement.LoadedEvent, new RoutedEventHandler(X)) { HandledEventsToo = true }); return style; } void X(object sender, RoutedEventArgs e) { } }"),
+            [])));
+        Assert.Empty(PlantedOnly(PastHandledSetterOffenders(
+            NoShellCode,
+            [("Planted.xaml", XElement.Parse("<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"Border\"><EventSetter Event=\"Loaded\" Handler=\"X\" HandledEventsToo=\"True\" /></Style></Window.Resources></Window>"))])));
     }
 
     /// <summary>
@@ -1336,62 +1390,35 @@ public sealed class ShellSealAdmissionCensus
         return offenders;
     }
 
-    /// <summary>Every stylus handler in the shell (see
-    /// <see cref="NothingInTheShellHandlesTheStylus"/>): a <c>+=</c> to a
-    /// stylus event, an <c>AddHandler</c> or class registration of one, a
-    /// <c>Stylus.Add…Handler</c> call, an <c>OnStylus…</c> or
-    /// <c>OnPreviewStylus…</c> override, and a XAML attribute that attaches
-    /// one.</summary>
-    private static List<string> StylusOffenders(IEnumerable<Unit> shell, IEnumerable<(string Name, XElement Root)> xaml)
+    /// <summary>
+    /// Every stylus handler in the shell (see
+    /// <see cref="NothingInTheShellHandlesTheStylus"/>), bound through
+    /// <paramref name="compilation"/> (codex round 1 on CB-38): a <c>+=</c>
+    /// to an event whose delegate takes a stylus's arguments; a
+    /// registration, which is any call or constructor that takes a
+    /// <c>RoutedEvent</c> and a handler (<c>AddHandler</c>,
+    /// <c>RegisterClassHandler</c>, an <c>EventSetter</c>), a conditional
+    /// call included, whose event is a stylus's by its value, or whose event
+    /// does not resolve and whose handler's delegate does not prove it is no
+    /// stylus's; an <c>EventSetter</c>'s <c>Event</c> set the same way; a
+    /// <c>Stylus.Add…Handler</c> call; an override that takes a stylus's
+    /// arguments; and in XAML an attribute or an <c>EventSetter</c> that
+    /// attaches a stylus event, or an <c>EventSetter</c> whose event the
+    /// census cannot read.
+    /// </summary>
+    private static List<string> StylusOffenders(CSharpCompilation compilation, IEnumerable<(string Name, XElement Root)> xaml)
     {
         var offenders = new List<string>();
-        foreach (Unit unit in shell)
+        foreach (SyntaxTree tree in compilation.SyntaxTrees.Where(tree => tree.FilePath.EndsWith(".cs", StringComparison.Ordinal)
+            && !tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal)))
         {
-            foreach (AssignmentExpressionSyntax subscription in unit.Root.DescendantNodes()
-                .OfType<AssignmentExpressionSyntax>()
-                .Where(assignment => assignment.IsKind(SyntaxKind.AddAssignmentExpression)))
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
             {
-                string? target = subscription.Left switch
+                if (StylusUseAt(compilation, model, node) is { } use)
                 {
-                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                    MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-                    _ => null,
-                };
-                if (target is not null && IsStylusEvent(target))
-                {
-                    offenders.Add($"{unit.Name}:{Line(subscription)} subscribes to {target}");
+                    offenders.Add($"{Path.GetFileName(tree.FilePath)}:{Line(node)} {use}");
                 }
-            }
-
-            foreach (InvocationExpressionSyntax invocation in unit.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
-            {
-                string callee = invocation.Expression switch
-                {
-                    IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                    MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-                    _ => string.Empty,
-                };
-                bool attached = callee.StartsWith("Add", StringComparison.Ordinal)
-                    && callee.EndsWith("Handler", StringComparison.Ordinal)
-                    && IsStylusEvent(callee["Add".Length..^"Handler".Length]);
-                bool registered = callee is "AddHandler" or "RegisterClassHandler"
-                    && invocation.ArgumentList.Arguments.Any(argument =>
-                        CSharpSource.Normalize(argument.Expression).Split('.').Last() is var field
-                        && field.EndsWith("Event", StringComparison.Ordinal)
-                        && IsStylusEvent(field[..^"Event".Length]));
-                if (attached || registered)
-                {
-                    offenders.Add($"{unit.Name}:{Line(invocation)} registers a stylus handler through {callee}");
-                }
-            }
-
-            foreach (MethodDeclarationSyntax method in unit.Root.DescendantNodes()
-                .OfType<MethodDeclarationSyntax>()
-                .Where(method => method.Modifiers.Any(SyntaxKind.OverrideKeyword)
-                    && method.Identifier.ValueText.StartsWith("On", StringComparison.Ordinal)
-                    && IsStylusEvent(method.Identifier.ValueText["On".Length..])))
-            {
-                offenders.Add($"{unit.Name}:{Line(method)} overrides {method.Identifier.ValueText}");
             }
         }
 
@@ -1405,10 +1432,288 @@ public sealed class ShellSealAdmissionCensus
                 {
                     offenders.Add($"{name}:{((IXmlLineInfo)attribute).LineNumber} <{element.Name.LocalName} {attribute.Name.LocalName}=\"{attribute.Value}\">");
                 }
+
+                if (element.Name.LocalName == "EventSetter")
+                {
+                    string? routed = XamlSetterEvent(element);
+                    if (routed is null || IsStylusEvent(routed))
+                    {
+                        offenders.Add($"{name}:{((IXmlLineInfo)element).LineNumber} <EventSetter Event=\"{element.Attribute("Event")?.Value}\"> "
+                            + (routed is null ? "names an event the census cannot read" : "attaches a stylus event"));
+                    }
+                }
             }
         }
 
         return offenders;
+    }
+
+    /// <summary>What <paramref name="node"/> does with the stylus, or null:
+    /// see <see cref="StylusOffenders"/>.</summary>
+    private static string? StylusUseAt(CSharpCompilation compilation, SemanticModel model, SyntaxNode node)
+    {
+        switch (node)
+        {
+            case MethodDeclarationSyntax method:
+                return model.GetDeclaredSymbol(method) is { IsOverride: true } overriding
+                    && overriding.Parameters.Any(parameter => IsStylusArguments(compilation, parameter.Type))
+                    ? $"overrides {overriding.Name}"
+                    : null;
+
+            case AssignmentExpressionSyntax:
+                switch (model.GetOperation(node))
+                {
+                    case IEventAssignmentOperation { Adds: true, EventReference: IEventReferenceOperation reference }
+                        when DelegateArguments(reference.Event.Type) is { } arguments && IsStylusArguments(compilation, arguments):
+                        return $"subscribes to {reference.Event.Name}";
+                    case ISimpleAssignmentOperation { Target: IPropertyReferenceOperation { Property.Name: "Event" } target, Value: var value }
+                        when IsNamed(target.Property.ContainingType, "System.Windows.EventSetter"):
+                        return Judge(compilation, value, SetterHandler(model, node)) is StylusVerdict.NotStylus
+                            ? null
+                            : "sets an EventSetter's event to a stylus event, or to one the census cannot resolve";
+                    default:
+                        return null;
+                }
+
+            case InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax:
+                {
+                    IMethodSymbol? target = null;
+                    IEnumerable<IArgumentOperation> arguments = [];
+                    switch (model.GetOperation(node))
+                    {
+                        case IInvocationOperation call:
+                            target = call.TargetMethod;
+                            arguments = call.Arguments;
+                            break;
+                        case IObjectCreationOperation creation:
+                            target = creation.Constructor;
+                            arguments = creation.Arguments;
+                            break;
+                    }
+
+                    if (target is null || target.Name.StartsWith("Remove", StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
+
+                    if (IsNamed(target.ContainingType, "System.Windows.Input.Stylus")
+                        && target.Name.StartsWith("Add", StringComparison.Ordinal)
+                        && target.Name.EndsWith("Handler", StringComparison.Ordinal))
+                    {
+                        return $"registers a stylus handler through Stylus.{target.Name}";
+                    }
+
+                    IArgumentOperation? routed = arguments.FirstOrDefault(argument =>
+                        argument.Parameter is { } parameter && IsNamed(parameter.Type, "System.Windows.RoutedEvent"));
+                    IArgumentOperation? handler = arguments.FirstOrDefault(argument =>
+                        argument.Parameter is { } parameter && (IsNamed(parameter.Type, "System.Delegate") || parameter.Type.TypeKind == TypeKind.Delegate));
+                    if (routed is null || handler is null)
+                    {
+                        return null;
+                    }
+
+                    return Judge(compilation, routed.Value, handler.Value) switch
+                    {
+                        StylusVerdict.Stylus => $"registers a stylus handler through {target.ContainingType.Name}.{target.Name}",
+                        StylusVerdict.Unresolved => $"registers a handler through {target.ContainingType.Name}.{target.Name} for an event the "
+                            + "census cannot resolve, and the handler's delegate does not prove it is no stylus's",
+                        _ => null,
+                    };
+                }
+
+            default:
+                return null;
+        }
+    }
+
+    private enum StylusVerdict
+    {
+        NotStylus,
+        Stylus,
+        Unresolved,
+    }
+
+    /// <summary>A registration's verdict: its event by value where it
+    /// resolves; otherwise its handler's delegate, which proves no stylus
+    /// only when its arguments are neither a stylus's nor a base of
+    /// them.</summary>
+    private static StylusVerdict Judge(CSharpCompilation compilation, IOperation? routedEvent, IOperation? handler)
+    {
+        if (RoutedEventsOf(compilation, routedEvent, depth: 0) is { } events)
+        {
+            return events.Any(routed => typeof(StylusEventArgs).IsAssignableFrom(HandlerArguments(routed)))
+                ? StylusVerdict.Stylus
+                : StylusVerdict.NotStylus;
+        }
+
+        ITypeSymbol? arguments = Unwrap(handler) switch
+        {
+            IDelegateCreationOperation creation => DelegateArguments(creation.Type),
+            { Type: { TypeKind: TypeKind.Delegate } type } => DelegateArguments(type),
+            _ => null,
+        };
+        if (arguments is null)
+        {
+            return StylusVerdict.Unresolved;
+        }
+
+        if (IsStylusArguments(compilation, arguments))
+        {
+            return StylusVerdict.Stylus;
+        }
+
+        // A handler for a base of the stylus's arguments (RoutedEventArgs,
+        // InputEventArgs) takes a stylus event as readily as any other.
+        return compilation.GetTypeByMetadataName("System.Windows.Input.StylusEventArgs") is { } stylus && DerivesFrom(stylus, arguments)
+            ? StylusVerdict.Unresolved
+            : StylusVerdict.NotStylus;
+    }
+
+    /// <summary>The routed events <paramref name="value"/> can hold, read by
+    /// value: a framework field's own value, a shell field's initializer, a
+    /// local's every assignment, both arms of a conditional. Null where any
+    /// part does not resolve (a parameter, a call, a property).</summary>
+    private static List<RoutedEvent>? RoutedEventsOf(CSharpCompilation compilation, IOperation? value, int depth)
+    {
+        if (depth > 8)
+        {
+            return null;
+        }
+
+        switch (Unwrap(value))
+        {
+            case IFieldReferenceOperation { Field: var field }:
+                if (field.DeclaringSyntaxReferences is [var declared, ..])
+                {
+                    return declared.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: var initializer }
+                        ? RoutedEventsOf(compilation, compilation.GetSemanticModel(initializer.SyntaxTree).GetOperation(initializer), depth + 1)
+                        : null;
+                }
+
+                return Type.GetType($"{MetadataName(field.ContainingType)}, {field.ContainingAssembly.Name}")?
+                    .GetField(field.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?
+                    .GetValue(null) is RoutedEvent routed
+                    ? [routed]
+                    : null;
+
+            case ILocalReferenceOperation { Local: var local }:
+                {
+                    if (local.DeclaringSyntaxReferences is not [var localDeclared, ..]
+                        || localDeclared.GetSyntax() is not VariableDeclaratorSyntax declarator
+                        || declarator.Ancestors().FirstOrDefault(ancestor => ancestor is MemberDeclarationSyntax or LocalFunctionStatementSyntax) is not { } body)
+                    {
+                        return null;
+                    }
+
+                    SemanticModel model = compilation.GetSemanticModel(declarator.SyntaxTree);
+                    var values = new List<IOperation?>();
+                    if (declarator.Initializer is { Value: var initial })
+                    {
+                        values.Add(model.GetOperation(initial));
+                    }
+
+                    foreach (SyntaxNode written in body.DescendantNodes().Where(node =>
+                        (node is AssignmentExpressionSyntax assignment && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(assignment.Left).Symbol, local))
+                        || (node is ArgumentSyntax { RefKindKeyword.RawKind: not 0 } passed && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(passed.Expression).Symbol, local))))
+                    {
+                        if (written is not AssignmentExpressionSyntax { Right: var right })
+                        {
+                            return null;
+                        }
+
+                        values.Add(model.GetOperation(right));
+                    }
+
+                    var events = new List<RoutedEvent>();
+                    foreach (IOperation? held in values)
+                    {
+                        if (RoutedEventsOf(compilation, held, depth + 1) is not { } some)
+                        {
+                            return null;
+                        }
+
+                        events.AddRange(some);
+                    }
+
+                    return events.Count > 0 ? events : null;
+                }
+
+            case IConditionalOperation conditional:
+                return RoutedEventsOf(compilation, conditional.WhenTrue, depth + 1) is { } whenTrue
+                    && RoutedEventsOf(compilation, conditional.WhenFalse, depth + 1) is { } whenFalse
+                    ? [.. whenTrue, .. whenFalse]
+                    : null;
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The handler an <c>EventSetter</c>'s initializer gives beside
+    /// its <c>Event</c>, or null.</summary>
+    private static IOperation? SetterHandler(SemanticModel model, SyntaxNode eventAssignment) =>
+        eventAssignment.Parent is InitializerExpressionSyntax initializer
+            ? initializer.Expressions.OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "Handler" })
+                .Select(assignment => model.GetOperation(assignment.Right))
+                .FirstOrDefault()
+            : null;
+
+    private static IOperation? Unwrap(IOperation? operation) => operation switch
+    {
+        IConversionOperation conversion => Unwrap(conversion.Operand),
+        IParenthesizedOperation parenthesized => Unwrap(parenthesized.Operand),
+        _ => operation,
+    };
+
+    /// <summary>The arguments a delegate type's handler takes: its last
+    /// parameter's type.</summary>
+    private static ITypeSymbol? DelegateArguments(ITypeSymbol? type) =>
+        type is INamedTypeSymbol { DelegateInvokeMethod.Parameters: [.., var last] } ? last.Type : null;
+
+    private static Type? HandlerArguments(RoutedEvent routed) =>
+        routed.HandlerType.GetMethod("Invoke")?.GetParameters().LastOrDefault()?.ParameterType;
+
+    private static bool IsStylusArguments(CSharpCompilation compilation, ITypeSymbol type) =>
+        compilation.GetTypeByMetadataName("System.Windows.Input.StylusEventArgs") is { } stylus && DerivesFrom(type, stylus);
+
+    /// <summary>Whether <paramref name="type"/> is <paramref name="ancestor"/>
+    /// or derives from it.</summary>
+    private static bool DerivesFrom(ITypeSymbol type, ITypeSymbol ancestor)
+    {
+        for (ITypeSymbol? at = type; at is not null; at = at.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(at, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsNamed(ITypeSymbol? type, string fullName) => type?.ToDisplayString() == fullName;
+
+    /// <summary>A type's name as reflection reads it: namespace, and a
+    /// nested type after a <c>+</c>.</summary>
+    private static string MetadataName(INamedTypeSymbol type) =>
+        type.ContainingType is { } outer
+            ? $"{MetadataName(outer)}+{type.MetadataName}"
+            : $"{type.ContainingNamespace.ToDisplayString()}.{type.MetadataName}";
+
+    /// <summary>An <c>EventSetter</c>'s event as XAML names it, by its last
+    /// name (<c>PreviewStylusDown</c>, <c>Stylus.PreviewStylusDown</c>,
+    /// <c>{x:Static Stylus.PreviewStylusDownEvent}</c>); null where the
+    /// setter gives it no <c>Event</c> attribute the census can read.</summary>
+    private static string? XamlSetterEvent(XElement setter)
+    {
+        if (setter.Attribute("Event")?.Value.Trim() is not { Length: > 0 } written)
+        {
+            return null;
+        }
+
+        string last = written.Trim('{', '}').Split([' ', '.', ':'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
+        return last.EndsWith("Event", StringComparison.Ordinal) && !KnownEventNames.Value.Contains(last) ? last[..^"Event".Length] : last;
     }
 
     /// <summary>Whether <paramref name="name"/> names a routed event whose
@@ -1416,19 +1721,117 @@ public sealed class ShellSealAdmissionCensus
     private static bool IsStylusEvent(string name) => StylusEventNames.Value.Contains(name);
 
     /// <summary>The names of the routed events whose arguments are a
-    /// stylus's, read once <c>Stylus</c> and <c>UIElement</c> have
-    /// registered theirs.</summary>
+    /// stylus's.</summary>
     private static readonly Lazy<HashSet<string>> StylusEventNames = new(() =>
+        new HashSet<string>(
+            RegisteredEvents().Where(routed => typeof(StylusEventArgs).IsAssignableFrom(HandlerArguments(routed))).Select(routed => routed.Name),
+            StringComparer.Ordinal));
+    /// <summary>
+    /// Event setters that listen past a handled input (codex round 1 on
+    /// CB-38). A style's setter adds its handler to the element it styles,
+    /// after the element's own handlers, and the window's admission runs on
+    /// the window ahead of every element under it, so a setter never sees
+    /// an input the admission took, unless it sets <c>HandledEventsToo</c>:
+    /// then it acts under the seal, a touch's and a drop's events among the
+    /// rest. In XAML, an <c>EventSetter</c> with
+    /// <c>HandledEventsToo="True"</c> whose event carries input or cannot be
+    /// read; in code, a <c>HandledEventsToo</c> set to anything but false on
+    /// an <c>EventSetter</c> whose event, by its value, carries input or does
+    /// not resolve.
+    /// </summary>
+    private static List<string> PastHandledSetterOffenders(CSharpCompilation compilation, IEnumerable<(string Name, XElement Root)> xaml)
+    {
+        var offenders = new List<string>();
+        foreach (SyntaxTree tree in compilation.SyntaxTrees.Where(tree => tree.FilePath.EndsWith(".cs", StringComparison.Ordinal)
+            && !tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal)))
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (AssignmentExpressionSyntax assignment in tree.GetRoot().DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (model.GetOperation(assignment) is not ISimpleAssignmentOperation
+                    {
+                        Target: IPropertyReferenceOperation { Property.Name: "HandledEventsToo" } target,
+                        Value: var value,
+                    }
+                    || !IsNamed(target.Property.ContainingType, "System.Windows.EventSetter")
+                    || Unwrap(value) is ILiteralOperation { ConstantValue: { HasValue: true, Value: false } })
+                {
+                    continue;
+                }
+
+                if (RoutedEventsOf(compilation, SetterEvent(model, assignment), depth: 0) is not { } events || events.Any(CarriesInput))
+                {
+                    offenders.Add($"{Path.GetFileName(tree.FilePath)}:{Line(assignment)} an EventSetter listens past handled to an "
+                        + "input event, or to one the census cannot resolve");
+                }
+            }
+        }
+
+        foreach ((string name, XElement root) in xaml)
+        {
+            foreach (XElement setter in root.DescendantsAndSelf().Where(element => element.Name.LocalName == "EventSetter"
+                && string.Equals(element.Attribute("HandledEventsToo")?.Value.Trim(), "True", StringComparison.OrdinalIgnoreCase)))
+            {
+                string? routed = XamlSetterEvent(setter);
+                if (routed is null || !KnownEventNames.Value.Contains(routed) || InputEventNames.Value.Contains(routed))
+                {
+                    offenders.Add($"{name}:{((IXmlLineInfo)setter).LineNumber} <EventSetter Event=\"{setter.Attribute("Event")?.Value}\" "
+                        + "HandledEventsToo=\"True\"> listens past handled to an input event, or to one the census cannot read");
+                }
+            }
+        }
+
+        return offenders;
+    }
+
+    /// <summary>The event an <c>EventSetter</c> is given beside a member
+    /// <paramref name="assignment"/> in its initializer, or by its
+    /// constructor; null where neither gives one.</summary>
+    private static IOperation? SetterEvent(SemanticModel model, AssignmentExpressionSyntax assignment)
+    {
+        if (assignment.Parent is not InitializerExpressionSyntax initializer)
+        {
+            return null;
+        }
+
+        if (initializer.Expressions.OfType<AssignmentExpressionSyntax>()
+            .FirstOrDefault(sibling => sibling.Left is IdentifierNameSyntax { Identifier.ValueText: "Event" }) is { } named)
+        {
+            return model.GetOperation(named.Right);
+        }
+
+        return initializer.Parent is BaseObjectCreationExpressionSyntax creation
+            && model.GetOperation(creation) is IObjectCreationOperation built
+            ? built.Arguments.FirstOrDefault(argument => argument.Parameter is { } parameter && IsNamed(parameter.Type, "System.Windows.RoutedEvent"))?.Value
+            : null;
+    }
+
+    /// <summary>Whether a routed event's arguments carry input: an input
+    /// event's, a drag's, or a mnemonic's.</summary>
+    private static bool CarriesInput(RoutedEvent routed) =>
+        HandlerArguments(routed) is { } arguments
+        && (typeof(InputEventArgs).IsAssignableFrom(arguments)
+            || typeof(DragEventArgs).IsAssignableFrom(arguments)
+            || arguments == typeof(AccessKeyPressedEventArgs));
+
+    /// <summary>The names of every routed event registered once the input
+    /// classes have registered theirs.</summary>
+    private static readonly Lazy<HashSet<string>> KnownEventNames = new(() =>
+        new HashSet<string>(RegisteredEvents().Select(routed => routed.Name), StringComparer.Ordinal));
+
+    /// <summary>The names of the routed events whose arguments carry
+    /// input.</summary>
+    private static readonly Lazy<HashSet<string>> InputEventNames = new(() =>
+        new HashSet<string>(RegisteredEvents().Where(CarriesInput).Select(routed => routed.Name), StringComparer.Ordinal));
+
+    private static RoutedEvent[] RegisteredEvents()
     {
         _ = Stylus.StylusDownEvent;
+        _ = UIElement.TouchDownEvent;
         _ = UIElement.StylusDownEvent;
-        return new HashSet<string>(
-            EventManager.GetRoutedEvents()
-                .Where(routed => routed.HandlerType.GetMethod("Invoke")?.GetParameters().LastOrDefault()?.ParameterType is { } args
-                    && typeof(StylusEventArgs).IsAssignableFrom(args))
-                .Select(routed => routed.Name),
-            StringComparer.Ordinal);
-    });
+        _ = DragDrop.DropEvent;
+        return EventManager.GetRoutedEvents();
+    }
 
     /// <summary>The owned-window guard.</summary>
     private const string OwnedWindowGuardFile = "ShellSeal.cs";
@@ -1718,6 +2121,30 @@ public sealed class ShellSealAdmissionCensus
                 && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => new Unit(Path.GetFileName(path), CSharpSource.LoadPath(path).Root));
+
+    /// <summary>The shell's compilation with <paramref name="source"/> added
+    /// as <c>Planted.cs</c>, which must bind without an error, so a planted
+    /// row is judged as the shell's own code would be.</summary>
+    private static CSharpCompilation WithPlanted(string source)
+    {
+        SyntaxTree planted = CSharpSyntaxTree.ParseText(
+            "using System.Windows;\nusing System.Windows.Controls;\nusing System.Windows.Input;\nnamespace SlateWindows;\n" + source,
+            (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options,
+            path: "Planted.cs");
+        CSharpCompilation compilation = ShellCompilation.Compilation.AddSyntaxTrees(planted);
+        Diagnostic[] errors = [.. compilation.GetSemanticModel(planted).GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)];
+        Assert.True(errors.Length == 0, "the planted source does not bind:\n  " + string.Join("\n  ", errors.Select(error => error.ToString())));
+        return compilation;
+    }
+
+    /// <summary>A compilation with no shell code, for a row planted only in
+    /// XAML.</summary>
+    private static readonly CSharpCompilation NoShellCode = CSharpCompilation.Create("no-shell-code");
+
+    /// <summary>The offenders a planted row added, so a row never passes on
+    /// a finding in the shell's own sources.</summary>
+    private static List<string> PlantedOnly(List<string> offenders) =>
+        [.. offenders.Where(offender => offender.StartsWith("Planted.", StringComparison.Ordinal))];
 
     private static IEnumerable<(string Name, XElement Root)> ShellXaml() =>
         Directory.EnumerateFiles(SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
