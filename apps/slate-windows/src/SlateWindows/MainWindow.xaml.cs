@@ -640,7 +640,7 @@ public partial class MainWindow : Window
     {
         if (_observedFileSidebar?.TakeVanishedSelection() is { } vanished
             && OpenModalSurface is null
-            && (vanished.Successor ? FilesTree.IsKeyboardFocusWithin : KeysOnARemovedFilesRow()))
+            && (vanished.Reveal || (vanished.Successor ? FilesTree.IsKeyboardFocusWithin : KeysOnARemovedFilesRow())))
         {
             FilesTree.UpdateLayout();
             _ = LandNearVanishedSelection(vanished.Survivor);

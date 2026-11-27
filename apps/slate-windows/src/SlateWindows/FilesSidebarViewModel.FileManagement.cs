@@ -684,29 +684,12 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void RequestInlineRenameAt(string vaultPath)
-    {
-        _pendingRenameArmPath = vaultPath;
-        DropWaitingReveal();
-    }
-
-    /// <summary>WB-6 (Codex round 4): a mutation's named row, or a delete's
-    /// focus restore, is a newer intent than a Reveal in File Tree still
-    /// waiting for its folder's rows, so the publication honours only the
-    /// mutation and the keys move once. Kept, the Reveal would take the
-    /// selection from the mutation's row and open its own note.</summary>
-    /// <param name="revealRequestsAtGesture">For a mutation that awaited
-    /// between its gesture and its request (a trash, whose work runs on a
-    /// worker behind its progress bar): the Reveal count it read at its
-    /// gesture. A Reveal asked since is newer than the mutation and stays.
-    /// Null for a mutation that requests in its gesture.</param>
-    private void DropWaitingReveal(long? revealRequestsAtGesture = null)
-    {
-        if (revealRequestsAtGesture is null || revealRequestsAtGesture == _revealRequests)
-        {
-            _pendingSurfaceSelectPath = null;
-        }
-    }
+    /// <summary>A create's rename arm: an intent (Plan 47 CB-39) that drops a
+    /// waiting Reveal and a pending row (WB-6, Codex round 4: kept, the Reveal
+    /// would take the selection from the new row and open its own
+    /// note).</summary>
+    private void RequestInlineRenameAt(string vaultPath) =>
+        _ = InstallIntent(IntentKind.RenameArm, vaultPath, TakeIntent());
 
     /// <summary>Raised at tree publication after a mutation that asked
     /// for selection/focus reconciliation — the window restores
@@ -722,13 +705,20 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>Ask the NEXT publication to re-seat selection at
     /// <paramref name="vaultPath"/> (null = no selection — just the
     /// focus restore; deletes have no successor to name).</summary>
-    /// <param name="revealRequestsAtGesture">See
-    /// <see cref="DropWaitingReveal"/>.</param>
-    private void RequestSelectionAt(string? vaultPath, long? revealRequestsAtGesture = null)
+    /// <remarks>Plan 47 CB-39: an intent, a named row or (null) one that names
+    /// no row, which drops a waiting Reveal and an older pending row.</remarks>
+    /// <param name="intentAtGesture">For a mutation that awaited between its
+    /// gesture and its request (a trash, whose work runs on a worker behind its
+    /// progress bar): the number it took at its gesture. If a newer intent was
+    /// taken since (a Reveal asked during its work), it installs nothing. Null
+    /// for a mutation that requests in its gesture.</param>
+    private void RequestSelectionAt(string? vaultPath, long? intentAtGesture = null)
     {
-        _pendingSelectPath = vaultPath;
         _pendingTreeFocusRestore = true;
-        DropWaitingReveal(revealRequestsAtGesture);
+        _ = InstallIntent(
+            vaultPath is null ? IntentKind.NoRow : IntentKind.NamedRow,
+            vaultPath,
+            intentAtGesture ?? TakeIntent());
     }
 
     /// <summary>Publication half of <see cref="RequestSelectionAt"/>:
@@ -1001,7 +991,10 @@ internal sealed partial class FilesSidebarViewModel
     /// (<paramref name="Successor"/>) takes the keys wherever they are in the
     /// tree; any other landing only when they were on a row the publication
     /// removed.</summary>
-    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor, bool Successor = false);
+    /// <param name="Reveal">Plan 47 CB-39: a Reveal's row, landed before it is
+    /// selected; it takes the keys from wherever they are outside a modal
+    /// surface.</param>
+    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor, bool Successor = false, bool Reveal = false);
 
     private VanishedSelection? _vanishedSelection;
 
@@ -1090,8 +1083,18 @@ internal sealed partial class FilesSidebarViewModel
     /// — and on both halves.</summary>
     private void SelectOnBothHalves(FileTreeNodeViewModel node)
     {
-        SelectedNode = node;
-        node.IsSelected = true;
+        // Plan 47 CB-39: the sidebar's own seat, not the reader's selection.
+        bool outer = _seatingOwnSelection;
+        _seatingOwnSelection = true;
+        try
+        {
+            SelectedNode = node;
+            node.IsSelected = true;
+        }
+        finally
+        {
+            _seatingOwnSelection = outer;
+        }
     }
 
     // ---- The Move-To picker (F4) ---------------------------------
@@ -1392,6 +1395,12 @@ internal sealed partial class FilesSidebarViewModel
             if (caveat is null)
             {
                 RequestSelectionAt(created);
+            }
+            else
+            {
+                // Plan 47 CB-39: a duplicate that names no row is still a
+                // gesture, newer than a waiting Reveal.
+                _ = StateIntentNamingNoRow();
             }
 
             Refresh();

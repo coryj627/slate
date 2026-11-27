@@ -170,6 +170,8 @@ internal sealed class FileTreeNodeViewModel : BindableBase
             {
                 ResetChildLoadAfterCollapse();
                 _owner?.CancelChildExpansion(this);
+                // Plan 47 CB-39: a Reveal waiting through this folder ends.
+                _owner?.FolderCollapsed(this);
             }
         }
     }
@@ -810,6 +812,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // Plan 47 CB-39: the reader's own selection (an arrow, a click, a
+            // row taking the keys, a list's row) is the newest intent: a
+            // waiting Reveal and a mutation's pending row give way. The
+            // sidebar's own seats and a delete's letting go are not it.
+            if (value is not null && !_seatingOwnSelection)
+            {
+                _ = InstallIntent(IntentKind.NoRow, null, TakeIntent());
+            }
+
             // WB-6 (S1): a tree row taking the selection clears every other
             // selected tree node; a list's row (the filter results, the dual
             // pane) taking it leaves the tree's own row alone.
@@ -1283,6 +1294,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         if (index >= 1 && index <= Math.Min(9, Shortcuts.Count))
         {
+            // Plan 47 CB-39: an explicit open, a gesture that names no row.
+            _ = StateIntentNamingNoRow();
             RequestOpen(Shortcuts[index - 1].Path);
         }
     }
@@ -1911,6 +1924,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 RequestInlineRenameAt(created);
             }
+            else
+            {
+                // Plan 47 CB-39: a create that names no row is still a gesture,
+                // newer than a waiting Reveal.
+                _ = StateIntentNamingNoRow();
+            }
 
             Refresh();
             ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
@@ -1994,6 +2013,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // A create is a structural history barrier (mac's table) —
             // a stale inverse must never target this path.
             StructuralHistoryBarrier();
+            // Plan 47 CB-39: New Canvas names no row; a Reveal still waiting
+            // must not open its note over the new canvas.
+            _ = StateIntentNamingNoRow();
             Refresh();
             var sentence = new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasFileCreated(
@@ -2048,7 +2070,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
-        long revealRequests = _revealRequests;
+        // Plan 47 CB-39: the trash's intent is installed at its gesture, so a
+        // Reveal asked before it is dropped now, and one asked during its work
+        // is newer and stays.
+        long trashIntent = StateIntentNamingNoRow();
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2089,7 +2114,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             if (ReferenceEquals(SelectedNode, node))
             {
                 SelectedNode = null;
-                RequestSelectionAt(null, revealRequests);
+                RequestSelectionAt(null, trashIntent);
             }
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
@@ -2365,6 +2390,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return false;
         }
 
+        // Plan 47 CB-39: an explicit open is a gesture that names no row; a
+        // waiting Reveal must not open its note over this one.
+        _ = StateIntentNamingNoRow();
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
         return true;
     }
@@ -2459,7 +2487,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         StructuralBatchItem[] items = SelectedBatchItems();
         if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
-        long revealRequests = _revealRequests;
+        // Plan 47 CB-39: the trash's intent is installed at its gesture, so a
+        // Reveal asked before it is dropped now, and one asked during its work
+        // is newer and stays.
+        long trashIntent = StateIntentNamingNoRow();
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2504,7 +2535,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 selected.Path == item.Path || (item.IsDirectory &&
                     selected.Path.StartsWith(item.Path + "/", StringComparison.Ordinal))))
             {
-                RequestSelectionAt(null, revealRequests);
+                RequestSelectionAt(null, trashIntent);
             }
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));
@@ -2654,6 +2685,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         if (candidate >= 0 && candidate < _history.Count)
         {
             _historyIndex = candidate;
+            // Plan 47 CB-39: an explicit open, a gesture that names no row.
+            _ = StateIntentNamingNoRow();
             RequestOpen(_history[_historyIndex], WorkspaceOpenTarget.CurrentTab, trackHistory: false);
         }
     }

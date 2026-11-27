@@ -2333,9 +2333,9 @@ internal sealed partial class VaultLifecycleViewModel
         // W5-4 F10: the template create is a CREATE — a structural
         // history barrier exactly like newNote (mac's table; red team,
         // contracts 1) — a stale inverse must never replay against a
-        // name the template note now owns.
-        FileSidebar?.StructuralHistoryBarrier();
-        FileSidebar?.Refresh();
+        // name the template note now owns. Plan 47 CB-39: and a gesture that
+        // names no row, so a Reveal still waiting never opens over it.
+        FileSidebar?.TemplateNoteLanded(path);
     }
 
     private void Workspace_EditorTagActivated(object? sender, string tag) =>

@@ -262,7 +262,9 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelBulkExpansion();
-        CancelChildExpansions();
+        // Plan 47 CB-39: this refresh restores every open folder, so a Reveal
+        // waiting on a folder load it cancels keeps waiting for its publication.
+        CancelChildExpansions(listsTheFoldersItself: true);
         CancelTreeRefreshCore();
         if (RootNodes.Count > 0)
         {
@@ -656,6 +658,7 @@ internal sealed partial class FilesSidebarViewModel
         // (CommandKeysFirst). The hold ends on a throw too.
         using IDisposable held = Commands.CommandKeysFirst.Hold();
         _settledTreeGeneration = _treeGeneration;
+        _treePublishedOnce = true;
         // WB-6 (#1515): the selected row's place, read before anything moves
         // — the reconcile removes a row from its kept folder's or group's own
         // rows, so the old tree cannot be walked afterwards — and an earlier
@@ -681,8 +684,10 @@ internal sealed partial class FilesSidebarViewModel
         ConsumePendingRenameArm();
         ConsumePendingSelection();
         // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
-        // node the previous tree had not materialised.
-        ConsumePendingSurfaceSelection();
+        // node the previous tree had not materialised. Plan 47 CB-39: one more
+        // listing step for it, which seats it, opens the next folder on its
+        // path, or ends a wait for a row this publication shows is not there.
+        AdvanceWaitingReveal();
         ReconcileSelectionAfterPublication(place, treeRow);
 
         // Project the AUTHORITATIVE checked set onto the published
@@ -789,6 +794,13 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelTreeRefreshCore();
+        if (wasPending)
+        {
+            // Plan 47 CB-39: the refresh a Reveal may be waiting for will not
+            // publish (a close, a shutdown), so its wait ends.
+            EndWaitingReveal();
+        }
+
         SettleTreeRefreshWaiters(int.MaxValue, failure: null, cancelled: true);
         // Plan 47 CB-16 (#1791, P2e): the cancelled refresh has no successor
         // (the close's path, a shutdown), so its "Loading files…" ends here.
@@ -830,7 +842,9 @@ internal sealed partial class FilesSidebarViewModel
     private async Task ExpandLoadedAsync()
     {
         CancelBulkExpansion();
-        CancelChildExpansions();
+        // Plan 47 CB-39: this run lists the folders itself, so a waiting Reveal
+        // keeps waiting.
+        CancelChildExpansions(listsTheFoldersItself: true);
         var cancellation = new CancellationTokenSource();
         CancellationToken token = cancellation.Token;
         if (SessionShutdownStarted)
@@ -904,6 +918,10 @@ internal sealed partial class FilesSidebarViewModel
                     WriteTreeStatus(DirectoryOverflowStatus(node.Path));
                 }
 
+                // Plan 47 CB-39: a waiting Reveal seats when this run lists
+                // its row; it opens no folder here (the run opens them, and a
+                // load would cancel the run).
+                AdvanceWaitingReveal(mayExpand: false);
                 await Task.Yield();
             }
         }
@@ -917,6 +935,9 @@ internal sealed partial class FilesSidebarViewModel
         finally
         {
             IsExpandingLoaded = false;
+            // Plan 47 CB-39: the run is over; a Reveal still waiting takes its
+            // next step, which may open a folder the run listed but did not.
+            AdvanceWaitingReveal();
             bool ownsCancellation = false;
             lock (_bulkExpandCancellationGate)
             {

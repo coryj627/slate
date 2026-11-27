@@ -122,7 +122,17 @@ internal sealed partial class FilesSidebarViewModel
         return completion;
     }
 
-    internal void CancelChildExpansions()
+    /// <summary>Cancels every folder load. Plan 47 CB-39: a Reveal waiting on
+    /// one of them ends, since nothing lists the folder after this cancel (a
+    /// refused close, a close's cancelled refresh, the shutdown, Collapse
+    /// all).</summary>
+    internal void CancelChildExpansions() => CancelChildExpansions(listsTheFoldersItself: false);
+
+    /// <param name="listsTheFoldersItself">Plan 47 CB-39: true for a canceller
+    /// that lists the folders itself (a whole-tree refresh restores every open
+    /// folder; Expand loaded folders lists them), which keeps a waiting
+    /// Reveal.</param>
+    private void CancelChildExpansions(bool listsTheFoldersItself)
     {
         KeyValuePair<FileTreeNodeViewModel, ChildExpansionOperation>[] operations;
         lock (_childExpansionGate)
@@ -137,6 +147,10 @@ internal sealed partial class FilesSidebarViewModel
                 operation.Cancellation,
                 HostDiagnosticEvent.SidebarChildExpansionShutdownFailed);
             MarkChildExpansionCanceled(node, operation.Cancellation);
+            if (!listsTheFoldersItself)
+            {
+                EndWaitingRevealThrough(node);
+            }
         }
     }
 
@@ -223,6 +237,10 @@ internal sealed partial class FilesSidebarViewModel
                 // shrinks, so no refresh puts it back.
                 WriteTreeStatus(DirectoryOverflowStatus(node.Path));
             }
+
+            // Plan 47 CB-39 (#1670): the folder's own load seats a waiting
+            // Reveal, or opens the next folder on its path.
+            AdvanceWaitingReveal();
         }
         catch (Exception exception)
         {
@@ -321,6 +339,11 @@ internal sealed partial class FilesSidebarViewModel
                             {
                                 WriteTreeStatus(DirectoryOverflowStatus(overflowPath));
                             }
+
+                            // Plan 47 CB-39 (#1670): the folder's own load
+                            // seats a waiting Reveal, or opens the next folder
+                            // on its path.
+                            AdvanceWaitingReveal();
                         }
 
                         applied.TrySetResult();
@@ -408,6 +431,8 @@ internal sealed partial class FilesSidebarViewModel
                             token))
                         {
                             node.FailChildLoad(ChildExpansionFailure);
+                            // Plan 47 CB-39: a Reveal waiting through the folder ends.
+                            EndWaitingRevealThrough(node);
                             ReportTreeReadFailure(ChildExpansionFailure);
                         }
 
@@ -436,6 +461,8 @@ internal sealed partial class FilesSidebarViewModel
     {
         HostLog.Write(HostDiagnosticEvent.SidebarChildExpansionFailed, exception);
         node.FailChildLoad(ChildExpansionFailure);
+        // Plan 47 CB-39: a Reveal waiting through the folder ends.
+        EndWaitingRevealThrough(node);
         try
         {
             ReportTreeReadFailure(ChildExpansionFailure);
