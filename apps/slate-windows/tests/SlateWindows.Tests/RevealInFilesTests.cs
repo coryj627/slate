@@ -179,10 +179,11 @@ public sealed class RevealInFilesTests
         Assert.False(shell.Sidebar.IsFilterActive, "the filter is still active");
         Assert.Equal(string.Empty, shell.Sidebar.FilterText);
         Assert.Null(shell.Sidebar.ScopeTag);
+        // Every line the sidebar said, exactly: the clear's own, then the
+        // selection's. An extra line fails this.
         Assert.Equal(
-            ["SidebarFilterCleared", "RowSelected: Selected: b.md"],
-            shell.SaidSinceMark.Where(said => said is A11yEvent.SidebarFilterCleared or A11yEvent.RowSelected or A11yEvent.TreeFolderSelected)
-                .Select(said => said is A11yEvent.SidebarFilterCleared ? "SidebarFilterCleared" : $"{said.GetType().Name}: {SlateUniffiMethods.A11yRender(said).Text}"));
+            ["SidebarFilterCleared: Filter cleared.", "RowSelected: Selected: b.md"],
+            shell.SaidSinceMark.Select(said => $"{said.GetType().Name}: {SlateUniffiMethods.A11yRender(said).Text}"));
         shell.AssertLandedOnceOn("b.md", opens: "b.md", said: "Selected: b.md");
     });
 

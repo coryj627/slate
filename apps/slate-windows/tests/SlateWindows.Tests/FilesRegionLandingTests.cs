@@ -922,11 +922,17 @@ public sealed partial class FilesRegionLandingTests
         /// folder that cannot be listed does (W1ChildExpansionTests' seam).</summary>
         public void FailNextTreeWork() => Volatile.Write(ref _failNextTreeWork, 1);
 
+        /// <summary>Plan 47 CB-39: how many pieces of tree work have reached the
+        /// worker.</summary>
+        public int TreeWorkStarted => Volatile.Read(ref _treeWorkStarted);
+
         private TaskCompletionSource? _treeGate;
         private int _failNextTreeWork;
+        private int _treeWorkStarted;
 
         private Task RunTreeWork(Action work, CancellationToken token)
         {
+            _ = Interlocked.Increment(ref _treeWorkStarted);
             if (Interlocked.Exchange(ref _failNextTreeWork, 0) == 1)
             {
                 return Task.FromException(new ApplicationException("CB-39: a folder that cannot be listed"));

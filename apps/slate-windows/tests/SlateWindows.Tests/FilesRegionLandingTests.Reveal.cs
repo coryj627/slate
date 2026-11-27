@@ -184,12 +184,26 @@ public sealed partial class FilesRegionLandingTests
     [InlineData("GraphNoteLanded")]
     [InlineData("CanvasNoteLanded")]
     [InlineData("EnterOnARow")]
+    [InlineData("ShortcutOpen")]
+    [InlineData("HistoryBack")]
     public void ARowlessGestureDropsAnOlderWaitingReveal(string gesture) => RunSta(() =>
     {
         using var host = new Host();
         SeedRevealVault(host);
         host.Initialize();
+        if (gesture == "HistoryBack")
+        {
+            // Two notes in the sidebar's history, so Back has one to open.
+            _ = LandOnSelected(host, "b.md", []);
+        }
+
         _ = LandOnSelected(host, "a.md", []);
+        if (gesture == "ShortcutOpen")
+        {
+            host.Sidebar.AddShortcutCommand.Execute(null);
+            Assert.Contains(host.Sidebar.Shortcuts, shortcut => shortcut.Path == "a.md");
+        }
+
         var log = new RevealLog();
         host.Sidebar.OpenTargetRequested += (_, request) => log.Opened.Add((request.Path, request.FocusEditor));
         host.HoldTreeWork();
@@ -213,6 +227,13 @@ public sealed partial class FilesRegionLandingTests
             case "CanvasNoteLanded":
                 _ = host.Sidebar.TryCreateNote("c.md", "# C\n");
                 host.Sidebar.NoteLanded("c.md", null);
+                break;
+            case "ShortcutOpen":
+                host.Sidebar.OpenShortcut(1);
+                break;
+            case "HistoryBack":
+                Assert.True(host.Sidebar.HistoryBackCommand.CanExecute(null), "premise: the history has nothing to go back to");
+                host.Sidebar.HistoryBackCommand.Execute(null);
                 break;
             default:
                 host.Press(Key.Enter);
@@ -251,6 +272,42 @@ public sealed partial class FilesRegionLandingTests
 
         AssertSeatedOnce(host, target, log);
         Assert.False(Row(host, mutated).IsSelected, $"{mutated} took the selection back");
+    });
+
+    /// <summary>The same with the keys still on the mutated row, in the tree: a
+    /// mutation's row that seated after the newer Reveal would take the keys on
+    /// its way, so the keys never reach it, and the Reveal's row ends holding
+    /// them on both halves. The rename's row leaves the tree under the keys,
+    /// which land on its neighbour first; the duplicate's original stays, so
+    /// its keys move once.</summary>
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("rename")]
+    public void ARevealAskedWhileAMutationPublishesWinsWithTheKeysOnTheMutatedRow(string mutation) => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        _ = LandOnSelected(host, "a.md", []);
+        var log = new RevealLog();
+        host.Sidebar.OpenTargetRequested += (_, request) => log.Opened.Add((request.Path, request.FocusEditor));
+
+        string mutated = Mutate(host, mutation);
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        SettleLoads(host);
+
+        FileTreeNodeViewModel row = Row(host, "docs/n.md");
+        Assert.Same(row, host.Sidebar.SelectedNode);
+        Assert.True(row.IsSelected, "docs/n.md's node does not hold the selection");
+        Assert.Same(row, host.Tree.SelectedItem);
+        TreeViewItem container = ContainerOf(host, row);
+        Assert.True(container.IsKeyboardFocused, $"the keys are on {Keyboard.FocusedElement}, not on docs/n.md's row");
+        Assert.DoesNotContain(host.FocusChanges, focus => focus is TreeViewItem { DataContext: FileTreeNodeViewModel node } && node.Path == mutated);
+        Assert.Same(container, host.FocusChanges[^1]);
+        Assert.True(host.FocusChanges.Count <= (mutation == "rename" ? 2 : 1), $"the keys moved {host.FocusChanges.Count} times");
+        Assert.False(Row(host, mutated).IsSelected, $"{mutated} took the selection back");
+        Assert.Equal([("docs/n.md", false)], log.Opened);
+        Assert.Equal(["Selected: n.md"], SelectionLines(host));
     });
 
     /// <summary>The reader selects another row in a mutation's own turn: the
@@ -515,6 +572,247 @@ public sealed partial class FilesRegionLandingTests
         AssertNeverSeated(host, "docs/n.md", log);
     });
 
+    /// <summary>A filter typed, or a tag applied, while the Reveal waits is the
+    /// reader's newer gesture: the wait ends, so the folder's load neither
+    /// clears that filter nor takes the keys out of it.</summary>
+    [Theory]
+    [InlineData("text")]
+    [InlineData("tag")]
+    public void AFilterTypedWhileARevealWaitsEndsIt(string filter) => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        File.WriteAllText(Path.Combine(host.Root, "tagged.md"), "# Tagged\n\n#alpha\n");
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+
+        if (filter == "text")
+        {
+            host.Sidebar.FilterText = "b";
+        }
+        else
+        {
+            host.Sidebar.ActivateTag("alpha");
+        }
+
+        string filterText = host.Sidebar.FilterText;
+        string? scopeTag = host.Sidebar.ScopeTag;
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+        Settle(host);
+
+        Assert.True(host.Sidebar.IsFilterActive, "the filter was cleared");
+        Assert.Equal(filterText, host.Sidebar.FilterText);
+        Assert.Equal(scopeTag, host.Sidebar.ScopeTag);
+        Assert.DoesNotContain(host.Announced, said => said is A11yEvent.SidebarFilterCleared);
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>Expand loaded folders cancels the Reveal's own folder load and
+    /// lists the folder itself: the wait goes on, and the Reveal seats when the
+    /// run lists its row, while the run is still going, the keys on the row
+    /// once.</summary>
+    [Fact]
+    public void ExpandLoadedFoldersKeepsAndSeatsAWaitingReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        bool? expandingAtSeat = null;
+        host.Sidebar.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(FilesSidebarViewModel.SelectedNode) && host.Sidebar.SelectedNode?.Path == "docs/n.md")
+            {
+                expandingAtSeat = host.Sidebar.IsExpandingLoaded;
+            }
+        };
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(host.Sidebar.IsExpandingLoaded, "premise: Expand loaded folders is not running");
+        host.ReleaseTreeWork();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        SettleLoads(host);
+
+        Assert.True(expandingAtSeat == true, $"the Reveal seated {(expandingAtSeat is null ? "never" : "after the run ended")}");
+        AssertSeatedOnce(host, "docs/n.md", log);
+    });
+
+    /// <summary>The Reveal's first folder is listed by Expand loaded folders,
+    /// which opens no folder it did not snapshot: when the run ends, the
+    /// Reveal's step opens the next folder, and it seats when that lists.</summary>
+    [Fact]
+    public void ARevealUnderAFolderExpandLoadedListsExpandsTheNextOne() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("deep/mid/n2.md");
+
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        host.ReleaseTreeWork();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        SettleLoads(host);
+
+        Assert.True(Row(host, "deep/mid").IsExpanded, "deep/mid is not expanded");
+        AssertSeatedOnce(host, "deep/mid/n2.md", log);
+    });
+
+    /// <summary>An Expand loaded folders run cancelled after it opened a folder
+    /// and before it listed it leaves the folder open and unlisted. A Reveal
+    /// through that folder loads it, and seats when it lists.</summary>
+    [Fact]
+    public void ARevealIntoAFolderACancelledExpandLoadedLeftOpenLoadsIt() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        ExpandAndList(host, Row(host, "deep"));
+        FileTreeNodeViewModel mid = Row(host, "deep/mid");
+        host.HoldTreeWork();
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => mid.IsExpanded), "premise: the run never opened deep/mid");
+
+        // The reader opens another folder by hand, which cancels the run.
+        Row(host, "docs").IsExpanded = true;
+        Assert.True(PumpedDispatcher.PumpUntil(() => !host.Sidebar.IsExpandingLoaded), "premise: the run was not cancelled");
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        Assert.True(mid.IsExpanded && mid.ChildLoadState == FileTreeChildLoadState.Unloaded, $"premise: deep/mid is expanded={mid.IsExpanded}, {mid.ChildLoadState}");
+        RevealLog log = KeysOutsideFiles(host);
+
+        host.Sidebar.SelectPathFromSurface("deep/mid/n2.md");
+        SettleLoads(host);
+
+        AssertSeatedOnce(host, "deep/mid/n2.md", log);
+    });
+
+    /// <summary>A folder whose load failed before the Reveal is asked is loaded
+    /// once more by the Reveal: it seats when the folder lists, or, failing
+    /// again, the wait ends with one failure line.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARevealIntoAFailedFolderRetriesItOnce(bool failsAgain) => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        host.FailNextTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        FileTreeNodeViewModel docs = Row(host, "docs");
+        Assert.True(PumpedDispatcher.PumpUntil(() => docs.ChildLoadFailed), "premise: docs's load did not fail");
+        SettleLoads(host);
+        RevealLog log = KeysOutsideFiles(host);
+        if (failsAgain)
+        {
+            host.FailNextTreeWork();
+        }
+
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        SettleLoads(host);
+
+        if (!failsAgain)
+        {
+            AssertSeatedOnce(host, "docs/n.md", log);
+            return;
+        }
+
+        Assert.True(docs.ChildLoadFailed, "the retry did not fail");
+        Assert.Single(host.Announced, said => SlateUniffiMethods.A11yRender(said).Text == "Could not load folder. Collapse and expand to retry.");
+        host.Sidebar.Refresh();
+        Settle(host);
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>A close cancels the refresh a Reveal waits for, and that
+    /// refresh never publishes: the wait ends (Call 15), so a later refresh
+    /// seats nothing.</summary>
+    [Fact]
+    public void AClosesCancelledRefreshEndsAWaitingReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+
+        host.Sidebar.Refresh();
+        Assert.True(host.Sidebar.CancelTreeRefresh(), "premise: no refresh was pending");
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        host.Sidebar.Refresh();
+        Settle(host);
+
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>A close refused while Expand loaded folders runs cancels the
+    /// run and every folder load (the lifecycle's order); nothing lists the
+    /// folder for the Reveal after it, so the wait ends (Call 15), and a later
+    /// refresh seats nothing.</summary>
+    [Fact]
+    public void ARefusedCloseDuringExpandLoadedEndsAWaitingReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(host.Sidebar.IsExpandingLoaded, "premise: Expand loaded folders is not running");
+
+        host.Sidebar.CancelExpandLoaded();
+        host.Sidebar.CancelChildExpansions();
+        host.ReleaseTreeWork();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        SettleLoads(host);
+        host.Sidebar.Refresh();
+        Settle(host);
+
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(log.Opened);
+        Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>A whole-tree refresh cancels the Reveal's folder load to list
+    /// the folder itself, then fails: nothing will list it, so the wait ends,
+    /// and the next good refresh seats nothing.</summary>
+    [Fact]
+    public void ARefreshThatFailsEndsAWaitingReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        int started = host.TreeWorkStarted;
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.TreeWorkStarted > started), "premise: docs's load never reached the tree worker");
+
+        host.FailNextTreeWork();
+        host.Sidebar.Refresh();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        host.Sidebar.Refresh();
+        Settle(host);
+
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(host.FocusChanges);
+    });
     // ---- helpers --------------------------------------------------------
 
     /// <summary>What a Reveal opened, with whether the editor took the
