@@ -412,15 +412,19 @@ public sealed partial class CommandPaletteTests
     /// modifier reads as held, and the cursor is back where it started, a
     /// place away from where the desk pressed. The fact then lets go of
     /// anything left down and puts the cursor back itself, so a broken
-    /// disposal fails it without leaving this desktop's input stuck. It
-    /// skips where the desktop refuses touch injection (#1680).
+    /// disposal fails it without leaving this desktop's input stuck. The
+    /// touch row skips where the desktop refuses touch injection, and the
+    /// left button's row where it refuses injected mouse input (#1680);
+    /// neither row depends on the other's input (the merge judge's n2 on
+    /// CB-38).
     /// </summary>
     [Theory]
     [InlineData("a touch contact")]
     [InlineData("the left button and Shift")]
     public void TheRealInputDeskLeavesNoInputDownWhenAFactThrows(string input) => RunSta(() =>
     {
-        if (!TouchAndDropNative.InitializeTouchInjection(1, TouchAndDropNative.TouchFeedbackNone))
+        bool touches = input == "a touch contact";
+        if (touches && !TouchAndDropNative.InitializeTouchInjection(1, TouchAndDropNative.TouchFeedbackNone))
         {
             RealInputDesk.SkipWhereThisDesktopRefusesRealInput(
                 $"touch injection (InitializeTouchInjection, error {Marshal.GetLastWin32Error()})", "the desk's clean-up");
@@ -449,7 +453,7 @@ public sealed partial class CommandPaletteTests
             {
                 using var desk = new RealInputDesk(window);
                 inside = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
-                if (input == "a touch contact")
+                if (touches)
                 {
                     if (desk.RealTouch([(inside, TouchAndDropNative.Down)]) is { } refused)
                     {
@@ -489,13 +493,19 @@ public sealed partial class CommandPaletteTests
             PumpedDispatcher.Drain();
             string held = TouchAndDropNative.HeldButtonsAndModifiers();
             (int X, int Y)? cursorAfter = TouchAndDropNative.CursorPosition();
-            bool lifted = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Down);
-            if (TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up))
+            if (touches)
             {
-                liftedHere = inside;
+                // Only the touch row has touch injection: a new contact goes
+                // down only where the desk lifted the old one.
+                bool lifted = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Down);
+                if (TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up))
+                {
+                    liftedHere = inside;
+                }
+
+                Assert.True(lifted, $"after {input}, a touch contact was still down once the desk was disposed (a new contact could not go down)");
             }
 
-            Assert.True(lifted, $"after {input}, a touch contact was still down once the desk was disposed (a new contact could not go down)");
             Assert.True(held.Length == 0, $"after {input}, the desktop still read {held} as held once the desk was disposed");
             Assert.True(cursorAfter == cursorBefore, $"after {input}, the cursor was at {cursorAfter} once the desk was disposed, not back at {cursorBefore}");
         }
@@ -503,7 +513,7 @@ public sealed partial class CommandPaletteTests
         {
             // What a broken disposal or a failed precondition left down goes
             // up here, whatever ended the fact.
-            if (inside != default && TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up))
+            if (touches && inside != default && TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up))
             {
                 liftedHere = inside;
             }
