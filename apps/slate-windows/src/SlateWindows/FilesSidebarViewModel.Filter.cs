@@ -38,6 +38,16 @@ internal sealed partial class FilesSidebarViewModel
     private (string Query, string? ScopeTag, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
+
+    /// <summary>Plan 47 CB-35 (#1837): the filter's list was published, raised as the last
+    /// thing the publication does: a keystroke's swap or clear at the true end of
+    /// <see cref="FilterText"/>'s setter, after its status writes; the field's clear at the end
+    /// of <see cref="ClearFilter"/>; a filter run, or its failure's report, at the end of the
+    /// operation it posts. Never
+    /// from <see cref="ScheduleFilter"/>: a tree publication calls it in the middle of its own
+    /// operation. The view lays the list out there, before TSF can be granted its lock
+    /// (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? FilterRowsPublished;
     internal Task FilterCompletion
     {
         get
@@ -83,6 +93,9 @@ internal sealed partial class FilesSidebarViewModel
                     // command: seen and heard once (codex PR 2 round 2).
                     ShowAndSpeakFilterCleared();
                 }
+
+                // CB-35: the swap, the clear and the status line, at the true end of the setter.
+                FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
             }
         }
     }
@@ -98,15 +111,30 @@ internal sealed partial class FilesSidebarViewModel
 
     public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText) || _scopeTag is not null;
 
-    /// <summary>One filter change for a tag activation (core's answer) or
-    /// a clear: the field's text and the scope together, one run.</summary>
+    /// <summary>A tag activation (core's answer), from the Tags tree's selection or the
+    /// editor's tag: the field's text and the scope together, one run. Plan 47 CB-35 (#1837):
+    /// an activation that changed the filter raises <see cref="FilterRowsPublished"/> as its
+    /// last step, after the swap, the run's start and the command states. One that changes
+    /// nothing raises nothing: the Tags tree's re-selection of the applied tag inside its own
+    /// publication (<c>ApplyTags</c>) is such an activation, so no tree publication lays out
+    /// in its middle.</summary>
     private void ApplyTagActivation(string filterText, string? scopeTag)
+    {
+        if (WriteTagFilter(filterText, scopeTag))
+        {
+            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
+        }
+    }
+
+    /// <summary>One filter change for a tag activation or a clear: the field's text and the
+    /// scope together, one run. Answers whether anything changed.</summary>
+    private bool WriteTagFilter(string filterText, string? scopeTag)
     {
         bool textChanged = !string.Equals(_filterText, filterText, StringComparison.Ordinal);
         bool scopeChanged = !string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal);
         if (!textChanged && !scopeChanged)
         {
-            return;
+            return false;
         }
 
         // Written past the FilterText setter, whose emptied-field rule
@@ -126,6 +154,7 @@ internal sealed partial class FilesSidebarViewModel
         OnPropertyChanged(nameof(IsFilterActive));
         ScheduleFilter();
         RaiseCommandStates();
+        return true;
     }
 
     /// <summary>Clear Sidebar Filter: the text and the scope in one change,
@@ -137,9 +166,11 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        ApplyTagActivation(string.Empty, scopeTag: null);
+        _ = WriteTagFilter(string.Empty, scopeTag: null);
         ReleaseTagSelection();
         ShowAndSpeakFilterCleared();
+        // CB-35: the field's Escape and Clear swap back to the tree as typing does.
+        FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     /// <summary>A filter clear — Clear Sidebar Filter, or the field emptied
@@ -395,6 +426,8 @@ internal sealed partial class FilesSidebarViewModel
                             && string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal))
                         {
                             ApplyFilterOutcome(query, scopeTag, outcome, automatic);
+                            // CB-35: last, after the outcome's rows and its status writes.
+                            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                         }
 
                         applied.TrySetResult();
@@ -456,6 +489,8 @@ internal sealed partial class FilesSidebarViewModel
                         if (!cancellationToken.IsCancellationRequested)
                         {
                             ReportFailure("Could not filter files.");
+                            // CB-35: the failure's status line, laid out last, as a run's is.
+                            FilterRowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                         }
 
                         applied.TrySetResult();

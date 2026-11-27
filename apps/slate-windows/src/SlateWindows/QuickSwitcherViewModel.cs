@@ -77,7 +77,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         // Plan 47 CB-17b (#1866, CD11): always on. Only Close reads it, Close shows only while
         // Quick Open does, and Dismiss guards itself; on only while open, Close went off in its
         // own press with the keys on it.
-        DismissCommand = new RelayCommand(_ => Dismiss(), _ => true);
+        DismissCommand = new RelayCommand(_ => DismissByTheReader(), _ => true);
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => SelectedRow is not null);
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => SelectedRow is not null);
         OpenSplitRightCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => SelectedRow is not null);
@@ -88,6 +88,15 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenRequested;
     public event EventHandler? Dismissed;
+
+    /// <summary>Plan 47 CB-35 (#1837): the results were published, raised as the last thing
+    /// the publication does: the open's first clear at the end of <see cref="Open"/>, a
+    /// keystroke's clear at the end of <see cref="Query"/>'s setter, a refresh's start at the
+    /// end of <see cref="ApplyFileChanges"/> and of <see cref="RepublishSilentlyAsync"/>, a
+    /// rank or its failure at the end of the operation it posts, and the reader's own
+    /// dismissal at the end of <see cref="DismissByTheReader"/>. The view lays the list out
+    /// there, before TSF can be granted its lock (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
 
     internal Task RankCompletion { get; private set; } = Task.CompletedTask;
 
@@ -106,6 +115,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             if (SetField(ref _query, value))
             {
                 ScheduleRefresh();
+                // CB-35: the keystroke's clear (and an inline rank) at the true end of the setter.
+                RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(SelectedRow is not null));
             }
         }
     }
@@ -183,6 +194,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         IsOpen = true;
         ScheduleRefresh();
         RaiseCommandStates();
+        // CB-35: the open lands the field, then clears the results and shows "Searching
+        // files…"; laid out last, after the command states.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     public void Dismiss()
@@ -195,6 +209,22 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         CloseSwitcher();
         Dismissed?.Invoke(this, EventArgs.Empty);
         RaiseCommandStates();
+    }
+
+    /// <summary>CB-35: the reader's own dismissal (Escape on the window's key route, the Close
+    /// button), laid out at its end as the palette's Dismiss lays out its collapse. The other
+    /// surfaces' openings call <see cref="Dismiss"/> to clear the way, inside their own
+    /// operation and ahead of their own landing, so it settles nothing there. The focus restore
+    /// the dismissal queues runs later, at Input.</summary>
+    internal void DismissByTheReader()
+    {
+        if (!IsOpen)
+        {
+            return;
+        }
+
+        Dismiss();
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     public void MoveSelection(int delta)
@@ -266,6 +296,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         if (IsOpen)
         {
             ScheduleRefresh();
+            // CB-35: last. The refresh's start cleared the rows and the selection and put
+            // the summary on ranking; laid out here, in the funnel's operation. What the
+            // funnel's later dependents change in that operation is the residual (#1955).
+            RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
         }
     }
 
@@ -343,6 +377,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         ScheduleRefresh(silent: true);
+        // CB-35: the start's summary line, laid out as the last thing Quick Open does in the
+        // operation that starts it. A change-feed page's operation ends at its caller's await;
+        // a rescan's goes on to start the workspace's re-sync, which is the residual (#1955).
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
         return published.Task;
     }
 
@@ -425,7 +463,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         {
             int inline = ++_rankGeneration;
             using var inlineCancel = new CancelToken();
-            ApplyRanked(
+            _ = ApplyRanked(
                 _rankTop(Query, [.. _recents], inlineCancel),
                 Query,
                 inline,
@@ -486,7 +524,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         && IsOpen
                         && string.Equals(Query, query, StringComparison.Ordinal))
                     {
-                        ApplyRanked(ranked, query, generation, silent);
+                        RowsPublishedEventArgs published = ApplyRanked(ranked, query, generation, silent);
+                        // CB-35: last in the posted operation, after ApplyRanked's selection,
+                        // count and waiters.
+                        RowsPublished?.Invoke(this, published);
                     }
                 },
                 null);
@@ -517,17 +558,25 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                         RaiseCommandStates();
                         HostLog.Write(HostDiagnosticEvent.QuickOpenRankingFailed, exception);
                         SettleRescanRankWaiters(generation, exception);
+                        // CB-35: the failure changed the summary line; last, as a rank's is.
+                        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
                     }
                 },
                 null);
         }
     }
 
-    private void ApplyRanked(SwitcherRankPage ranked, string query, int generation, bool silent)
+    /// <summary>Publishes a rank, and answers whether it chose the selection (CB-35). A rank
+    /// a keystroke started chooses it. A silent re-rank chooses it only when the reader's row
+    /// does not stay where it was: nothing was selected, the selected path is gone, or it now
+    /// sits at another row. One that keeps the row in its place keeps the reader's view, so a
+    /// reader who scrolled away from it is not pulled back (spec Design 2, M-I).</summary>
+    private RowsPublishedEventArgs ApplyRanked(SwitcherRankPage ranked, string query, int generation, bool silent)
     {
         IsRanking = false;
         _rankingError = null;
         string? keptPath = silent ? _selectedRow?.Path : null;
+        int keptIndex = keptPath is null ? -1 : Results.IndexOf(_selectedRow!);
 
         TotalResults = ClampTotal(ranked.Total);
         Results.Clear();
@@ -555,6 +604,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
         RaiseCommandStates();
         SettleRescanRankWaiters(generation, failure: null);
+        bool keptInPlace = keptPath is not null
+            && _selectedRow is { } kept
+            && string.Equals(kept.Path, keptPath, StringComparison.Ordinal)
+            && Results.IndexOf(kept) == keptIndex;
+        return RowsPublishedEventArgs.Of(_selectedRow is not null && !keptInPlace);
     }
 
     internal static int ClampTotal(ulong total) =>

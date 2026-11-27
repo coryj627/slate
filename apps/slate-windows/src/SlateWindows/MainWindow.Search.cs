@@ -33,6 +33,7 @@ public partial class MainWindow
         search.PropertyChanged += Search_PropertyChanged;
         search.PropertyChanged += ModalSource_PropertyChanged;
         search.Dismissed += Search_Dismissed;
+        search.RowsPublished += Search_RowsPublished;
         // W5-2 SD-4: reading-view tag activation opens the overlay from
         // the view-model side, and must respect the same modal decision
         // the Ctrl+Shift+F chord does — never open beneath a sheet.
@@ -60,6 +61,13 @@ public partial class MainWindow
     }
 
     private void Search_Dismissed(object? sender, EventArgs e) => RestoreFocusAfterSearch();
+
+    /// <summary>Plan 47 CB-35 (#1837): the results panel laid out in the operation that
+    /// published it, and the selection the results chose shown in that same operation, once
+    /// the list shows: a list that has never generated a row defers a scroll asked of it
+    /// while it is collapsed to its Loaded pass (<see cref="PublishedList"/>).</summary>
+    private void Search_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(SearchOverlayResults, e, SelectedResult(_viewModel.Search));
 
     /// <summary>
     /// Hands the search overlay's captured pre-open focus to a caller
@@ -195,15 +203,26 @@ public partial class MainWindow
                     return;
                 case Key.Down:
                     search.MoveSelection(1);
+                    // CB-35: the row the arrow selected, shown and laid out as the key ends.
+                    PublishedList.Show(SearchOverlayResults, SelectedResult(search));
                     e.Handled = true;
                     return;
                 case Key.Up:
                     search.MoveSelection(-1);
+                    PublishedList.Show(SearchOverlayResults, SelectedResult(search));
                     e.Handled = true;
                     return;
             }
         }
     }
+
+    /// <summary>CB-35: the result the view model selects, the row the arrows moved to. The keys
+    /// stay in the field, so it is the selection that is shown, read from the view model as
+    /// Quick Open's and Move To's arrows read theirs.</summary>
+    private static SearchResultRowViewModel? SelectedResult(SearchOverlayViewModel search) =>
+        search.SelectedIndex >= 0 && search.SelectedIndex < search.Rows.Count
+            ? search.Rows[search.SelectedIndex]
+            : null;
 
     private void RestoreFocusAfterSearch()
     {
@@ -284,16 +303,6 @@ public partial class MainWindow
         return false;
     }
 
-    private void SearchOverlayResults_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        // Selection lives on the view model (a two-way SelectedIndex
-        // binding); the view only keeps the selected row visible.
-        if (SearchOverlayResults.SelectedItem is object selected)
-        {
-            SearchOverlayResults.ScrollIntoView(selected);
-        }
-    }
-
     private void SearchOverlayResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // Only a double-click on an actual ROW activates — a double-click
@@ -331,17 +340,20 @@ public partial class MainWindow
 
     private void SearchOverlayClearRecents_Click(object sender, RoutedEventArgs e)
     {
-        _viewModel.Search.ClearRecents();
         // The recents section may collapse under the focused button;
         // the field is the surviving focus target (mac's clear button
-        // sets focus = .field for the same reason).
+        // sets focus = .field for the same reason). CB-35: the field
+        // takes the keys first, as SidebarFilterClear_Click gives them,
+        // so the clear's own publication is the last thing laid out.
         SearchOverlaySearchTextBox.Focus();
+        _viewModel.Search.ClearRecents();
     }
 
     private void SearchOverlayClearTagScope_Click(object sender, RoutedEventArgs e)
     {
-        _viewModel.Search.ClearScope();
+        // CB-35: the keys first, then the scope change, which lays out last.
         SearchOverlaySearchTextBox.Focus();
+        _viewModel.Search.ClearScope();
     }
 
     /// <summary>

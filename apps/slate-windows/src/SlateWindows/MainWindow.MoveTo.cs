@@ -21,6 +21,7 @@ namespace SlateWindows;
 public partial class MainWindow
 {
     private IInputElement? _focusBeforeMoveTo;
+    private MoveToPickerViewModel? _observedMoveToPicker;
 
     /// <summary>Spoken when the verb asks for the picker beneath an
     /// unrelated sheet — the template dialog-busy copy's shape.</summary>
@@ -70,6 +71,7 @@ public partial class MainWindow
             return;
         }
 
+        ObserveMoveToPicker(sidebar.MoveToSheet);
         if (sidebar.MoveToSheet is { } picker)
         {
             _focusBeforeMoveTo ??= CapturePreSheetFocus();
@@ -83,6 +85,60 @@ public partial class MainWindow
         else
         {
             RestoreFocusAfterMoveTo();
+        }
+    }
+
+    /// <summary>Plan 47 CB-35 (#1837): the sheet's rows are laid out in the operation that
+    /// publishes them (<see cref="PublishedList"/>), from the sheet that shows; one that goes
+    /// is let go.</summary>
+    private void ObserveMoveToPicker(MoveToPickerViewModel? picker)
+    {
+        if (ReferenceEquals(_observedMoveToPicker, picker))
+        {
+            return;
+        }
+
+        if (_observedMoveToPicker is not null)
+        {
+            _observedMoveToPicker.RowsPublished -= MoveToPicker_RowsPublished;
+        }
+
+        _observedMoveToPicker = picker;
+        if (picker is not null)
+        {
+            picker.RowsPublished += MoveToPicker_RowsPublished;
+            // Kept past the close, which lets the picker go before its cancel ends; the
+            // handler lets it go itself.
+            picker.CancelEnded -= MoveToPicker_CancelEnded;
+            picker.CancelEnded += MoveToPicker_CancelEnded;
+        }
+    }
+
+    private void MoveToPicker_RowsPublished(object? sender, RowsPublishedEventArgs e) =>
+        PublishedList.Published(MoveToList, e, (sender as MoveToPickerViewModel)?.SelectedRow);
+
+    /// <summary>Plan 47 CB-35 (#1837): the reader's cancel of Move To, Escape or Cancel, laid
+    /// out at its end: the sheet's collapse, the scrims and the retired picker.</summary>
+    private void MoveToPicker_CancelEnded(object? sender, EventArgs e)
+    {
+        if (sender is MoveToPickerViewModel picker)
+        {
+            picker.CancelEnded -= MoveToPicker_CancelEnded;
+        }
+
+        SettleAReadersCancel(MoveToList);
+    }
+
+    /// <summary>Plan 47 CB-35 (#1837): a reader's cancel of a sheet laid out as its last step.
+    /// Not while a surface is still open: the close can land that surface in its own
+    /// notification (<see cref="LandAnOpeningThatWaited"/>), and nothing settles after a
+    /// landing. The focus restore that follows a cancel is queued for a later
+    /// operation.</summary>
+    private void SettleAReadersCancel(FrameworkElement anchor)
+    {
+        if (OpenModalSurface is null)
+        {
+            PublishedList.Settle(anchor);
         }
     }
 
@@ -152,7 +208,8 @@ public partial class MainWindow
                 ? System.Math.Min(index + 1, picker.Rows.Count - 1)
                 : System.Math.Max(index - 1, 0);
             picker.SelectedRow = picker.Rows[next];
-            MoveToList.ScrollIntoView(picker.SelectedRow);
+            // CB-35: the row the arrow selected, shown and laid out as the key ends.
+            PublishedList.Show(MoveToList, picker.SelectedRow);
             e.Handled = true;
             return;
         }

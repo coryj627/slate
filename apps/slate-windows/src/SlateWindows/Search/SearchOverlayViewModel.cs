@@ -116,6 +116,17 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// (divergence SD-2, wired in phase 2).</summary>
     public event EventHandler? Dismissed;
 
+    /// <summary>Plan 47 CB-35 (#1837): the results panel was published, raised as the last
+    /// thing each operation the pipeline posts does: the Searching state or the idle
+    /// transition a debounced keystroke starts, and the results, zero results or error a
+    /// search publishes; and as the last thing <see cref="Open"/> does, whose open publishes
+    /// the recents panel, <see cref="SetScope"/>, whose scope change shows or hides the chip
+    /// and can clear the rows, <see cref="ClearRecents"/>, and the reader's
+    /// <see cref="Close"/>. The view lays the list out there, before TSF can be
+    /// granted its lock
+    /// (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     /// <summary>The whole pending pipeline for the latest keystroke —
     /// awaited by tests, then the captured context is drained.</summary>
     internal Task SearchCompletion { get; private set; } = Task.CompletedTask;
@@ -325,6 +336,10 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         {
             ScheduleSearch();
         }
+
+        // CB-35: last, as Quick Open's open does. The open publishes the recents
+        // panel and the retained rows; the view settles them here.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     /// <summary>
@@ -337,13 +352,31 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// </summary>
     public void Close()
     {
-        if (!IsOpen)
+        if (!CloseAndNotify())
         {
             return;
         }
 
+        // CB-35: the reader's close (Escape, the Close button, the chord's toggle), laid out
+        // at its end as the palette's Dismiss lays out its collapse. The focus restore the
+        // dismissal queues runs later, at Input.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
+    }
+
+    /// <summary>The close itself, and its dismissal notification; false when the overlay was
+    /// not open. A supersession and a vault transition close through this alone: they run
+    /// inside another surface's opening or the vault's teardown, ahead of its own landing, so
+    /// they settle nothing here (CB-35).</summary>
+    private bool CloseAndNotify()
+    {
+        if (!IsOpen)
+        {
+            return false;
+        }
+
         CloseCore();
         Dismissed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     /// <summary>The teardown half of <see cref="Close"/> without the
@@ -387,7 +420,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         SearchScope preserved = Scope;
-        Close();
+        _ = CloseAndNotify();
         Scope = preserved;
     }
 
@@ -406,7 +439,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// </summary>
     public void ResetForVaultTransition()
     {
-        Close();
+        _ = CloseAndNotify();
         Scope = new SearchScope.Vault();
         Query = string.Empty;
     }
@@ -436,6 +469,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         ScheduleSearch();
+        // CB-35: the chip and the cleared rows, laid out last in the operation that changed
+        // the scope (the chip's Clear, a tag activated over open results).
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     /// <summary>Drop back to Vault scope and refresh under the wider
@@ -633,6 +669,8 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     {
         _source.ClearRecents();
         Recents = _source.LoadRecents();
+        // CB-35: the recents section gives way to the hint; laid out last.
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
     }
 
     public void Dispose()
@@ -695,6 +733,10 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 {
                     dispatched.SetException(exception);
                 }
+
+                // CB-35: the Searching state's visibility flip, or the idle transition, laid
+                // out last in the operation that made it.
+                RowsPublished?.Invoke(this, RowsPublishedEventArgs.SelectionKept);
             },
             null);
         if (await dispatched.Task is Task search)
@@ -758,7 +800,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
                 failure = exception;
             }
 
-            Publish(trimmed, cancel, sessionAtDispatch, scope, resultSet, failure);
+            _ = Publish(trimmed, cancel, sessionAtDispatch, scope, resultSet, failure);
             return null;
         }
 
@@ -784,7 +826,15 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         }
 
         _uiContext!.Post(
-            _ => Publish(query, cancel, sessionAtDispatch, scope, resultSet, failure),
+            _ =>
+            {
+                // CB-35: last in the posted operation, after PublishResults and its summary,
+                // or after PublishError; a stale or cancelled answer published nothing.
+                if (Publish(query, cancel, sessionAtDispatch, scope, resultSet, failure) is { } published)
+                {
+                    RowsPublished?.Invoke(this, published);
+                }
+            },
             null);
     }
 
@@ -799,8 +849,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
     /// session, query and open-flag all still pass while the landing
     /// rows belong to a scope the user just dismissed), and the
     /// open-flag guards a result resurrecting a closed overlay.
+    /// Answers what it published (CB-35): whether the results chose a
+    /// row to select, or null when a stale or cancelled answer
+    /// published nothing.
     /// </summary>
-    private void Publish(
+    private RowsPublishedEventArgs? Publish(
         string query,
         CancelToken cancel,
         object? sessionAtDispatch,
@@ -818,7 +871,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
             || !Equals(Scope, scopeAtDispatch)
             || !IsOpen)
         {
-            return;
+            return null;
         }
 
         // Contract S6: cancellation is a user action, not a failure —
@@ -826,7 +879,7 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         // change, no summary, no announcement.
         if (failure is VaultException.Cancelled)
         {
-            return;
+            return null;
         }
 
         // Terminal outcome for the current search: release the native
@@ -837,10 +890,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
         if (failure is not null)
         {
             PublishError(failure);
-            return;
+            return RowsPublishedEventArgs.SelectionKept;
         }
 
         PublishResults(resultSet!, query);
+        return RowsPublishedEventArgs.Of(SelectedIndex >= 0);
     }
 
     private void PublishResults(QueryResultSet resultSet, string query)

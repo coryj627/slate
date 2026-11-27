@@ -136,6 +136,20 @@ internal sealed class MoveToPickerViewModel : BindableBase
         RebuildRows(announceCount: false);
     }
 
+    /// <summary>Plan 47 CB-35 (#1837): the rows were published, raised as the last thing
+    /// <see cref="RebuildRows"/> does, which is the last thing this picker does in each
+    /// publication: a keystroke's at the true end of <see cref="FilterText"/>'s setter, after
+    /// its count; a folder page, the complete publication or a failure at the end of
+    /// <see cref="PublishFolders"/> or <see cref="FailLoading"/>. The sidebar's posted
+    /// delegate announces the complete publication's or the failure's status after it, a
+    /// notification that changes no layout. A keystroke chooses the
+    /// selection; a background page keeps it unless the reader already had a selection and
+    /// the destination it selects moved, so a reader who scrolled while folders load keeps
+    /// the view. A page that takes the selection from none to the first row only settles:
+    /// the list is at its top, and showing it would scroll the sheet around the list
+    /// (<see cref="PublishedList"/>).</summary>
+    internal event EventHandler<RowsPublishedEventArgs>? RowsPublished;
+
     public MoveToLoadState State => _state;
     public bool IsReady => !_retired && _state == MoveToLoadState.Ready;
     public bool CanRetry => !_retired && _state == MoveToLoadState.Failed;
@@ -271,7 +285,23 @@ internal sealed class MoveToPickerViewModel : BindableBase
             && parameter is MoveToRowViewModel row && Rows.Contains(row));
 
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
-        _ => { if (!_retired) { _cancelled(); } }, _ => !_retired);
+        _ =>
+        {
+            if (!_retired)
+            {
+                _cancelled();
+                // CB-35: last, after the sheet closed and this picker was retired.
+                CancelEnded?.Invoke(this, EventArgs.Empty);
+            }
+        },
+        _ => !_retired);
+
+    /// <summary>Plan 47 CB-35 (#1837): the reader's cancel (Escape, or the Cancel button) has
+    /// run to its end, raised as the last thing <see cref="CancelCommand"/> does: after the
+    /// sheet closed, which collapses it and its scrims, and after the sidebar retired this
+    /// picker. The view lays that out there, before TSF can be granted its lock
+    /// (<see cref="PublishedList"/>). No result lands after a cancel.</summary>
+    internal event EventHandler? CancelEnded;
 
     /// <summary>Each row's name among the rows it sits with, by the one
     /// sibling rule — naming code, which NamingComparesOnlyBySpeechKey holds
@@ -368,6 +398,13 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 $"{destinations:N0} {(destinations == 1 ? "destination" : "destinations")}{(IsReady ? "." : " loaded so far.")}",
                 A11yPriority.Medium));
         }
+
+        // CB-35: last. A keystroke chose the selection; a page moved it only when the
+        // reader had a selection and the destination it selects is another. A page that
+        // selects the first row where there was none settles only.
+        bool moved = previous is not null
+            && (SelectedRow?.Kind != previous.Kind || SelectedRow?.Destination != previous.Destination);
+        RowsPublished?.Invoke(this, RowsPublishedEventArgs.Of(announceCount || moved));
     }
 
     private static string LeafOf(string vaultPath)
