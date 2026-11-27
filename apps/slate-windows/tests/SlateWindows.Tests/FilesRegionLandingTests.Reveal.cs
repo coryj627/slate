@@ -895,6 +895,44 @@ public sealed partial class FilesRegionLandingTests
         AssertSeatedOnce(host, "deep/mid/n2.md", log);
     });
 
+    /// <summary>Expand loaded folders cancels the Reveal's own folder load to
+    /// list the folder itself, and its read of that folder fails (Codex round
+    /// 2): the wait ends there, as it does when the folder's own load fails.
+    /// The run's end starts no load for the folder, and a later good refresh
+    /// seats nothing: no focus change, nothing opened, nothing said
+    /// selected.</summary>
+    [Fact]
+    public void AFailedExpandLoadedReadOfTheRevealsFolderEndsTheWait() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        int started = host.TreeWorkStarted;
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.TreeWorkStarted > started), "premise: docs's load never reached the tree worker");
+
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.TreeWorkStarted > started + 1), "premise: the run's first read never reached the tree worker");
+
+        // The run's first read (deep's) is held; its next read, docs's, fails.
+        host.FailNextTreeWork();
+        host.ReleaseTreeWork();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        Assert.True(Row(host, "deep").Children.Any(child => !child.IsPlaceholder), "premise: the run's first read was not deep's");
+        Assert.Contains(host.Announced, said => SlateUniffiMethods.A11yRender(said).Text == "Could not expand loaded folders.");
+        SettleLoads(host);
+        host.Sidebar.Refresh();
+        Settle(host);
+        SettleLoads(host);
+
+        AssertNeverSeated(host, "docs/n.md", log);
+        Assert.Empty(log.Opened);
+        Assert.Empty(host.FocusChanges);
+        Assert.Empty(SelectionLines(host));
+    });
+
     /// <summary>A whole-tree refresh cancels the Reveal's folder load to list
     /// the folder itself, then fails: nothing will list it, so the wait ends,
     /// and the next good refresh seats nothing.</summary>
