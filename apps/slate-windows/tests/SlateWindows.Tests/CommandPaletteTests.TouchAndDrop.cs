@@ -302,17 +302,21 @@ public sealed partial class CommandPaletteTests
     /// <summary>
     /// The desk the interactive facts hold puts the desktop's input back
     /// when a fact throws with input down (CB-38 red team: a home-pool VM
-    /// that grants the foreground runs them for real). A touch contact, the
-    /// left button and Shift are each sent down on a window of the fact's
-    /// own, and the fact throws; once the desk is disposed no contact is
-    /// down (a new contact goes down and up), no button or modifier reads
-    /// as held, and the cursor is back where it was. The fact then lets go
-    /// of anything left down itself, so a broken disposal fails it without
-    /// leaving this desktop's input stuck. It skips where the desktop
-    /// refuses touch injection (#1680).
+    /// that grants the foreground runs them for real). Each row sends input
+    /// down on a window of the fact's own and throws: a touch contact, or the
+    /// left button and Shift (apart, since lifting a contact releases a
+    /// left button Windows promoted from it). Once the desk is disposed no
+    /// contact is down (a new contact goes down and up), no button or
+    /// modifier reads as held, and the cursor is back where it started, a
+    /// place away from where the desk pressed. The fact then lets go of
+    /// anything left down and puts the cursor back itself, so a broken
+    /// disposal fails it without leaving this desktop's input stuck. It
+    /// skips where the desktop refuses touch injection (#1680).
     /// </summary>
-    [Fact]
-    public void TheRealInputDeskLeavesNoInputDownWhenAFactThrows() => RunSta(() =>
+    [Theory]
+    [InlineData("a touch contact")]
+    [InlineData("the left button and Shift")]
+    public void TheRealInputDeskLeavesNoInputDownWhenAFactThrows(string input) => RunSta(() =>
     {
         if (!TouchAndDropNative.InitializeTouchInjection(1, TouchAndDropNative.TouchFeedbackNone))
         {
@@ -329,22 +333,33 @@ public sealed partial class CommandPaletteTests
             WindowStartupLocation = WindowStartupLocation.Manual,
         };
         window.Show();
+        (int X, int Y)? original = TouchAndDropNative.CursorPosition();
         try
         {
+            // The cursor starts at the work area's corner, away from the
+            // window's middle, where the desk presses.
+            double pixelsPerDip = VisualTreeHelper.GetDpi(window).PixelsPerDip;
+            _ = TouchAndDropNative.SetCursorPos((int)(SystemParameters.WorkArea.Left * pixelsPerDip) + 5, (int)(SystemParameters.WorkArea.Top * pixelsPerDip) + 5);
             (int X, int Y)? cursorBefore = TouchAndDropNative.CursorPosition();
             Point inside = default;
             try
             {
                 using var desk = new RealInputDesk(window);
                 inside = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
-                if (desk.RealTouch([(inside, TouchAndDropNative.Down)]) is { } refused)
+                if (input == "a touch contact")
                 {
-                    RealInputDesk.SkipWhereThisDesktopRefusesRealInput($"touch injection ({refused})", "the desk's clean-up");
+                    if (desk.RealTouch([(inside, TouchAndDropNative.Down)]) is { } refused)
+                    {
+                        RealInputDesk.SkipWhereThisDesktopRefusesRealInput($"touch injection ({refused})", "the desk's clean-up");
+                    }
+                }
+                else
+                {
+                    TouchAndDropNative.MoveCursor(inside);
+                    desk.SendButton(down: true);
+                    desk.SendKey(TouchAndDropNative.VkShift, up: false);
                 }
 
-                TouchAndDropNative.MoveCursor(inside);
-                desk.SendButton(down: true);
-                desk.SendKey(TouchAndDropNative.VkShift, up: false);
                 throw new PlantedFailure();
             }
             catch (PlantedFailure)
@@ -353,25 +368,29 @@ public sealed partial class CommandPaletteTests
             }
 
             string held = TouchAndDropNative.HeldButtonsAndModifiers();
+            (int X, int Y)? cursorAfter = TouchAndDropNative.CursorPosition();
             bool lifted = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Down);
             _ = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up);
-            (int X, int Y)? cursorAfter = TouchAndDropNative.CursorPosition();
 
             // What a broken disposal left down goes up here, before the
             // assertions say so.
             TouchAndDropNative.LetGoOfHeldInput();
 
-            Assert.True(lifted, "a touch contact the desk sent down was still down once the desk was disposed (a new contact could not go down)");
-            Assert.True(held.Length == 0, $"once the desk was disposed the desktop still read {held} as held");
-            Assert.Equal(cursorBefore, cursorAfter);
+            Assert.True(lifted, $"after {input}, a touch contact was still down once the desk was disposed (a new contact could not go down)");
+            Assert.True(held.Length == 0, $"after {input}, the desktop still read {held} as held once the desk was disposed");
+            Assert.True(cursorAfter == cursorBefore, $"after {input}, the cursor was at {cursorAfter} once the desk was disposed, not back at {cursorBefore}");
         }
         finally
         {
+            if (original is { } at)
+            {
+                _ = TouchAndDropNative.SetCursorPos(at.X, at.Y);
+            }
+
             window.Close();
             PumpedDispatcher.Drain();
         }
     });
-
     /// <summary>The throw <see cref="TheRealInputDeskLeavesNoInputDownWhenAFactThrows"/>
     /// plants.</summary>
     private sealed class PlantedFailure : Exception
