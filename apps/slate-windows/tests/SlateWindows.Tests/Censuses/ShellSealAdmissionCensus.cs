@@ -21,6 +21,9 @@
 // only preview-side class handlers need the seal's own (MainWindow.Seal.cs).
 // WB-15 (#1313, #1307) adds the departure observer's call graph, the one
 // HWND hook, the window's input overrides and the owned-window guard.
+// Plan 47 CB-38 (#1695) adds a touch's own events and the three drag
+// previews to the routes, a drag's arguments to what counts as input, and
+// the touch and stylus hooks to what sees input ahead of the routes.
 
 using System.Reflection;
 using System.Windows;
@@ -42,9 +45,15 @@ public sealed class ShellSealAdmissionCensus
     /// <summary>The window's preview input routes the admission must hold at
     /// least: keys down and up (the Apps key opens a context menu on its
     /// release), text that arrives without a key, pointer press and
-    /// release, the wheel (a graph pans and zooms on it — codex round 7).</summary>
+    /// release, the wheel (a graph pans and zooms on it — codex round 7),
+    /// a touch's own events (a list pans from them before any press is
+    /// promoted, plan 47 CB-38) and the three drag previews (a drop from
+    /// another app lands in the shell, a disabled one included, CB-38).</summary>
     private static readonly string[] RequiredGates =
-        ["PreviewKeyDown", "PreviewKeyUp", "PreviewTextInput", "PreviewMouseDown", "PreviewMouseUp", "PreviewMouseWheel"];
+    [
+        "PreviewKeyDown", "PreviewKeyUp", "PreviewTextInput", "PreviewMouseDown", "PreviewMouseUp", "PreviewMouseWheel",
+        "PreviewTouchDown", "PreviewTouchMove", "PreviewTouchUp", "PreviewDragEnter", "PreviewDragOver", "PreviewDrop",
+    ];
 
     /// <summary>The double-click events WPF's <c>Control</c> raises FRESH from
     /// a press it saw past handled; the seal's class handler takes both, and
@@ -277,6 +286,13 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("hwnd-hook-second", "class Other { void M(HwndSource source) { source.AddHook(Hook); } }")]
     [InlineData("input-override-key", "partial class MainWindow { protected override void OnPreviewKeyDown(KeyEventArgs e) => Run(); }")]
     [InlineData("input-override-pointer", "partial class MainWindow { protected override void OnPreviewMouseDown(MouseButtonEventArgs e) => Run(); }")]
+    // CB-38: a drag's arguments are no input arguments, so a drop route and a
+    // drop override are planted on their own, and so are the touch and stylus
+    // hooks that hear input ahead of the window's routes.
+    [InlineData("xaml-drop-attribute", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" PreviewKeyDown=\"Window_PreviewKeyDown\" PreviewDrop=\"Bypass\" />")]
+    [InlineData("input-override-drop", "partial class MainWindow { protected override void OnPreviewDrop(DragEventArgs e) => Run(); }")]
+    [InlineData("touch-frame-hook", "class Other { void M() { Touch.FrameReported += X; } }")]
+    [InlineData("stylus-plug-in-hook", "class Other : UIElement { void M() { StylusPlugIns.Add(new Plug()); } }")]
     [InlineData("owned-window-route-missing", "        owned.PreviewMouseWheel += Take;\n")]
     [InlineData("owned-window-unadmitted", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Show(); } }")]
     [InlineData("owned-window-admitted-late", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.PreviewKeyDown += (_, _) => { }; ShellSeal.Admit(window); window.Show(); } }")]
@@ -301,7 +317,7 @@ public sealed class ShellSealAdmissionCensus
                 ? new Unit(unit.Name, Parse(PlantedText(MonitorFile, "        if (message == WmEnable)\n        {\n            Recompute();\n        }", source)))
                 : unit)),
             "hwnd-hook-second" => HwndHookOffenders(ShellUnits().Append(new Unit("Other.cs", Parse(source)))),
-            "input-override-key" or "input-override-pointer" =>
+            "input-override-key" or "input-override-pointer" or "input-override-drop" =>
                 InputOverrideOffenders(WindowUnits().Append(new Unit("MainWindow.Planted.cs", Parse(source)))),
             "owned-window-route-missing" => OwnedWindowOffenders(PlantInto(OwnedWindowGuardFile, source, string.Empty)),
             "owned-window-unadmitted" or "owned-window-admitted-late" or "modal-dialog-admitted"
@@ -346,7 +362,7 @@ public sealed class ShellSealAdmissionCensus
         var handlers = new Unit("MainWindow.Seal.cs", Parse(Handlers));
         List<string> found = bypass switch
         {
-            "xaml-attribute" or "xaml-late-check" =>
+            "xaml-attribute" or "xaml-late-check" or "xaml-drop-attribute" =>
                 WindowRouteOffenders(XElement.Parse(source), [handlers]).Offenders,
             "code-subscription" or "code-add-handler" or "code-lambda" =>
                 WindowRouteOffenders(
@@ -696,7 +712,9 @@ public sealed class ShellSealAdmissionCensus
     }
 
     /// <summary>Whether a window event (a CLR event on <c>Window</c>, or an
-    /// attached <c>Owner.Event</c>) carries input.</summary>
+    /// attached <c>Owner.Event</c>) carries input. A drag's arguments are
+    /// routed arguments, not input arguments, and a drop is input all the
+    /// same (CB-38).</summary>
     private static bool IsInputEvent(string name)
     {
         Type? args;
@@ -716,7 +734,9 @@ public sealed class ShellSealAdmissionCensus
         }
 
         return args is not null
-            && (typeof(InputEventArgs).IsAssignableFrom(args) || args == typeof(AccessKeyPressedEventArgs));
+            && (typeof(InputEventArgs).IsAssignableFrom(args)
+                || args == typeof(AccessKeyPressedEventArgs)
+                || typeof(DragEventArgs).IsAssignableFrom(args));
     }
 
     /// <summary>What sees input the admission took, or sees it first: a
@@ -760,9 +780,12 @@ public sealed class ShellSealAdmissionCensus
                 }
             }
 
+            // CB-38: Touch.FrameReported hears every touch frame, and a stylus
+            // plug-in hears pen and touch on the stylus thread, both ahead of
+            // the window's routes.
             foreach (SyntaxNode hook in unit.Root.DescendantNodes().Where(node => node is IdentifierNameSyntax
             {
-                Identifier.ValueText: "InputManager" or "ThreadPreprocessMessage" or "ThreadFilterMessage",
+                Identifier.ValueText: "InputManager" or "ThreadPreprocessMessage" or "ThreadFilterMessage" or "FrameReported" or "StylusPlugIns",
             }))
             {
                 offenders.Add($"{unit.Name}:{Line(hook)} hooks {CSharpSource.Normalize(hook)} — input seen ahead of the window's routes");
@@ -1258,12 +1281,14 @@ public sealed class ShellSealAdmissionCensus
     }
 
     /// <summary>Overrides on the window whose single parameter is a routed
-    /// input's arguments.</summary>
+    /// input's arguments, a drag's included (CB-38).</summary>
     private static List<string> InputOverrideOffenders(IEnumerable<Unit> window)
     {
         Type[] inputArguments = typeof(InputEventArgs).Assembly.GetTypes()
             .Concat(typeof(AccessKeyPressedEventArgs).Assembly.GetTypes())
-            .Where(type => typeof(InputEventArgs).IsAssignableFrom(type) || type == typeof(AccessKeyPressedEventArgs))
+            .Where(type => typeof(InputEventArgs).IsAssignableFrom(type)
+                || type == typeof(AccessKeyPressedEventArgs)
+                || typeof(DragEventArgs).IsAssignableFrom(type))
             .ToArray();
         var offenders = new List<string>();
         foreach (Unit unit in window)
