@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -256,12 +257,75 @@ public sealed partial class CommandPaletteTests
     /// dialog closes the same drop lands, which makes the refusal mean
     /// something. The sealed drop's reads are asserted before the control
     /// drop sends any input. It skips where the desktop refuses the
-    /// foreground, the drag source's window or the sealed drag (#1680); once
-    /// the sealed drag has reached the shell, a refused, missing or
-    /// cancelled control drag fails it.
+    /// foreground or the drag source's window, or where the shell never sees
+    /// the sealed drag enter (#1680); once the shell has seen it enter, a
+    /// sealed drag that ends cancelled, and a refused, missing or cancelled
+    /// control drag, fail it (codex round 3 on CB-38).
     /// </summary>
     [Fact]
-    public void ARealDropUnderAPromptLandsNothing() => RunSta(() =>
+    public void ARealDropUnderAPromptLandsNothing() =>
+        RunSta(() => RealDropUnderAPrompt(cancelOnceEntered: null, knob: null, RealInputDesk.SkipWhereThisDesktopRefusesRealInput));
+
+    /// <summary>
+    /// Codex round 3 on CB-38: once the shell has seen a drag enter, a drag
+    /// that ends cancelled fails <see cref="ARealDropUnderAPromptLandsNothing"/>
+    /// instead of skipping it, the sealed drag and the control drag alike, as
+    /// a drag still running at the drag source's deadline is cancelled. The
+    /// drag source's test-only knob cancels the named drag at the first
+    /// <c>QueryContinueDrag</c> after the shell's <c>PreviewDragEnter</c>.
+    /// The fact's own skip is handed in, so a skip the fact takes is seen here
+    /// as a throw (xunit reports a test skipped once it has called
+    /// <c>Assert.Skip</c>, even where the skip is caught). It skips where the
+    /// desktop refuses the drag before the shell sees it (#1680).
+    /// </summary>
+    [Theory]
+    [InlineData("the sealed drag")]
+    [InlineData("the control drag")]
+    public void ADragTheShellSawEnterThenCancelledFailsTheRealDrop(string cancelled) => RunSta(() =>
+    {
+        var knob = new StrongBox<bool>();
+        string? refused = null;
+        Exception? thrown = Record.Exception(() => RealDropUnderAPrompt(cancelled, knob, (what, _) =>
+        {
+            refused = what;
+            throw new WitnessedSkip();
+        }));
+        if (!knob.Value)
+        {
+            if (thrown is WitnessedSkip)
+            {
+                RealInputDesk.SkipWhereThisDesktopRefusesRealInput(refused!, $"a drop's {cancelled} cancelled after it entered the shell");
+            }
+
+            Assert.Fail($"premise: the knob never cancelled {cancelled} after the shell saw it enter ({Ended(thrown)})");
+        }
+
+        Assert.True(
+            thrown is Xunit.Sdk.FailException failure && failure.Message.Contains("delivered the sealed drag", StringComparison.Ordinal),
+            $"{cancelled}, cancelled after the shell saw it enter, ended the real drop fact with {Ended(thrown)}");
+
+        static string Ended(Exception? thrown) => thrown switch
+        {
+            null => "a pass",
+            WitnessedSkip => "a skip",
+            _ => $"{thrown.GetType().Name}: {thrown.Message}",
+        };
+    });
+
+    /// <summary>The skip <see cref="ADragTheShellSawEnterThenCancelledFailsTheRealDrop"/>
+    /// hands the real drop's body in place of its own.</summary>
+    private sealed class WitnessedSkip : Exception
+    {
+    }
+
+    /// <summary>The body of <see cref="ARealDropUnderAPromptLandsNothing"/>.
+    /// With <paramref name="cancelOnceEntered"/> naming "the sealed drag" or
+    /// "the control drag", the drag source cancels that drag at its first
+    /// <c>QueryContinueDrag</c> after the shell has seen it enter, and sets
+    /// <paramref name="knob"/>. <paramref name="skip"/> is the body's own
+    /// skip, taken only before the shell has seen the sealed drag
+    /// enter.</summary>
+    private static void RealDropUnderAPrompt(string? cancelOnceEntered, StrongBox<bool>? knob, Action<string, string> skip)
     {
         using var host = new ShippedShellHost(shown: true);
         WorkspaceViewModel workspace = host.AttachWorkspace(_ => { }, "note0.md");
@@ -269,23 +333,53 @@ public sealed partial class CommandPaletteTests
         desk.TakeTheForegroundOrSkip("a real drop under a prompt");
         (UIElement editor, Point at, Func<string> landed) = EditorDropTarget(host, workspace);
         int entered = 0;
-        host.Shell.AddHandler(DragDrop.PreviewDragEnterEvent, new DragEventHandler((_, _) => entered++), handledEventsToo: true);
+        host.Shell.AddHandler(DragDrop.PreviewDragEnterEvent, new DragEventHandler((_, _) => Interlocked.Increment(ref entered)), handledEventsToo: true);
 
-        string before = SettledIn(host.Shell, landed);
-        (bool Sealed, bool ShellEnabled, DragDropEffects? Effect) underThePrompt =
-            desk.UnderARealPrompt(() => (host.Palette.IsSealed, WindowIsEnabled(host.Shell), desk.RealOleDrop(editor, at, DroppedText)));
-        if (underThePrompt.Effect is null || entered == 0)
+        // The drag source asks this on its own thread as the drag goes on.
+        Func<bool>? CancelOnceEntered(string drag, int seen)
         {
-            RealInputDesk.SkipWhereThisDesktopRefusesRealInput("the drag", "a real drop under a prompt");
+            if (cancelOnceEntered != drag)
+            {
+                return null;
+            }
+
+            return () =>
+            {
+                if (Volatile.Read(ref entered) <= seen)
+                {
+                    return false;
+                }
+
+                knob!.Value = true;
+                return true;
+            };
         }
 
-        // The sealed drop's reads, asserted before the control drop below
-        // sends any input.
+        string before = SettledIn(host.Shell, landed);
+        (bool Sealed, bool ShellEnabled, DragDropEffects? Effect) underThePrompt = desk.UnderARealPrompt(() =>
+            (host.Palette.IsSealed, WindowIsEnabled(host.Shell), desk.RealOleDrop(editor, at, DroppedText, cancelWhen: CancelOnceEntered("the sealed drag", 0))));
+        if (Volatile.Read(ref entered) == 0)
+        {
+            // The shell never saw the drag, so nothing was delivered.
+            skip("the drag", "a real drop under a prompt");
+            return;
+        }
+
+        // The shell has seen the sealed drag enter (codex round 3 on CB-38):
+        // from here on nothing skips. The sealed drop's reads are asserted
+        // before the control drop below sends any input, and a drag that
+        // ended with no answer from DoDragDrop (cancelled at the source's
+        // deadline) fails the fact.
         string sealedAfter = SettledIn(host.Shell, landed);
         Assert.True(
             underThePrompt is { Sealed: true, ShellEnabled: false },
             $"premise: the prompt sealed the shell and disabled its window (sealed {underThePrompt.Sealed}, enabled {underThePrompt.ShellEnabled})");
         Assert.True(sealedAfter == before, $"a real drop landed in the editor under a prompt: {before} to {sealedAfter}");
+        if (underThePrompt.Effect is null)
+        {
+            Assert.Fail("the desktop delivered the sealed drag to the shell, then the drag ended cancelled, so what DoDragDrop returns under a prompt was not measured");
+        }
+
         Assert.True(
             underThePrompt.Effect == DragDropEffects.None,
             $"DoDragDrop returned {underThePrompt.Effect} under a prompt; it must return None, or a source that deletes on Move loses its text");
@@ -294,7 +388,8 @@ public sealed partial class CommandPaletteTests
         // refuses, loses or cancels now fails the fact.
         Assert.False(host.Palette.IsSealed);
         string unsealedBefore = SettledIn(host.Shell, landed);
-        DragDropEffects? unsealedEffect = desk.RealOleDrop(editor, at, DroppedText, refusalFails: true);
+        DragDropEffects? unsealedEffect = desk.RealOleDrop(
+            editor, at, DroppedText, refusalFails: true, cancelWhen: CancelOnceEntered("the control drag", Volatile.Read(ref entered)));
         if (unsealedEffect is null)
         {
             Assert.Fail("the desktop delivered the sealed drag to the shell, then refused or cancelled the control drag once the prompt closed");
@@ -304,7 +399,7 @@ public sealed partial class CommandPaletteTests
         Assert.True(
             unsealedLanded,
             $"a real drop did not land once the prompt closed ({unsealedBefore}, DoDragDrop returned {unsealedEffect}), so the fact proves nothing");
-    });
+    }
 
     /// <summary>
     /// The desk the interactive facts hold puts the desktop's input back
@@ -891,8 +986,11 @@ public sealed partial class CommandPaletteTests
         /// <paramref name="refusalFails"/>, fails. The source's thread
         /// runs through <see cref="StaThread"/>, and its dispatcher is shut
         /// down as the drag ends, so it leaves no window class behind.
+        /// <paramref name="cancelWhen"/> is a test-only knob: the source
+        /// cancels the drag at the first <c>QueryContinueDrag</c> where it
+        /// holds, as it does at the deadline.
         /// </summary>
-        public DragDropEffects? RealOleDrop(UIElement target, Point local, string text, bool refusalFails = false)
+        public DragDropEffects? RealOleDrop(UIElement target, Point local, string text, bool refusalFails = false, Func<bool>? cancelWhen = null)
         {
             double pixelsPerDip = VisualTreeHelper.GetDpi(_window).PixelsPerDip;
             var sourceDip = new Rect(_column.Left, _column.Top, Math.Min(180, _column.Width), 90);
@@ -924,11 +1022,11 @@ public sealed partial class CommandPaletteTests
                     var clock = new Stopwatch();
 
                     // OLE asks the source whether to go on as the mouse or a
-                    // key changes; past the deadline the answer is Cancel,
-                    // and DoDragDrop returns.
+                    // key changes; past the deadline, or where the knob
+                    // holds, the answer is Cancel, and DoDragDrop returns.
                     border.QueryContinueDrag += (_, e) =>
                     {
-                        if (clock.Elapsed > DragDeadline)
+                        if (clock.Elapsed > DragDeadline || cancelWhen?.Invoke() == true)
                         {
                             cancelled = true;
                             e.Action = DragAction.Cancel;
