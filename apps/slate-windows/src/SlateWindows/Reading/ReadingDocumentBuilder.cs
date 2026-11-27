@@ -1112,6 +1112,7 @@ internal static class ReadingDocumentBuilder
                 {
                     var paragraph = new Paragraph();
                     ReadingSemantics.MarkDiagramFence(paragraph, fence);
+                    ReadingSemantics.MarkDiagramSource(paragraph, fallbackSource);
                     ApplyRenderedShape(
                         paragraph,
                         new ReadingDiagramElement(rendered.Description, artifact!.Source),
@@ -1122,6 +1123,7 @@ internal static class ReadingDocumentBuilder
                 {
                     var paragraph = new Paragraph();
                     ReadingSemantics.MarkDiagramFence(paragraph, fence);
+                    ReadingSemantics.MarkDiagramSource(paragraph, fallbackSource);
                     ApplyFailureShape(
                         paragraph,
                         new ReadingDiagramElement(failed.Description, artifact!.Source),
@@ -1137,6 +1139,9 @@ internal static class ReadingDocumentBuilder
         Paragraph sourceParagraph = MonospaceParagraph(fallbackSource);
         ReadingSemantics.MarkDiagramBlock(sourceParagraph, fallbackSource);
         ReadingSemantics.MarkDiagramFence(sourceParagraph, fence);
+        // Plan 47 CB-20b: what the source chord speaks, on every diagram
+        // paragraph, the unmatched one with no element included.
+        ReadingSemantics.MarkDiagramSource(sourceParagraph, fallbackSource);
         if (context.DiagramsPending)
         {
             // Pending (WB-20): the source stays IN the text range, where caret
@@ -1165,6 +1170,12 @@ internal static class ReadingDocumentBuilder
 
     /// <summary>The placeholder's name while its diagram renders (WD11).</summary>
     internal const string PendingDiagramName = "Diagram, rendering";
+
+    /// <summary>A diagram's name when core gives none: the mac's defensive
+    /// fallback. Core builds a diagram block for a <c>mermaid</c> fence only
+    /// (<c>reading.rs</c>, the fence's language), so it names every diagram
+    /// the reading view holds.</summary>
+    internal const string FallbackDiagramName = "Mermaid diagram.";
 
     /// <summary>Whether <paramref name="artifact"/> is the canonical
     /// content of this fence: byte containment, then LIVE-source coherence
@@ -1208,7 +1219,7 @@ internal static class ReadingDocumentBuilder
         string description = matched.StructuredDescription.Trim();
         if (description.Length == 0)
         {
-            description = "Mermaid diagram.";
+            description = FallbackDiagramName;
         }
         // Landing text: trailing period stripped so the canonical
         // vocabulary's own punctuation composes ("…3 steps, diagram.").

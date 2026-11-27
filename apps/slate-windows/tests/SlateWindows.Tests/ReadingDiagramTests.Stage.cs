@@ -554,8 +554,9 @@ public sealed partial class ReadingDiagramTests
                 Assert.Empty(surfacePeer.GetChildren().OfType<ReadingDiagramElementPeer>());
             }
 
-            // Focused: the placeholder stays, keeps focus, is named by the
-            // source, and is the same peer.
+            // Focused: the placeholder stays, keeps focus and is the same
+            // peer. Plan 47 CB-20b: it is named by the builder's fallback,
+            // not by its source, which the reader asks for by the chord.
             using (var harness = StageHarness.Open(
                 "reading-diagram-nomatch-b",
                 StageNote,
@@ -576,7 +577,7 @@ public sealed partial class ReadingDiagramTests
                     placeholder,
                     Assert.IsType<InlineUIContainer>(harness.DiagramParagraph().Inlines.FirstInline).Child);
                 Assert.True(placeholder.IsKeyboardFocused);
-                Assert.Contains("flowchart LR", AutomationProperties.GetName(placeholder), StringComparison.Ordinal);
+                Assert.Equal(ReadingDocumentBuilder.FallbackDiagramName, AutomationProperties.GetName(placeholder));
                 Assert.Contains(held, surfacePeer.GetChildren());
             }
         });

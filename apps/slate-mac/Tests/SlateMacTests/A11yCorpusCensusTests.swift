@@ -397,6 +397,9 @@ final class A11yCorpusCensusTests: XCTestCase {
             .readingNavLanded(target: .embed, text: ""),
             .mathSourceSpoken(source: "\\nabla^2 f"),
             .mathSourceSpoken(source: nil),
+            .diagramSourceSpoken(source: "  flowchart LR\nA --> B\nB --> C\n"),
+            .diagramSourceSpoken(source: "  "),
+            .diagramSourceSpoken(source: nil),
             .gridSorted(column: "Status", ascending: true),
             .gridSorted(column: "Due", ascending: false),
             .gridRowMoved(

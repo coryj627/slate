@@ -505,8 +505,10 @@ internal sealed class ReadingSurface : RichTextBox
     /// kept — the reader may be on it, hold the caret beside it or anchor a
     /// selection at it — and the paragraph's text is edited around them in
     /// one change. The caret and the selection are remapped onto the same
-    /// characters. A late diagram says nothing (WD11): the element's name
-    /// change is a property change, not speech.
+    /// characters. A late diagram posts no announcement (WD11). A reader on
+    /// the element hears its name change, so a placeholder kept with no
+    /// artifact takes the builder's fallback name, never its source (plan 47
+    /// CB-20b).
     /// </summary>
     internal void CompleteDiagrams(IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)
     {
@@ -557,11 +559,14 @@ internal sealed class ReadingSurface : RichTextBox
                     default:
                         // No artifact: main's unmatched shape — the source run
                         // alone — unless the reader is on the placeholder,
-                        // which then keeps focus, named by the source until
-                        // the next projection rebuilds the paragraph. #1708: the
-                        // name's run and its line break go either way; a kept
-                        // placeholder stays where it stood, first, since an
-                        // element moved in the tree loses the keys.
+                        // which then keeps focus until the next projection
+                        // rebuilds the paragraph, named by the builder's
+                        // fallback: a name holding the source would be spoken
+                        // unasked as it changes (plan 47 CB-20b; the source
+                        // chord speaks the source). #1708: the name's run and
+                        // its line break go either way; a kept placeholder
+                        // stays where it stood, first, since an element moved
+                        // in the tree loses the keys.
                         foreach (Inline spare in paragraph.Inlines
                                      .Where(inline => inline is LineBreak || inline is Run run && ReadingSemantics.IsHiddenSpeech(run))
                                      .ToList())
@@ -574,7 +579,7 @@ internal sealed class ReadingSurface : RichTextBox
                                     System.Windows.Input.FocusManager.GetFocusScope(element)),
                                 element))
                         {
-                            element.Complete(sourceText, null);
+                            element.Complete(ReadingDocumentBuilder.FallbackDiagramName, null);
                         }
                         else
                         {
@@ -1459,21 +1464,29 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     /// <summary>
-    /// #1591 (plan 45 XB-9): Ctrl+Shift+Enter on a math block speaks its
-    /// authored source, the one route to it, since line reading and focus
-    /// speak the speech. The sentence is core's. Returns false off a math
-    /// block, so the key falls through.
+    /// #1591 (plan 45 XB-9) and plan 47 CB-20b: Ctrl+Shift+Enter on a math
+    /// block or a diagram speaks its authored source on request: focus
+    /// speaks the speech or the description, and line reading reads a source
+    /// only where it is shown as text. The sentence is core's. Returns false
+    /// off both, so the key falls through.
     /// </summary>
-    internal bool TrySpeakMathSourceAtCaret()
+    internal bool TrySpeakSourceAtCaret()
     {
-        if (_model is not { } model
-            || CaretPosition?.Paragraph is not { } paragraph
-            || !ReadingSemantics.IsMathBlock(paragraph))
+        if (_model is not { } model || CaretPosition?.Paragraph is not { } paragraph)
         {
             return false;
         }
-        AnnounceMathSource(model, MathElementOf(paragraph));
-        return true;
+        if (ReadingSemantics.IsMathBlock(paragraph))
+        {
+            AnnounceMathSource(model, MathElementOf(paragraph));
+            return true;
+        }
+        if (ReadingSemantics.IsDiagramBlock(paragraph))
+        {
+            AnnounceDiagramSource(model, paragraph);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -1506,6 +1519,37 @@ internal sealed class ReadingSurface : RichTextBox
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Plan 47 CB-20b: Tab puts keyboard focus ON a diagram element, where
+    /// the caret's requests do not reach, so its source is answered for it
+    /// on Ctrl+Shift+Enter. Every other modifier state returns false, so
+    /// Enter and Ctrl+Enter on a focused diagram fall through as before: the
+    /// focus already spoke its name, and a pending or unmatched diagram's
+    /// description is its source (the lead's ruling on CB-20b's Call 3).
+    /// </summary>
+    internal bool TryAnswerDiagram(
+        ReadingDiagramElement element, System.Windows.Input.ModifierKeys modifiers)
+    {
+        if (modifiers != (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift)
+            || _model is not { } model
+            || (element.Parent as InlineUIContainer)?.Parent is not Paragraph paragraph
+            || !ReadingSemantics.IsDiagramBlock(paragraph))
+        {
+            return false;
+        }
+        AnnounceDiagramSource(model, paragraph);
+        return true;
+    }
+
+    /// <summary>Plan 47 CB-20b: core's sentence for a diagram's source, from
+    /// the fence's interior the paragraph carries; a blank one has none.</summary>
+    private static void AnnounceDiagramSource(ReadingContentViewModel model, Paragraph paragraph)
+    {
+        string? source = ReadingSemantics.DiagramSourceOf(paragraph);
+        model.Announce(new uniffi.slate_uniffi.A11yEvent.DiagramSourceSpoken(
+            string.IsNullOrWhiteSpace(source) ? null : source));
     }
 
     private static void AnnounceMathSpeech(ReadingContentViewModel model, Paragraph paragraph) =>

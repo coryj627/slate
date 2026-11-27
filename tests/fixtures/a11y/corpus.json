@@ -1705,6 +1705,21 @@
     "text": "Source not available."
   },
   {
+    "event": "DiagramSourceSpoken { source: Some(\"  flowchart LR\\nA --> B\\nB --> C\\n\") }",
+    "priority": "medium",
+    "text": "Source: flowchart LR\nA --> B\nB --> C."
+  },
+  {
+    "event": "DiagramSourceSpoken { source: Some(\"  \") }",
+    "priority": "medium",
+    "text": "Source not available."
+  },
+  {
+    "event": "DiagramSourceSpoken { source: None }",
+    "priority": "medium",
+    "text": "Source not available."
+  },
+  {
     "event": "GridSorted { column: \"Status\", ascending: true }",
     "priority": "medium",
     "text": "Sorted by Status, ascending"
