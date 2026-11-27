@@ -165,7 +165,8 @@ public sealed partial class CommandPaletteTests
     {
         RealInputDesk.PrepareTouchInjection();
         using var host = new ShippedShellHost(shown: true);
-        using var desk = new RealInputDesk(host.Shell, "a real touch pan on the reading table");
+        using var desk = new RealInputDesk(host.Shell);
+        desk.TakeTheForegroundOrSkip("a real touch pan on the reading table");
         Window table = desk.TableInTheColumn(host.Shell);
         try
         {
@@ -261,7 +262,8 @@ public sealed partial class CommandPaletteTests
     {
         using var host = new ShippedShellHost(shown: true);
         WorkspaceViewModel workspace = host.AttachWorkspace(_ => { }, "note0.md");
-        using var desk = new RealInputDesk(host.Shell, "a real drop under a prompt");
+        using var desk = new RealInputDesk(host.Shell);
+        desk.TakeTheForegroundOrSkip("a real drop under a prompt");
         (UIElement editor, Point at, Func<string> landed) = EditorDropTarget(host, workspace);
         int entered = 0;
         host.Shell.AddHandler(DragDrop.PreviewDragEnterEvent, new DragEventHandler((_, _) => entered++), handledEventsToo: true);
@@ -296,6 +298,85 @@ public sealed partial class CommandPaletteTests
             unsealedLanded,
             $"a real drop did not land once the prompt closed ({unsealedBefore}, DoDragDrop returned {unsealedEffect}), so the fact proves nothing");
     });
+
+    /// <summary>
+    /// The desk the interactive facts hold puts the desktop's input back
+    /// when a fact throws with input down (CB-38 red team: a home-pool VM
+    /// that grants the foreground runs them for real). A touch contact, the
+    /// left button and Shift are each sent down on a window of the fact's
+    /// own, and the fact throws; once the desk is disposed no contact is
+    /// down (a new contact goes down and up), no button or modifier reads
+    /// as held, and the cursor is back where it was. The fact then lets go
+    /// of anything left down itself, so a broken disposal fails it without
+    /// leaving this desktop's input stuck. It skips where the desktop
+    /// refuses touch injection (#1680).
+    /// </summary>
+    [Fact]
+    public void TheRealInputDeskLeavesNoInputDownWhenAFactThrows() => RunSta(() =>
+    {
+        if (!TouchAndDropNative.InitializeTouchInjection(1, TouchAndDropNative.TouchFeedbackNone))
+        {
+            RealInputDesk.SkipWhereThisDesktopRefusesRealInput(
+                $"touch injection (InitializeTouchInjection, error {Marshal.GetLastWin32Error()})", "the desk's clean-up");
+        }
+
+        var window = new Window
+        {
+            Title = "CB-38 input clean-up",
+            Content = new Border { Background = Brushes.WhiteSmoke },
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+        };
+        window.Show();
+        try
+        {
+            (int X, int Y)? cursorBefore = TouchAndDropNative.CursorPosition();
+            Point inside = default;
+            try
+            {
+                using var desk = new RealInputDesk(window);
+                inside = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
+                if (desk.RealTouch([(inside, TouchAndDropNative.Down)]) is { } refused)
+                {
+                    RealInputDesk.SkipWhereThisDesktopRefusesRealInput($"touch injection ({refused})", "the desk's clean-up");
+                }
+
+                TouchAndDropNative.MoveCursor(inside);
+                desk.SendButton(down: true);
+                desk.SendKey(TouchAndDropNative.VkShift, up: false);
+                throw new PlantedFailure();
+            }
+            catch (PlantedFailure)
+            {
+                // The fact's own throw, with input down.
+            }
+
+            string held = TouchAndDropNative.HeldButtonsAndModifiers();
+            bool lifted = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Down);
+            _ = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Up);
+            (int X, int Y)? cursorAfter = TouchAndDropNative.CursorPosition();
+
+            // What a broken disposal left down goes up here, before the
+            // assertions say so.
+            TouchAndDropNative.LetGoOfHeldInput();
+
+            Assert.True(lifted, "a touch contact the desk sent down was still down once the desk was disposed (a new contact could not go down)");
+            Assert.True(held.Length == 0, $"once the desk was disposed the desktop still read {held} as held");
+            Assert.Equal(cursorBefore, cursorAfter);
+        }
+        finally
+        {
+            window.Close();
+            PumpedDispatcher.Drain();
+        }
+    });
+
+    /// <summary>The throw <see cref="TheRealInputDeskLeavesNoInputDownWhenAFactThrows"/>
+    /// plants.</summary>
+    private sealed class PlantedFailure : Exception
+    {
+    }
 
     /// <summary>
     /// A touch drag on <paramref name="target"/> through a synthetic touch
@@ -534,35 +615,75 @@ public sealed partial class CommandPaletteTests
     }
 
     /// <summary>
-    /// The shell on the screen and in front, with a column to its right for
+    /// The window on the screen and in front, with a column to its right for
     /// a drag source, a prompt and the reading table, for the facts that
-    /// drive real input. Each refusal skips the fact (#1680). Disposing it
-    /// lets go of any modifier key or mouse button the input left down.
+    /// drive real input. Each refusal skips the fact (#1680). Its
+    /// <see cref="Dispose"/> puts the desktop's input back whatever ended the
+    /// fact (a pass, a failed assertion, a skip, an exception, a timeout that
+    /// unwinds the body): it waits for its injectors, lifts any touch contact
+    /// left down, releases the mouse button and every key it sent down (and
+    /// any modifier or left button the desktop still reads as held), puts the
+    /// cursor back where it was, and undoes the window's <c>Topmost</c>. It
+    /// leaves the foreground with the test process rather than hand it to the
+    /// window that held it before: a fact that hands it to another process
+    /// leaves every later fact's <c>Activate</c> refused (<see cref="StaThread"/>'s
+    /// remarks), and the window, closing with its fact, leaves it for the next
+    /// fact to take. Each fact holds the desk in a <c>using</c>, ahead of
+    /// everything it injects.
     /// </summary>
     private sealed class RealInputDesk : IDisposable
     {
         private const ushort VkControl = 0x11;
-        private readonly MainWindow _shell;
+        private readonly Window _window;
+        private readonly bool _wasTopmost;
+        private readonly (int X, int Y)? _cursorAtStart;
         private readonly Rect _column;
+        private readonly object _gate = new();
+        private readonly List<Task> _injectors = [];
+        private readonly HashSet<ushort> _keysDown = [];
+        private (Point Screen, bool Down) _contact;
+        private bool _buttonDown;
 
-        public RealInputDesk(MainWindow shell, string measured)
+        public RealInputDesk(Window window)
         {
-            _shell = shell;
+            _window = window;
+            _wasTopmost = window.Topmost;
+            _cursorAtStart = TouchAndDropNative.CursorPosition();
             Rect work = SystemParameters.WorkArea;
             double width = Math.Max(640, Math.Min(960, work.Width - 380));
             double height = Math.Max(480, Math.Min(680, work.Height - 40));
-            shell.Topmost = true;
-            shell.Left = work.Left + 20;
-            shell.Top = work.Top + 20;
-            shell.Width = width;
-            shell.Height = height;
-            shell.UpdateLayout();
+            window.Topmost = true;
+            window.Left = work.Left + 20;
+            window.Top = work.Top + 20;
+            window.Width = width;
+            window.Height = height;
+            window.UpdateLayout();
             PumpedDispatcher.Drain();
-            _column = new Rect(shell.Left + width + 20, work.Top + 20, Math.Max(240, Math.Min(320, work.Right - shell.Left - width - 30)), height);
-            if (!TakeTheForeground(shell))
+            _column = new Rect(window.Left + width + 20, work.Top + 20, Math.Max(240, Math.Min(320, work.Right - window.Left - width - 30)), height);
+        }
+
+        /// <summary>Takes the foreground for the window, or skips the fact
+        /// where the desktop refuses it (#1680).</summary>
+        public void TakeTheForegroundOrSkip(string measured)
+        {
+            IntPtr handle = new WindowInteropHelper(_window).Handle;
+            for (int attempt = 0; attempt < 5 && TouchAndDropNative.GetForegroundWindow() != handle; attempt++)
             {
-                TouchAndDropNative.LetGoOfHeldInput();
-                shell.Topmost = false;
+                if (attempt > 0)
+                {
+                    // A tap of Control makes this process the last to take
+                    // input, which lets it set the foreground.
+                    SendKey(VkControl, up: false);
+                    SendKey(VkControl, up: true);
+                }
+
+                _ = _window.Activate();
+                _ = TouchAndDropNative.SetForegroundWindow(handle);
+                _ = PumpedDispatcher.PumpUntil(() => TouchAndDropNative.GetForegroundWindow() == handle, TimeSpan.FromMilliseconds(300));
+            }
+
+            if (TouchAndDropNative.GetForegroundWindow() != handle)
+            {
                 SkipWhereThisDesktopRefusesRealInput("the foreground", measured);
             }
         }
@@ -664,37 +785,32 @@ public sealed partial class CommandPaletteTests
         }
 
         /// <summary>Injects <paramref name="frames"/> as real touch, one frame
-        /// every 16 ms, from a worker thread while this thread pumps. Returns
-        /// null, or what failed: the caller decides whether that is the
-        /// desktop refusing touch or a failure of the fact.</summary>
+        /// every 16 ms, from a worker thread while this thread pumps. The
+        /// desk notes where the contact is and whether it is down, so its
+        /// disposal lifts a contact a failed or unfinished batch left down.
+        /// Returns null, or what failed: the caller decides whether that is
+        /// the desktop refusing touch or a failure of the fact.</summary>
         public string? RealTouch((Point Screen, uint Flags)[] frames)
         {
-            Task<string?> injected = Task.Run(() =>
+            Task<string?> injected = Track(Task.Run(() =>
             {
-                bool down = false;
-                try
+                foreach ((Point screen, uint flags) in frames)
                 {
-                    foreach ((Point screen, uint flags) in frames)
+                    if (!TouchAndDropNative.InjectTouch(screen, flags))
                     {
-                        if (!TouchAndDropNative.InjectTouch(screen, flags))
-                        {
-                            return $"InjectTouchInput, error {Marshal.GetLastWin32Error()}";
-                        }
+                        return $"InjectTouchInput, error {Marshal.GetLastWin32Error()}";
+                    }
 
-                        down = flags != TouchAndDropNative.Up;
-                        Thread.Sleep(16);
-                    }
-                }
-                finally
-                {
-                    if (down)
+                    lock (_gate)
                     {
-                        _ = TouchAndDropNative.InjectTouch(frames[^1].Screen, TouchAndDropNative.Up);
+                        _contact = (screen, flags != TouchAndDropNative.Up);
                     }
+
+                    Thread.Sleep(16);
                 }
 
-                return null;
-            });
+                return (string?)null;
+            }));
             Assert.True(PumpedDispatcher.PumpUntil(() => injected.IsCompleted, TimeSpan.FromSeconds(20)), "the touch injector never finished");
             return injected.Result;
         }
@@ -719,7 +835,7 @@ public sealed partial class CommandPaletteTests
         /// </summary>
         public DragDropEffects? RealOleDrop(UIElement target, Point local, string text)
         {
-            double pixelsPerDip = VisualTreeHelper.GetDpi(_shell).PixelsPerDip;
+            double pixelsPerDip = VisualTreeHelper.GetDpi(_window).PixelsPerDip;
             var sourceDip = new Rect(_column.Left, _column.Top, Math.Min(180, _column.Width), 90);
             var sourcePixel = new Point((sourceDip.Left + (sourceDip.Width / 2)) * pixelsPerDip, (sourceDip.Top + (sourceDip.Height / 2)) * pixelsPerDip);
             Point targetPixel = target.PointToScreen(local);
@@ -729,7 +845,7 @@ public sealed partial class CommandPaletteTests
             DragDropEffects effect = DragDropEffects.None;
             bool cancelled = false;
             Dispatcher? sourceDispatcher = null;
-            Task sourceThread = Task.Run(() => StaThread.Run(
+            Task sourceThread = Track(Task.Run(() => StaThread.Run(
                 () =>
                 {
                     var border = new Border { Background = Brushes.Gold, Child = new TextBlock { Text = "CB-38 drag source" } };
@@ -776,8 +892,8 @@ public sealed partial class CommandPaletteTests
                     Dispatcher.Run();
                 },
                 TimeSpan.FromSeconds(90),
-                "the CB-38 drag source timed out."));
-            Task driver = Task.Run(() =>
+                "the CB-38 drag source timed out.")));
+            Task driver = Track(Task.Run(() =>
             {
                 if (!ready.Wait(TimeSpan.FromSeconds(30)))
                 {
@@ -787,7 +903,7 @@ public sealed partial class CommandPaletteTests
                 Thread.Sleep(300);
                 TouchAndDropNative.MoveCursor(sourcePixel);
                 Thread.Sleep(150);
-                TouchAndDropNative.LeftButton(down: true);
+                SendButton(down: true);
                 try
                 {
                     if (!started.Wait(TimeSpan.FromSeconds(3)))
@@ -810,7 +926,7 @@ public sealed partial class CommandPaletteTests
                 }
                 finally
                 {
-                    TouchAndDropNative.LeftButton(down: false);
+                    SendButton(down: false);
                 }
 
                 // A drag whose release the desktop refused runs on: a nudge of
@@ -820,7 +936,7 @@ public sealed partial class CommandPaletteTests
                 {
                     TouchAndDropNative.MoveCursor(targetPixel + new Vector(nudge % 2, 1));
                 }
-            });
+            }));
             Assert.True(PumpedDispatcher.PumpUntil(() => driver.IsCompleted, TimeSpan.FromSeconds(75)), "the drag's driver never finished");
             driver.GetAwaiter().GetResult();
             if (!ready.IsSet)
@@ -859,7 +975,7 @@ public sealed partial class CommandPaletteTests
             ExceptionDispatchInfo? failure = null;
             var dialog = new Window
             {
-                Owner = _shell,
+                Owner = _window,
                 Title = "CB-38 prompt",
                 Content = new TextBlock { Text = "CB-38 prompt", Margin = new Thickness(12) },
                 WindowStartupLocation = WindowStartupLocation.Manual,
@@ -891,31 +1007,128 @@ public sealed partial class CommandPaletteTests
             return result;
         }
 
+        /// <summary>Puts the desktop's input back: see the class.</summary>
         public void Dispose()
         {
-            TouchAndDropNative.LetGoOfHeldInput();
-            _shell.Topmost = false;
-        }
-
-        private static bool TakeTheForeground(Window window)
-        {
-            IntPtr handle = new WindowInteropHelper(window).Handle;
-            for (int attempt = 0; attempt < 5 && TouchAndDropNative.GetForegroundWindow() != handle; attempt++)
+            Task[] injectors;
+            lock (_gate)
             {
-                if (attempt > 0)
-                {
-                    // A tap of Control makes this process the last to take
-                    // input, which lets it set the foreground.
-                    TouchAndDropNative.Key(VkControl, up: false);
-                    TouchAndDropNative.Key(VkControl, up: true);
-                }
-
-                _ = window.Activate();
-                _ = TouchAndDropNative.SetForegroundWindow(handle);
-                _ = PumpedDispatcher.PumpUntil(() => TouchAndDropNative.GetForegroundWindow() == handle, TimeSpan.FromMilliseconds(300));
+                injectors = [.. _injectors.Where(injector => !injector.IsCompleted)];
             }
 
-            return TouchAndDropNative.GetForegroundWindow() == handle;
+            try
+            {
+                // Each injector ends on its own bound (the touch frames, the
+                // drag's deadline); none needs this thread to pump.
+                _ = Task.WaitAll(injectors, TimeSpan.FromSeconds(30));
+            }
+            catch (AggregateException)
+            {
+                // A failed injector has already failed its fact; what it left
+                // down is put back below all the same.
+            }
+
+            LiftEveryContact();
+            ReleaseEveryButtonAndKey();
+            if (_cursorAtStart is { } cursor)
+            {
+                _ = TouchAndDropNative.SetCursorPos(cursor.X, cursor.Y);
+            }
+
+            try
+            {
+                _window.Topmost = _wasTopmost;
+            }
+            catch (InvalidOperationException)
+            {
+                // A timed-out body's dispatcher has shut down; its window goes
+                // with its thread.
+            }
+        }
+
+        /// <summary>A touch contact the desk left down gets an up.</summary>
+        private void LiftEveryContact()
+        {
+            (Point Screen, bool Down) contact;
+            lock (_gate)
+            {
+                contact = _contact;
+                _contact = default;
+            }
+
+            if (contact.Down)
+            {
+                _ = TouchAndDropNative.InjectTouch(contact.Screen, TouchAndDropNative.Up);
+            }
+        }
+
+        /// <summary>The mouse button and every key the desk sent down come
+        /// up, and so does any modifier or left button the desktop still
+        /// reads as held.</summary>
+        private void ReleaseEveryButtonAndKey()
+        {
+            ushort[] keys;
+            bool button;
+            lock (_gate)
+            {
+                keys = [.. _keysDown];
+                button = _buttonDown;
+            }
+
+            if (button)
+            {
+                SendButton(down: false);
+            }
+
+            foreach (ushort key in keys)
+            {
+                SendKey(key, up: true);
+            }
+
+            TouchAndDropNative.LetGoOfHeldInput();
+        }
+
+        /// <summary>A left button press or release, which the desk
+        /// tracks.</summary>
+        public void SendButton(bool down)
+        {
+            lock (_gate)
+            {
+                _buttonDown = down;
+            }
+
+            TouchAndDropNative.LeftButton(down);
+        }
+
+        /// <summary>A key press or release, which the desk tracks.</summary>
+        public void SendKey(ushort key, bool up)
+        {
+            lock (_gate)
+            {
+                if (up)
+                {
+                    _ = _keysDown.Remove(key);
+                }
+                else
+                {
+                    _ = _keysDown.Add(key);
+                }
+            }
+
+            TouchAndDropNative.Key(key, up);
+        }
+
+        /// <summary>Keeps <paramref name="injector"/>, a worker that sends
+        /// input, for the desk to wait for as it is disposed.</summary>
+        private T Track<T>(T injector)
+            where T : Task
+        {
+            lock (_gate)
+            {
+                _injectors.Add(injector);
+            }
+
+            return injector;
         }
     }
 
@@ -989,6 +1202,24 @@ public sealed partial class CommandPaletteTests
                 },
             });
         }
+
+        public const ushort VkShift = 0x10;
+
+        /// <summary>Where the cursor is, in screen pixels, or null where
+        /// Windows will not say.</summary>
+        public static (int X, int Y)? CursorPosition() => GetCursorPos(out NativePoint at) ? (at.X, at.Y) : null;
+
+        /// <summary>The left button and the modifiers the desktop reads as
+        /// held, by name; empty when none is.</summary>
+        public static string HeldButtonsAndModifiers() =>
+            string.Join(", ", new (ushort Key, string Name)[]
+                {
+                    (0x01, "the left button"), (0x10, "Shift"), (0x11, "Control"), (0x12, "Alt"), (0xA0, "left Shift"),
+                    (0xA1, "right Shift"), (0xA2, "left Control"), (0xA3, "right Control"), (0xA4, "left Alt"),
+                    (0xA5, "right Alt"), (0x5B, "left Windows"), (0x5C, "right Windows"),
+                }
+                .Where(key => (GetAsyncKeyState(key.Key) & 0x8000) != 0)
+                .Select(key => key.Name));
 
         public static void LeftButton(bool down) =>
             Send(new SentInput { Type = InputMouse, Union = new InputUnion { Pointer = new MouseInput { Flags = down ? MouseLeftDown : MouseLeftUp } } });
@@ -1123,6 +1354,14 @@ public sealed partial class CommandPaletteTests
 
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int index);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetCursorPos(out NativePoint point);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetCursorPos(int x, int y);
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
