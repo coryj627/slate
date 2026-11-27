@@ -26,6 +26,7 @@
 // the touch and stylus hooks to what sees input ahead of the routes.
 
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Xml;
@@ -286,13 +287,19 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("transition-focus-api", "        held.Detach();\n        FocusManager.SetFocusedElement(held.Target()!, null);")]
     [InlineData("hwnd-hook-reads-keys", "        if (message == WmEnable)\n        {\n            Recompute();\n        }\n\n        if (message == 0x0100)\n        {\n            Recompute();\n        }")]
     [InlineData("hwnd-hook-second", "class Other { void M(HwndSource source) { source.AddHook(Hook); } }")]
-    [InlineData("input-override-key", "partial class MainWindow { protected override void OnPreviewKeyDown(KeyEventArgs e) => Run(); }")]
-    [InlineData("input-override-pointer", "partial class MainWindow { protected override void OnPreviewMouseDown(MouseButtonEventArgs e) => Run(); }")]
+    [InlineData("input-override-key", "partial class MainWindow { protected override void OnPreviewKeyDown(KeyEventArgs e) { } }")]
+    [InlineData("input-override-pointer", "partial class MainWindow { protected override void OnPreviewMouseDown(MouseButtonEventArgs e) { } }")]
     // CB-38: a drag's arguments are no input arguments, so a drop route and a
     // drop override are planted on their own, and so are the touch and stylus
     // hooks that hear input ahead of the window's routes.
     [InlineData("xaml-drop-attribute", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" PreviewKeyDown=\"Window_PreviewKeyDown\" PreviewDrop=\"Bypass\" />")]
-    [InlineData("input-override-drop", "partial class MainWindow { protected override void OnPreviewDrop(DragEventArgs e) => Run(); }")]
+    [InlineData("input-override-drop", "partial class MainWindow { protected override void OnPreviewDrop(DragEventArgs e) { } }")]
+    // Codex round 2 on CB-38: an override's parameter is judged by its bound
+    // type, so an alias hides no drag or touch override.
+    [InlineData("input-override-aliased-drop", "using DropArguments = System.Windows.DragEventArgs;\npartial class MainWindow { protected override void OnPreviewDrop(DropArguments e) { } }")]
+    [InlineData("input-override-aliased-touch", "using Contact = System.Windows.Input.TouchEventArgs;\npartial class MainWindow { protected override void OnPreviewTouchDown(Contact e) { } }")]
+    // A window attribute with a namespace prefix is read through its xmlns.
+    [InlineData("xaml-prefixed-drop-attribute", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:dd=\"clr-namespace:System.Windows;assembly=PresentationCore\" PreviewKeyDown=\"Window_PreviewKeyDown\" dd:DragDrop.PreviewDrop=\"Bypass\" />")]
     [InlineData("touch-frame-hook", "class Other { void M() { Touch.FrameReported += X; } }")]
     [InlineData("stylus-plug-in-hook", "class Other : UIElement { void M() { StylusPlugIns.Add(new Plug()); } }")]
     // CB-38: the seal takes no stylus preview, so any stylus handler in the
@@ -312,12 +319,24 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("stylus-code-setter", "class PlantedSetter { Style M() { var style = new Style(typeof(Border)); style.Setters.Add(new EventSetter(UIElement.PreviewStylusDownEvent, new StylusDownEventHandler(X))); return style; } void X(object sender, StylusDownEventArgs e) { } }")]
     [InlineData("stylus-xaml", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Border StylusUp=\"X\" /></Window>")]
     [InlineData("stylus-xaml-setter", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"Border\"><EventSetter Event=\"PreviewStylusDown\" Handler=\"X\" /></Style></Window.Resources></Window>")]
+    // Codex round 2 on CB-38: a field the census follows only when nothing
+    // else ever writes it; a method group of a registration API; a XAML
+    // attribute with a namespace prefix.
+    [InlineData("stylus-mutable-field", "class PlantedMutableField { static RoutedEvent route = Keyboard.KeyDownEvent; void M(UIElement u) { route = Stylus.StylusUpEvent; u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }")]
+    [InlineData("stylus-readonly-field-set-in-constructor", "class PlantedConstructedField { readonly RoutedEvent route = Keyboard.KeyDownEvent; PlantedConstructedField() { route = Stylus.StylusUpEvent; } void M(UIElement u) { u.AddHandler(route, new RoutedEventHandler(X)); } void X(object sender, RoutedEventArgs e) { } }")]
+    [InlineData("stylus-method-group", "class PlantedMethodGroup { void M(UIElement u) { Action<DependencyObject, StylusEventHandler> add = Stylus.AddStylusUpHandler; add(u, X); } void X(object sender, StylusEventArgs e) { } }")]
+    [InlineData("stylus-static-import-method-group", "using static System.Windows.Input.Stylus;\nclass PlantedImportedGroup { void M(UIElement u) { Action<DependencyObject, StylusDownEventHandler> add = AddPreviewStylusDownHandler; add(u, X); } void X(object sender, StylusDownEventArgs e) { } }")]
+    [InlineData("registration-method-group", "class PlantedAddHandlerGroup { Action<RoutedEvent, Delegate> M(UIElement u) => u.AddHandler; }")]
+    [InlineData("stylus-xaml-prefixed", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:pen=\"clr-namespace:System.Windows.Input;assembly=PresentationCore\"><Border pen:Stylus.StylusUp=\"X\" /></Window>")]
     [InlineData("stylus-xaml-qualified-setter", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"Border\"><EventSetter Event=\"Stylus.PreviewStylusDown\" Handler=\"X\" /></Style></Window.Resources></Window>")]
     // CB-38: a style's setter runs after the window's admission and sees no
     // input it took, unless it listens past handled; then a touch's and a
     // drop's events act under the seal like any other input.
     [InlineData("past-handled-xaml-setter-touch", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"ListBoxItem\"><EventSetter Event=\"PreviewTouchDown\" Handler=\"X\" HandledEventsToo=\"True\" /></Style></Window.Resources></Window>")]
     [InlineData("past-handled-xaml-setter-drop", "<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Window.Resources><Style TargetType=\"ListBoxItem\"><EventSetter Event=\"Drop\" Handler=\"X\" HandledEventsToo=\"True\" /></Style></Window.Resources></Window>")]
+    // Codex round 2 on CB-38: an EventSetter written after its construction.
+    [InlineData("past-handled-setter-retargeted-touch", "class PlantedRetargetedTouch { Style M() { var setter = new EventSetter(FrameworkElement.LoadedEvent, new RoutedEventHandler(X)) { HandledEventsToo = true }; setter.Event = UIElement.PreviewTouchDownEvent; var style = new Style(typeof(Border)); style.Setters.Add(setter); return style; } void X(object sender, RoutedEventArgs e) { } }")]
+    [InlineData("past-handled-setter-retargeted-drop", "class PlantedRetargetedDrop { Style M() { var setter = new EventSetter(FrameworkElement.LoadedEvent, new RoutedEventHandler(X)) { HandledEventsToo = true }; setter.Event = DragDrop.PreviewDropEvent; var style = new Style(typeof(Border)); style.Setters.Add(setter); return style; } void X(object sender, RoutedEventArgs e) { } }")]
     [InlineData("past-handled-code-setter", "class PlantedPastHandledSetter { Style M() { var style = new Style(typeof(ListBoxItem)); style.Setters.Add(new EventSetter(UIElement.TouchDownEvent, new EventHandler<TouchEventArgs>(X)) { HandledEventsToo = true }); return style; } void X(object? sender, TouchEventArgs e) { } }")]
     [InlineData("owned-window-route-missing", "        owned.PreviewMouseWheel += Take;\n")]
     [InlineData("owned-window-unadmitted", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Show(); } }")]
@@ -343,8 +362,8 @@ public sealed class ShellSealAdmissionCensus
                 ? new Unit(unit.Name, Parse(PlantedText(MonitorFile, "        if (message == WmEnable)\n        {\n            Recompute();\n        }", source)))
                 : unit)),
             "hwnd-hook-second" => HwndHookOffenders(ShellUnits().Append(new Unit("Other.cs", Parse(source)))),
-            "input-override-key" or "input-override-pointer" or "input-override-drop" =>
-                InputOverrideOffenders(WindowUnits().Append(new Unit("MainWindow.Planted.cs", Parse(source)))),
+            "input-override-key" or "input-override-pointer" or "input-override-drop" or "input-override-aliased-drop" or "input-override-aliased-touch" =>
+                PlantedOnly(InputOverrideOffenders(WithPlanted(source))),
             "owned-window-route-missing" => OwnedWindowOffenders(PlantInto(OwnedWindowGuardFile, source, string.Empty)),
             "owned-window-unadmitted" or "owned-window-admitted-late" or "modal-dialog-admitted"
                 or "owned-window-conditional-show" or "owned-window-shown-elsewhere" or "owned-window-show-method-group" =>
@@ -354,11 +373,14 @@ public sealed class ShellSealAdmissionCensus
                         (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options,
                         path: "Planted.cs"))),
             "stylus-subscription" or "stylus-registration" or "stylus-attached-registration" or "stylus-override"
-                or "stylus-conditional-registration" or "stylus-event-variable" or "stylus-unresolved-event" or "stylus-code-setter" =>
+                or "stylus-conditional-registration" or "stylus-event-variable" or "stylus-unresolved-event" or "stylus-code-setter"
+                or "stylus-mutable-field" or "stylus-readonly-field-set-in-constructor" or "stylus-method-group"
+                or "stylus-static-import-method-group" or "registration-method-group" =>
                 PlantedOnly(StylusOffenders(WithPlanted(source), [])),
-            "stylus-xaml" or "stylus-xaml-setter" or "stylus-xaml-qualified-setter" =>
+            "stylus-xaml" or "stylus-xaml-setter" or "stylus-xaml-qualified-setter" or "stylus-xaml-prefixed" =>
                 PlantedOnly(StylusOffenders(NoShellCode, [("Planted.xaml", XElement.Parse(source))])),
-            "past-handled-code-setter" => PlantedOnly(PastHandledSetterOffenders(WithPlanted(source), [])),
+            "past-handled-code-setter" or "past-handled-setter-retargeted-touch" or "past-handled-setter-retargeted-drop" =>
+                PlantedOnly(PastHandledSetterOffenders(WithPlanted(source), [])),
             "past-handled-xaml-setter-touch" or "past-handled-xaml-setter-drop" =>
                 PlantedOnly(PastHandledSetterOffenders(NoShellCode, [("Planted.xaml", XElement.Parse(source))])),
             "shell-of-follows-owner" => OwnedWindowOffenders(PlantInto(
@@ -396,7 +418,7 @@ public sealed class ShellSealAdmissionCensus
         var handlers = new Unit("MainWindow.Seal.cs", Parse(Handlers));
         List<string> found = bypass switch
         {
-            "xaml-attribute" or "xaml-late-check" or "xaml-drop-attribute" =>
+            "xaml-attribute" or "xaml-late-check" or "xaml-drop-attribute" or "xaml-prefixed-drop-attribute" =>
                 WindowRouteOffenders(XElement.Parse(source), [handlers]).Offenders,
             "code-subscription" or "code-add-handler" or "code-lambda" =>
                 WindowRouteOffenders(
@@ -561,7 +583,7 @@ public sealed class ShellSealAdmissionCensus
     [Fact]
     public void MainWindowOverridesNoRoutedInputVirtual()
     {
-        List<string> offenders = InputOverrideOffenders(WindowUnits());
+        List<string> offenders = InputOverrideOffenders(ShellCompilation.Compilation);
         Assert.True(offenders.Count == 0, "MainWindow overrides a routed input virtual:\n  " + string.Join("\n  ", offenders));
     }
 
@@ -678,11 +700,9 @@ public sealed class ShellSealAdmissionCensus
         var offenders = new List<string>();
         var gated = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (XAttribute attribute in window.Attributes().Where(attribute => !attribute.IsNamespaceDeclaration
-            && attribute.Name.Namespace == XNamespace.None))
+        foreach (XAttribute attribute in window.Attributes())
         {
-            string name = attribute.Name.LocalName;
-            if (!IsInputEvent(name))
+            if (XamlMemberName(attribute) is not { } name || !IsInputEvent(name))
             {
                 continue;
             }
@@ -1363,32 +1383,44 @@ public sealed class ShellSealAdmissionCensus
         return offenders;
     }
 
-    /// <summary>Overrides on the window whose single parameter is a routed
-    /// input's arguments, a drag's included (CB-38).</summary>
-    private static List<string> InputOverrideOffenders(IEnumerable<Unit> window)
+    /// <summary>Overrides on the window that take a routed input's
+    /// arguments, a drag's and a mnemonic's included (CB-38), judged by the
+    /// bound parameter type's inheritance, so an alias or a qualified name
+    /// hides none (codex round 2 on CB-38).</summary>
+    private static List<string> InputOverrideOffenders(CSharpCompilation compilation)
     {
-        Type[] inputArguments = typeof(InputEventArgs).Assembly.GetTypes()
-            .Concat(typeof(AccessKeyPressedEventArgs).Assembly.GetTypes())
-            .Where(type => typeof(InputEventArgs).IsAssignableFrom(type)
-                || type == typeof(AccessKeyPressedEventArgs)
-                || typeof(DragEventArgs).IsAssignableFrom(type))
-            .ToArray();
         var offenders = new List<string>();
-        foreach (Unit unit in window)
+        foreach (SyntaxTree tree in SourceTrees(compilation))
         {
-            foreach (MethodDeclarationSyntax method in unit.Root.DescendantNodes()
-                .OfType<MethodDeclarationSyntax>()
-                .Where(method => method.Modifiers.Any(SyntaxKind.OverrideKeyword)
-                    && method.ParameterList.Parameters is [{ Type: { } parameter }]
-                    && inputArguments.Any(type => type.Name == CSharpSource.Normalize(parameter).Split('.').Last())))
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (MethodDeclarationSyntax method in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
             {
-                offenders.Add($"{unit.Name}:{Line(method)} overrides {method.Identifier.ValueText} — the window's class "
-                    + "handling runs before its own preview handlers, so the admission cannot take that input first");
+                if (model.GetDeclaredSymbol(method) is { IsOverride: true } overriding
+                    && IsMainWindow(overriding.ContainingType)
+                    && overriding.Parameters.Any(parameter => IsInputArguments(compilation, parameter.Type)))
+                {
+                    offenders.Add($"{Path.GetFileName(tree.FilePath)}:{Line(method)} overrides {overriding.Name}: the window's class "
+                        + "handling runs before its own preview handlers, so the admission cannot take that input first");
+                }
             }
         }
 
         return offenders;
     }
+
+    /// <summary>Whether <paramref name="type"/> is a routed input's
+    /// arguments by its inheritance: an input event's, a drag's, or a
+    /// mnemonic's.</summary>
+    private static bool IsInputArguments(CSharpCompilation compilation, ITypeSymbol type) =>
+        new[] { "System.Windows.Input.InputEventArgs", "System.Windows.DragEventArgs", "System.Windows.Input.AccessKeyPressedEventArgs" }
+            .Select(compilation.GetTypeByMetadataName)
+            .Any(ancestor => ancestor is not null && DerivesFrom(type, ancestor));
+
+    /// <summary>The compilation's own source trees, never a generated
+    /// one.</summary>
+    private static IEnumerable<SyntaxTree> SourceTrees(CSharpCompilation compilation) =>
+        compilation.SyntaxTrees.Where(tree => tree.FilePath.EndsWith(".cs", StringComparison.Ordinal)
+            && !tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
 
     /// <summary>
     /// Every stylus handler in the shell (see
@@ -1426,9 +1458,8 @@ public sealed class ShellSealAdmissionCensus
         {
             foreach (XElement element in root.DescendantsAndSelf())
             {
-                foreach (XAttribute attribute in element.Attributes().Where(attribute => !attribute.IsNamespaceDeclaration
-                    && attribute.Name.Namespace == XNamespace.None
-                    && IsStylusEvent(attribute.Name.LocalName.Split('.').Last())))
+                foreach (XAttribute attribute in element.Attributes().Where(attribute =>
+                    XamlMemberName(attribute) is { } member && IsStylusEvent(member.Split('.').Last())))
                 {
                     offenders.Add($"{name}:{((IXmlLineInfo)attribute).LineNumber} <{element.Name.LocalName} {attribute.Name.LocalName}=\"{attribute.Value}\">");
                 }
@@ -1521,10 +1552,33 @@ public sealed class ShellSealAdmissionCensus
                     };
                 }
 
+            // Codex round 2 on CB-38: a registration API taken as a method
+            // group registers whatever it is later handed, which the census
+            // does not follow. The member access is read, not its name, so a
+            // group is reported once.
+            case MemberAccessExpressionSyntax or IdentifierNameSyntax
+                when node.Parent is not MemberAccessExpressionSyntax { Name: var name } || !ReferenceEquals(name, node):
+                return model.GetOperation(node) is IMethodReferenceOperation { Method: var referenced } && IsRegistrationApi(referenced)
+                    ? $"takes {referenced.ContainingType.Name}.{referenced.Name} as a method group, a registration whose event "
+                        + "and handler the census does not follow"
+                    : null;
+
             default:
                 return null;
         }
     }
+
+    /// <summary>Whether <paramref name="method"/> registers a routed
+    /// handler: a <c>Stylus.Add…Handler</c>, or any method that takes a
+    /// <c>RoutedEvent</c> and a handler (<c>AddHandler</c>,
+    /// <c>RegisterClassHandler</c>), a removal aside.</summary>
+    private static bool IsRegistrationApi(IMethodSymbol method) =>
+        !method.Name.StartsWith("Remove", StringComparison.Ordinal)
+        && ((IsNamed(method.ContainingType, "System.Windows.Input.Stylus")
+                && method.Name.StartsWith("Add", StringComparison.Ordinal)
+                && method.Name.EndsWith("Handler", StringComparison.Ordinal))
+            || (method.Parameters.Any(parameter => IsNamed(parameter.Type, "System.Windows.RoutedEvent"))
+                && method.Parameters.Any(parameter => IsNamed(parameter.Type, "System.Delegate") || parameter.Type.TypeKind == TypeKind.Delegate)));
 
     private enum StylusVerdict
     {
@@ -1585,9 +1639,19 @@ public sealed class ShellSealAdmissionCensus
             case IFieldReferenceOperation { Field: var field }:
                 if (field.DeclaringSyntaxReferences is [var declared, ..])
                 {
-                    return declared.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: var initializer }
+                    // A shell field holds its initializer only when it is
+                    // readonly and nothing writes it anywhere, its
+                    // constructors included (codex round 2 on CB-38).
+                    return field.IsReadOnly
+                        && declared.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: var initializer }
+                        && !WrittenFields(compilation).Contains(field.OriginalDefinition)
                         ? RoutedEventsOf(compilation, compilation.GetSemanticModel(initializer.SyntaxTree).GetOperation(initializer), depth + 1)
                         : null;
+                }
+
+                if (!field.IsReadOnly && !field.IsConst)
+                {
+                    return null;
                 }
 
                 return Type.GetType($"{MetadataName(field.ContainingType)}, {field.ContainingAssembly.Name}")?
@@ -1649,6 +1713,37 @@ public sealed class ShellSealAdmissionCensus
         }
     }
 
+    /// <summary>Every field a compilation's sources write outside the
+    /// field's own initializer: an assignment to it, an object initializer's
+    /// member, a <c>ref</c> or <c>out</c> argument. Read once per
+    /// compilation.</summary>
+    private static HashSet<ISymbol> WrittenFields(CSharpCompilation compilation) =>
+        WrittenFieldsByCompilation.GetValue(compilation, static built =>
+        {
+            var written = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            foreach (SyntaxTree tree in SourceTrees(built))
+            {
+                SemanticModel model = built.GetSemanticModel(tree);
+                foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+                {
+                    ExpressionSyntax? target = node switch
+                    {
+                        AssignmentExpressionSyntax assignment => assignment.Left,
+                        ArgumentSyntax { RefKindKeyword.RawKind: not 0 } passed => passed.Expression,
+                        _ => null,
+                    };
+                    if (target is not null && model.GetSymbolInfo(target).Symbol is IFieldSymbol field)
+                    {
+                        _ = written.Add(field.OriginalDefinition);
+                    }
+                }
+            }
+
+            return written;
+        });
+
+    private static readonly ConditionalWeakTable<CSharpCompilation, HashSet<ISymbol>> WrittenFieldsByCompilation = new();
+
     /// <summary>The handler an <c>EventSetter</c>'s initializer gives beside
     /// its <c>Event</c>, or null.</summary>
     private static IOperation? SetterHandler(SemanticModel model, SyntaxNode eventAssignment) =>
@@ -1701,6 +1796,24 @@ public sealed class ShellSealAdmissionCensus
             ? $"{MetadataName(outer)}+{type.MetadataName}"
             : $"{type.ContainingNamespace.ToDisplayString()}.{type.MetadataName}";
 
+    /// <summary>The member a XAML attribute names, read through its xmlns
+    /// (codex round 2 on CB-38): with no prefix, or with a prefix bound to
+    /// WPF's own namespaces, to a <c>clr-namespace</c>, or to any namespace
+    /// the census does not know, its local name (<c>Stylus.StylusUp</c> for
+    /// <c>pen:Stylus.StylusUp</c>); null for a namespace declaration and for
+    /// the XAML language, markup compatibility, design and XML namespaces,
+    /// whose attributes attach no handler.</summary>
+    private static string? XamlMemberName(XAttribute attribute) =>
+        attribute.IsNamespaceDeclaration || NoMemberNamespaces.Contains(attribute.Name.NamespaceName) ? null : attribute.Name.LocalName;
+
+    private static readonly HashSet<string> NoMemberNamespaces =
+    [
+        "http://schemas.microsoft.com/winfx/2006/xaml",
+        "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        "http://schemas.microsoft.com/expression/blend/2008",
+        "http://www.w3.org/XML/1998/namespace",
+    ];
+
     /// <summary>An <c>EventSetter</c>'s event as XAML names it, by its last
     /// name (<c>PreviewStylusDown</c>, <c>Stylus.PreviewStylusDown</c>,
     /// <c>{x:Static Stylus.PreviewStylusDownEvent}</c>); null where the
@@ -1737,7 +1850,8 @@ public sealed class ShellSealAdmissionCensus
     /// <c>HandledEventsToo="True"</c> whose event carries input or cannot be
     /// read; in code, a <c>HandledEventsToo</c> set to anything but false on
     /// an <c>EventSetter</c> whose event, by its value, carries input or does
-    /// not resolve.
+    /// not resolve, and any write to a setter's <c>Event</c>, <c>Handler</c>
+    /// or <c>HandledEventsToo</c> after its construction (codex round 2).
     /// </summary>
     private static List<string> PastHandledSetterOffenders(CSharpCompilation compilation, IEnumerable<(string Name, XElement Root)> xaml)
     {
@@ -1748,6 +1862,18 @@ public sealed class ShellSealAdmissionCensus
             SemanticModel model = compilation.GetSemanticModel(tree);
             foreach (AssignmentExpressionSyntax assignment in tree.GetRoot().DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
+                // Codex round 2 on CB-38: a setter's Event, Handler or
+                // HandledEventsToo written anywhere but its own object
+                // initializer is a write the census does not follow.
+                if (model.GetOperation(assignment) is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation { Property.Name: "Event" or "Handler" or "HandledEventsToo" } written }
+                    && IsNamed(written.Property.ContainingType, "System.Windows.EventSetter")
+                    && assignment.Parent is not InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax })
+                {
+                    offenders.Add($"{Path.GetFileName(tree.FilePath)}:{Line(assignment)} writes an EventSetter's {written.Property.Name} "
+                        + "after its construction, which the census does not follow");
+                    continue;
+                }
+
                 if (model.GetOperation(assignment) is not ISimpleAssignmentOperation
                     {
                         Target: IPropertyReferenceOperation { Property.Name: "HandledEventsToo" } target,
