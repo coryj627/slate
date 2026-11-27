@@ -869,12 +869,12 @@ public sealed partial class FilesRegionLandingTests
     public void ADuplicateAfterAWaitingRevealSeatsTheCopyAndDropsTheReveal() => RunSta(() =>
     {
         using var host = new Host();
-        WaitForAReveal(host);
         var opened = new List<string>();
-        FileTreeNodeViewModel original = LandOnSelected(host, "a.md", opened);
+        FileTreeNodeViewModel original = WaitForAReveal(host, opened);
 
         host.Sidebar.DuplicateCommand.Execute(null);
-        Settle(host);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
 
         FileTreeNodeViewModel copy = Assert.Single(host.Sidebar.RootNodes, node => node.Path is not ("a.md" or "b.md" or "docs"));
         Assert.Same(copy, host.Sidebar.SelectedNode);
@@ -899,12 +899,12 @@ public sealed partial class FilesRegionLandingTests
     public void ACreateAfterAWaitingRevealSeatsTheNewRowAndDropsTheReveal() => RunSta(() =>
     {
         using var host = new Host();
-        WaitForAReveal(host);
         var opened = new List<string>();
-        _ = LandOnSelected(host, "a.md", opened);
+        _ = WaitForAReveal(host, opened);
 
         host.Sidebar.CreateNoteCommand.Execute(null);
-        Settle(host);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
 
         FileTreeNodeViewModel created = host.Sidebar.RootNodes.Single(node => node.Path == "Untitled.md");
         Assert.Same(created, host.Sidebar.SelectedNode);
@@ -945,9 +945,14 @@ public sealed partial class FilesRegionLandingTests
             waited = ReferenceEquals(trashed, host.Sidebar.SelectedNode);
         };
 
+        // Plan 47 CB-39: the Reveal's folder load is held until the trash has
+        // published, so the Reveal seats at one point only: the trash's
+        // refresh cancels the held load and lists the folder itself.
+        host.HoldTreeWork();
         (batch ? host.Sidebar.BatchTrashCommand : host.Sidebar.DeleteCommand).Execute(null);
         Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.TrashCompletion.IsCompleted), "the trash never finished");
-        Settle(host);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
 
         Assert.True(waited, "premise: the Reveal seated before the trash finished");
         Assert.False(File.Exists(Path.Combine(host.Root, "a.md")), "premise: the trash left the note");
@@ -958,21 +963,24 @@ public sealed partial class FilesRegionLandingTests
         Assert.True(host.FocusChanges.Count <= 1, $"the keys moved {host.FocusChanges.Count} times");
     });
 
-    /// <summary>A Reveal in File Tree of <c>docs/n.md</c> asked while its
-    /// folder is collapsed and unlisted: the folder opens and lists its rows,
-    /// and the Reveal waits for a later publication.</summary>
-    private static void WaitForAReveal(Host host)
+    /// <summary>The reader's <c>a.md</c> selected with the keys on it, then a
+    /// Reveal in File Tree of <c>docs/n.md</c> asked while its folder is
+    /// collapsed and unlisted. Plan 47 CB-39: the folder's own load seats a
+    /// Reveal now, so the load is held and the Reveal waits; the fact releases
+    /// it. The reader selects first, since a selection made after the Reveal
+    /// is a newer intent that drops it.</summary>
+    private static FileTreeNodeViewModel WaitForAReveal(Host host, List<string> opened)
     {
         SeedNotes(host, ("docs/n.md", DateTime.Now), ("a.md", DateTime.Now), ("b.md", DateTime.Now));
         host.Initialize();
+        FileTreeNodeViewModel original = LandOnSelected(host, "a.md", opened);
         FileTreeNodeViewModel docs = host.Sidebar.RootNodes.Single(node => node.Path == "docs");
         Assert.False(docs.IsExpanded, "premise: the folder starts open");
+        host.HoldTreeWork();
         host.Sidebar.SelectPathFromSurface("docs/n.md");
-        Assert.True(
-            PumpedDispatcher.PumpUntil(() => docs.Children.Any(node => node.Path == "docs/n.md")),
-            "premise: the folder never listed its rows");
-        Settle(host);
-        Assert.False(RevealedRow(host).IsSelected, "premise: the folder's own load seated the Reveal");
+        Assert.False(docs.HasLoadedChildren, "premise: the folder listed its rows while its load was held");
+        Assert.Same(original, host.Sidebar.SelectedNode);
+        return original;
     }
 
     private static FileTreeNodeViewModel RevealedRow(Host host) =>
