@@ -612,6 +612,40 @@ public sealed partial class FilesRegionLandingTests
         Assert.Empty(host.FocusChanges);
     });
 
+    /// <summary>A filter keystroke while a create's publication is pending is
+    /// the reader's newer gesture, and it names no row (Codex round 1): the
+    /// create's rename arm drops, so the publication neither selects the new
+    /// note nor pulls the keys out of the filter field into the name
+    /// field.</summary>
+    [Fact]
+    public void AFilterKeystrokeDuringACreatesPublicationDropsItsRenameArm() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        bool renameArmed = false;
+        host.Sidebar.InlineRenameRequested += () => renameArmed = true;
+        host.HoldTreeWork();
+        host.Sidebar.CreateNoteCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(host.Root, "Untitled.md")), "premise: the create wrote no note");
+        PumpedDispatcher.Drain();
+        Assert.False(renameArmed, "premise: the rename was armed before the publication");
+
+        Assert.True(host.FilterField.Focus(), "premise: the filter field refused the keys");
+        PumpedDispatcher.Drain();
+        host.FilterField.Text = "b";
+        Assert.Equal("b", host.Sidebar.FilterText);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+        Settle(host);
+
+        Assert.False(renameArmed, "the create's rename was armed after the filter keystroke");
+        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        Assert.NotEqual("Untitled.md", host.Sidebar.SelectedNode?.Path);
+        Assert.Equal("b", host.Sidebar.FilterText);
+    });
+
     /// <summary>Expand loaded folders cancels the Reveal's own folder load and
     /// lists the folder itself: the wait goes on, and the Reveal seats when the
     /// run lists its row, while the run is still going, the keys on the row
@@ -785,6 +819,80 @@ public sealed partial class FilesRegionLandingTests
         AssertNeverSeated(host, "docs/n.md", log);
         Assert.Empty(log.Opened);
         Assert.Empty(host.FocusChanges);
+    });
+
+    /// <summary>A refresh (a watcher's, after any Slate write, or Refresh)
+    /// cancels Expand loaded folders before the run lists the Reveal's folder.
+    /// The folder lists once and the Reveal seats there, the keys on its row in
+    /// one move, and the row stays: a folder load the cancelled run's end starts
+    /// is the one that lists it, since the refresh leaves a folder whose own
+    /// load runs to that load, so nothing lists the folder a second time under
+    /// the seated row.</summary>
+    [Fact]
+    public void ARefreshDuringExpandLoadedSeatsTheRevealOnceAndKeepsItsRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(host.Sidebar.IsExpandingLoaded, "premise: Expand loaded folders is not running");
+
+        host.Sidebar.Refresh();
+        Assert.True(PumpedDispatcher.PumpUntil(() => !host.Sidebar.IsExpandingLoaded), "premise: the refresh did not end the run");
+        host.ReleaseTreeWork();
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        SettleLoads(host);
+
+        AssertSeatedOnce(host, "docs/n.md", log);
+    });
+
+    /// <summary>A folder the reader opens by hand cancels Expand loaded folders
+    /// while the run holds the Reveal's own folder unlisted, and that other
+    /// folder's load fails (Codex round 1). The run's end takes the Reveal's
+    /// step, which lists its folder, so the Reveal seats at the time, the keys
+    /// on its row once; a later good refresh seats nothing more.</summary>
+    [Fact]
+    public void AnUnrelatedFailingExpansionThatCancelsExpandLoadedLeavesTheRevealItsOwnWalk() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        RevealLog log = KeysOutsideFiles(host);
+        FileTreeNodeViewModel docs = Row(host, "docs");
+        host.HoldTreeWork();
+        int started = host.TreeWorkStarted;
+        host.Sidebar.SelectPathFromSurface("deep/mid/n2.md");
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.TreeWorkStarted > started), "premise: deep's load never reached the tree worker");
+
+        host.Sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.TreeWorkStarted > started + 1), "premise: the run's load never reached the tree worker");
+        Assert.True(host.Sidebar.IsExpandingLoaded, "premise: Expand loaded folders is not running");
+
+        // The reader opens docs by hand, which cancels the run, and docs's load
+        // fails. Nothing is pumped until it has reached the worker, so docs's
+        // load is the one that fails.
+        host.FailNextTreeWork();
+        docs.IsExpanded = true;
+        Assert.True(SpinWait.SpinUntil(() => host.TreeWorkStarted > started + 2, TimeSpan.FromSeconds(10)), "premise: docs's load never reached the tree worker");
+        Assert.True(PumpedDispatcher.PumpUntil(() => docs.ChildLoadFailed), "premise: docs's load did not fail");
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.ExpandLoadedCompletion);
+        Assert.False(host.Sidebar.IsExpandingLoaded, "premise: the run was not cancelled");
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+
+        Assert.True(
+            host.Sidebar.SelectedNode?.Path == "deep/mid/n2.md",
+            $"the Reveal did not seat at the time: {host.Sidebar.SelectedNode?.Path ?? "nothing"} is selected, and deep is {Row(host, "deep").ChildLoadState}");
+        AssertSeatedOnce(host, "deep/mid/n2.md", log);
+
+        host.Sidebar.Refresh();
+        Settle(host);
+        SettleLoads(host);
+
+        AssertSeatedOnce(host, "deep/mid/n2.md", log);
     });
 
     /// <summary>A whole-tree refresh cancels the Reveal's folder load to list
