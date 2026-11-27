@@ -1941,7 +1941,7 @@ public sealed class ShellSealAdmissionCensus
             || arguments == typeof(AccessKeyPressedEventArgs));
 
     /// <summary>The names of every routed event registered once the input
-    /// classes have registered theirs.</summary>
+    /// and framework classes have registered theirs.</summary>
     private static readonly Lazy<HashSet<string>> KnownEventNames = new(() =>
         new HashSet<string>(RegisteredEvents().Select(routed => routed.Name), StringComparer.Ordinal));
 
@@ -1950,12 +1950,25 @@ public sealed class ShellSealAdmissionCensus
     private static readonly Lazy<HashSet<string>> InputEventNames = new(() =>
         new HashSet<string>(RegisteredEvents().Where(CarriesInput).Select(routed => routed.Name), StringComparer.Ordinal));
 
+    /// <summary>Every routed event WPF has registered, once the classes
+    /// that own the events the census names have run their type
+    /// initializers. A class registers its events only as it initializes, so
+    /// without these the cached names hold whatever the facts run before
+    /// had touched: the PR's merge judge (m1) found that a run of the XAML
+    /// setter rows ahead of
+    /// <see cref="ASetterPastHandledForAnEventThatCarriesNoInputPasses"/>
+    /// left <c>Loaded</c> out, and the fact failed.</summary>
     private static RoutedEvent[] RegisteredEvents()
     {
-        _ = Stylus.StylusDownEvent;
-        _ = UIElement.TouchDownEvent;
-        _ = UIElement.StylusDownEvent;
-        _ = DragDrop.DropEvent;
+        foreach (Type owner in new[]
+        {
+            typeof(Stylus), typeof(Touch), typeof(DragDrop), typeof(UIElement), typeof(ContentElement),
+            typeof(FrameworkElement), typeof(FrameworkContentElement), typeof(System.Windows.Controls.Control),
+        })
+        {
+            RuntimeHelpers.RunClassConstructor(owner.TypeHandle);
+        }
+
         return EventManager.GetRoutedEvents();
     }
 
