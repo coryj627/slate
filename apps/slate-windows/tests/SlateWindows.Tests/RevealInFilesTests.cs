@@ -251,6 +251,161 @@ public sealed class RevealInFilesTests
         shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
     });
 
+    /// <summary>A Reveal into a folder whose load is held, asked with the keys
+    /// on a note header's segment; the reader then moves the keys into the
+    /// editor, opening nothing (the merge judge's major 1, the lead's ruling
+    /// (a)). When the folder lists, the row is selected silently on both
+    /// halves: nothing lands, nothing opens, nothing is said, and the tabs
+    /// stay. The reader's return to Files lands the keys on that row, and a
+    /// later whole-tree publication neither opens it nor moves the keys.</summary>
+    [Fact]
+    public void ALateRevealAfterTheKeysMovedSelectsItsRowSilently() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        UIElement editor = shell.Editor;
+        Assert.True(editor.Focus(), "premise: the editor did not take the keys");
+        shell.Mark();
+        string tabs = shell.Tabs;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(editor.IsKeyboardFocused, "the keys left the editor");
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+        shell.AssertSelectedOnBothHalves("docs/n.md");
+
+        shell.Sidebar.Refresh();
+        shell.SettleLoads();
+
+        Assert.True(editor.IsKeyboardFocused, "a later publication moved the keys");
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+
+        Assert.True(shell.Host.Shell.LandOnFilesTree(), "the window's Files landing took nothing");
+        shell.SettleLoads();
+        shell.AssertKeysMovedOnceTo("docs/n.md", 0);
+
+        shell.Sidebar.Refresh();
+        shell.SettleLoads();
+
+        shell.AssertKeysMovedOnceTo("docs/n.md", 0);
+        shell.AssertSelectedOnBothHalves("docs/n.md");
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.DoesNotContain(shell.SaidSinceMark, said => said is A11yEvent.RowSelected);
+        Assert.Equal(tabs, shell.Tabs);
+    });
+
+    /// <summary>A Reveal from the graph tab into a folder whose load is held,
+    /// the keys left on the graph table where the gesture had them: when the
+    /// folder lists, the keys land on the row once, as before.</summary>
+    [Fact]
+    public void ALateRevealWithTheKeysStillOnTheGraphLandsThemOnce() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.OpenGraph();
+        PumpedDispatcher.PumpUntilDrained(shell.Host.Workspace.GraphDocument!.WhenAllWorkDrained());
+        shell.Host.Settle();
+        DataGrid table = ShownShell.Descendants(shell.Host.Shell).OfType<DataGrid>().First(grid => grid.IsVisible);
+        Assert.True(table.Focus() || table.IsKeyboardFocusWithin, "premise: the graph table did not take the keys");
+        shell.Mark();
+        shell.HoldTreeWork();
+
+        Assert.True(shell.Host.Workspace.RevealGraphRowFromSurface("docs/n.md"));
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
+    /// <summary>A Reveal into a folder whose load is held; the reader opens
+    /// another note through the workspace (the merge judge's major 1). The
+    /// open ends the wait: when the folder lists, the revealed note is never
+    /// seated or opened, the reader's note and the keys stay, and nothing is
+    /// said.</summary>
+    [Fact]
+    public void AnOpenWhileARevealWaitsEndsIt() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.OpenAndParkKeysInTheEditor();
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+
+        shell.Host.Workspace.OpenPath("a.md");
+        shell.Host.Settle();
+        Assert.True(shell.Host.Workspace.ActiveGroup.ActiveTab?.Path == "a.md", "premise: the reader's open failed");
+        shell.Mark();
+        string tabs = shell.Tabs;
+        IInputElement keys = Keyboard.FocusedElement;
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+        shell.Sidebar.Refresh();
+        shell.SettleLoads();
+
+        shell.AssertNeverSeated("docs/n.md");
+        Assert.Equal("a.md", shell.Host.Workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.Equal(tabs, shell.Tabs);
+        Assert.Same(keys, Keyboard.FocusedElement);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+    });
+
+    /// <summary>The merge judge's minor 1: the reader's row selected with the
+    /// keys on it, a Reveal waiting on a held folder, and F2 pressed in the
+    /// same pass as the folder's publication, which runs first. The seat is the
+    /// newer intent: the rename's queued focus gives way, so the name field
+    /// never takes the keys holding the revealed note's name, and Enter renames
+    /// nothing.</summary>
+    [Fact]
+    public void F2InTheRevealsPublicationPassRenamesNothing() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        var nameFieldHeld = new List<string>();
+        nameField.GotKeyboardFocus += (_, _) => nameFieldHeld.Add(nameField.Text);
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.Mark();
+
+        Dispatcher dispatcher = shell.Host.Shell.Dispatcher;
+        using var posted = new ManualResetEventSlim();
+        DispatcherHookEventHandler onPosted = (_, e) =>
+        {
+            if (e.Operation.Priority == DispatcherPriority.Normal && !dispatcher.CheckAccess())
+            {
+                posted.Set();
+            }
+        };
+        dispatcher.Hooks.OperationPosted += onPosted;
+        shell.ReleaseTreeWork();
+        Assert.True(posted.Wait(TimeSpan.FromSeconds(10)), "premise: the folder's publication was never posted");
+        dispatcher.Hooks.OperationPosted -= onPosted;
+        Assert.True(shell.PressWithoutPumping(Key.F2), "premise: F2 on the selected row went unhandled");
+        shell.SettleLoads();
+
+        Assert.DoesNotContain("n.md", nameFieldHeld);
+        if (nameField.IsKeyboardFocused)
+        {
+            nameField.Text = "renamed.md";
+        }
+
+        _ = shell.PressWithoutPumping(Key.Enter);
+        shell.SettleLoads();
+
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "n.md")), "Enter renamed the revealed note");
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a.md")), "Enter renamed the reader's note");
+        Assert.Empty(Directory.EnumerateFiles(shell.Host.Root, "renamed.md", SearchOption.AllDirectories));
+    });
+
     private static void Invoke(UIElement element) =>
         ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(element).GetPattern(PatternInterface.Invoke)).Invoke();
 
@@ -299,8 +454,70 @@ public sealed class RevealInFilesTests
                 Opens.Add(request.Path);
                 Host.Workspace.OpenPath(request.Path, request.Target, fromSelection: !request.FocusEditor);
             };
+            // Every open reaches the lifecycle's own handler, subscribed as
+            // InitializeWorkspace subscribes it (a workspace attached through
+            // the setter has none).
+            Host.Workspace.FileOpened += (EventHandler<string>)Delegate.CreateDelegate(
+                typeof(EventHandler<string>),
+                Host.Lifecycle,
+                typeof(VaultLifecycleViewModel).GetMethod("Workspace_FileOpened", BindingFlags.NonPublic | BindingFlags.Instance)
+                    ?? throw new InvalidOperationException("The lifecycle's open handler is gone"));
             Host.Settle();
             _focus = Host.RecordFocusChanges();
+        }
+
+        public IReadOnlyList<string> OpensSinceMark => [.. Opens.Skip(_opensMark)];
+
+        /// <summary>The workspace's tabs by path, the active one marked.</summary>
+        public string Tabs => string.Join(
+            " | ",
+            Host.Workspace.ActiveGroup.Tabs.Select(tab => ReferenceEquals(tab, Host.Workspace.ActiveGroup.ActiveTab) ? $"*{tab.Path}" : tab.Path));
+
+        /// <summary>The visible editor's text area.</summary>
+        public UIElement Editor =>
+            ShownShell.Descendants(Host.Shell).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(candidate => candidate.IsVisible);
+
+        /// <summary>The reader selects the row at <paramref name="path"/> and
+        /// puts the keys on it, as an arrow onto it does.</summary>
+        public void SelectAndFocusRow(string path)
+        {
+            FileTreeNodeViewModel row = Row(path);
+            Sidebar.SelectedNode = row;
+            Host.Shell.UpdateLayout();
+            TreeViewItem? container = ContainerOf(row);
+            Assert.True(container is not null && container.Focus(), $"premise: {path}'s row did not take the keys");
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>A key pressed where the keys are, through the window's
+        /// routes, with nothing pumped after it.</summary>
+        public bool PressWithoutPumping(Key key)
+        {
+            var target = (UIElement)Keyboard.FocusedElement;
+            PresentationSource source = PresentationSource.FromVisual(target)!;
+            var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            target.RaiseEvent(preview);
+            if (preview.Handled)
+            {
+                return true;
+            }
+
+            var down = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.KeyDownEvent };
+            target.RaiseEvent(down);
+            return down.Handled;
+        }
+
+        /// <summary>The row at <paramref name="path"/> holds the selection on
+        /// both halves.</summary>
+        public void AssertSelectedOnBothHalves(string path)
+        {
+            FileTreeNodeViewModel row = Row(path);
+            Assert.Same(row, Sidebar.SelectedNode);
+            Assert.True(row.IsSelected, $"{path}'s node does not hold the selection");
+            Host.Shell.UpdateLayout();
+            TreeViewItem? container = ContainerOf(row);
+            Assert.True(container is not null && container.IsSelected, $"{path}'s container is not selected");
+            Assert.Same(row, Tree.SelectedItem);
         }
 
         public ShownShell Host { get; }

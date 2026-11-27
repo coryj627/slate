@@ -646,6 +646,39 @@ public sealed partial class FilesRegionLandingTests
         Assert.Equal("b", host.Sidebar.FilterText);
     });
 
+    /// <summary>A filter keystroke while a rename's publication is pending
+    /// keeps the rename's named row (the merge judge's minor 2; main kept it):
+    /// the publication selects the renamed row silently, nothing opens or is
+    /// said, and the keys stay in the filter field.</summary>
+    [Fact]
+    public void AFilterKeystrokeDuringARenamesPublicationKeepsItsRenamedRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        host.Sidebar.SelectedNode = Row(host, "a.md");
+        Settle(host);
+        RevealLog log = KeysOutsideFiles(host);
+        host.HoldTreeWork();
+        Assert.Equal("aa.md", Mutate(host, "rename"));
+
+        Assert.True(host.FilterField.Focus(), "premise: the filter field refused the keys");
+        PumpedDispatcher.Drain();
+        host.FilterField.Text = "b";
+        Assert.Equal("b", host.Sidebar.FilterText);
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+        Settle(host);
+
+        Assert.Equal("aa.md", host.Sidebar.SelectedNode?.Path);
+        Assert.True(Row(host, "aa.md").IsSelected, "the renamed row's node is not selected");
+        Assert.Same(host.FilterField, Keyboard.FocusedElement);
+        Assert.Empty(SelectionLines(host));
+        Assert.Empty(log.Opened);
+        Assert.Equal("b", host.Sidebar.FilterText);
+    });
+
     /// <summary>Expand loaded folders cancels the Reveal's own folder load and
     /// lists the folder itself: the wait goes on, and the Reveal seats when the
     /// run lists its row, while the run is still going, the keys on the row

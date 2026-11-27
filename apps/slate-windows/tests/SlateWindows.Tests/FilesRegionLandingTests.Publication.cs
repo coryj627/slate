@@ -923,8 +923,8 @@ public sealed partial class FilesRegionLandingTests
     /// from another surface while it runs, into a folder that has not listed
     /// its rows. That Reveal is newer than the trash, so the trash's focus
     /// restore keeps it and the trash's publication seats it: the revealed
-    /// note takes the selection, as a Reveal does, and the keys move at most
-    /// once.</summary>
+    /// note takes the selection, as a Reveal does, and the keys move once, to
+    /// its row.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -960,7 +960,11 @@ public sealed partial class FilesRegionLandingTests
         Assert.Same(revealed, host.Sidebar.SelectedNode);
         Assert.True(revealed.IsSelected, "the revealed note's node does not hold the selection");
         Assert.Contains("docs/n.md", opened);
-        Assert.True(host.FocusChanges.Count <= 1, $"the keys moved {host.FocusChanges.Count} times");
+        TreeViewItem container = ContainerOf(host, revealed);
+        Assert.True(container.IsKeyboardFocused, $"the keys are on {Keyboard.FocusedElement}, not on the revealed row");
+        Assert.True(
+            host.FocusChanges.Count == 1 && ReferenceEquals(host.FocusChanges[0], container),
+            $"the keys moved {host.FocusChanges.Count} times");
     });
 
     /// <summary>The reader's <c>a.md</c> selected with the keys on it, then a
