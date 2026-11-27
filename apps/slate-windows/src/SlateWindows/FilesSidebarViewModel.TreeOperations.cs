@@ -945,15 +945,17 @@ internal sealed partial class FilesSidebarViewModel
         finally
         {
             IsExpandingLoaded = false;
-            // Plan 47 CB-39: a run that finished lets a Reveal still waiting take
-            // its next step, which may open a folder the run listed but did not.
-            // A cancelled run takes none: its canceller lists the folders itself
-            // (a refresh, a folder's own load) or ends the wait (a refused close,
-            // the shutdown), and a load started here would outlive it.
-            if (!token.IsCancellationRequested)
-            {
-                AdvanceWaitingReveal();
-            }
+            // Plan 47 CB-39: a Reveal still waiting takes its next step, which may
+            // open a folder the run listed but did not, cancelled or not. A run
+            // cancelled by a folder the reader opened by hand leaves the Reveal's
+            // own folder unlisted, and that folder's load lists nothing on the
+            // Reveal's path (and may fail), so this step is what lists it. A
+            // refused close, the shutdown, a close's cancelled refresh and
+            // Collapse all have ended the wait already, so the step finds
+            // nothing. After a refresh, the load the step may start is the one
+            // that lists the folder: the refresh leaves a folder whose own load
+            // runs to that load (ListsItsRowsAgain).
+            AdvanceWaitingReveal();
             bool ownsCancellation = false;
             lock (_bulkExpandCancellationGate)
             {

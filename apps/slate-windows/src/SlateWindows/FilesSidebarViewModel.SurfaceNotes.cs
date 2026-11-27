@@ -46,7 +46,8 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
 
     /// <summary>Plan 47 CB-39: set while the sidebar seats a row of its own
     /// through the setter (a Reveal, a create's rename arm), which is not the
-    /// reader's selection.</summary>
+    /// reader's selection, and while a Reveal's seat clears the filter, which
+    /// is not the reader's filter change.</summary>
     private bool _seatingOwnSelection;
 
     /// <summary>Plan 47 CB-39: set while <see cref="AdvanceWaitingReveal"/>
@@ -330,11 +331,22 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// collapsed among them (Call 14); then the keys land on the row,
     /// unselected, and only then is it selected, so the selection's open
     /// switches tabs with the keys already in the tree and moves nothing
-    /// (B1).</summary>
+    /// (B1). The clear is the seat's own, not the reader's filter change, so
+    /// it runs with the seating flag set and takes no intent.</summary>
     private void SeatReveal(FileTreeNodeViewModel target)
     {
         _pendingSurfaceSelectPath = null;
-        ClearFilter();
+        bool outer = _seatingOwnSelection;
+        _seatingOwnSelection = true;
+        try
+        {
+            ClearFilter();
+        }
+        finally
+        {
+            _seatingOwnSelection = outer;
+        }
+
         foreach (FileTreeNodeViewModel ancestor in AncestorsOf(target))
         {
             if (!ancestor.IsExpanded)
