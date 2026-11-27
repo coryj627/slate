@@ -70,7 +70,7 @@ internal static class ShellSeal
         owned.AddHandler(AccessKeyManager.AccessKeyPressedEvent, new AccessKeyPressedEventHandler(TakeAccessKey), true);
     }
 
-    private static void Take(object sender, RoutedEventArgs e) => _ = TakesFor((Window)sender, e);
+    private static void Take(object? sender, RoutedEventArgs e) => _ = TakesFor((Window)sender!, e);
 
     /// <summary>The access key manager asks each candidate for its target;
     /// under the seal no element in an admitted window is one.</summary>

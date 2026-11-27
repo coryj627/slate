@@ -1840,7 +1840,7 @@ public sealed class ShellSealAdmissionCensus
     {
         ["ShellOf"] = "Window.GetWindow(element)switch{MainWindowshell=>shell,"
             + "WindowwindowwhenAdmittedWindows.TryGetValue(window,out_)=>window.OwnerasMainWindow,_=>null,}",
-        ["Take"] = "_=TakesFor((Window)sender,e)",
+        ["Take"] = "_=TakesFor((Window)sender!,e)",
         ["TakeAccessKey"] = "{if(TakesFor((Window)sender,e)){e.Target=null;}}",
         ["TakesFor"] = "ShellOf(owned)?.SealTakes(input,inTheShellsWindow:false)??false",
     };
