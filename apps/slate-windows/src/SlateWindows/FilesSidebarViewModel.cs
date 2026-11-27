@@ -557,13 +557,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 // neither clears that filter nor takes the keys out of the
                 // field; a mutation's pending row and a create's rename arm
                 // drop, so the publication neither selects that row nor pulls
-                // the keys into the name field (Call 2's one slot). A Reveal's
-                // own clear of the filter runs with the seating flag set and
-                // takes no intent.
-                if (!_seatingOwnSelection)
-                {
-                    _ = StateIntentNamingNoRow();
-                }
+                // the keys into the name field (Call 2's one slot).
+                _ = StateIntentNamingNoRow();
             }
         };
 
