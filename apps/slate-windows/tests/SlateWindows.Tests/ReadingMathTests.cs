@@ -262,7 +262,7 @@ public sealed class ReadingMathTests
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
 
             announced.Clear();
-            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.True(surface.TrySpeakSourceAtCaret());
             Assert.Equal(
                 @"Source: \begin{bmatrix} 1 \\ 2 \end{bmatrix}.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
@@ -632,7 +632,7 @@ public sealed class ReadingMathTests
                 surface.LandmarksForTests,
                 candidate => candidate.Kind == ReadingLandmarkKind.Math);
             surface.CaretPosition = landmark.Position;
-            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.True(surface.TrySpeakSourceAtCaret());
             Assert.Equal(
                 "Source: y^3 - 2.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
@@ -666,14 +666,14 @@ public sealed class ReadingMathTests
         {
             surface.CaretPosition = surface.Document.ContentStart.GetInsertionPosition(
                 System.Windows.Documents.LogicalDirection.Forward);
-            Assert.False(surface.TrySpeakMathSourceAtCaret());
+            Assert.False(surface.TrySpeakSourceAtCaret());
             Assert.Empty(announced);
 
             ReadingLandmark landmark = Assert.Single(
                 surface.LandmarksForTests,
                 candidate => candidate.Kind == ReadingLandmarkKind.Math);
             surface.CaretPosition = landmark.Position;
-            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.True(surface.TrySpeakSourceAtCaret());
             A11yEvent spoken = Assert.Single(announced);
             Assert.IsType<A11yEvent.MathSourceSpoken>(spoken);
             Assert.Equal("Source: \\nabla^2 f.", SlateUniffiMethods.A11yRender(spoken).Text);
@@ -692,7 +692,7 @@ public sealed class ReadingMathTests
             ReadingSemantics.MarkMathBlock(paragraph, "x");
             surface.Document.Blocks.Add(paragraph);
             surface.CaretPosition = paragraph.ContentStart;
-            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.True(surface.TrySpeakSourceAtCaret());
             Assert.Equal(
                 "Source not available.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);

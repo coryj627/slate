@@ -44,6 +44,11 @@ internal static class ReadingSemantics
             "ReadingDiagramFence", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty DiagramSourceProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingDiagramSource", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty HiddenSpeechProperty =
         DependencyProperty.RegisterAttached(
             "ReadingHiddenSpeech", typeof(bool), typeof(ReadingSemantics),
@@ -271,6 +276,17 @@ internal static class ReadingSemantics
 
     public static string? DiagramFenceOf(Paragraph paragraph) =>
         paragraph.GetValue(DiagramFenceProperty) as string;
+
+    /// <summary>Plan 47 CB-20b: every diagram paragraph, in every state,
+    /// carries its fence's interior as the note holds it, which the reading
+    /// view's source chord speaks (core's <c>DiagramSourceSpoken</c>). A
+    /// completion in place keeps the paragraph, so the source survives it.</summary>
+    public static void MarkDiagramSource(Paragraph paragraph, string source)
+    {
+    }
+
+    public static string? DiagramSourceOf(Paragraph paragraph) =>
+        paragraph.GetValue(DiagramSourceProperty) as string;
 
     /// <summary>#1595 and #1708: a run in the text range for line reading
     /// only: a formula's speech, a rendered diagram's description, a pending

@@ -1645,6 +1645,14 @@ pub enum A11yEvent {
     MathSourceSpoken {
         source: Option<String>,
     },
+    /// The reading view's source chord on a diagram (plan 47 CB-20b, CD12(d),
+    /// the twin of #1591): the authored Mermaid source is spoken on request,
+    /// never on focus or by Tab, which speak the diagram's description and
+    /// role. `source` is `None` when the fence holds nothing to speak; the
+    /// source keeps its line breaks and has no cap, as math's does.
+    DiagramSourceSpoken {
+        source: Option<String>,
+    },
 
     // --- Accessible data grid (W4-1, the #969 grid announce family) ---
     /// A grid column sort was applied (keyboard or header click).
@@ -2926,6 +2934,7 @@ impl A11yEvent {
                 Some(source) if !source.is_empty() => format!("Source: {source}."),
                 _ => "Source not available.".to_owned(),
             },
+            DiagramSourceSpoken { .. } => String::new(),
 
             GridSorted { column, ascending } => format!(
                 "Sorted by {column}, {}",
@@ -5626,6 +5635,16 @@ pub fn corpus() -> Vec<A11yEvent> {
             source: Some("\\nabla^2 f".into()),
         },
         MathSourceSpoken { source: None },
+        // Plan 47 CB-20b: the diagram's source on request. The first witness
+        // carries the leading spaces and trailing line break the trim takes
+        // off; the second is a blank fence.
+        DiagramSourceSpoken {
+            source: Some("  flowchart LR\nA --> B\nB --> C\n".into()),
+        },
+        DiagramSourceSpoken {
+            source: Some("  ".into()),
+        },
+        DiagramSourceSpoken { source: None },
         GridSorted {
             column: "Status".into(),
             ascending: true,
@@ -8463,6 +8482,9 @@ mod tests {
             (Medium, "Embed."),
             (Medium, "Source: \\nabla^2 f."),
             (Medium, "Source not available."),
+            (Medium, "Source: flowchart LR\nA --> B\nB --> C."),
+            (Medium, "Source not available."),
+            (Medium, "Source not available."),
             (Medium, "Sorted by Status, ascending"),
             (Medium, "Sorted by Due, descending"),
             (Medium, "Ship the plan. Status: Open. Due: Friday"),
@@ -10105,8 +10127,9 @@ mod tests {
             // plan 47 CB-17b (#1866, CD11) the press on a button whose work
             // is still running, WorkStillRunning, 240; plan 47 CB-16 (#1830,
             // CD10) the import's summary and its cancel, ImportFinished and
-            // ImportCancelling, 242.
-            242,
+            // ImportCancelling, 242; plan 47 CB-20b (CD12(d)) the reading
+            // view's on-request diagram source, DiagramSourceSpoken, 243.
+            243,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

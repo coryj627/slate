@@ -1628,18 +1628,19 @@ public sealed class ChordTableTests
 
     }
 
-    /// <summary>#1591 (plan 45 XB-9): the reading view's math braille and
-    /// source chords, read from the arms of
-    /// <c>ReadingNavigator.Surface_PreviewKeyDown</c> that request them (the
-    /// braille activation and <c>TrySpeakMathSourceAtCaret</c>): each arm's
-    /// key and its EXACT modifier state.</summary>
+    /// <summary>#1591 (plan 45 XB-9) and plan 47 CB-20b: the reading view's
+    /// math braille chord and its source chord (a formula's or a diagram's),
+    /// read from the arms of <c>ReadingNavigator.Surface_PreviewKeyDown</c>
+    /// that request them (the braille activation and
+    /// <c>TrySpeakSourceAtCaret</c>): each arm's key and its EXACT modifier
+    /// state.</summary>
     private static HashSet<string> ReadingMathRequestChords()
     {
         MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
             .Method("Surface_PreviewKeyDown");
         IfStatementSyntax[] arms = route.DescendantNodes()
             .OfType<IfStatementSyntax>()
-            .Where(arm => CSharpSource.Invokes(arm.Condition, "_surface.TrySpeakMathSourceAtCaret")
+            .Where(arm => CSharpSource.Invokes(arm.Condition, "_surface.TrySpeakSourceAtCaret")
                 || CSharpSource.Normalize(arm.Condition).Contains(
                     "_surface.TryActivateAtCaret(brailleRequested:true)", System.StringComparison.Ordinal))
             .ToArray();
@@ -1661,6 +1662,35 @@ public sealed class ChordTableTests
 
         Assert.Equal(2, chords.Count);
         return chords;
+    }
+
+    /// <summary>#1591 (the plan 45 XB-9 review) and plan 47 CB-20b: with
+    /// keyboard focus ON a formula or a diagram (Tab), the caret arms do not
+    /// apply, so the route answers the focused element: one arm each, gated on
+    /// a first press of Return with that element focused, handing its exact
+    /// modifier state to the answer, which picks the request (the source on
+    /// Ctrl+Shift+Enter for both).</summary>
+    [Fact]
+    public void TheFocusedFormulaAndDiagramAreAnsweredOnReturn()
+    {
+        MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
+            .Method("Surface_PreviewKeyDown");
+        foreach ((string element, string answer) in new[]
+        {
+            ("ReadingMathElement", "_surface.TryAnswerMath"),
+            ("ReadingDiagramElement", "_surface.TryAnswerDiagram"),
+        })
+        {
+            IfStatementSyntax arm = Assert.Single(
+                route.DescendantNodes().OfType<IfStatementSyntax>(),
+                candidate => CSharpSource.Invokes(candidate.Condition, answer));
+            string condition = CSharpSource.Normalize(arm.Condition);
+            Assert.Contains("key==Key.Return", condition, System.StringComparison.Ordinal);
+            Assert.Contains("!e.IsRepeat", condition, System.StringComparison.Ordinal);
+            Assert.Contains($"Keyboard.FocusedElementis{element}", condition, System.StringComparison.Ordinal);
+            Assert.Contains($"{answer}(", condition, System.StringComparison.Ordinal);
+            Assert.Contains(",Keyboard.Modifiers)", condition, System.StringComparison.Ordinal);
+        }
     }
 
     private static HashSet<string> GridGestureChords()

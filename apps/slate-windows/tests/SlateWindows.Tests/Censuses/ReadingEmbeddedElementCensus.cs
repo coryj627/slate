@@ -126,6 +126,7 @@ public sealed class ReadingEmbeddedElementCensus
                 continue;
             }
             met.Add(Row.MathUnmatched);
+            NoHelpText(child, "unmatched math", wrong);
             string name = AutomationProperties.GetName(child);
             string text = new TextRange(host!.ContentStart, host.ContentEnd).Text;
             if (name.Length == 0 || !text.Contains(name, StringComparison.Ordinal))
@@ -357,6 +358,7 @@ public sealed class ReadingEmbeddedElementCensus
             met.Add(row);
             string name = AutomationProperties.GetName(child);
             string where = $"{state}: {row} ({child.GetType().Name} \"{name}\")";
+            NoHelpText(child, where, wrong);
             if (row == Row.Rule)
             {
                 AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(child);
@@ -401,6 +403,19 @@ public sealed class ReadingEmbeddedElementCensus
                     }
                     break;
             }
+        }
+    }
+
+    /// <summary>Plan 47 CB-20b (the twin of #1591): no embedded element
+    /// carries HelpText, which a reader hears on Tab, so a source can reach
+    /// Tab only through a name. An element with no peer passes.</summary>
+    private static void NoHelpText(UIElement child, string where, List<string> wrong)
+    {
+        string property = AutomationProperties.GetHelpText(child);
+        string peer = UIElementAutomationPeer.CreatePeerForElement(child)?.GetHelpText() ?? string.Empty;
+        if (property.Length > 0 || peer.Length > 0)
+        {
+            wrong.Add($"{where}: it carries HelpText \"{(peer.Length > 0 ? peer : property)}\"");
         }
     }
 

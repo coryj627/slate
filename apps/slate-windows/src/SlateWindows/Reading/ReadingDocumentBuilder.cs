@@ -1166,6 +1166,12 @@ internal static class ReadingDocumentBuilder
     /// <summary>The placeholder's name while its diagram renders (WD11).</summary>
     internal const string PendingDiagramName = "Diagram, rendering";
 
+    /// <summary>A diagram's name when core gives none: the mac's defensive
+    /// fallback. Core builds a diagram block for a <c>mermaid</c> fence only
+    /// (<c>reading.rs</c>, the fence's language), so it names every diagram
+    /// the reading view holds.</summary>
+    internal const string FallbackDiagramName = "Mermaid diagram.";
+
     /// <summary>Whether <paramref name="artifact"/> is the canonical
     /// content of this fence: byte containment, then LIVE-source coherence
     /// (the W3-4/W3-2 lesson) — the reading block is parsed from the live
@@ -1208,7 +1214,7 @@ internal static class ReadingDocumentBuilder
         string description = matched.StructuredDescription.Trim();
         if (description.Length == 0)
         {
-            description = "Mermaid diagram.";
+            description = FallbackDiagramName;
         }
         // Landing text: trailing period stripped so the canonical
         // vocabulary's own punctuation composes ("…3 steps, diagram.").

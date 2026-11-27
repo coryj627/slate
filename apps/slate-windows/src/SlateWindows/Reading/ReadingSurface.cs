@@ -1464,7 +1464,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// speak the speech. The sentence is core's. Returns false off a math
     /// block, so the key falls through.
     /// </summary>
-    internal bool TrySpeakMathSourceAtCaret()
+    internal bool TrySpeakSourceAtCaret()
     {
         if (_model is not { } model
             || CaretPosition?.Paragraph is not { } paragraph
@@ -1507,6 +1507,11 @@ internal sealed class ReadingSurface : RichTextBox
                 return false;
         }
     }
+
+    /// <summary>Plan 47 CB-20b: with keyboard focus on a diagram element
+    /// (Tab), Ctrl+Shift+Enter speaks its source.</summary>
+    internal bool TryAnswerDiagram(
+        ReadingDiagramElement element, System.Windows.Input.ModifierKeys modifiers) => false;
 
     private static void AnnounceMathSpeech(ReadingContentViewModel model, Paragraph paragraph) =>
         model.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(

@@ -181,7 +181,7 @@ internal sealed class ReadingNavigator
             // request only (windows.reading.mathSource).
             if (key == Key.Return
                 && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)
-                && _surface.TrySpeakMathSourceAtCaret())
+                && _surface.TrySpeakSourceAtCaret())
             {
                 e.Handled = true;
                 return;
