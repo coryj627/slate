@@ -44,6 +44,12 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// installs only while its own number is this one (the watermark).</summary>
     private long _intentsTaken;
 
+    /// <summary>Plan 47 CB-39: the newest intent number taken. A landing the
+    /// window defers (a create's rename focus) reads it when it is asked and
+    /// gives way when a newer intent has been taken by the time it
+    /// runs.</summary>
+    internal long NewestIntent => _intentsTaken;
+
     /// <summary>Plan 47 CB-39: set while the sidebar seats a row of its own
     /// through the setter (a Reveal, a create's rename arm), which is not the
     /// reader's selection.</summary>

@@ -677,8 +677,18 @@ public partial class MainWindow : Window
 
         RevealFilesSidebar();
         SidebarFileActionsExpander.IsExpanded = true;
+        // Plan 47 CB-39: the name field's focus waits for Input priority. A
+        // newer intent the sidebar takes before then (a Reveal that lands
+        // first) owns the keys, and this older rename takes nothing.
+        FilesSidebarViewModel? sidebar = _observedFileSidebar;
+        long intent = sidebar?.NewestIntent ?? 0;
         _ = Dispatcher.InvokeAsync(() =>
         {
+            if (sidebar is not null && sidebar.NewestIntent != intent)
+            {
+                return;
+            }
+
             if (SidebarMutationNameTextBox.Focus())
             {
                 SelectSidebarRenameText();
