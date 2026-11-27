@@ -388,6 +388,10 @@ public sealed partial class CommandPaletteTests
                 // The fact's own throw, with input down.
             }
 
+            // A lifted contact moves the cursor once this thread reads the
+            // contact's last pointer message, so the reads below come after
+            // this thread has read what is queued for it.
+            PumpedDispatcher.Drain();
             string held = TouchAndDropNative.HeldButtonsAndModifiers();
             (int X, int Y)? cursorAfter = TouchAndDropNative.CursorPosition();
             bool lifted = TouchAndDropNative.InjectTouch(inside, TouchAndDropNative.Down);
