@@ -9,7 +9,9 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SlateWindows.FileManagement;
+using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -187,6 +189,68 @@ public sealed class RevealInFilesTests
         shell.AssertLandedOnceOn("b.md", opens: "b.md", said: "Selected: b.md");
     });
 
+    /// <summary>A create's publication arms its rename, and the window queues
+    /// the name field's focus at Input priority. A newer Reveal of a listed
+    /// note runs before that, at Normal priority, and lands (Codex round 3).
+    /// The older rename's queued focus then takes nothing: the keys stay on the
+    /// revealed row after one move, and the name field never takes
+    /// them.</summary>
+    [Fact]
+    public void ACreatesQueuedRenameFocusGivesWayToANewerReveal() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.OpenAndParkKeysInTheEditor();
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        bool nameFieldTookTheKeys = false;
+        nameField.GotKeyboardFocus += (_, _) => nameFieldTookTheKeys = true;
+        shell.HoldTreeWork();
+        shell.Sidebar.CreateNoteCommand.Execute(null);
+        shell.Mark();
+        int armed = 0;
+        int? movesBeforeTheReveal = null;
+        bool revealed = false;
+        shell.Sidebar.InlineRenameRequested += () =>
+        {
+            armed++;
+            _ = shell.Host.Shell.Dispatcher.InvokeAsync(
+                () =>
+                {
+                    movesBeforeTheReveal = shell.FocusChanges.Count;
+                    revealed = shell.Host.Workspace.RevealConnectionsRowFromSurface("b.md");
+                },
+                DispatcherPriority.Normal);
+        };
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Equal(1, armed);
+        Assert.True(revealed && movesBeforeTheReveal is not null, "premise: the newer Reveal never ran");
+        Assert.False(nameFieldTookTheKeys, "the older rename took the keys into the name field");
+        shell.AssertKeysMovedOnceTo("b.md", movesBeforeTheReveal!.Value);
+    });
+
+    /// <summary>The keys on a Connections leaf row; the leaf's Reveal in File
+    /// Tree of a note in a folder that has not listed its rows, whose open
+    /// re-roots the leaf on the note (the NVDA head session, row 2). The keys
+    /// move once, to the Files row, and never to a Connections row after the
+    /// Reveal starts.</summary>
+    [Fact]
+    public void AConnectionsLeafsRevealLandsOnItsRowOnceThroughTheReRoot() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell();
+        ConnectionsLeafView surface = shell.KeysOnTheConnectionsRowOf("start.md", "docs/n.md", out TreeViewItem row);
+        GraphConnectionRow target = ((ConnectionsRowViewModel)row.DataContext).Row!;
+
+        shell.Host.Workspace.Connections.Execute(GraphRowAction.Reveal, target);
+        shell.SettleLoads();
+        shell.SettleLeaf();
+
+        Assert.Equal("docs/n.md", shell.Host.Workspace.Connections.Root);
+        Assert.DoesNotContain(shell.FocusChanges, focus => focus is DependencyObject element && surface.IsAncestorOf(element));
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
     private static void Invoke(UIElement element) =>
         ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(element).GetPattern(PatternInterface.Invoke)).Invoke();
 
@@ -208,6 +272,7 @@ public sealed class RevealInFilesTests
             ("fn/sub/sub.md", "# Sub\n\nThe folder note.\n"),
             ("fn/sub/x.md", "# X\n"),
             ("tagged.md", "# Tagged\n\n#alpha\n"),
+            ("start.md", "# Start\n\nLinks to [[n]].\n"),
         ];
 
         private readonly List<IInputElement> _focus;
@@ -303,6 +368,25 @@ public sealed class RevealInFilesTests
             return button;
         }
 
+        /// <summary><paramref name="note"/> opened, the Connections leaf shown
+        /// over it as the palette's Show connections shows it (following the
+        /// open note), and the keys on its row for <paramref name="path"/>; the
+        /// logs marked from there.</summary>
+        public ConnectionsLeafView KeysOnTheConnectionsRowOf(string note, string path, out TreeViewItem row)
+        {
+            Host.RelayFocusBoundaries();
+            Host.Workspace.OpenPath(note);
+            Host.Settle();
+            Host.Workspace.ShowConnections();
+            SettleLeaf();
+            ConnectionsLeafView surface = Host.Shell.ConnectionsLeafSurface;
+            row = ShownShell.Descendants(surface.TreeForTests).OfType<TreeViewItem>()
+                .First(item => item.IsVisible && item.DataContext is ConnectionsRowViewModel { Row: { } shown } && shown.Path == path);
+            Assert.True(row.Focus(), $"premise: the Connections row for {path} did not take the keys");
+            Mark();
+            return surface;
+        }
+
         public void SettleLoads()
         {
             for (int round = 0; round < 4; round++)
@@ -312,6 +396,28 @@ public sealed class RevealInFilesTests
                 Host.Shell.UpdateLayout();
                 PumpedDispatcher.Drain();
             }
+        }
+
+        public void SettleLeaf()
+        {
+            for (int pass = 0; pass < 3; pass++)
+            {
+                PumpedDispatcher.PumpUntilDrained(Host.Workspace.Connections.WhenAllWorkDrained());
+                Host.Settle();
+            }
+        }
+
+        /// <summary>After the first <paramref name="since"/> focus changes from
+        /// the mark, the keys moved exactly once more, to the row at
+        /// <paramref name="path"/>, and are there.</summary>
+        public void AssertKeysMovedOnceTo(string path, int since)
+        {
+            TreeViewItem? container = ContainerOf(Row(path));
+            Assert.True(container is not null, $"{path}'s row has no container");
+            IInputElement[] moves = [.. FocusChanges.Skip(since)];
+            string trail = string.Join(" -> ", moves.Select(Describe));
+            Assert.True(container.IsKeyboardFocused, $"the keys are on {Describe(Keyboard.FocusedElement)}, not on {path}'s row; they went {trail}");
+            Assert.True(moves.Length == 1 && ReferenceEquals(moves[0], container), $"the keys moved {moves.Length} times: {trail}");
         }
 
         public FileTreeNodeViewModel Row(string path) =>
@@ -437,6 +543,7 @@ public sealed class RevealInFilesTests
         {
             null => "nothing",
             TreeViewItem { DataContext: FileTreeNodeViewModel node } => $"tree row {node.Path}",
+            TreeViewItem { DataContext: ConnectionsRowViewModel row } => $"Connections row {row.Row?.Path ?? row.Id}",
             FrameworkElement framework => $"{framework.GetType().Name} '{AutomationProperties.GetName(framework)}' ({AutomationProperties.GetAutomationId(framework)})",
             _ => element.GetType().Name,
         };
