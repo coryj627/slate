@@ -281,9 +281,8 @@ internal static class ReadingSemantics
     /// carries its fence's interior as the note holds it, which the reading
     /// view's source chord speaks (core's <c>DiagramSourceSpoken</c>). A
     /// completion in place keeps the paragraph, so the source survives it.</summary>
-    public static void MarkDiagramSource(Paragraph paragraph, string source)
-    {
-    }
+    public static void MarkDiagramSource(Paragraph paragraph, string source) =>
+        paragraph.SetValue(DiagramSourceProperty, source);
 
     public static string? DiagramSourceOf(Paragraph paragraph) =>
         paragraph.GetValue(DiagramSourceProperty) as string;

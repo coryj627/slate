@@ -152,6 +152,29 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   Tab still reads a diagram's source, which CB-20b moves to a chord
   (CD12(d)). Census: `ReadingEmbeddedElementCensus`.
 
+- **A-12 (2026-11-26, plan 47 CB-20b; CD12(d), adopted as recommended on
+  2026-11-16, and the lead's rulings on the chunk's calls of the same
+  day):** a diagram's source is spoken on request, never on Tab, the twin
+  of A-10's math rule. Tab, focus and object navigation speak a diagram's
+  name and role; no HelpText and no keyboard tooltip carries its source
+  (the hover tooltip keeps the preview). Ctrl+Shift+Enter, the source chord
+  (`windows.reading.mathSource`, its label widened to "the math block or
+  diagram"), speaks core's `DiagramSourceSpoken` at the caret on any diagram
+  paragraph and with focus on a diagram element: "Source: {source}.", the
+  source trimmed, its line breaks kept and uncapped, or "Source not
+  available." for an empty fence. Enter and Ctrl+Enter on a focused diagram
+  do nothing, as before; at the caret they re-read the description. A
+  placeholder focused when its stage finds no artifact is named "Mermaid
+  diagram.", the builder's fallback, not by its source. The reading help
+  (A-8) gains "Next diagram: {nextD}. Enter speaks either one, {mathSource}
+  its source, and {mathBraille} a formula's braille.", each chord from its
+  row. Two places still speak source text without a request, by name: a
+  failed diagram of an unknown kind keeps core's description, which holds up
+  to 160 characters of its source (#2078); and a chord landing or Enter at
+  the caret on a pending or unmatched diagram reads its source, the content
+  in range there, as an unmatched formula's does. Census:
+  `ReadingEmbeddedElementCensus` (no embedded element carries HelpText).
+
 ## Review record
 
 Contract/map round 1 reviewed fixed remote `88ec8440` against `541f7ceb`.

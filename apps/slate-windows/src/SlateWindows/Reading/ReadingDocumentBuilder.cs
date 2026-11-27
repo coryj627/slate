@@ -1112,6 +1112,7 @@ internal static class ReadingDocumentBuilder
                 {
                     var paragraph = new Paragraph();
                     ReadingSemantics.MarkDiagramFence(paragraph, fence);
+                    ReadingSemantics.MarkDiagramSource(paragraph, fallbackSource);
                     ApplyRenderedShape(
                         paragraph,
                         new ReadingDiagramElement(rendered.Description, artifact!.Source),
@@ -1122,6 +1123,7 @@ internal static class ReadingDocumentBuilder
                 {
                     var paragraph = new Paragraph();
                     ReadingSemantics.MarkDiagramFence(paragraph, fence);
+                    ReadingSemantics.MarkDiagramSource(paragraph, fallbackSource);
                     ApplyFailureShape(
                         paragraph,
                         new ReadingDiagramElement(failed.Description, artifact!.Source),
@@ -1137,6 +1139,9 @@ internal static class ReadingDocumentBuilder
         Paragraph sourceParagraph = MonospaceParagraph(fallbackSource);
         ReadingSemantics.MarkDiagramBlock(sourceParagraph, fallbackSource);
         ReadingSemantics.MarkDiagramFence(sourceParagraph, fence);
+        // Plan 47 CB-20b: what the source chord speaks, on every diagram
+        // paragraph, the unmatched one with no element included.
+        ReadingSemantics.MarkDiagramSource(sourceParagraph, fallbackSource);
         if (context.DiagramsPending)
         {
             // Pending (WB-20): the source stays IN the text range, where caret

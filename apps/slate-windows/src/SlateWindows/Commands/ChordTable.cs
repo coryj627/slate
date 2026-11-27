@@ -1707,13 +1707,15 @@ internal static class ChordTable
             + "no command object."));
         rows.Add(Chord(
             "windows.reading.mathSource",
-            "Reading: speak the math block's source",
+            "Reading: speak the source of the math block or diagram",
             "Ctrl+Shift+Enter",
             ChordScope.Reading,
-            "#1591 (plan 45 XB-9): a math block's authored source, spoken on request "
-            + "by Reading/ReadingNavigator.cs while the caret is on the block, never on "
-            + "focus or by line reading. No mac twin (mac reads it from VoiceOver's More "
-            + "Content menu, MathView.swift); no command object."));
+            "#1591 (plan 45 XB-9) and plan 47 CB-20b: a math block's or a diagram's "
+            + "authored source, spoken on request by Reading/ReadingNavigator.cs while "
+            + "the caret is on the block or keyboard focus is on its element, never on "
+            + "focus or by line reading. The id is math's, kept when diagrams joined. "
+            + "No mac twin (mac reads both from VoiceOver's More Content menu, "
+            + "MathView.swift and MermaidView.swift); no command object."));
 
         const string PropertyRowReason =
             "A property-row editor interaction, live only while a numeric row's "

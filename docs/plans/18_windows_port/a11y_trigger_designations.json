@@ -268,6 +268,11 @@
         "decision": "docs/plans/39_at_navigation_contracts.md",
         "status": "recorded"
       },
+      "DiagramSourceSpoken": {
+        "reason": "Plan 47 CB-20b (CD12(d), the twin of #1591): the Windows reading view's Ctrl+Shift+Enter speaks a diagram's source on request, at the caret or on a focused diagram, since Tab, focus and line reading speak its description. Mac offers the source on request as \"Source\" in VoiceOver's More Content menu (MermaidView.swift), which VoiceOver reads itself; no Mac construction site.",
+        "decision": "docs/plans/39_at_navigation_contracts.md",
+        "status": "recorded"
+      },
       "RecentSearchFocused": {
         "reason": "#1412: on Mac, keyboard focus moves onto the recent-search row and VoiceOver reads the row's own label (Recent search: {query}) on every move; posting RecentSearchFocused as well spoke the row twice or cut the read short (VoiceOver pass 2026-10-16).",
         "decision": "docs/plans/29_search_overlay_contracts.md",

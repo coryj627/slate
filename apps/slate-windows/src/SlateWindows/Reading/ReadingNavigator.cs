@@ -158,6 +158,17 @@ internal sealed class ReadingNavigator
             e.Handled = true;
             return;
         }
+        // Plan 47 CB-20b: and on a diagram element, its source on
+        // Ctrl+Shift+Enter (windows.reading.mathSource); other modifier
+        // states fall through.
+        if (key == Key.Return
+            && !e.IsRepeat
+            && Keyboard.FocusedElement is ReadingDiagramElement focusedDiagram
+            && _surface.TryAnswerDiagram(focusedDiagram, Keyboard.Modifiers))
+        {
+            e.Handled = true;
+            return;
+        }
         if (CaretActivationApplies(_surface.IsKeyboardFocused, e.IsRepeat))
         {
             if (key == Key.Return
@@ -177,8 +188,9 @@ internal sealed class ReadingNavigator
                 e.Handled = true;
                 return;
             }
-            // #1591: Ctrl+Shift+Enter speaks a math block's source, on
-            // request only (windows.reading.mathSource).
+            // #1591 and plan 47 CB-20b: Ctrl+Shift+Enter speaks a math
+            // block's or a diagram's source, on request only
+            // (windows.reading.mathSource).
             if (key == Key.Return
                 && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)
                 && _surface.TrySpeakSourceAtCaret())

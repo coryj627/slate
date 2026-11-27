@@ -2930,11 +2930,14 @@ impl A11yEvent {
                     format!("{text}, {}.", target.spoken())
                 }
             }
-            MathSourceSpoken { source } => match source.as_deref().map(str::trim) {
-                Some(source) if !source.is_empty() => format!("Source: {source}."),
-                _ => "Source not available.".to_owned(),
-            },
-            DiagramSourceSpoken { .. } => String::new(),
+            // One rule for a formula's source and a diagram's (plan 47
+            // CB-20b): trimmed at its ends, its line breaks kept.
+            MathSourceSpoken { source } | DiagramSourceSpoken { source } => {
+                match source.as_deref().map(str::trim) {
+                    Some(source) if !source.is_empty() => format!("Source: {source}."),
+                    _ => "Source not available.".to_owned(),
+                }
+            }
 
             GridSorted { column, ascending } => format!(
                 "Sorted by {column}, {}",
@@ -12163,10 +12166,20 @@ mod tests {
     #[test]
     fn multiline_templates_carry_no_stray_whitespace() {
         // The templates written with line-continuation backslashes must
-        // render as single-space prose.
+        // render as single-space prose. A source spoken on request is the
+        // one payload whose line breaks are the author's content, kept as
+        // the note has them (plan 47 CB-20b; a formula's source can span
+        // lines too), so only its newline check is waived.
         for event in corpus() {
             let text = event.render();
-            assert!(!text.contains('\n'), "newline leaked into {event:?}");
+            let authored_lines = matches!(
+                event,
+                A11yEvent::MathSourceSpoken { .. } | A11yEvent::DiagramSourceSpoken { .. }
+            );
+            assert!(
+                authored_lines || !text.contains('\n'),
+                "newline leaked into {event:?}"
+            );
             assert!(!text.contains("  "), "double space leaked into {event:?}");
         }
     }
