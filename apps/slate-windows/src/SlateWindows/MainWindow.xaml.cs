@@ -638,7 +638,20 @@ public partial class MainWindow : Window
     /// them to — so it cannot move them on to the first row.</remarks>
     private void FileSidebar_TreeSelectionRestored()
     {
-        if (_observedFileSidebar?.TakeVanishedSelection() is { } vanished
+        FilesSidebarViewModel.VanishedSelection? vanished = _observedFileSidebar?.TakeVanishedSelection();
+        if (vanished is { LateReveal: true })
+        {
+            // Plan 47 CB-39: a Reveal seating after its gesture's own turn asks
+            // whether the keys moved since the gesture: they are neither on the
+            // element they were on then, nor stranded, nor in Files. Its row is
+            // then selected silently, and nothing lands here.
+            vanished.KeysMoved = !ReferenceEquals(Keyboard.FocusedElement, vanished.KeysAtGesture)
+                && !KeysStrandedFromFilesTree()
+                && !FilesPaneBorder.IsKeyboardFocusWithin;
+            return;
+        }
+
+        if (vanished is not null
             && OpenModalSurface is null
             && (vanished.Reveal || (vanished.Successor ? FilesTree.IsKeyboardFocusWithin : KeysOnARemovedFilesRow())))
         {

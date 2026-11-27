@@ -689,7 +689,7 @@ internal sealed partial class FilesSidebarViewModel
     /// would take the selection from the new row and open its own
     /// note).</summary>
     private void RequestInlineRenameAt(string vaultPath) =>
-        _ = InstallIntent(IntentKind.RenameArm, vaultPath, TakeIntent());
+        InstallIntent(IntentKind.RenameArm, vaultPath, TakeIntent());
 
     /// <summary>Raised at tree publication after a mutation that asked
     /// for selection/focus reconciliation — the window restores
@@ -715,7 +715,7 @@ internal sealed partial class FilesSidebarViewModel
     private void RequestSelectionAt(string? vaultPath, long? intentAtGesture = null)
     {
         _pendingTreeFocusRestore = true;
-        _ = InstallIntent(
+        InstallIntent(
             vaultPath is null ? IntentKind.NoRow : IntentKind.NamedRow,
             vaultPath,
             intentAtGesture ?? TakeIntent());
@@ -994,7 +994,24 @@ internal sealed partial class FilesSidebarViewModel
     /// <param name="Reveal">Plan 47 CB-39: a Reveal's row, landed before it is
     /// selected; it takes the keys from wherever they are outside a modal
     /// surface.</param>
-    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor, bool Successor = false, bool Reveal = false);
+    /// <param name="LateReveal">Plan 47 CB-39: not a landing but a question
+    /// from a Reveal that seats after its gesture's own turn. The window lands
+    /// nothing and answers in <see cref="KeysMoved"/>.</param>
+    /// <param name="KeysAtGesture">The focused element when that Reveal was
+    /// asked.</param>
+    internal sealed record VanishedSelection(
+        FileTreeNodeViewModel? Survivor,
+        bool Successor = false,
+        bool Reveal = false,
+        bool LateReveal = false,
+        object? KeysAtGesture = null)
+    {
+        /// <summary>Plan 47 CB-39: the window's answer to a late Reveal: the
+        /// keys are neither on <see cref="KeysAtGesture"/>, nor stranded, nor
+        /// in Files, so the row is selected silently and nothing
+        /// lands.</summary>
+        public bool KeysMoved { get; set; }
+    }
 
     private VanishedSelection? _vanishedSelection;
 

@@ -551,14 +551,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
             else if (e.PropertyName is nameof(FilterText) or nameof(ScopeTag))
             {
-                // Plan 47 CB-39: a filter typed or cleared, or a tag scope
-                // applied or cleared, is the reader's newer gesture, and it
-                // names no row. A Reveal still waiting ends, so its seat
-                // neither clears that filter nor takes the keys out of the
-                // field; a mutation's pending row and a create's rename arm
-                // drop, so the publication neither selects that row nor pulls
-                // the keys into the name field (Call 2's one slot).
-                _ = StateIntentNamingNoRow();
+                // Plan 47 CB-39: the reader's newer gesture (FilterChanged).
+                FilterChanged();
             }
         };
 
@@ -829,7 +823,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // sidebar's own seats and a delete's letting go are not it.
             if (value is not null && !_seatingOwnSelection)
             {
-                _ = InstallIntent(IntentKind.NoRow, null, TakeIntent());
+                InstallIntent(IntentKind.NoRow, null, TakeIntent());
             }
 
             // WB-6 (S1): a tree row taking the selection clears every other
