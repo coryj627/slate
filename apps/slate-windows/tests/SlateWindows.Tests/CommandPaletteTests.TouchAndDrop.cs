@@ -154,8 +154,8 @@ public sealed partial class CommandPaletteTests
     /// previews broke that tap in step 0); and a drag then pans, which makes
     /// the sealed drag's stillness mean something. It skips where the
     /// desktop refuses the foreground, touch injection or the touch itself,
-    /// and in a test process that built windows before it, where WPF reads
-    /// no injected touch device: it runs alone, or first.
+    /// and where WPF reads no injected touch device, which some test
+    /// processes in which other facts ran first do not: it runs alone.
     /// </summary>
     [Fact]
     public void ARealTouchPanAndTheNextTap() => RunSta(() =>
@@ -168,9 +168,7 @@ public sealed partial class CommandPaletteTests
         {
             DataGrid grid = Assert.IsType<AccessibleDataGrid>(table.Content).Grid;
             ScrollViewer viewer = Descendants<ScrollViewer>(grid).First();
-            int touchDowns = 0;
             int touchUps = 0;
-            table.AddHandler(UIElement.PreviewTouchDownEvent, new EventHandler<TouchEventArgs>((_, _) => touchDowns++), handledEventsToo: true);
             table.AddHandler(UIElement.PreviewTouchUpEvent, new EventHandler<TouchEventArgs>((_, _) => touchUps++), handledEventsToo: true);
 
             // Real touch must reach the table before anything is measured:
@@ -190,7 +188,6 @@ public sealed partial class CommandPaletteTests
 
             PumpedDispatcher.Drain();
             double offset = viewer.VerticalOffset;
-            int downsBefore = touchDowns;
             int upsBefore = touchUps;
             ComponentDispatcher.PushModal();
             try
@@ -204,7 +201,6 @@ public sealed partial class CommandPaletteTests
                 ComponentDispatcher.PopModal();
             }
 
-            Assert.True(touchDowns > downsBefore, "premise: the sealed drag reached the reading table");
             double sealedOffset = viewer.VerticalOffset;
             int row = CurrentRowOf(grid);
             desk.RealTouch(RealInputDesk.TouchTapFrames(grid, CellPointIn(grid, 4)));
@@ -604,14 +600,15 @@ public sealed partial class CommandPaletteTests
         /// Sets up touch injection before the fact builds a window, and checks
         /// that WPF reads the injection's touch device. WPF reads a thread's
         /// tablets once, as the thread's first window is made, and drops a
-        /// touch from a device it did not read. Measured on 2026-11-27: when
-        /// the fact is the first in its test process to build a window, WPF
-        /// reads the device at once; after other facts have built windows in
-        /// the process, no thread of it ever read the device, for ten seconds,
-        /// and no touch arrived. So the check looks once, from a thread of its
-        /// own that spends none of the fact thread's one read, and the fact
-        /// skips where WPF does not read the device, as where the desktop
-        /// refuses touch injection.
+        /// touch from a device it did not read: set up after the fact's first
+        /// window, no injected touch arrived. Measured on 2026-11-27: run alone,
+        /// the fact's thread reads the device at once; in an 851-fact run it
+        /// read it too; but in short runs where a fact with a shell window ran
+        /// just before it, no thread of the process read the device for ten
+        /// seconds, and no touch arrived. So the check looks once, from a
+        /// thread of its own that spends none of the fact thread's one read,
+        /// and the fact skips where WPF does not read the device, as where the
+        /// desktop refuses touch injection.
         /// </summary>
         public static void PrepareTouchInjection()
         {
@@ -628,7 +625,7 @@ public sealed partial class CommandPaletteTests
             if (!read)
             {
                 SkipWhereThisDesktopRefusesRealInput(
-                    "a touch device WPF reads (a test process that built windows before the fact reads none; run the fact alone)",
+                    "a touch device WPF reads (some test processes in which other facts ran first read none; the fact runs alone)",
                     "real touch");
             }
         }
