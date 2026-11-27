@@ -416,11 +416,18 @@ public sealed partial class CommandPaletteTests
     /// touch row skips where the desktop refuses touch injection, and the
     /// left button's row where it refuses injected mouse input (#1680);
     /// neither row depends on the other's input (the merge judge's n2 on
-    /// CB-38).
+    /// CB-38). A third row throws while a drag's driver still runs (the
+    /// merge judge's n3): the source's window has shown, the driver holds
+    /// before it sends anything, and the throw comes out of the pump that
+    /// waits for it; once the desk is disposed every worker it tracks has
+    /// ended, so none can move or press after the cursor was put back. The
+    /// held driver sends nothing in any case. That row skips where the
+    /// source's window never shows.
     /// </summary>
     [Theory]
     [InlineData("a touch contact")]
     [InlineData("the left button and Shift")]
+    [InlineData("a drag still running")]
     public void TheRealInputDeskLeavesNoInputDownWhenAFactThrows(string input) => RunSta(() =>
     {
         bool touches = input == "a touch contact";
@@ -449,11 +456,31 @@ public sealed partial class CommandPaletteTests
             double pixelsPerDip = VisualTreeHelper.GetDpi(window).PixelsPerDip;
             _ = TouchAndDropNative.SetCursorPos((int)(SystemParameters.WorkArea.Left * pixelsPerDip) + 5, (int)(SystemParameters.WorkArea.Top * pixelsPerDip) + 5);
             (int X, int Y)? cursorBefore = TouchAndDropNative.CursorPosition();
+            RealInputDesk? disposed = null;
+            long thrownAt = 0;
             try
             {
                 using var desk = new RealInputDesk(window);
+                disposed = desk;
                 inside = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
-                if (touches)
+                if (input == "a drag still running")
+                {
+                    _ = desk.RealOleDrop(
+                        (UIElement)window.Content,
+                        new Point(10, 10),
+                        DroppedText,
+                        holdTheDriver: stop =>
+                        {
+                            _ = Interlocked.Exchange(ref thrownAt, Stopwatch.GetTimestamp());
+                            _ = window.Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() => throw new PlantedFailure()));
+
+                            // Held until the desk is disposed, or for longer
+                            // than the desk waits for its workers.
+                            _ = stop.WaitHandle.WaitOne(TimeSpan.FromSeconds(40));
+                        });
+                    Assert.Fail("the planted throw never reached the fact while its drag's driver ran");
+                }
+                else if (touches)
                 {
                     if (desk.RealTouch([(inside, TouchAndDropNative.Down)]) is { } refused)
                     {
@@ -504,6 +531,17 @@ public sealed partial class CommandPaletteTests
                 }
 
                 Assert.True(lifted, $"after {input}, a touch contact was still down once the desk was disposed (a new contact could not go down)");
+            }
+
+            if (input == "a drag still running")
+            {
+                int running = disposed!.InjectorsStillRunning;
+                TimeSpan sinceTheThrow = Stopwatch.GetElapsedTime(Interlocked.Read(ref thrownAt));
+                Assert.True(
+                    running == 0,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"once the desk was disposed, {running} of its workers still ran ({sinceTheThrow.TotalSeconds:0.0} s after the throw), so a drag's driver could move or press after the cursor was put back"));
             }
 
             Assert.True(held.Length == 0, $"after {input}, the desktop still read {held} as held once the desk was disposed");
@@ -778,7 +816,8 @@ public sealed partial class CommandPaletteTests
     /// drive real input. Each refusal skips the fact (#1680). Its
     /// <see cref="Dispose"/> puts the desktop's input back whatever ended the
     /// fact (a pass, a failed assertion, a skip, an exception, a timeout that
-    /// unwinds the body): it waits for its injectors, lifts any touch contact
+    /// unwinds the body): it tells its injectors to stop and waits for them
+    /// to end, lifts any touch contact
     /// left down, releases the mouse button and every key it sent down (and
     /// any modifier or left button the desktop still reads as held), puts the
     /// cursor back where it was, and undoes the window's <c>Topmost</c>. It
@@ -798,6 +837,12 @@ public sealed partial class CommandPaletteTests
         private readonly Rect _column;
         private readonly object _gate = new();
         private readonly List<Task> _injectors = [];
+
+        /// <summary>Cancelled as the desk is disposed: each worker that sends
+        /// input checks it before each move, press, nudge and touch frame,
+        /// so none sends anything once the desk has begun to put the
+        /// desktop's input back.</summary>
+        private readonly CancellationTokenSource _disposing = new();
         private readonly HashSet<ushort> _keysDown = [];
         private (Point Screen, bool Down) _contact;
         private Point? _liftedAt;
@@ -951,10 +996,16 @@ public sealed partial class CommandPaletteTests
         /// the desktop refusing touch or a failure of the fact.</summary>
         public string? RealTouch((Point Screen, uint Flags)[] frames)
         {
+            CancellationToken disposing = _disposing.Token;
             Task<string?> injected = Track(Task.Run(() =>
             {
                 foreach ((Point screen, uint flags) in frames)
                 {
+                    if (disposing.IsCancellationRequested)
+                    {
+                        return "the desk was disposed before the touch ended";
+                    }
+
                     if (!TouchAndDropNative.InjectTouch(screen, flags))
                     {
                         return $"InjectTouchInput, error {Marshal.GetLastWin32Error()}";
@@ -998,9 +1049,15 @@ public sealed partial class CommandPaletteTests
         /// down as the drag ends, so it leaves no window class behind.
         /// <paramref name="cancelWhen"/> is a test-only knob: the source
         /// cancels the drag at the first <c>QueryContinueDrag</c> where it
-        /// holds, as it does at the deadline.
+        /// holds, as it does at the deadline. <paramref name="holdTheDriver"/>
+        /// is another: once the source's window shows, the driver runs it,
+        /// with the desk's disposal token, and then sends nothing. The desk's
+        /// disposal cancels the driver before each move, press and nudge, and
+        /// cancels the drag at the source; a body that unwinds through this
+        /// method leaves the source's loop to end on its own.
         /// </summary>
-        public DragDropEffects? RealOleDrop(UIElement target, Point local, string text, bool refusalFails = false, Func<bool>? cancelWhen = null)
+        public DragDropEffects? RealOleDrop(
+            UIElement target, Point local, string text, bool refusalFails = false, Func<bool>? cancelWhen = null, Action<CancellationToken>? holdTheDriver = null)
         {
             double pixelsPerDip = VisualTreeHelper.GetDpi(_window).PixelsPerDip;
             var sourceDip = new Rect(_column.Left, _column.Top, Math.Min(180, _column.Width), 90);
@@ -1011,7 +1068,9 @@ public sealed partial class CommandPaletteTests
             var ended = new ManualResetEventSlim();
             DragDropEffects effect = DragDropEffects.None;
             bool cancelled = false;
+            bool abandoned = false;
             Dispatcher? sourceDispatcher = null;
+            CancellationToken disposing = _disposing.Token;
             Task sourceThread = Track(Task.Run(() => StaThread.Run(
                 () =>
                 {
@@ -1032,11 +1091,12 @@ public sealed partial class CommandPaletteTests
                     var clock = new Stopwatch();
 
                     // OLE asks the source whether to go on as the mouse or a
-                    // key changes; past the deadline, or where the knob
-                    // holds, the answer is Cancel, and DoDragDrop returns.
+                    // key changes; past the deadline, once the desk is being
+                    // disposed, or where the knob holds, the answer is
+                    // Cancel, and DoDragDrop returns.
                     border.QueryContinueDrag += (_, e) =>
                     {
-                        if (clock.Elapsed > DragDeadline || cancelWhen?.Invoke() == true)
+                        if (clock.Elapsed > DragDeadline || disposing.IsCancellationRequested || cancelWhen?.Invoke() == true)
                         {
                             cancelled = true;
                             e.Action = DragAction.Cancel;
@@ -1054,87 +1114,133 @@ public sealed partial class CommandPaletteTests
                     };
                     window.Show();
                     TouchAndDropNative.NeverActivate(window);
-                    sourceDispatcher = Dispatcher.CurrentDispatcher;
+                    Volatile.Write(ref sourceDispatcher, Dispatcher.CurrentDispatcher);
                     ready.Set();
+
+                    // A drop its fact left by a throw, or a desk being
+                    // disposed, ends this loop; nothing else would.
+                    if (Volatile.Read(ref abandoned))
+                    {
+                        Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+                    }
+
+                    using CancellationTokenRegistration onDisposal =
+                        disposing.Register(() => window.Dispatcher.BeginInvokeShutdown(DispatcherPriority.Send));
                     Dispatcher.Run();
                 },
                 TimeSpan.FromSeconds(90),
                 "the CB-38 drag source timed out.")));
             Task driver = Track(Task.Run(() =>
             {
-                if (!ready.Wait(TimeSpan.FromSeconds(30)))
-                {
-                    return;
-                }
-
-                Thread.Sleep(300);
-                TouchAndDropNative.MoveCursor(sourcePixel);
-                Thread.Sleep(150);
-                SendButton(down: true);
                 try
                 {
-                    if (!started.Wait(TimeSpan.FromSeconds(3)))
+                    if (!ready.Wait(TimeSpan.FromSeconds(30), disposing))
                     {
                         return;
                     }
 
-                    Thread.Sleep(250);
-                    for (int step = 1; step <= 15; step++)
+                    if (holdTheDriver is not null)
                     {
-                        TouchAndDropNative.MoveCursor(sourcePixel + ((targetPixel - sourcePixel) * step / 15));
-                        Thread.Sleep(40);
+                        // Test-only: a held driver sends nothing, whatever
+                        // ends the hold.
+                        holdTheDriver(disposing);
+                        return;
                     }
 
-                    for (int still = 0; still < 6; still++)
+                    Thread.Sleep(300);
+                    disposing.ThrowIfCancellationRequested();
+                    TouchAndDropNative.MoveCursor(sourcePixel);
+                    Thread.Sleep(150);
+                    disposing.ThrowIfCancellationRequested();
+                    SendButton(down: true);
+                    try
                     {
-                        TouchAndDropNative.MoveCursor(targetPixel + new Vector(still % 2, 0));
-                        Thread.Sleep(80);
+                        if (!started.Wait(TimeSpan.FromSeconds(3), disposing))
+                        {
+                            return;
+                        }
+
+                        Thread.Sleep(250);
+                        for (int step = 1; step <= 15; step++)
+                        {
+                            disposing.ThrowIfCancellationRequested();
+                            TouchAndDropNative.MoveCursor(sourcePixel + ((targetPixel - sourcePixel) * step / 15));
+                            Thread.Sleep(40);
+                        }
+
+                        for (int still = 0; still < 6; still++)
+                        {
+                            disposing.ThrowIfCancellationRequested();
+                            TouchAndDropNative.MoveCursor(targetPixel + new Vector(still % 2, 0));
+                            Thread.Sleep(80);
+                        }
+                    }
+                    finally
+                    {
+                        SendButton(down: false);
+                    }
+
+                    // A drag whose release the desktop refused runs on: a
+                    // nudge of the cursor makes OLE ask the source again,
+                    // which cancels it once the deadline has passed.
+                    for (int nudge = 0; nudge < 60 && !ended.Wait(TimeSpan.FromMilliseconds(500), disposing); nudge++)
+                    {
+                        disposing.ThrowIfCancellationRequested();
+                        TouchAndDropNative.MoveCursor(targetPixel + new Vector(nudge % 2, 1));
                     }
                 }
-                finally
+                catch (OperationCanceledException) when (disposing.IsCancellationRequested)
                 {
-                    SendButton(down: false);
-                }
-
-                // A drag whose release the desktop refused runs on: a nudge of
-                // the cursor makes OLE ask the source again, which cancels it
-                // once the deadline has passed.
-                for (int nudge = 0; nudge < 60 && !ended.Wait(TimeSpan.FromMilliseconds(500)); nudge++)
-                {
-                    TouchAndDropNative.MoveCursor(targetPixel + new Vector(nudge % 2, 1));
+                    // The desk is being disposed, and puts back what this
+                    // sent once this has ended.
                 }
             }));
-            Assert.True(PumpedDispatcher.PumpUntil(() => driver.IsCompleted, TimeSpan.FromSeconds(75)), "the drag's driver never finished");
-            driver.GetAwaiter().GetResult();
-            if (!ready.IsSet)
+            try
             {
-                if (sourceThread.IsFaulted)
+                Assert.True(PumpedDispatcher.PumpUntil(() => driver.IsCompleted, TimeSpan.FromSeconds(75)), "the drag's driver never finished");
+                driver.GetAwaiter().GetResult();
+                if (!ready.IsSet)
                 {
-                    sourceThread.GetAwaiter().GetResult();
+                    if (sourceThread.IsFaulted)
+                    {
+                        sourceThread.GetAwaiter().GetResult();
+                    }
+
+                    // A window shown late still ends its loop here.
+                    _ = PumpedDispatcher.PumpUntil(() => sourceDispatcher is not null || sourceThread.IsCompleted, TimeSpan.FromSeconds(5));
+                    sourceDispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
+                    if (refusalFails)
+                    {
+                        Assert.Fail("the drag source's window never showed, after this desktop had delivered a drag");
+                    }
+
+                    SkipWhereThisDesktopRefusesRealInput("the drag source's window", "a real drop");
                 }
 
-                // A window shown late still ends its loop here.
-                _ = PumpedDispatcher.PumpUntil(() => sourceDispatcher is not null || sourceThread.IsCompleted, TimeSpan.FromSeconds(5));
-                sourceDispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
-                if (refusalFails)
+                if (!started.IsSet && sourceDispatcher is { } idle)
                 {
-                    Assert.Fail("the drag source's window never showed, after this desktop had delivered a drag");
+                    // The press never reached the source, so nothing ends its
+                    // loop.
+                    idle.BeginInvokeShutdown(DispatcherPriority.Send);
                 }
 
-                SkipWhereThisDesktopRefusesRealInput("the drag source's window", "a real drop");
+                Assert.True(PumpedDispatcher.PumpUntil(() => sourceThread.IsCompleted, TimeSpan.FromSeconds(30)), "the drag source's thread never ended");
+                sourceThread.GetAwaiter().GetResult();
+                TouchAndDropNative.MoveCursor(sourcePixel);
+                PumpedDispatcher.Drain();
+                return started.IsSet && !cancelled ? effect : null;
             }
-
-            if (!started.IsSet && sourceDispatcher is { } idle)
+            finally
             {
-                // The press never reached the source, so nothing ends its loop.
-                idle.BeginInvokeShutdown(DispatcherPriority.Send);
+                // A body that unwinds through here, a throw out of a pump
+                // included, leaves the source's loop to end: it shuts down
+                // whether or not its window has shown yet.
+                if (!sourceThread.IsCompleted)
+                {
+                    Volatile.Write(ref abandoned, true);
+                    Volatile.Read(ref sourceDispatcher)?.BeginInvokeShutdown(DispatcherPriority.Send);
+                }
             }
-
-            Assert.True(PumpedDispatcher.PumpUntil(() => sourceThread.IsCompleted, TimeSpan.FromSeconds(30)), "the drag source's thread never ended");
-            sourceThread.GetAwaiter().GetResult();
-            TouchAndDropNative.MoveCursor(sourcePixel);
-            PumpedDispatcher.Drain();
-            return started.IsSet && !cancelled ? effect : null;
         }
 
         /// <summary>Runs <paramref name="inside"/> while a real WPF dialog the
@@ -1179,9 +1285,27 @@ public sealed partial class CommandPaletteTests
             return result;
         }
 
-        /// <summary>Puts the desktop's input back: see the class.</summary>
+        /// <summary>The input workers the desk tracks that have not
+        /// ended.</summary>
+        public int InjectorsStillRunning
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _injectors.Count(injector => !injector.IsCompleted);
+                }
+            }
+        }
+
+        /// <summary>Puts the desktop's input back: see the class. It first
+        /// tells every worker to stop (the merge judge's n3 on CB-38: a drag's
+        /// driver could run about 62 s, past this wait, and move or press
+        /// after the cursor was put back), then waits for them to end, then
+        /// puts back what they left.</summary>
         public void Dispose()
         {
+            _disposing.Cancel();
             Task[] injectors;
             lock (_gate)
             {
@@ -1190,7 +1314,8 @@ public sealed partial class CommandPaletteTests
 
             try
             {
-                // Each injector ends on its own bound (the touch frames, the
+                // Each worker ends at its next check of the cancelled token,
+                // and on its own bound in any case (the touch frames, the
                 // drag's deadline); none needs this thread to pump.
                 _ = Task.WaitAll(injectors, TimeSpan.FromSeconds(30));
             }
