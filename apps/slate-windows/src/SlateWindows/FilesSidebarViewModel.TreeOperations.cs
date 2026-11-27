@@ -870,6 +870,8 @@ internal sealed partial class FilesSidebarViewModel
 
         Task treeRefresh = _treeRefreshCompletion;
         IsExpandingLoaded = true;
+        // Plan 47 CB-39: the folder the run is reading, until it lists it.
+        FileTreeNodeViewModel? reading = null;
         try
         {
             await treeRefresh.WaitAsync(token);
@@ -895,6 +897,7 @@ internal sealed partial class FilesSidebarViewModel
                     continue;
                 }
 
+                reading = node;
                 (bool admitted, DirectoryLevel? level) = await LoadExpandedLevelAsync(
                     node,
                     ordering,
@@ -919,6 +922,7 @@ internal sealed partial class FilesSidebarViewModel
                 // Expand Loaded is deliberately snapshot-based: children that
                 // materialize here are not recursively expanded in this run.
                 node.ReplaceChildren(level.Nodes);
+                reading = null;
                 // Dispatcher publication boundary (codex round 7):
                 // recursive check projection.
                 ProjectBatchChecksOnto(level.Nodes);
@@ -940,6 +944,14 @@ internal sealed partial class FilesSidebarViewModel
         }
         catch (Exception exception)
         {
+            // Plan 47 CB-39: a Reveal waiting through the folder whose read
+            // failed ends, as it does when that folder's own load fails. A
+            // Reveal waiting through any other folder keeps its step below.
+            if (reading is not null)
+            {
+                EndWaitingRevealThrough(reading);
+            }
+
             ReportExpansionFailure(exception);
         }
         finally
@@ -950,11 +962,12 @@ internal sealed partial class FilesSidebarViewModel
             // cancelled by a folder the reader opened by hand leaves the Reveal's
             // own folder unlisted, and that folder's load lists nothing on the
             // Reveal's path (and may fail), so this step is what lists it. A
-            // refused close, the shutdown, a close's cancelled refresh and
-            // Collapse all have ended the wait already, so the step finds
-            // nothing. After a refresh, the load the step may start is the one
-            // that lists the folder: the refresh leaves a folder whose own load
-            // runs to that load (ListsItsRowsAgain).
+            // refused close, the shutdown, a close's cancelled refresh, Collapse
+            // all and a failed read of the Reveal's own folder have ended the
+            // wait already, so the step finds nothing. After a refresh, the load
+            // the step may start is the one that lists the folder: the refresh
+            // leaves a folder whose own load runs to that load
+            // (ListsItsRowsAgain).
             AdvanceWaitingReveal();
             bool ownsCancellation = false;
             lock (_bulkExpandCancellationGate)
