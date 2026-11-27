@@ -24,6 +24,12 @@
         PreviewMouseDown="Window_PreviewMouseDown"
         PreviewMouseUp="Window_PreviewMouseUp"
         PreviewMouseWheel="Window_PreviewMouseWheel"
+        PreviewTouchDown="Window_PreviewTouchDown"
+        PreviewTouchMove="Window_PreviewTouchMove"
+        PreviewTouchUp="Window_PreviewTouchUp"
+        PreviewDragEnter="Window_PreviewDragEnter"
+        PreviewDragOver="Window_PreviewDragOver"
+        PreviewDrop="Window_PreviewDrop"
         SourceInitialized="Window_SourceInitialized"
         Closing="Window_Closing"
         Closed="Window_Closed">

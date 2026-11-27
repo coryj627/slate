@@ -30,7 +30,9 @@ public sealed class ShellOwnedWindowProbeTests
 {
     /// <summary>One row per route I3 names: "a key, its release, text, a
     /// pointer press, a double-click, a wheel turn, a mnemonic" — the
-    /// pointer press as its press and its release.</summary>
+    /// pointer press as its press and its release. Plan 47 CB-38 adds a
+    /// touch drag, which pans the grid from the touch's own events before
+    /// any press is promoted.</summary>
     [Theory]
     [InlineData("key-down")]
     [InlineData("key-up")]
@@ -40,6 +42,7 @@ public sealed class ShellOwnedWindowProbeTests
     [InlineData("wheel")]
     [InlineData("double-click")]
     [InlineData("mnemonic")]
+    [InlineData("touch-drag")]
     public void AnOpenReadingTableUnderTheSealTakesEveryShellRoute(string route) => RunSta(() =>
     {
         using var host = new CommandPaletteTests.ShippedShellHost(shown: true);
@@ -110,6 +113,94 @@ public sealed class ShellOwnedWindowProbeTests
         PumpedDispatcher.Drain();
         Assert.False(table.Window.IsVisible, "premise: unsealed, the table's Escape closes it");
         Assert.True(palette.IsOpen, "the table's Escape dismissed the shell's palette");
+    });
+
+    /// <summary>
+    /// Plan 47 CB-38: a message box or a common dialog disables only its
+    /// owner, so under one the reading table the shell owns stays enabled
+    /// and a touch still reaches it; a WPF dialog disables every window on
+    /// the thread, the table included. Step 0 measured a real touch panning
+    /// the table six rows under the seal. The loop here is
+    /// <c>LoopSignals.DisablesShell</c>, a message box's: the shell's window
+    /// disabled and no thread-modal state. Under it, the shell sealed and
+    /// disabled and the table enabled, a touch drag pans nothing; once the
+    /// loop ends it pans.
+    /// </summary>
+    [Fact]
+    public void AReadingTableUnderAPromptThatDisablesTheShellPansNothingByTouch() => RunSta(() =>
+    {
+        using var host = new CommandPaletteTests.ShippedShellHost(shown: true);
+        using var table = new OpenTable(host);
+        (Action apply, Func<string> observe) = table.Route("touch-drag");
+        string before = table.Settled(observe);
+        var prompt = new CommandPaletteTests.SyntheticPrompt(host.Shell, CommandPaletteTests.LoopSignals.DisablesShell);
+        (bool Sealed, bool ShellEnabled, bool TableEnabled)? premise = null;
+        string? underThePrompt = null;
+        _ = host.Shell.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            try
+            {
+                premise = (host.Palette.IsSealed, CommandPaletteTests.WindowIsEnabled(host.Shell), CommandPaletteTests.WindowIsEnabled(table.Window));
+                apply();
+                underThePrompt = table.Settled(observe);
+            }
+            finally
+            {
+                prompt.Closer()!();
+            }
+        });
+        prompt.Run();
+
+        Assert.True(prompt.Ran, "the prompt never ran");
+        Assert.True(
+            premise is (true, false, true),
+            $"premise: under the prompt the shell is sealed and disabled and the table enabled (sealed, shell, table: {premise})");
+        Assert.False(host.Palette.IsSealed);
+        string unsealedBefore = table.Settled(observe);
+        apply();
+        string unsealedAfter = table.Settled(observe);
+
+        Assert.True(underThePrompt == before, $"a touch drag panned the reading table under a message box's loop: {before} to {underThePrompt}");
+        Assert.True(
+            unsealedAfter != unsealedBefore,
+            $"a touch drag did not pan the table once the prompt closed ({unsealedBefore}), so the fact proves nothing");
+    });
+
+    /// <summary>
+    /// Plan 47 CB-38: the take, and this fact, are defensive. Nothing in the
+    /// reading table sets <c>AllowDrop</c>, so a real drag raises no drag
+    /// events there today; should the table ever take a drop, a drag
+    /// entering it under the seal is taken as it is in the shell's own
+    /// window, and the source is told nothing would move. Unsealed, nothing
+    /// in the table takes it.
+    /// </summary>
+    [Fact]
+    public void AReadingTableUnderTheSealTakesADrop() => RunSta(() =>
+    {
+        using var host = new CommandPaletteTests.ShippedShellHost(shown: true);
+        using var table = new OpenTable(host);
+        DataGridCell cell = table.Cell(4);
+        DragEventArgs sealedEnter;
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Palette.IsSealed, "premise: the modal section sealed the shell");
+            sealedEnter = CommandPaletteTests.RaisePreviewDragEnter(cell);
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+
+        Assert.False(host.Palette.IsSealed);
+        DragEventArgs unsealedEnter = CommandPaletteTests.RaisePreviewDragEnter(cell);
+
+        Assert.True(
+            sealedEnter is { Handled: true, Effects: DragDropEffects.None },
+            $"a drag entered the reading table under the seal (handled {sealedEnter.Handled}, the source told {sealedEnter.Effects})");
+        Assert.True(
+            unsealedEnter is { Handled: false, Effects: CommandPaletteTests.OfferedEffects },
+            $"unsealed, something in the table took the drag (handled {unsealedEnter.Handled}, the source told {unsealedEnter.Effects}), so the fact proves nothing");
     });
 
     /// <summary>
@@ -289,6 +380,19 @@ public sealed class ShellOwnedWindowProbeTests
                             () => $"sort {Grid.Grid.Columns[0].SortDirection?.ToString() ?? "none"}");
                     }
 
+                case "touch-drag":
+                    {
+                        ScrollViewer viewer = Descendants<ScrollViewer>(Grid.Grid).First();
+                        Assert.True(
+                            viewer.PanningMode != PanningMode.None && viewer.ScrollableHeight > 0,
+                            $"premise: the table's grid pans by touch and has rows to pan to (PanningMode {viewer.PanningMode})");
+                        DataGridCell from = Cell(8);
+                        Point start = from.TranslatePoint(new Point(10, from.ActualHeight / 2), Grid.Grid);
+                        return (
+                            () => CommandPaletteTests.SyntheticTouchDrag(Grid.Grid, start, new Vector(0, -200)),
+                            () => string.Create(CultureInfo.InvariantCulture, $"offset {viewer.VerticalOffset}"));
+                    }
+
                 default:
                     throw new ArgumentOutOfRangeException(nameof(route), route, "no such route");
             }
@@ -324,7 +428,7 @@ public sealed class ShellOwnedWindowProbeTests
         private UIElement Focused() =>
             Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
 
-        private DataGridCell Cell(int row)
+        public DataGridCell Cell(int row)
         {
             Grid.Grid.UpdateLayout();
             var container = Assert.IsType<DataGridRow>(Grid.Grid.ItemContainerGenerator.ContainerFromIndex(row));
