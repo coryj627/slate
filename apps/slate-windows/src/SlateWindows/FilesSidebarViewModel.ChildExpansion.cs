@@ -238,9 +238,11 @@ internal sealed partial class FilesSidebarViewModel
                 WriteTreeStatus(DirectoryOverflowStatus(node.Path));
             }
 
-            // Plan 47 CB-39 (#1670): the folder's own load seats a waiting
-            // Reveal, or opens the next folder on its path.
-            AdvanceWaitingReveal();
+            // Plan 47 CB-39 (#1670): no Reveal step here. In this headless
+            // fallback a Reveal's own walk starts this load and passes through
+            // the listed folder in the same call, and no Reveal can be waiting
+            // when anything else starts one, since nothing it waits for is ever
+            // pending.
         }
         catch (Exception exception)
         {
