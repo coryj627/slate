@@ -204,17 +204,25 @@ public partial class MainWindow
                 case Key.Down:
                     search.MoveSelection(1);
                     // CB-35: the row the arrow selected, shown and laid out as the key ends.
-                    PublishedList.Show(SearchOverlayResults, SearchOverlayResults.SelectedItem);
+                    PublishedList.Show(SearchOverlayResults, SelectedResult(search));
                     e.Handled = true;
                     return;
                 case Key.Up:
                     search.MoveSelection(-1);
-                    PublishedList.Show(SearchOverlayResults, SearchOverlayResults.SelectedItem);
+                    PublishedList.Show(SearchOverlayResults, SelectedResult(search));
                     e.Handled = true;
                     return;
             }
         }
     }
+
+    /// <summary>CB-35: the result the view model selects, the row the arrows moved to. The keys
+    /// stay in the field, so it is the selection that is shown, read from the view model as
+    /// Quick Open's and Move To's arrows read theirs.</summary>
+    private static SearchResultRowViewModel? SelectedResult(SearchOverlayViewModel search) =>
+        search.SelectedIndex >= 0 && search.SelectedIndex < search.Rows.Count
+            ? search.Rows[search.SelectedIndex]
+            : null;
 
     private void RestoreFocusAfterSearch()
     {
