@@ -99,7 +99,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
                 "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
                 "ALabelledEdgeInTheWindowIsAChildOfTheBoard", "AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize",
-                "AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint", "InvokeSelectsTheEndpointTheEndStyleTableNames",
+                "AnEdgeLongerThanTheViewportRealizesOnItsChip", "InvokeSelectsTheEndpointTheEndStyleTableNames",
                 "TheSameEdgePeerIsReturnedWhileAnythingHoldsIt", "FindItemByNameResolvesAnEdge",
                 "AStructureChangeRaisesChildrenInvalidatedOncePerInstall", "APointOnAnEndpointCardIsTheCardNotTheEdge",
                 "APointBesideTheBoardIsNeverOneOfItsPeers", "AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer",
@@ -127,8 +127,21 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "AVisualBoardLandsOnItsRenderer", "ANamedLandingOnTheBoardSeatsItsCard",
                 "ALandingOnTheBoardRevealsItsCardWithFollowSelectionOff", "AZeroMatchFilterStillLandsTheBoardOnItsRenderer",
                 "TheBoardsFullSceneLandingSeatsTheFirstCardInReadingOrder", "AnEmptyVisualBoardLandsOnItsOnboarding",
-                "SeatingTheVisualProjectionFocusesTheRenderer"],
-            ["canvas-visual"]),
+                "SeatingTheVisualProjectionFocusesTheRenderer",
+                // Plan 47 CB-36 (#1721, CD24): each labelled edge's drawn chip is its bounds, its
+                // point and its hover; the covering state is scanned. #1722: the first name search.
+                "ALabelledEdgesBoundsAreItsDrawnChip", "TheChipsLayerDrawsOneChipPerWindowedLabelledEdgeAboveTheCardsAndBelowTheRing",
+                "AChipsTextFollowsTheTextSizeAndTheZoomWithAFloor", "ALongLabelIsCutOffAndABrokenOneDrawsOnOneLine",
+                "ALaterChipCoversAnEarlierOne", "APointOnAChipIsTheConnectionAndOnTheBareLineIsTheBoard",
+                "AShortEdgesLongLabelIsInViewAfterItsRealization", "HoveringACutOffChipShowsItsFullLabelBelowItAndEscDismissesIt",
+                "AChipThatFitsShowsNoTooltipEvenOverATruncatedCard", "AChipOverATruncatedCardWinsTheHoverAndSharedIdsNeverMix",
+                "AChipTooltipFollowsTheBoardsPopupRules", "AChipTooltipClosesWhenItsContentStopsBeingValid",
+                "ARepublishKeepsAChipTooltipUnderAStillPointer", "AChipsOutlineStandsOffTheBoardTheChipAndEveryCardFill",
+                "ARealizationDuringAZoomPansByTheChipTheCommittedZoomDraws", "ARebindClosesAChipTooltipAndNeverShowsAnotherCanvassLabel",
+                "APointerOnThePreviousCanvassChipDuringARebindShowsNothing",
+                "CanvasBoard_ALongLabelledEdgeZoomedInLeavesTheBoardAxeClean", "CanvasBoard_APointerOnAChipOverACardShowsTheChipsLabel",
+                "CanvasBoard_TheFirstNameSearchReturnsAnOffWindowItem"],
+            ["canvas-visual", "canvas-board-first-search", "canvas-board-covering", "canvas-board-chips"]),
         new(
             "Canvas card editor (W6-1 §E)",
             ["CanvasCardEditorSheet", "CanvasCardEditorText"],
@@ -168,6 +181,8 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
                 "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone",
                 "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard",
+                // Plan 47 CB-36 (#1721, the owner's answer): a right-click on a chip acts on the card under it.
+                "ARightClickOnAChipActsOnTheCardUnderIt",
                 // #1283: a keyboard request with nothing to open answers.
                 "AKeyboardRequestOnAnEmptyOutlineSaysWhyThereIsNoMenu"],
             []),

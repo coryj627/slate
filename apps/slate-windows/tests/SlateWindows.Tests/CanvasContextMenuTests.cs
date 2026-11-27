@@ -617,6 +617,44 @@ public sealed class CanvasContextMenuTests
     });
 
     /// <summary>
+    /// Plan 47 CB-36 (#1721, the owner's answer, 2026-11-26): a right-click on a connection's
+    /// chip acts on the card under it. The "revisit" connection runs from the loose card to the
+    /// question card, so its chip sits at the line's midpoint, over the note card; the right-click
+    /// there opens the note card's menu and seats the note card, as a right-click anywhere on that
+    /// card does, although a pointer that reads the board hears the connection at that point.
+    /// </summary>
+    [Fact]
+    public void ARightClickOnAChipActsOnTheCardUnderIt() => RunSta(() =>
+    {
+        using var vault = new BoardVault();
+        CanvasDocumentViewModel document = vault.Open();
+        var surface = new CanvasSurfaceView { Model = document };
+        ContextMenu tabMenu = TabMenuStandIn();
+        using HostedWindow host = Host(new Border { ContextMenu = tabMenu, Child = surface });
+        CanvasRendererView board = ShowBoard(document, surface, host);
+        document.SeatSelectionSilently("question");
+        // The midpoint of the loose card's centre (100, 510) and the question card's (120, 70).
+        CanvasPresentationState state = board.Engine.Current!;
+        var onTheChip = new Point(
+            (110 * state.Viewport.Zoom) + state.Viewport.PanX,
+            (290 * state.Viewport.Zoom) + state.Viewport.PanY);
+        Assert.True(board.ChipBoxFor("e3")?.Contains(onTheChip) == true, "premise: the revisit connection draws no chip at that point.");
+        Assert.True(board.HitTest(onTheChip) == "note", "premise: the revisit chip's centre is not over the note card.");
+        ContextMenu? persistent = board.ContextMenu;
+
+        Assert.True(RightClick(board, onTheChip), "the right-click on the chip was answered by nothing.");
+        Assert.False(tabMenu.IsOpen, "a right-click on the chip opened the ancestor's menu.");
+        Assert.True(persistent is { IsOpen: true }, "a right-click on the chip opened no card menu.");
+        Assert.Equal("note", document.Selection.Selected);
+        CanvasOutlineRow note = document.RowFor("note")!;
+        Assert.Equal(
+            PlanNames(
+                CanvasContextSurface.Renderer,
+                new CanvasContextTarget.Node(note.NodeId, note.Kind, note.GroupPath.Length > 0)),
+            Headers(persistent!));
+    });
+
+    /// <summary>
     /// R-12 (#1256): a right-click on EMPTY board space opens no menu —
     /// neither the board's card menu (which still holds the previous card's
     /// rows, and would act on that card) nor the ancestor's (the workspace
