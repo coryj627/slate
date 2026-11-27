@@ -7,6 +7,8 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -805,8 +807,24 @@ public sealed class SearchFieldPublicationTests
         TextBox field = host.Shell.SearchOverlaySearchTextBox;
         Assert.True(field.Focus(), "premise: the field refused the keys");
         search.Show("alpha", 60);
-        ArrowsShowTheirRow(host, field, host.Shell.SearchOverlayResults, () => host.Shell.SearchOverlayResults.SelectedItem, downs: 30, ups: 3);
+        ArrowsShowTheirRow(host, field, host.Shell.SearchOverlayResults, () => ModelRow(search.Overlay), downs: 30, ups: 3);
+
+        // The arrows show the view model's row, not whatever the list selects (the merge
+        // judge's M1): with the list's selection unbound, so it no longer follows the view
+        // model, each row the arrows move to is the row shown.
+        BindingOperations.ClearBinding(host.Shell.SearchOverlayResults, Selector.SelectedIndexProperty);
+        var unbound = new Findings();
+        for (int press = 1; press <= 12; press++)
+        {
+            Press(field, Key.Down);
+            unbound.Shown($"the list unbound, press {press} (Down)", host.Shell.SearchOverlayResults, ModelRow(search.Overlay), listFollows: false);
+        }
+
+        unbound.AssertNone("The arrows showed the list's row, not the view model's");
     });
+
+    private static object? ModelRow(SearchOverlayViewModel overlay) =>
+        overlay.SelectedIndex >= 0 && overlay.SelectedIndex < overlay.Rows.Count ? overlay.Rows[overlay.SelectedIndex] : null;
 
     /// <summary>Move To's arrows from its filter, through the sheet's key route.</summary>
     [Fact]
@@ -1158,6 +1176,7 @@ public sealed class SearchFieldPublicationTests
     [Theory]
     [InlineData("Quick Open")]
     [InlineData("Search")]
+    [InlineData("Files filter")]
     [InlineData("Move To")]
     [InlineData("Card picker")]
     [InlineData("File picker")]
@@ -1197,6 +1216,20 @@ public sealed class SearchFieldPublicationTests
                     modelSelected = () => search.Overlay.SelectedIndex;
                     seat = index => search.Overlay.SelectedIndex = index;
                     heard = () => search.Announced.Count;
+                    break;
+                case "Files filter":
+                    // The merge judge's M3: the filter's results list pushes no selection of
+                    // its own, so the list's is the model's.
+                    var sidebar = new FilesSidebar(host);
+                    cleanup.Push(sidebar);
+                    TextBox filterField = host.Shell.SidebarFilterTextBox;
+                    Assert.True(filterField.Focus(), "premise: the filter refused the keys");
+                    filterField.Text = "topic";
+                    SettleUntil(host, () => !sidebar.Model.IsFiltering && sidebar.Model.FilterResults.Count >= 4, "the filter of 'topic'");
+                    list = host.Shell.FilterResultsList;
+                    modelSelected = () => list.SelectedIndex;
+                    seat = index => list.SelectedIndex = index;
+                    heard = () => sidebar.Announced.Count;
                     break;
                 case "Move To":
                     var files = new FilesSidebar(host);
@@ -1776,8 +1809,9 @@ public sealed class SearchFieldPublicationTests
             }
         }
 
-        /// <summary>The row realized, showing, and inside its list's viewport, now.</summary>
-        public void Shown(string label, ListBox list, object? row)
+        /// <summary>The row realized, showing, and inside its list's viewport, now; and, unless
+        /// <paramref name="listFollows"/> is false, the row the list selects.</summary>
+        public void Shown(string label, ListBox list, object? row, bool listFollows = true)
         {
             if (row is null)
             {
@@ -1785,7 +1819,7 @@ public sealed class SearchFieldPublicationTests
                 return;
             }
 
-            if (!ReferenceEquals(list.SelectedItem, row) && !Equals(list.SelectedItem, row))
+            if (listFollows && !ReferenceEquals(list.SelectedItem, row) && !Equals(list.SelectedItem, row))
             {
                 _found.Add($"{label}: the list selects {list.SelectedItem} and the model {row}");
             }
