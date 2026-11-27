@@ -66,10 +66,18 @@ public sealed class NavigationHelpTests
             var surface = new ReadingSurface();
             string help = AutomationProperties.GetHelpText(surface);
             Assert.Equal(NavigationHelp.Reading, help);
-            foreach (string id in new[] { "nextH", "previousH", "nextK", "nextL", "nextT", "nextM", "mathBraille", "mathSource" })
+            foreach (string id in new[] { "nextH", "previousH", "nextK", "nextL", "nextT", "nextM", "nextD", "mathBraille", "mathSource" })
             {
                 Assert.Contains(ChordTable.WindowsSpokenFor("windows.reading." + id)!, help);
             }
+            // Plan 47 CB-20b: one source chord for a formula and a diagram.
+            Assert.Contains(
+                $"Next math: {Spoken("nextM")}. Next diagram: {Spoken("nextD")}. "
+                + $"Enter speaks either one, {Spoken("mathSource")} its source, "
+                + $"and {Spoken("mathBraille")} a formula's braille. ",
+                help);
+
+            static string Spoken(string id) => ChordTable.WindowsSpokenFor("windows.reading." + id)!;
         });
 
     [Fact]

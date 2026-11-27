@@ -18,9 +18,10 @@ public sealed partial class ReadingDiagramTests
     /// The core rendering path over a REAL vault: a mermaid fence
     /// matches its canonical artifact, renders into a focusable
     /// element whose Name is the structured description VERBATIM
-    /// (never composed — mac contract), carries the source in
-    /// HelpText, and lands in the landmark index with the
-    /// trailing-period-stripped description as landing text.
+    /// (never composed — mac contract), carries no HelpText (plan 47
+    /// CB-20b: the source is spoken on request, never on Tab), and lands
+    /// in the landmark index with the trailing-period-stripped
+    /// description as landing text.
     /// </summary>
     [Fact]
     public void DiagramRendersAFocusableElementSpeakingTheDescription()
@@ -52,10 +53,9 @@ public sealed partial class ReadingDiagramTests
             Assert.Equal(
                 "Flowchart with 2 steps.",
                 System.Windows.Automation.AutomationProperties.GetName(element));
-            Assert.Contains(
-                "flowchart LR",
-                System.Windows.Automation.AutomationProperties.GetHelpText(element),
-                StringComparison.Ordinal);
+            Assert.Equal(
+                string.Empty,
+                System.Windows.Automation.AutomationProperties.GetHelpText(element));
             Assert.NotNull(element.Content);
 
             ReadingLandmark landmark = Assert.Single(
