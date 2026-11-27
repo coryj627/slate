@@ -116,12 +116,15 @@ public sealed class ShellOwnedWindowProbeTests
     });
 
     /// <summary>
-    /// Plan 47 CB-38: a prompt that disables the shell's window leaves the
-    /// window the shell owns enabled (step 0 measured it under a real
-    /// dialog), so a touch still reaches the reading table there, and step 0
-    /// measured a real touch panning it six rows under the seal. Under a
-    /// message-box shaped loop, the shell sealed and disabled and the table
-    /// enabled, a touch drag pans nothing; once the loop ends it pans.
+    /// Plan 47 CB-38: a message box or a common dialog disables only its
+    /// owner, so under one the reading table the shell owns stays enabled
+    /// and a touch still reaches it; a WPF dialog disables every window on
+    /// the thread, the table included. Step 0 measured a real touch panning
+    /// the table six rows under the seal. The loop here is
+    /// <c>LoopSignals.DisablesShell</c>, a message box's: the shell's window
+    /// disabled and no thread-modal state. Under it, the shell sealed and
+    /// disabled and the table enabled, a touch drag pans nothing; once the
+    /// loop ends it pans.
     /// </summary>
     [Fact]
     public void AReadingTableUnderAPromptThatDisablesTheShellPansNothingByTouch() => RunSta(() =>
@@ -157,16 +160,19 @@ public sealed class ShellOwnedWindowProbeTests
         apply();
         string unsealedAfter = table.Settled(observe);
 
-        Assert.True(underThePrompt == before, $"a touch drag panned the reading table under a prompt: {before} to {underThePrompt}");
+        Assert.True(underThePrompt == before, $"a touch drag panned the reading table under a message box's loop: {before} to {underThePrompt}");
         Assert.True(
             unsealedAfter != unsealedBefore,
             $"a touch drag did not pan the table once the prompt closed ({unsealedBefore}), so the fact proves nothing");
     });
 
     /// <summary>
-    /// Plan 47 CB-38: a drag entering the reading table under the seal is
-    /// taken there, and the source is told nothing would move, as it is in
-    /// the shell's own window. Unsealed, nothing in the table takes it.
+    /// Plan 47 CB-38: the take, and this fact, are defensive. Nothing in the
+    /// reading table sets <c>AllowDrop</c>, so a real drag raises no drag
+    /// events there today; should the table ever take a drop, a drag
+    /// entering it under the seal is taken as it is in the shell's own
+    /// window, and the source is told nothing would move. Unsealed, nothing
+    /// in the table takes it.
     /// </summary>
     [Fact]
     public void AReadingTableUnderTheSealTakesADrop() => RunSta(() =>

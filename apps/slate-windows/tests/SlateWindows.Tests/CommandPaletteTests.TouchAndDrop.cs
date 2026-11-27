@@ -20,16 +20,18 @@ namespace SlateWindows.Tests;
 
 /// <summary>
 /// Plan 47 CB-38 (#1695): the seal takes a touch's own events and a drop
-/// from another app. A touch pans a list from its own events before WPF
-/// promotes any press, and a window a prompt disabled still receives an OLE
-/// drop, so the press gate saw neither. The window takes the three touch
+/// from another app. A touch pans a list from its own events, and a drag it
+/// pans promotes no press; a window a prompt disabled still receives an OLE
+/// drop; so the press gate saw neither. The window takes the three touch
 /// previews and the three drag previews through <c>SealTakes</c>, which
 /// tells a drag's source that nothing moved. The hosted facts drive a
 /// synthetic touch device, which starts a manipulation as a digitizer's
 /// touch does and needs no touch hardware, and raise a drop's routed events
 /// in the order WPF's OLE drop target raises them. The two interactive
 /// facts drive real touch and a real OLE drop, and skip where the desktop
-/// refuses either, as the menu facts do (#1680).
+/// refuses either, as the menu facts do (#1680); the touch fact also skips,
+/// on its own cause, where WPF in its test process has not registered the
+/// injected touch device.
 /// </summary>
 public sealed partial class CommandPaletteTests
 {
@@ -148,14 +150,15 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
-    /// Real touch on the reading table, the window the shell owns and leaves
-    /// enabled under a prompt: a drag under the seal pans nothing; the first
-    /// tap once the seal lifts moves the current row (a take of the stylus
-    /// previews broke that tap in step 0); and a drag then pans, which makes
-    /// the sealed drag's stillness mean something. It skips where the
-    /// desktop refuses the foreground, touch injection or the touch itself,
-    /// and where WPF reads no injected touch device, which some test
-    /// processes in which other facts ran first do not: it runs alone.
+    /// Real touch on the reading table under the seal (a thread-modal
+    /// section, which disables no window): a drag under the seal reaches the
+    /// table and pans nothing; the first tap once the seal lifts moves the
+    /// current row (a take of the stylus previews broke that tap in step 0);
+    /// and a drag then pans, which makes the sealed drag's stillness mean
+    /// something. It skips where the desktop refuses the foreground, touch
+    /// injection or the touch itself (#1680), and, on a cause of its own,
+    /// where WPF in this test process has not registered the injected touch
+    /// device: it runs alone as well as in the whole run.
     /// </summary>
     [Fact]
     public void ARealTouchPanAndTheNextTap() => RunSta(() =>
@@ -168,8 +171,12 @@ public sealed partial class CommandPaletteTests
         {
             DataGrid grid = Assert.IsType<AccessibleDataGrid>(table.Content).Grid;
             ScrollViewer viewer = Descendants<ScrollViewer>(grid).First();
-            int touchUps = 0;
-            table.AddHandler(UIElement.PreviewTouchUpEvent, new EventHandler<TouchEventArgs>((_, _) => touchUps++), handledEventsToo: true);
+
+            // A touch reaches the table as stylus events first, and the
+            // stylus up is raised whatever takes the touch, so it says the
+            // contact arrived; counted past handled.
+            int stylusUps = 0;
+            table.AddHandler(UIElement.PreviewStylusUpEvent, new StylusEventHandler((_, _) => stylusUps++), handledEventsToo: true);
 
             // Real touch must reach the table before anything is measured:
             // tap the first row, where the keys already are, until a touch
@@ -177,8 +184,12 @@ public sealed partial class CommandPaletteTests
             bool arrived = false;
             for (int attempt = 0; attempt < 5 && !arrived; attempt++)
             {
-                desk.RealTouch(RealInputDesk.TouchTapFrames(grid, CellPointIn(grid, 0)));
-                arrived = PumpedDispatcher.PumpUntil(() => touchUps > 0, TimeSpan.FromSeconds(1));
+                if (desk.RealTouch(RealInputDesk.TouchTapFrames(grid, CellPointIn(grid, 0))) is { } refused)
+                {
+                    RealInputDesk.SkipWhereThisDesktopRefusesRealInput($"touch injection ({refused})", "a real touch pan");
+                }
+
+                arrived = PumpedDispatcher.PumpUntil(() => stylusUps > 0, TimeSpan.FromSeconds(1));
             }
 
             if (!arrived)
@@ -186,28 +197,39 @@ public sealed partial class CommandPaletteTests
                 RealInputDesk.SkipWhereThisDesktopRefusesRealInput("real touch on the reading table", "a real touch pan");
             }
 
+            // Once a touch has reached the table, injection that fails is a
+            // failure of the fact, not the desktop refusing it.
+            void Touch((Point Screen, uint Flags)[] frames)
+            {
+                if (desk.RealTouch(frames) is { } failed)
+                {
+                    Assert.Fail($"touch injection failed after a touch had reached the table: {failed}");
+                }
+            }
+
             PumpedDispatcher.Drain();
             double offset = viewer.VerticalOffset;
-            int upsBefore = touchUps;
+            int upsBefore = stylusUps;
             ComponentDispatcher.PushModal();
             try
             {
                 Assert.True(host.Palette.IsSealed, "premise: the modal section sealed the shell");
-                desk.RealTouch(RealInputDesk.TouchDragFrames(grid, CellPointIn(grid, 8), new Vector(0, -150)));
-                _ = PumpedDispatcher.PumpUntil(() => touchUps > upsBefore, TimeSpan.FromSeconds(5));
+                Touch(RealInputDesk.TouchDragFrames(grid, CellPointIn(grid, 8), new Vector(0, -150)));
+                _ = PumpedDispatcher.PumpUntil(() => stylusUps > upsBefore, TimeSpan.FromSeconds(5));
             }
             finally
             {
                 ComponentDispatcher.PopModal();
             }
 
+            Assert.True(stylusUps > upsBefore, "premise: the sealed drag reached the reading table (no stylus up arrived there)");
             double sealedOffset = viewer.VerticalOffset;
             int row = CurrentRowOf(grid);
-            desk.RealTouch(RealInputDesk.TouchTapFrames(grid, CellPointIn(grid, 4)));
+            Touch(RealInputDesk.TouchTapFrames(grid, CellPointIn(grid, 4)));
             bool tapped = PumpedDispatcher.PumpUntil(() => CurrentRowOf(grid) != row, TimeSpan.FromSeconds(5));
 
             double unsealedOffset = viewer.VerticalOffset;
-            desk.RealTouch(RealInputDesk.TouchDragFrames(grid, CellPointIn(grid, 8), new Vector(0, -150)));
+            Touch(RealInputDesk.TouchDragFrames(grid, CellPointIn(grid, 8), new Vector(0, -150)));
             bool panned = PumpedDispatcher.PumpUntil(() => viewer.VerticalOffset != unsealedOffset, TimeSpan.FromSeconds(5));
 
             Assert.True(
@@ -227,11 +249,12 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>
     /// A real OLE drop of text from another window onto the editor while a
-    /// real dialog the shell owns is up: the dialog disables the shell, and
-    /// OLE still offers the drop to it. Nothing lands and <c>DoDragDrop</c>
-    /// returns None. Once the dialog closes the same drop lands, which makes
-    /// the refusal mean something. It skips where the desktop refuses the
-    /// foreground or the drag never enters the shell.
+    /// real WPF dialog the shell owns is up: the dialog disables the shell
+    /// (and every other window on the thread), and OLE still offers the drop
+    /// to it. Nothing lands and <c>DoDragDrop</c> returns None. Once the
+    /// dialog closes the same drop lands, which makes the refusal mean
+    /// something. It skips where the desktop refuses the foreground, the
+    /// drag source's window or the drag (#1680).
     /// </summary>
     [Fact]
     public void ARealDropUnderAPromptLandsNothing() => RunSta(() =>
@@ -255,6 +278,11 @@ public sealed partial class CommandPaletteTests
         Assert.False(host.Palette.IsSealed);
         string unsealedBefore = SettledIn(host.Shell, landed);
         DragDropEffects? unsealedEffect = desk.RealOleDrop(editor, at, DroppedText);
+        if (unsealedEffect is null)
+        {
+            RealInputDesk.SkipWhereThisDesktopRefusesRealInput("the drag once the prompt closed", "a real drop under a prompt");
+        }
+
         bool unsealedLanded = PumpedDispatcher.PumpUntil(() => landed() != unsealedBefore, TimeSpan.FromSeconds(5));
 
         Assert.True(
@@ -534,6 +562,7 @@ public sealed partial class CommandPaletteTests
             if (!TakeTheForeground(shell))
             {
                 TouchAndDropNative.LetGoOfHeldInput();
+                shell.Topmost = false;
                 SkipWhereThisDesktopRefusesRealInput("the foreground", measured);
             }
         }
@@ -598,17 +627,20 @@ public sealed partial class CommandPaletteTests
 
         /// <summary>
         /// Sets up touch injection before the fact builds a window, and checks
-        /// that WPF reads the injection's touch device. WPF reads a thread's
-        /// tablets once, as the thread's first window is made, and drops a
-        /// touch from a device it did not read: set up after the fact's first
-        /// window, no injected touch arrived. Measured on 2026-11-27: run alone,
-        /// the fact's thread reads the device at once; in an 851-fact run it
-        /// read it too; but in short runs where a fact with a shell window ran
-        /// just before it, no thread of the process read the device for ten
-        /// seconds, and no touch arrived. So the check looks once, from a
-        /// thread of its own that spends none of the fact thread's one read,
-        /// and the fact skips where WPF does not read the device, as where the
-        /// desktop refuses touch injection.
+        /// that WPF has registered the injection's touch device. The device,
+        /// once set up, stays for the life of the test process. WPF reads a
+        /// thread's tablets once, as the thread's first window is made, and
+        /// drops a touch from a device it did not read: set up after the
+        /// fact's first window, no injected touch arrived. Measured on
+        /// 2026-11-27: run alone, the fact's thread reads the device at once;
+        /// in an 851-fact run it read it too; but in short runs where a fact
+        /// with a shell window ran just before it, no thread of the process
+        /// read the device for ten seconds, and no touch arrived. So the check
+        /// looks once, from a thread of its own that spends none of the fact
+        /// thread's one read. Where the desktop refuses touch injection the
+        /// fact skips as the menu facts do (#1680); where WPF in this process
+        /// has not registered the device, which is no desktop's refusal, it
+        /// skips on that cause.
         /// </summary>
         public static void PrepareTouchInjection()
         {
@@ -618,22 +650,24 @@ public sealed partial class CommandPaletteTests
                     $"touch injection (InitializeTouchInjection, error {Marshal.GetLastWin32Error()})", "real touch");
             }
 
-            bool read = StaThread.Run(
+            bool registered = StaThread.Run(
                 () => Tablet.TabletDevices.Cast<TabletDevice>().Any(tablet => tablet.Type == TabletDeviceType.Touch),
                 TimeSpan.FromSeconds(20),
                 "the look at WPF's tablets timed out.");
-            if (!read)
+            if (!registered)
             {
-                SkipWhereThisDesktopRefusesRealInput(
-                    "a touch device WPF reads (some test processes in which other facts ran first read none; the fact runs alone)",
-                    "real touch");
+                Assert.Skip(
+                    "WPF in this test process has not registered the injected touch device (in short runs where a fact "
+                    + "with a shell window ran just before this one it never does; run the fact alone), so a real touch "
+                    + "pan was not measured");
             }
         }
 
         /// <summary>Injects <paramref name="frames"/> as real touch, one frame
-        /// every 16 ms, from a worker thread while this thread pumps. Skips
-        /// where the desktop refuses touch injection.</summary>
-        public void RealTouch((Point Screen, uint Flags)[] frames)
+        /// every 16 ms, from a worker thread while this thread pumps. Returns
+        /// null, or what failed: the caller decides whether that is the
+        /// desktop refusing touch or a failure of the fact.</summary>
+        public string? RealTouch((Point Screen, uint Flags)[] frames)
         {
             Task<string?> injected = Task.Run(() =>
             {
@@ -644,7 +678,7 @@ public sealed partial class CommandPaletteTests
                     {
                         if (!TouchAndDropNative.InjectTouch(screen, flags))
                         {
-                            return $"touch injection (InjectTouchInput, error {Marshal.GetLastWin32Error()})";
+                            return $"InjectTouchInput, error {Marshal.GetLastWin32Error()}";
                         }
 
                         down = flags != TouchAndDropNative.Up;
@@ -662,11 +696,13 @@ public sealed partial class CommandPaletteTests
                 return null;
             });
             Assert.True(PumpedDispatcher.PumpUntil(() => injected.IsCompleted, TimeSpan.FromSeconds(20)), "the touch injector never finished");
-            if (injected.Result is { } refused)
-            {
-                SkipWhereThisDesktopRefusesRealInput(refused, "real touch");
-            }
+            return injected.Result;
         }
+
+        /// <summary>How long a drag may run before its source cancels it: a
+        /// release the desktop refused would otherwise hold
+        /// <c>DoDragDrop</c> for good.</summary>
+        private static readonly TimeSpan DragDeadline = TimeSpan.FromSeconds(15);
 
         /// <summary>
         /// A real OLE drag of <paramref name="text"/> from a window on a
@@ -674,10 +710,12 @@ public sealed partial class CommandPaletteTests
         /// <paramref name="target"/>: the left button goes down on the source
         /// window, which starts <c>DoDragDrop</c> there, the cursor moves to
         /// the target, and the button comes up. Returns the effect
-        /// <c>DoDragDrop</c> reported, or null when the press never reached
-        /// the source. The source's thread runs through
-        /// <see cref="StaThread"/>, and its dispatcher is shut down as the
-        /// drag ends, so it leaves no window class behind.
+        /// <c>DoDragDrop</c> reported, or null where the desktop refused the
+        /// drag: the press never reached the source, or the drag was still
+        /// running at <see cref="DragDeadline"/> and the source cancelled it.
+        /// Skips where the source's window never shows. The source's thread
+        /// runs through <see cref="StaThread"/>, and its dispatcher is shut
+        /// down as the drag ends, so it leaves no window class behind.
         /// </summary>
         public DragDropEffects? RealOleDrop(UIElement target, Point local, string text)
         {
@@ -687,7 +725,9 @@ public sealed partial class CommandPaletteTests
             Point targetPixel = target.PointToScreen(local);
             var ready = new ManualResetEventSlim();
             var started = new ManualResetEventSlim();
+            var ended = new ManualResetEventSlim();
             DragDropEffects effect = DragDropEffects.None;
+            bool cancelled = false;
             Dispatcher? sourceDispatcher = null;
             Task sourceThread = Task.Run(() => StaThread.Run(
                 () =>
@@ -706,11 +746,27 @@ public sealed partial class CommandPaletteTests
                         Width = sourceDip.Width,
                         Height = sourceDip.Height,
                     };
+                    var clock = new Stopwatch();
+
+                    // OLE asks the source whether to go on as the mouse or a
+                    // key changes; past the deadline the answer is Cancel,
+                    // and DoDragDrop returns.
+                    border.QueryContinueDrag += (_, e) =>
+                    {
+                        if (clock.Elapsed > DragDeadline)
+                        {
+                            cancelled = true;
+                            e.Action = DragAction.Cancel;
+                            e.Handled = true;
+                        }
+                    };
                     border.PreviewMouseLeftButtonDown += (_, e) =>
                     {
                         e.Handled = true;
                         started.Set();
+                        clock.Start();
                         effect = DragDrop.DoDragDrop(border, new DataObject(DataFormats.UnicodeText, text), OfferedEffects);
+                        ended.Set();
                         Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
                     };
                     window.Show();
@@ -719,11 +775,11 @@ public sealed partial class CommandPaletteTests
                     ready.Set();
                     Dispatcher.Run();
                 },
-                TimeSpan.FromSeconds(60),
+                TimeSpan.FromSeconds(90),
                 "the CB-38 drag source timed out."));
             Task driver = Task.Run(() =>
             {
-                if (!ready.Wait(TimeSpan.FromSeconds(10)))
+                if (!ready.Wait(TimeSpan.FromSeconds(30)))
                 {
                     return;
                 }
@@ -756,9 +812,30 @@ public sealed partial class CommandPaletteTests
                 {
                     TouchAndDropNative.LeftButton(down: false);
                 }
+
+                // A drag whose release the desktop refused runs on: a nudge of
+                // the cursor makes OLE ask the source again, which cancels it
+                // once the deadline has passed.
+                for (int nudge = 0; nudge < 60 && !ended.Wait(TimeSpan.FromMilliseconds(500)); nudge++)
+                {
+                    TouchAndDropNative.MoveCursor(targetPixel + new Vector(nudge % 2, 1));
+                }
             });
-            Assert.True(PumpedDispatcher.PumpUntil(() => driver.IsCompleted, TimeSpan.FromSeconds(30)), "the drag's driver never finished");
+            Assert.True(PumpedDispatcher.PumpUntil(() => driver.IsCompleted, TimeSpan.FromSeconds(75)), "the drag's driver never finished");
             driver.GetAwaiter().GetResult();
+            if (!ready.IsSet)
+            {
+                if (sourceThread.IsFaulted)
+                {
+                    sourceThread.GetAwaiter().GetResult();
+                }
+
+                // A window shown late still ends its loop here.
+                _ = PumpedDispatcher.PumpUntil(() => sourceDispatcher is not null || sourceThread.IsCompleted, TimeSpan.FromSeconds(5));
+                sourceDispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
+                SkipWhereThisDesktopRefusesRealInput("the drag source's window", "a real drop");
+            }
+
             if (!started.IsSet && sourceDispatcher is { } idle)
             {
                 // The press never reached the source, so nothing ends its loop.
@@ -769,12 +846,13 @@ public sealed partial class CommandPaletteTests
             sourceThread.GetAwaiter().GetResult();
             TouchAndDropNative.MoveCursor(sourcePixel);
             PumpedDispatcher.Drain();
-            return started.IsSet ? effect : null;
+            return started.IsSet && !cancelled ? effect : null;
         }
 
-        /// <summary>Runs <paramref name="inside"/> while a real dialog the
-        /// shell owns is up (<c>ShowDialog</c>: the shell is disabled and the
-        /// thread is modal), from the dialog's own loop, then closes it.</summary>
+        /// <summary>Runs <paramref name="inside"/> while a real WPF dialog the
+        /// shell owns is up (<c>ShowDialog</c>: every other window on the
+        /// thread is disabled, the shell included, and the thread is modal),
+        /// from the dialog's own loop, then closes it.</summary>
         public T UnderARealPrompt<T>(Func<T> inside)
         {
             T result = default!;

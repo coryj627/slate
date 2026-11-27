@@ -37,21 +37,21 @@ internal static class ShellSeal
     };
 
     /// <summary>The owning shell's admission for an input in
-    /// <paramref name="owned"/>; <c>RoutedEventArgs</c>, because a
-    /// mnemonic's <c>AccessKeyPressedEventArgs</c> and a drag's
-    /// <c>DragEventArgs</c> are no input events. Not
-    /// in the shell's window, so an Escape here is taken, never handed to
-    /// the palette (T9 dismisses an open palette from the palette's own
-    /// window only).</summary>
+    /// <paramref name="owned"/>; <c>RoutedEventArgs</c>, because neither a
+    /// mnemonic's <c>AccessKeyPressedEventArgs</c> nor a drag's
+    /// <c>DragEventArgs</c> is an input event. Not in the shell's window, so
+    /// an Escape here is taken, never handed to the palette (T9 dismisses
+    /// an open palette from the palette's own window only).</summary>
     internal static bool TakesFor(Window owned, RoutedEventArgs input) =>
         ShellOf(owned)?.SealTakes(input, inTheShellsWindow: false) ?? false;
 
     /// <summary>Admits a modeless window the shell owns: the shell's twelve
     /// preview routes and its access-key gate, each through the shell's
     /// one check. Called right after the window is built, before any other
-    /// subscription on it, so the check runs first on every route. A prompt
-    /// that disables the shell leaves this window enabled, so a touch
-    /// reaches it then too (CB-38).</summary>
+    /// subscription on it, so the check runs first on every route. A message
+    /// box or a common dialog disables only its owner and leaves this
+    /// window enabled, so a touch reaches it then too; a WPF dialog disables
+    /// every window on the thread, this one included (CB-38).</summary>
     internal static void Admit(Window owned)
     {
         AdmittedWindows.AddOrUpdate(owned, owned);

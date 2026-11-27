@@ -8,7 +8,6 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
-using System.Windows.Media;
 
 namespace SlateWindows.Tests;
 
@@ -109,7 +108,7 @@ public sealed class UiaPatternProbeTests
         using var host = new CommandPaletteTests.ShippedShellHost(shown: true, folder: true);
         FilesSidebarViewModel sidebar = host.AttachFilesSidebar();
         TreeViewItem held = Row(host.Shell.FilesTree, sidebar.RootNodes.First());
-        Button button = Descendants<Button>(host.Shell).First(candidate =>
+        Button button = ShownShell.Descendants(host.Shell).OfType<Button>().First(candidate =>
             AutomationProperties.GetAutomationId(candidate) == "SidebarCollapseAll");
         Assert.True(button.IsVisible && held.Focus(), "premise: the button shows and the keys rest on a tree row first");
         int clicks = 0;
@@ -162,25 +161,6 @@ public sealed class UiaPatternProbeTests
             "premise: the Files tree never showed its rows");
         tree.UpdateLayout();
         return Assert.IsAssignableFrom<TreeViewItem>(tree.ItemContainerGenerator.ContainerFromItem(node));
-    }
-
-    private static IEnumerable<T> Descendants<T>(DependencyObject root)
-        where T : DependencyObject
-    {
-        var pending = new Stack<DependencyObject>([root]);
-        while (pending.Count > 0)
-        {
-            DependencyObject node = pending.Pop();
-            if (node is T match)
-            {
-                yield return match;
-            }
-
-            for (int i = VisualTreeHelper.GetChildrenCount(node) - 1; i >= 0; i--)
-            {
-                pending.Push(VisualTreeHelper.GetChild(node, i));
-            }
-        }
     }
 
     private static void RunSta(Action body) =>
