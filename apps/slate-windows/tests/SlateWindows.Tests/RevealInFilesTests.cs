@@ -937,12 +937,13 @@ public sealed class RevealInFilesTests
     });
 
     /// <summary>The red team's item 1: New note arms the rename of the note it
-    /// creates and opens it, its publication held. Before the publication, the
-    /// reader opens park/here.md as Quick Open opens a note (the workspace's
-    /// open). That open is the reader's newer gesture and drops the arm: the
-    /// publication selects no created row and opens no tab over the reader's
-    /// note, the name field does not take the keys, and the open's own landing
-    /// puts them in its editor.</summary>
+    /// creates and opens it, its publication held. The keys go to the Files
+    /// filter field; then the reader opens park/here.md as Quick Open opens a
+    /// note (the workspace's open). That open is the reader's newer gesture and
+    /// drops the arm: the publication selects no created row and opens no tab
+    /// over the reader's note, the name field does not take the keys, and the
+    /// open's own landing moves them from the filter field into its
+    /// editor.</summary>
     [Fact]
     public void AnOpenFromElsewhereDropsACreatesRenameArm() => StaThread.RunPumped(() =>
     {
@@ -952,6 +953,7 @@ public sealed class RevealInFilesTests
         shell.Sidebar.CreateNoteCommand.Execute(null);
         Assert.True(File.Exists(Path.Combine(shell.Host.Root, "Untitled.md")), "premise: New note wrote no note");
         PumpedDispatcher.Drain();
+        Assert.True(shell.Host.Shell.SidebarFilterTextBox.Focus(), "premise: the filter field refused the keys");
 
         shell.Host.Workspace.OpenPath("park/here.md");
         PumpedDispatcher.Drain();
