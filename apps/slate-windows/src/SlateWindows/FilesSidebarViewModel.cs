@@ -2674,7 +2674,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _historyIndex = _history.Count - 1;
         }
 
-        OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
+        // Plan 47 CB-39: the sidebar's own open took its intent at its gesture;
+        // the workspace's open it asks for takes none (NoteOpenedInTheWorkspace).
+        bool outer = _sidebarOpening;
+        _sidebarOpening = true;
+        try
+        {
+            OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
+        }
+        finally
+        {
+            _sidebarOpening = outer;
+        }
         RaiseCommandStates();
     }
 

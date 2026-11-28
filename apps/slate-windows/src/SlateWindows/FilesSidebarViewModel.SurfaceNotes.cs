@@ -76,9 +76,20 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// inside it is not a late one.</summary>
     private bool _revealGestureTurn;
 
-    /// <summary>Plan 47 CB-39: set while a seat opens its own note, which is
-    /// not the reader's open and ends no Reveal asked from its handlers.</summary>
-    private bool _seatOpening;
+    /// <summary>Plan 47 CB-39: set while the sidebar asks for an open of its own
+    /// (a row's open, a selection's, a seat's, a create's), which took its intent
+    /// at its own gesture, so the workspace's open that follows takes none.</summary>
+    private bool _sidebarOpening;
+
+    /// <summary>Plan 47 CB-39: how many seats have landed the keys.</summary>
+    private long _landingsTaken;
+
+    /// <summary>Plan 47 CB-39: the newest seat that landed the keys. The window's
+    /// queued editor landing reads it when it is asked and gives way when a seat
+    /// has landed since. A silent seat, an open, a filter change or a rename's arm
+    /// lands nothing here, so a newer workspace landing (a pane move, a tab
+    /// switch, a view switch) is left to run (the red team's item 7).</summary>
+    internal long NewestLanding => _landingsTaken;
 
     private enum IntentKind
     {
@@ -365,16 +376,23 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     }
 
     /// <summary>Plan 47 CB-39: the workspace opened a note (Quick Open, a
-    /// link, a surface's open; the lifecycle's handler calls this): the
-    /// reader's newer gesture, so a Reveal still waiting ends, and its seat
-    /// never opens its note over the reader's. The seat's own open is not the
-    /// reader's: it ends no Reveal asked from the seat's own landing or open
-    /// handlers (the red team's minor 7).</summary>
+    /// search hit, a link, a surface's open; the lifecycle's handler calls
+    /// this): the reader's newer gesture, which names no row. A Reveal still
+    /// waiting ends, so its seat never opens its note over the reader's, and a
+    /// create's rename arm and a mutation's named row drop, so their publication
+    /// neither selects their row over the reader's note nor takes the keys into
+    /// the name field (the red team's item 1). The sidebar's own opens took
+    /// their intent at their gesture and take none here; a seat's own open among
+    /// them ends no Reveal asked from the seat's own handlers (the red team's
+    /// minor 7).</summary>
+    /// <remarks>The workspace raises its open after its dirty-tab gate, whose
+    /// dialog runs a modal loop: work published inside that loop runs before
+    /// this intent is taken (a late seat ends there, under the loop).</remarks>
     internal void NoteOpenedInTheWorkspace()
     {
-        if (!_seatOpening)
+        if (!_sidebarOpening)
         {
-            EndWaitingReveal();
+            _ = StateIntentNamingNoRow();
         }
     }
 
@@ -444,6 +462,10 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             return;
         }
 
+        // A seat that lands moves the keys: the window's editor landing queued
+        // before it gives way (Codex round 9). A silent seat counts none.
+        _landingsTaken++;
+
         // The clear's intent drops nothing: the slot is empty, no newer intent waits.
         ClearFilter();
         ExpandAncestorsOf(target);
@@ -458,16 +480,9 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             _vanishedSelection = null;
         }
 
-        bool outer = _seatOpening;
-        _seatOpening = true;
-        try
-        {
-            SelectOnBothHalves(target);
-        }
-        finally
-        {
-            _seatOpening = outer;
-        }
+        // Its open is the sidebar's own (RequestOpen marks it), so it ends no
+        // Reveal asked from the seat's own handlers.
+        SelectOnBothHalves(target);
     }
 
     /// <summary>Opens every collapsed row above <paramref name="target"/>, a

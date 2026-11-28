@@ -714,15 +714,26 @@ public partial class MainWindow : Window
             return (region, _viewModel.Workspace?.ActiveGroup.ActiveTab);
         }
 
-        // Where a late Reveal may put the keys. With Files hidden, nothing can
-        // land: the row is selected silently, whatever holds the keys. In the
+        // Where a late Reveal may put the keys. Under a modal surface or loop,
+        // the wait ends: the surface owns the keys, and the Files commands keep
+        // acting on the reader's own row (the red team's item 3). With Files
+        // hidden, nothing can land: the row is selected silently, whatever
+        // holds the keys. In the
         // Files tree, they are taken. In the pane's fields, lists or buttons (a
         // rename, a filter), they are the reader's own work there: the wait
         // ends. Stranded (on nothing, the window, or an element gone from it),
-        // they are taken. Still in the gesture's place, they are taken;
+        // they are taken. With the gesture's own place gone from view on the
+        // same tab (a narrow window stepped its pane aside to show Files, and
+        // WPF handed the keys on), they are taken as stranded keys are (the red
+        // team's item 2). Still in the gesture's place, they are taken;
         // anywhere else, the row is selected silently.
         FilesSidebarViewModel.LateRevealAnswer AnswerLateReveal(object? gesturePlace)
         {
+            if (OpenModalSurface is not null || _modalLoops.IsModalLoopActive)
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.End;
+            }
+
             if (!FilesPaneBorder.IsVisible)
             {
                 return FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
@@ -740,6 +751,13 @@ public partial class MainWindow : Window
             }
 
             if (keys is null or Window || (keys is Visual gone && PresentationSource.FromVisual(gone) is null))
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.Land;
+            }
+
+            if (gesturePlace is (UIElement placeShown, var placeTab)
+                && !placeShown.IsVisible
+                && ReferenceEquals(placeTab, _viewModel.Workspace?.ActiveGroup.ActiveTab))
             {
                 return FilesSidebarViewModel.LateRevealAnswer.Land;
             }
@@ -778,6 +796,14 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(() =>
         {
             if (sidebar is not null && sidebar.NewestIntent != intent)
+            {
+                return;
+            }
+
+            // A modal loop that started after the arm owns the keys (the red
+            // team's item 4). A modal surface opened after it keeps them
+            // already: the name field cannot take them from the surface.
+            if (_modalLoops.IsModalLoopActive)
             {
                 return;
             }
@@ -1002,14 +1028,15 @@ public partial class MainWindow : Window
         // the request (canvas and graph included, contract A14's instruction)
         // under the window's slot. A later focus request that supersedes it in
         // the arbiter leaves no request behind to seat the tab later.
-        // Plan 47 CB-39: the sidebar's newest intent when this landing is
-        // queued, after an explicit open's own. A newer intent taken before it
-        // runs is where the reader is now (a Reveal that landed on its row and
-        // opened its note as a selection, which queues no landing of its own),
-        // and the landing gives way to it. When the window observes another
-        // sidebar by then, the landing runs as before.
+        // Plan 47 CB-39: the sidebar's newest landing when this landing is
+        // queued. A seat that lands the keys before it runs is where the reader
+        // is now (a Reveal that landed on its row and opened its note as a
+        // selection, which queues no landing of its own), and this landing gives
+        // way to it. A silent seat, an open or a filter change moves no keys and
+        // leaves it to run (the red team's item 7). When the window observes
+        // another sidebar by then, the landing runs as before.
         FilesSidebarViewModel? sidebar = _observedFileSidebar;
-        long intent = sidebar?.NewestIntent ?? 0;
+        long landing = sidebar?.NewestLanding ?? 0;
         _ = _focusRequests.Post(
             Dispatcher,
             DispatcherPriority.Input,
@@ -1017,7 +1044,7 @@ public partial class MainWindow : Window
             {
                 if (sidebar is not null
                     && ReferenceEquals(_observedFileSidebar, sidebar)
-                    && sidebar.NewestIntent != intent)
+                    && sidebar.NewestLanding != landing)
                 {
                     return;
                 }
