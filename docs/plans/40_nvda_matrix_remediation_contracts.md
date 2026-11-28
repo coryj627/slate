@@ -1016,8 +1016,9 @@ The frozen R-9 row above is unchanged.
   - the sidebar's own explicit opens;
   - the reader's own selection;
   - F2, or a create's hand-off to the name field;
+  - opening Move To (it keeps the selected row, the move's subject);
   - a change to the Files filter: text typed or cleared, or a tag scope applied or cleared.
-  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. A filter change drops a waiting Reveal and a create's rename arm, and keeps a rename's or move's named row, which seats silently as before. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
+  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. Work queued for later (the window's restore fallback and the rename field's focus) captures the newest intent when it is queued and stands down if a newer one has been taken; an older mutation's focus restore is retired by a newer intent, and a stale request arms none. A filter change drops a waiting Reveal and a create's rename arm, and keeps a rename's or move's named row, which seats silently as before. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
 - **The wait.** Each folder load runs one step over the Reveal's path:
   - it seats a listed target, at any depth and inside a date group (it expands a collapsed group that holds the target);
   - it expands the next collapsed folder, and walks on in the same call through a folder already loaded;
