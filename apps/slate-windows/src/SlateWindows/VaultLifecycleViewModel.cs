@@ -2324,7 +2324,7 @@ internal sealed partial class VaultLifecycleViewModel
         QuickSwitcher?.RecordOpen(path);
         // Plan 47 CB-39: an open is the reader's newer gesture; a Reveal still
         // waiting ends, so its seat never opens its note over this one.
-        FileSidebar?.NoteOpenedInTheWorkspace();
+        FileSidebar?.NoteOpenedInTheWorkspace(path);
     }
 
     /// <summary>W5-3 (T7): a template note was written outside the

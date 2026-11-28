@@ -817,6 +817,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // Plan 47 CB-39: a new selection ends a silent seat's claim on its row.
+            _silentSeat = null;
+
             // Plan 47 CB-39: the reader's own selection (an arrow, a click, a
             // row taking the keys, a list's row) is the newest intent: a
             // waiting Reveal and a mutation's pending row give way. The
@@ -843,29 +846,39 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            MutationName = value.Name;
-            // W7-7 (R-2, OD-2): selection keeps opening the note (mac
-            // parity: selectedFilePath drives the editor) but never takes
-            // focus off the row — every arrow onto a file used to land the
-            // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
-            // opens that move focus.
-            if (value.IsDirectory)
-            {
-                _announce(new A11yEvent.TreeFolderSelected(SpokenSelection(value)));
-                LoadDualPane(value.Path);
-                if (value.HasFolderNote)
-                {
-                    RequestOpen(FolderNotePath(value), focusEditor: false);
-                }
-            }
-            else
-            {
-                _announce(new A11yEvent.RowSelected(SpokenSelection(value)));
-                RequestOpen(value.Path, focusEditor: false);
-            }
-
-            RaiseCommandStates();
+            SaySelectionAndOpen(value);
         }
+    }
+
+    /// <summary>A selection's own effects: the name field, the line said, a
+    /// folder's dual pane, and the open that keeps the keys on the row. The
+    /// setter runs them for each new selection; a seat that lands on a row a
+    /// silent seat selected runs them once (Plan 47 CB-39, Codex round
+    /// 11).</summary>
+    private void SaySelectionAndOpen(FileTreeNodeViewModel value)
+    {
+        MutationName = value.Name;
+        // W7-7 (R-2, OD-2): selection keeps opening the note (mac
+        // parity: selectedFilePath drives the editor) but never takes
+        // focus off the row — every arrow onto a file used to land the
+        // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
+        // opens that move focus.
+        if (value.IsDirectory)
+        {
+            _announce(new A11yEvent.TreeFolderSelected(SpokenSelection(value)));
+            LoadDualPane(value.Path);
+            if (value.HasFolderNote)
+            {
+                RequestOpen(FolderNotePath(value), focusEditor: false);
+            }
+        }
+        else
+        {
+            _announce(new A11yEvent.RowSelected(SpokenSelection(value)));
+            RequestOpen(value.Path, focusEditor: false);
+        }
+
+        RaiseCommandStates();
     }
 
     /// <summary>A row of a list's own listing — the filter results or the

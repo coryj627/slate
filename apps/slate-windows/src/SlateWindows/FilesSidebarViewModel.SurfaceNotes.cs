@@ -91,6 +91,14 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// switch, a view switch) is left to run (the red team's item 7).</summary>
     internal long NewestLanding => _landingsTaken;
 
+    /// <summary>Plan 47 CB-39: the row a silent seat selected, and the note its
+    /// selection opens (none for a folder without a folder note), until the
+    /// selection changes or that note opens. A seat that lands on the row while
+    /// it is still selected opens the note and says it once, as a seat does:
+    /// its selection changes nothing, so the setter would do neither (Codex
+    /// round 11).</summary>
+    private (string Row, string? Note)? _silentSeat;
+
     private enum IntentKind
     {
         Reveal,
@@ -388,8 +396,16 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     /// <remarks>The workspace raises its open after its dirty-tab gate, whose
     /// dialog runs a modal loop: work published inside that loop runs before
     /// this intent is taken (a late seat ends there, under the loop).</remarks>
-    internal void NoteOpenedInTheWorkspace()
+    internal void NoteOpenedInTheWorkspace(string path)
     {
+        ArgumentNullException.ThrowIfNull(path);
+        // A silent seat's row whose own note opened, from anywhere, has had
+        // its open; a seat that lands on it later says nothing again.
+        if (_silentSeat is { Note: { } note } && string.Equals(note, path, StringComparison.Ordinal))
+        {
+            _silentSeat = null;
+        }
+
         if (!_sidebarOpening)
         {
             _ = StateIntentNamingNoRow();
@@ -459,6 +475,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         {
             ExpandAncestorsOf(target);
             SelectSilently(target);
+            _silentSeat = (target.Path, target.IsDirectory ? (target.HasFolderNote ? FolderNotePath(target) : null) : target.Path);
             return;
         }
 
@@ -480,9 +497,21 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             _vanishedSelection = null;
         }
 
+        // A row a silent seat selected is this very node, selected already, so
+        // the selection below changes nothing and its open and line would not
+        // come: the seat runs them once (Codex round 11). A row the reader
+        // selected and opened says nothing again.
+        bool silentlySeated = ReferenceEquals(SelectedNode, target)
+            && string.Equals(_silentSeat?.Row, target.Path, StringComparison.Ordinal);
+        _silentSeat = null;
+
         // Its open is the sidebar's own (RequestOpen marks it), so it ends no
         // Reveal asked from the seat's own handlers.
         SelectOnBothHalves(target);
+        if (silentlySeated)
+        {
+            SaySelectionAndOpen(target);
+        }
     }
 
     /// <summary>Opens every collapsed row above <paramref name="target"/>, a
