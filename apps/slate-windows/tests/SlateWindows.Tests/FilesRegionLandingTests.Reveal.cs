@@ -646,6 +646,34 @@ public sealed partial class FilesRegionLandingTests
         Assert.Equal("b", host.Sidebar.FilterText);
     });
 
+    /// <summary>The deferred-work table, the named row: a rename of b.md with
+    /// its publication held, then the reader's selection of a.md (a newer
+    /// intent), then a trash of a.md, whose request names no row and arms the
+    /// focus restore again. The rename's named row went with the reader's
+    /// selection, so the shared publication never seats the renamed
+    /// row.</summary>
+    [Fact]
+    public void ATrashAfterTheReadersSelectionNeverSeatsAnOlderRenamesRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedRevealVault(host);
+        host.Initialize();
+        host.Sidebar.SelectedNode = Row(host, "b.md");
+        Settle(host);
+        host.HoldTreeWork();
+        Assert.True(RenameSelectedTo(host, "bb.md"), "premise: the rename failed");
+        host.Sidebar.SelectedNode = Row(host, "a.md");
+
+        host.Sidebar.DeleteCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.TrashCompletion.IsCompleted), "the trash never finished");
+        Assert.False(File.Exists(Path.Combine(host.Root, "a.md")), "premise: the trash left a.md");
+        host.ReleaseTreeWork();
+        SettleLoads(host);
+
+        Assert.NotEqual("bb.md", host.Sidebar.SelectedNode?.Path);
+        Assert.False(Row(host, "bb.md").IsSelected, "the older rename's row holds the selection");
+    });
+
     /// <summary>The red team's minor 5: a late seat's silent arm into a date
     /// group the reader collapsed. A surface's landed note waits for the
     /// refresh that lists it, with the keys moved off the gesture's place
@@ -1118,6 +1146,13 @@ public sealed partial class FilesRegionLandingTests
 
     private static FileTreeNodeViewModel Row(Host host, string path) =>
         EveryRow(host.Sidebar.RootNodes).Single(node => node.Path == path && !node.IsPlaceholder);
+
+    /// <summary>A rename of the selected row to <paramref name="name"/>.</summary>
+    private static bool RenameSelectedTo(Host host, string name)
+    {
+        host.Sidebar.MutationName = name;
+        return host.Sidebar.TryRenameSelected();
+    }
 
     private static bool IsSelectionLine(A11yEvent said) =>
         said is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected;

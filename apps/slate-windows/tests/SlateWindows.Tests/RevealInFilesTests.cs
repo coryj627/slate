@@ -703,6 +703,86 @@ public sealed class RevealInFilesTests
             $"the keys moved after the Reveal: {string.Join(" -> ", shell.FocusChanges.Skip(movesAfterTheReveal!.Value).Select(focus => focus.ToString()))}");
     });
 
+    /// <summary>The deferred-work table, the restore's retirement: a filter
+    /// active, a duplicate of the reader's a.md with its publication held,
+    /// then a newer Reveal asked from a note header's segment, then the keys
+    /// moved into the editor and the keyboard focus cleared. The Reveal ends
+    /// at its seat (silent under a filter is an end) and takes no intent, so
+    /// only the retirement keeps the duplicate's restore from queueing a
+    /// fallback that would land the cleared keys in Files.</summary>
+    [Fact]
+    public void AnEndedRevealLeavesAHeldDuplicatesRestoreRetired() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        shell.Sidebar.FilterText = "b";
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.FilterCompletion);
+        shell.Host.Settle();
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        shell.Sidebar.DuplicateSelected();
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a copy.md")), "premise: the duplicate wrote no copy");
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        Assert.True(shell.Editor.Focus(), "premise: the editor did not take the keys");
+        Keyboard.ClearFocus();
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.NotNull(FocusManager.GetFocusedElement(shell.Host.Shell));
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Equal("b", shell.Sidebar.FilterText);
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        shell.AssertNeverSeated("docs/n.md");
+    });
+
+    /// <summary>The deferred-work table, the stale request: nothing selected,
+    /// a filter active, b.md checked and batch-trashed, a newer Reveal asked
+    /// during the trash's work from a note header's segment, so the trash's
+    /// request at its end is stale; then the keys moved into the editor and
+    /// the keyboard focus cleared. The Reveal ends at its seat and takes no
+    /// intent, so only the stale request's rejection keeps a restore from
+    /// queueing a fallback that would land the cleared keys in Files.</summary>
+    [Fact]
+    public void AStaleTrashRequestUnderAnEndedRevealLandsNothing() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        Assert.Null(shell.Sidebar.SelectedNode);
+        shell.Sidebar.FilterText = "b";
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.FilterCompletion);
+        shell.Host.Settle();
+        shell.Row("b.md").IsBatchSelected = true;
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        bool revealed = false;
+        shell.Sidebar.TrashStagedForTesting = _ => revealed = shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md");
+        shell.HoldTreeWork();
+
+        shell.Sidebar.BatchTrashCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => shell.Sidebar.TrashCompletion.IsCompleted), "the trash never finished");
+        Assert.True(revealed, "premise: the Reveal was not asked during the trash");
+        Assert.False(File.Exists(Path.Combine(shell.Host.Root, "b.md")), "premise: the trash left b.md");
+        Assert.True(shell.Editor.Focus(), "premise: the editor did not take the keys");
+        Keyboard.ClearFocus();
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.NotNull(FocusManager.GetFocusedElement(shell.Host.Shell));
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Equal("b", shell.Sidebar.FilterText);
+        shell.AssertNeverSeated("docs/n.md");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
