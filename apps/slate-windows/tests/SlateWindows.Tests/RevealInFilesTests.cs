@@ -830,6 +830,111 @@ public sealed class RevealInFilesTests
         shell.AssertNeverSeated("docs/n.md");
     });
 
+    /// <summary>Codex round 9, an open's queued editor landing: the reader
+    /// opens a.md from its row, the explicit open that queues the editor's
+    /// landing, and a Reveal of the listed b.md is asked before the dispatcher
+    /// drains. The Reveal lands on b.md's row and opens b.md as a selection,
+    /// which asks for no editor landing of its own. The older landing gives way
+    /// to the newer intent, so the keys stay on b.md's row. With nothing after
+    /// the open, the landing puts the keys in the editor.</summary>
+    [Theory]
+    [InlineData("reveal")]
+    [InlineData("nothing")]
+    public void AnOpensQueuedEditorLandingGivesWayToANewerReveal(string after) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell();
+        shell.SelectAndFocusRow("a.md");
+        shell.Mark();
+
+        shell.Sidebar.OpenCurrentCommand.Execute(null);
+        if (after == "reveal")
+        {
+            Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("b.md"));
+        }
+
+        shell.Host.Settle();
+
+        if (after == "reveal")
+        {
+            Assert.Equal("tree row b.md", shell.KeysAt);
+            shell.AssertSelectedOnBothHalves("b.md");
+            Assert.Equal(["a.md", "b.md"], shell.OpensSinceMark);
+            Assert.DoesNotContain(shell.FocusChanges, focus => focus is ICSharpCode.AvalonEdit.Editing.TextArea);
+        }
+        else
+        {
+            Assert.Equal(["a.md"], shell.OpensSinceMark);
+            Assert.True(shell.Editor.IsKeyboardFocusWithin, $"premise: the open's landing did not put the keys in the editor; they are on {shell.KeysAt}");
+        }
+    });
+
+    /// <summary>Codex round 9, Move To's queued focus return: Move To opened
+    /// from the File actions pane's Move to button with the reader's a.md
+    /// selected and docs listed. A cancel queues the return to the button; a Reveal of the
+    /// listed b.md asked before it runs lands on b.md's row, a newer intent,
+    /// and the return gives way: the keys stay on b.md's row. A confirm takes
+    /// the move's own number before the sheet closes, so its return still runs
+    /// and puts the keys back on the button, for one moved row and for checked
+    /// rows; the moved row is selected.</summary>
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("confirm")]
+    [InlineData("confirm checked")]
+    public void MoveTosQueuedFocusReturnGivesWayToANewerReveal(string close) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        shell.Row("docs").IsExpanded = true;
+        shell.SettleLoads();
+        Assert.Contains(shell.Row("docs").Children, child => child.Path == "docs/n.md");
+        if (close == "confirm checked")
+        {
+            shell.Row("a.md").IsBatchSelected = true;
+            shell.Row("b.md").IsBatchSelected = true;
+        }
+
+        Button moveTo = shell.FileActionsButton("Move to…");
+        Assert.True(moveTo.Focus(), "premise: the Move to button refused the keys");
+        Invoke(moveTo);
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.MoveToCompletion);
+        shell.Host.Settle();
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(shell.Sidebar.MoveToSheet);
+        Assert.True(picker.IsReady, "premise: the picker did not load its folders");
+        Assert.False(moveTo.IsKeyboardFocused, "premise: the sheet did not take the keys");
+        shell.Mark();
+
+        if (close == "cancel")
+        {
+            picker.CancelCommand.Execute(null);
+            Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("b.md"));
+            shell.SettleLoads();
+
+            Assert.Equal("tree row b.md", shell.KeysAt);
+            shell.AssertSelectedOnBothHalves("b.md");
+            Assert.DoesNotContain(moveTo, shell.FocusChanges);
+            return;
+        }
+
+        shell.HoldTreeWork();
+        picker.ActivateCommand.Execute(picker.Rows.Single(row => row.Destination == "docs"));
+        PumpedDispatcher.Drain();
+        Assert.True(moveTo.IsKeyboardFocused, $"the move's focus return did not run; the keys are on {shell.KeysAt}");
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "a.md")), "premise: the move left a.md");
+        if (close == "confirm")
+        {
+            Assert.Equal("docs/a.md", shell.Sidebar.SelectedNode?.Path);
+        }
+        else
+        {
+            Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "b.md")), "premise: the move left b.md");
+        }
+
+        Assert.True(moveTo.IsKeyboardFocused, $"the keys left the button after the move's return; they are on {shell.KeysAt}");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
@@ -1214,6 +1319,16 @@ public sealed class RevealInFilesTests
 
         /// <summary>Where the keys are, described.</summary>
         public string KeysAt => Describe(Keyboard.FocusedElement);
+
+        /// <summary>The File actions pane's button that says
+        /// <paramref name="content"/>, the pane expanded.</summary>
+        public Button FileActionsButton(string content)
+        {
+            Host.Shell.SidebarFileActionsExpander.IsExpanded = true;
+            Host.Shell.UpdateLayout();
+            return ShownShell.Descendants(Host.Shell.SidebarFileActionsExpander).OfType<Button>()
+                .Single(candidate => candidate.IsVisible && Equals(candidate.Content, content));
+        }
 
         /// <summary>The reader puts the keys on the row at
         /// <paramref name="path"/> without selecting it, as a landing
