@@ -653,6 +653,56 @@ public sealed class RevealInFilesTests
         shell.AssertSilentlySelected("docs/n.md", tabs);
     });
 
+    /// <summary>Codex round 8: a rename's publication restores the selection
+    /// with the keys outside the tree, so the window queues its fallback
+    /// landing at Input priority. Before it runs, a newer Reveal of a listed
+    /// note runs at Normal priority and lands, and then the keys move into the
+    /// editor and the keyboard focus is cleared, the window's logical focus
+    /// still there. The older fallback stands down: nothing lands in Files
+    /// after the Reveal's own landing.</summary>
+    [Fact]
+    public void ARestoresQueuedFallbackGivesWayToANewerReveal() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("b.md");
+        shell.HoldTreeWork();
+        shell.Sidebar.MutationName = "bb.md";
+        Assert.True(shell.Sidebar.TryRenameSelected(), "premise: the rename failed");
+        Assert.True(shell.Editor.Focus(), "premise: the editor did not take the keys");
+        shell.Mark();
+        int? movesAfterTheReveal = null;
+        bool armed = true;
+        shell.Sidebar.TreeSelectionRestored += () =>
+        {
+            if (!armed)
+            {
+                return;
+            }
+
+            armed = false;
+            _ = shell.Host.Shell.Dispatcher.InvokeAsync(
+                () =>
+                {
+                    _ = shell.Host.Workspace.RevealConnectionsRowFromSurface("a.md");
+                    _ = shell.Editor.Focus();
+                    Keyboard.ClearFocus();
+                    movesAfterTheReveal = shell.FocusChanges.Count;
+                },
+                DispatcherPriority.Normal);
+        };
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(movesAfterTheReveal is not null, "premise: the newer Reveal never ran");
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.Contains("a.md", shell.OpensSinceMark);
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.True(
+            shell.FocusChanges.Count == movesAfterTheReveal,
+            $"the keys moved after the Reveal: {string.Join(" -> ", shell.FocusChanges.Skip(movesAfterTheReveal!.Value).Select(focus => focus.ToString()))}");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
