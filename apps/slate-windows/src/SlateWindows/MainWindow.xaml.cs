@@ -642,25 +642,24 @@ public partial class MainWindow : Window
         if (vanished is { RevealAsked: true })
         {
             // Plan 47 CB-39: a Reveal's gesture records where the keys are;
-            // nothing lands here. When the gesture's place is hidden by the
-            // keys' next move (a narrow window steps its pane aside to show
-            // Files), that move is WPF's handoff, and where it put the keys, on
-            // which tab, is recorded too (Codex round 10). The watch ends at
-            // that next move, whatever it is.
+            // nothing lands here. When the gesture's place is hidden (a narrow
+            // window steps its pane aside to show Files), WPF hands its keys on
+            // at Input priority; a one-shot capture after that records where
+            // they went, on which tab (Codex round 10). It listens to no input:
+            // the seal's admission is the window's only input route.
             object place = RevealPlaceOf(RevealKeys());
             var handoff = new System.Runtime.CompilerServices.StrongBox<object?>();
             if (place is (UIElement region, _))
             {
-                KeyboardFocusChangedEventHandler next = null!;
-                next = (_, moved) =>
-                {
-                    RemoveHandler(Keyboard.GotKeyboardFocusEvent, next);
-                    if (!region.IsVisible)
+                _ = Dispatcher.InvokeAsync(
+                    () =>
                     {
-                        handoff.Value = (moved.NewFocus, _viewModel.Workspace?.ActiveGroup.ActiveTab);
-                    }
-                };
-                AddHandler(Keyboard.GotKeyboardFocusEvent, next, handledEventsToo: true);
+                        if (!region.IsVisible && RevealKeys() is { } handedTo)
+                        {
+                            handoff.Value = (handedTo, _viewModel.Workspace?.ActiveGroup.ActiveTab);
+                        }
+                    },
+                    DispatcherPriority.Background);
             }
 
             vanished.Place = (place, handoff);
