@@ -501,6 +501,81 @@ public sealed class RevealInFilesTests
         Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "n.md")), "Enter renamed the revealed note");
     });
 
+    /// <summary>Codex round 6: a duplicate of the reader's a.md with its
+    /// publication held, then F2 on a.md and a new name typed. F2 fixes the
+    /// rename's target and is the newer intent: the duplicate's named row
+    /// drops, so its publication neither selects the copy nor overwrites the
+    /// name field, and Enter renames a.md.</summary>
+    [Fact]
+    public void F2AfterAHeldDuplicateRenamesTheReadersRow() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        shell.HoldTreeWork();
+        shell.Sidebar.DuplicateSelected();
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a copy.md")), "premise: the duplicate wrote no copy");
+        PumpedDispatcher.Drain();
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.True(shell.PressWithoutPumping(Key.F2), "premise: F2 on the selected row went unhandled");
+        PumpedDispatcher.Drain();
+        Assert.True(nameField.IsKeyboardFocused, "premise: F2 did not put the keys in the name field");
+        nameField.Text = "renamed.md";
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.False(shell.Row("a copy.md").IsSelected, "the copy holds the selection");
+        Assert.True(nameField.IsKeyboardFocused, "the publication took the keys out of the name field");
+        Assert.Equal("renamed.md", nameField.Text);
+        Assert.Empty(shell.FocusChanges);
+        _ = shell.PressWithoutPumping(Key.Enter);
+        shell.SettleLoads();
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "renamed.md")), "Enter did not rename a.md");
+        Assert.False(File.Exists(Path.Combine(shell.Host.Root, "a.md")), "a.md kept its name");
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a copy.md")), "Enter renamed the copy");
+    });
+
+    /// <summary>Codex round 6: a create with its publication held, then F2 on
+    /// the reader's a.md and a new name typed. F2 is the newer intent: the
+    /// create's rename arm drops, so its publication neither selects the new
+    /// note nor re-arms the rename into it, and Enter renames a.md.</summary>
+    [Fact]
+    public void F2AfterAHeldCreateRenamesTheReadersRow() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        shell.HoldTreeWork();
+        shell.Sidebar.CreateNoteCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "Untitled.md")), "premise: the create wrote no note");
+        PumpedDispatcher.Drain();
+        shell.SelectAndFocusRow("a.md");
+        Assert.True(shell.PressWithoutPumping(Key.F2), "premise: F2 on the selected row went unhandled");
+        PumpedDispatcher.Drain();
+        Assert.True(nameField.IsKeyboardFocused, "premise: F2 did not put the keys in the name field");
+        nameField.Text = "renamed.md";
+        int rearmed = 0;
+        shell.Sidebar.InlineRenameRequested += () => rearmed++;
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Equal(0, rearmed);
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.False(shell.Row("Untitled.md").IsSelected, "the created note holds the selection");
+        Assert.True(nameField.IsKeyboardFocused, "the publication took the keys out of the name field");
+        Assert.Equal("renamed.md", nameField.Text);
+        Assert.Empty(shell.FocusChanges);
+        _ = shell.PressWithoutPumping(Key.Enter);
+        shell.SettleLoads();
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "renamed.md")), "Enter did not rename a.md");
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "Untitled.md")), "Enter renamed the created note");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
