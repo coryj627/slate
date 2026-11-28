@@ -1187,6 +1187,14 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
+        // Plan 47 CB-39: opening Move To is the reader's gesture on the
+        // selected (or checked) rows, a newer intent that names no row, as F2
+        // and an open are: a Reveal still waiting ends, so it never seats
+        // under the sheet or after it. The selection stays: it is the move's
+        // own subject, and a confirm's request names the moved row with a
+        // newer number.
+        _ = StateIntentNamingNoRow();
+
         var illegalParents = new HashSet<string>(
             items.Select(item => ParentPath(item.Path)), StringComparer.Ordinal);
         string[] movingFolders = [.. items
