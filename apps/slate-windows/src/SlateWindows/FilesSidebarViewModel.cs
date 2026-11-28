@@ -170,6 +170,8 @@ internal sealed class FileTreeNodeViewModel : BindableBase
             {
                 ResetChildLoadAfterCollapse();
                 _owner?.CancelChildExpansion(this);
+                // Plan 47 CB-39: a Reveal waiting through this folder ends.
+                _owner?.FolderCollapsed(this);
             }
         }
     }
@@ -547,6 +549,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 OnPropertyChanged(nameof(SortButtonName));
             }
+            else if (e.PropertyName is nameof(FilterText) or nameof(ScopeTag))
+            {
+                // Plan 47 CB-39: the reader's newer gesture (FilterChanged).
+                FilterChanged();
+            }
         };
 
         _session = session;
@@ -810,6 +817,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
+            // Plan 47 CB-39: a new selection ends a silent seat's claim on its row.
+            _silentSeat = null;
+
+            // Plan 47 CB-39: the reader's own selection (an arrow, a click, a
+            // row taking the keys, a list's row) is the newest intent: a
+            // waiting Reveal and a mutation's pending row give way. The
+            // sidebar's own seats and a delete's letting go are not it.
+            if (value is not null && !_seatingOwnSelection)
+            {
+                InstallIntent(IntentKind.NoRow, null, TakeIntent());
+            }
+
             // WB-6 (S1): a tree row taking the selection clears every other
             // selected tree node; a list's row (the filter results, the dual
             // pane) taking it leaves the tree's own row alone.
@@ -827,29 +846,39 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            MutationName = value.Name;
-            // W7-7 (R-2, OD-2): selection keeps opening the note (mac
-            // parity: selectedFilePath drives the editor) but never takes
-            // focus off the row — every arrow onto a file used to land the
-            // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
-            // opens that move focus.
-            if (value.IsDirectory)
-            {
-                _announce(new A11yEvent.TreeFolderSelected(SpokenSelection(value)));
-                LoadDualPane(value.Path);
-                if (value.HasFolderNote)
-                {
-                    RequestOpen(FolderNotePath(value), focusEditor: false);
-                }
-            }
-            else
-            {
-                _announce(new A11yEvent.RowSelected(SpokenSelection(value)));
-                RequestOpen(value.Path, focusEditor: false);
-            }
-
-            RaiseCommandStates();
+            SaySelectionAndOpen(value);
         }
+    }
+
+    /// <summary>A selection's own effects: the name field, the line said, a
+    /// folder's dual pane, and the open that keeps the keys on the row. The
+    /// setter runs them for each new selection; a seat that lands on a row a
+    /// silent seat selected runs them once (Plan 47 CB-39, Codex round
+    /// 11).</summary>
+    private void SaySelectionAndOpen(FileTreeNodeViewModel value)
+    {
+        MutationName = value.Name;
+        // W7-7 (R-2, OD-2): selection keeps opening the note (mac
+        // parity: selectedFilePath drives the editor) but never takes
+        // focus off the row — every arrow onto a file used to land the
+        // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
+        // opens that move focus.
+        if (value.IsDirectory)
+        {
+            _announce(new A11yEvent.TreeFolderSelected(SpokenSelection(value)));
+            LoadDualPane(value.Path);
+            if (value.HasFolderNote)
+            {
+                RequestOpen(FolderNotePath(value), focusEditor: false);
+            }
+        }
+        else
+        {
+            _announce(new A11yEvent.RowSelected(SpokenSelection(value)));
+            RequestOpen(value.Path, focusEditor: false);
+        }
+
+        RaiseCommandStates();
     }
 
     /// <summary>A row of a list's own listing — the filter results or the
@@ -1283,6 +1312,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         if (index >= 1 && index <= Math.Min(9, Shortcuts.Count))
         {
+            // Plan 47 CB-39: an explicit open, a gesture that names no row.
+            _ = StateIntentNamingNoRow();
             RequestOpen(Shortcuts[index - 1].Path);
         }
     }
@@ -1911,6 +1942,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             {
                 RequestInlineRenameAt(created);
             }
+            else
+            {
+                // Plan 47 CB-39: a create that names no row is still a gesture,
+                // newer than a waiting Reveal.
+                _ = StateIntentNamingNoRow();
+            }
 
             Refresh();
             ReportResult($"Created note {System.IO.Path.GetFileName(created)}.");
@@ -1994,6 +2031,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // A create is a structural history barrier (mac's table) —
             // a stale inverse must never target this path.
             StructuralHistoryBarrier();
+            // Plan 47 CB-39: New Canvas names no row; a Reveal still waiting
+            // must not open its note over the new canvas.
+            _ = StateIntentNamingNoRow();
             Refresh();
             var sentence = new A11yEvent.Canvas(
                 new CanvasA11yEvent.CanvasFileCreated(
@@ -2048,7 +2088,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
-        long revealRequests = _revealRequests;
+        // Plan 47 CB-39: the trash's intent is installed at its gesture, so a
+        // Reveal asked before it is dropped now, and one asked during its work
+        // is newer and stays.
+        long trashIntent = StateIntentNamingNoRow();
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2089,7 +2132,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             if (ReferenceEquals(SelectedNode, node))
             {
                 SelectedNode = null;
-                RequestSelectionAt(null, revealRequests);
+                RequestSelectionAt(null, trashIntent);
             }
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
@@ -2365,6 +2408,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return false;
         }
 
+        // Plan 47 CB-39: an explicit open is a gesture that names no row; a
+        // waiting Reveal must not open its note over this one.
+        _ = StateIntentNamingNoRow();
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
         return true;
     }
@@ -2375,7 +2421,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void BatchMove() => BatchMove(SelectedBatchItems(), MoveDestination);
 
-    private void BatchMove(StructuralBatchItem[] items, string destination)
+    private void BatchMove(StructuralBatchItem[] items, string destination, long? moveIntent = null)
     {
         if (items.Length == 0)
         {
@@ -2442,7 +2488,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 StructuralHistoryBarrier();
             }
 
-            RequestSelectionAt(null);
+            // Plan 47 CB-39: the Move-To sheet's confirm passes the number it
+            // took before the sheet closed; the batch verb takes one here.
+            RequestSelectionAt(null, moveIntent);
             Refresh();
             ReportMutationResult(BatchMoveSummary(report, destination));
         }
@@ -2459,7 +2507,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         StructuralBatchItem[] items = SelectedBatchItems();
         if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
-        long revealRequests = _revealRequests;
+        // Plan 47 CB-39: the trash's intent is installed at its gesture, so a
+        // Reveal asked before it is dropped now, and one asked during its work
+        // is newer and stays.
+        long trashIntent = StateIntentNamingNoRow();
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2504,7 +2555,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 selected.Path == item.Path || (item.IsDirectory &&
                     selected.Path.StartsWith(item.Path + "/", StringComparison.Ordinal))))
             {
-                RequestSelectionAt(null, revealRequests);
+                RequestSelectionAt(null, trashIntent);
             }
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));
@@ -2636,7 +2687,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _historyIndex = _history.Count - 1;
         }
 
-        OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
+        // Plan 47 CB-39: the sidebar's own open took its intent at its gesture;
+        // the workspace's open it asks for takes none (NoteOpenedInTheWorkspace).
+        bool outer = _sidebarOpening;
+        _sidebarOpening = true;
+        try
+        {
+            OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
+        }
+        finally
+        {
+            _sidebarOpening = outer;
+        }
         RaiseCommandStates();
     }
 
@@ -2654,6 +2716,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         if (candidate >= 0 && candidate < _history.Count)
         {
             _historyIndex = candidate;
+            // Plan 47 CB-39: an explicit open, a gesture that names no row.
+            _ = StateIntentNamingNoRow();
             RequestOpen(_history[_historyIndex], WorkspaceOpenTarget.CurrentTab, trackHistory: false);
         }
     }

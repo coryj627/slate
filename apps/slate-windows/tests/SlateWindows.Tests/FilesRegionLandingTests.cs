@@ -734,6 +734,9 @@ public sealed partial class FilesRegionLandingTests
 
         public Button Above { get; private set; } = null!;
 
+        /// <summary>Plan 47 CB-39: the button beside the pane, outside Files.</summary>
+        public Button Beside { get; private set; } = null!;
+
         public List<A11yEvent> Announced { get; } = [];
 
         /// <param name="nested">Adds a folder holding one note, so a selected
@@ -745,7 +748,18 @@ public sealed partial class FilesRegionLandingTests
         /// is empty.</param>
         /// <param name="nestedTag">Adds a note tagged <c>alpha/beta</c>, a
         /// child of the <c>alpha</c> tag.</param>
-        public void Initialize(bool nested = false, bool tagged = false, bool untagged = false, bool nestedTag = false)
+        /// <param name="synchronousTree">Plan 47 CB-39: builds the sidebar with
+        /// no tree context, so its refreshes and folder loads run in the
+        /// caller's turn (the headless fallback).</param>
+        /// <param name="beforeFirstPublication">Plan 47 CB-39: runs on the new
+        /// sidebar before its first refresh has published.</param>
+        public void Initialize(
+            bool nested = false,
+            bool tagged = false,
+            bool untagged = false,
+            bool nestedTag = false,
+            bool synchronousTree = false,
+            Action<FilesSidebarViewModel>? beforeFirstPublication = null)
         {
             Assert.Null(Application.Current);
             if (nestedTag)
@@ -781,7 +795,27 @@ public sealed partial class FilesRegionLandingTests
                 _session.ScanInitial(cancel);
             }
 
-            Sidebar = new FilesSidebarViewModel(_session, Announced.Add, localAppDataRoot: _fixture.Root);
+            SynchronizationContext? context = SynchronizationContext.Current;
+            if (synchronousTree)
+            {
+                SynchronizationContext.SetSynchronizationContext(null);
+            }
+
+            try
+            {
+                Sidebar = new FilesSidebarViewModel(
+                    _session,
+                    Announced.Add,
+                    localAppDataRoot: _fixture.Root,
+                    filterUiContext: context,
+                    treeWorker: RunTreeWork);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(context);
+            }
+
+            beforeFirstPublication?.Invoke(Sidebar);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion);
             Assert.True(Sidebar.RootNodes.Count >= 3, "premise: the vault's notes are the tree's rows.");
 
@@ -794,13 +828,13 @@ public sealed partial class FilesRegionLandingTests
             Assert.IsAssignableFrom<Panel>(Pane.Parent).Children.Remove(Pane);
 
             Above = new Button { Content = "Above" };
-            var beside = new Button { Content = "Beside" };
+            Beside = new Button { Content = "Beside" };
             var root = new DockPanel { DataContext = lifecycle };
             DockPanel.SetDock(Above, Dock.Top);
-            DockPanel.SetDock(beside, Dock.Right);
+            DockPanel.SetDock(Beside, Dock.Right);
             DockPanel.SetDock(Pane, Dock.Left);
             root.Children.Add(Above);
-            root.Children.Add(beside);
+            root.Children.Add(Beside);
             root.Children.Add(Pane);
             _window = new Window
             {
@@ -877,6 +911,45 @@ public sealed partial class FilesRegionLandingTests
             _populatedFocus.Clear();
         }
 
+        /// <summary>Plan 47 CB-39: the sidebar's tree work (every refresh and
+        /// folder load) waits from here until <see cref="ReleaseTreeWork"/>, so
+        /// a folder's load stays pending while the reader or a mutation
+        /// acts.</summary>
+        public void HoldTreeWork() =>
+            Volatile.Write(ref _treeGate, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+        /// <summary>Plan 47 CB-39: the held tree work runs.</summary>
+        public void ReleaseTreeWork() => Interlocked.Exchange(ref _treeGate, null)?.TrySetResult();
+
+        /// <summary>Plan 47 CB-39: the next piece of tree work fails, as a
+        /// folder that cannot be listed does (W1ChildExpansionTests' seam).</summary>
+        public void FailNextTreeWork() => Volatile.Write(ref _failNextTreeWork, 1);
+
+        /// <summary>Plan 47 CB-39: how many pieces of tree work have reached the
+        /// worker.</summary>
+        public int TreeWorkStarted => Volatile.Read(ref _treeWorkStarted);
+
+        private TaskCompletionSource? _treeGate;
+        private int _failNextTreeWork;
+        private int _treeWorkStarted;
+
+        private Task RunTreeWork(Action work, CancellationToken token)
+        {
+            _ = Interlocked.Increment(ref _treeWorkStarted);
+            if (Interlocked.Exchange(ref _failNextTreeWork, 0) == 1)
+            {
+                return Task.FromException(new ApplicationException("CB-39: a folder that cannot be listed"));
+            }
+
+            return Volatile.Read(ref _treeGate) is { } gate ? RunAfter(gate.Task, work, token) : Task.Run(work, token);
+
+            static async Task RunAfter(Task gate, Action work, CancellationToken token)
+            {
+                await gate.WaitAsync(token).ConfigureAwait(false);
+                await Task.Run(work, token).ConfigureAwait(false);
+            }
+        }
+
         public void Dispose()
         {
             var failures = new List<Exception>();
@@ -892,6 +965,7 @@ public sealed partial class FilesRegionLandingTests
                 }
             }
 
+            ReleaseTreeWork();
             try
             {
                 if (Shell?.DataContext is VaultLifecycleViewModel lifecycle)

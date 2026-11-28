@@ -146,6 +146,10 @@ public partial class MainWindow
     {
         IInputElement? focusBefore = _focusBeforeMoveTo;
         FilesSidebarViewModel? sidebar = _observedFileSidebar;
+        // Plan 47 CB-39: the sidebar's newest intent at the close. A confirm
+        // takes the move's own number before the sheet closes, so this holds
+        // it, and the move's request leaves the return running.
+        long closeIntent = sidebar?.NewestIntent ?? 0;
         _focusBeforeMoveTo = null;
         _ = Dispatcher.InvokeAsync(
             () =>
@@ -159,6 +163,14 @@ public partial class MainWindow
                 }
 
                 if (OpenModalSurface is not null)
+                {
+                    return;
+                }
+
+                // Plan 47 CB-39: a newer intent taken since the close (a Reveal
+                // that landed on its row, the reader's own selection) is where
+                // the reader is now, and the return gives way to it.
+                if (sidebar is not null && sidebar.NewestIntent != closeIntent)
                 {
                     return;
                 }

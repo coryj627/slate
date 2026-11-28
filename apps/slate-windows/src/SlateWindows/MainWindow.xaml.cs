@@ -638,18 +638,65 @@ public partial class MainWindow : Window
     /// them to — so it cannot move them on to the first row.</remarks>
     private void FileSidebar_TreeSelectionRestored()
     {
-        if (_observedFileSidebar?.TakeVanishedSelection() is { } vanished
+        FilesSidebarViewModel.VanishedSelection? vanished = _observedFileSidebar?.TakeVanishedSelection();
+        if (vanished is { RevealAsked: true })
+        {
+            // Plan 47 CB-39: a Reveal's gesture records where the keys are;
+            // nothing lands here. When the gesture's place is hidden (a narrow
+            // window steps its pane aside to show Files), WPF hands its keys on
+            // at Input priority; a one-shot capture after that records where
+            // they went, on which tab (Codex round 10). It listens to no input:
+            // the seal's admission is the window's only input route.
+            object place = RevealPlaceOf(RevealKeys());
+            var handoff = new System.Runtime.CompilerServices.StrongBox<object?>();
+            if (place is (UIElement region, _))
+            {
+                _ = Dispatcher.InvokeAsync(
+                    () =>
+                    {
+                        if (!region.IsVisible && RevealKeys() is { } handedTo)
+                        {
+                            handoff.Value = (handedTo, _viewModel.Workspace?.ActiveGroup.ActiveTab);
+                        }
+                    },
+                    DispatcherPriority.Background);
+            }
+
+            vanished.Place = (place, handoff);
+            return;
+        }
+
+        if (vanished is { LateReveal: true })
+        {
+            // Plan 47 CB-39: a Reveal seating after its gesture's own turn asks
+            // where the keys may go; nothing lands here.
+            vanished.Answer = AnswerLateReveal(vanished.GesturePlace);
+            return;
+        }
+
+        if (vanished is not null
             && OpenModalSurface is null
-            && (vanished.Successor ? FilesTree.IsKeyboardFocusWithin : KeysOnARemovedFilesRow()))
+            && (vanished.Reveal || (vanished.Successor ? FilesTree.IsKeyboardFocusWithin : KeysOnARemovedFilesRow())))
         {
             FilesTree.UpdateLayout();
             _ = LandNearVanishedSelection(vanished.Survivor);
             return;
         }
 
+        // Plan 47 CB-39: the fallback waits for Input priority. A newer intent
+        // the sidebar takes before then (a Reveal that seats first) owns the
+        // keys, and this older restore takes nothing (Codex round 8).
+        FilesSidebarViewModel? restoring = _observedFileSidebar;
+        long restoringIntent = restoring?.NewestIntent ?? 0;
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                if (!ReferenceEquals(_observedFileSidebar, restoring)
+                    || (restoring is not null && restoring.NewestIntent != restoringIntent))
+                {
+                    return;
+                }
+
                 if (OpenModalSurface is not null || !KeysStrandedFromFilesTree())
                 {
                     return;
@@ -658,6 +705,91 @@ public partial class MainWindow : Window
                 _ = LandOnFilesTree();
             },
             DispatcherPriority.Input);
+
+        // The keys, or, when the window holds no keyboard focus (another app
+        // active, a Win32 message box, the focus cleared), the element the
+        // window gives them back to.
+        IInputElement? RevealKeys() =>
+            Keyboard.FocusedElement is { } keys and not Window ? keys : FocusManager.GetFocusedElement(this);
+
+        // A place, not an element: the editor, note header, table, tree or list
+        // holding the keys (else the element itself), with the active tab. A row
+        // or a button rebuilt in place is the same place; another tab's note in
+        // the editor the tabs share is not.
+        object RevealPlaceOf(IInputElement? keys)
+        {
+            DependencyObject? region = keys as DependencyObject;
+            for (DependencyObject? up = region;
+                up is not null;
+                up = up is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(up) : LogicalTreeHelper.GetParent(up))
+            {
+                if (up is NoteHeaderView or ICSharpCode.AvalonEdit.Editing.TextArea or DataGrid or TreeView or ListBox)
+                {
+                    region = up;
+                    break;
+                }
+            }
+
+            return (region, _viewModel.Workspace?.ActiveGroup.ActiveTab);
+        }
+
+        // Where a late Reveal may put the keys. Under a modal surface or loop,
+        // the wait ends: the surface owns the keys, and the Files commands keep
+        // acting on the reader's own row (the red team's item 3). With Files
+        // hidden, nothing can land: the row is selected silently, whatever
+        // holds the keys. In the
+        // Files tree, they are taken. In the pane's fields, lists or buttons (a
+        // rename, a filter), they are the reader's own work there: the wait
+        // ends. Stranded (on nothing, the window, or an element gone from it),
+        // they are taken. With the gesture's own place gone from view on the
+        // same tab (a narrow window stepped its pane aside to show Files) and
+        // the keys still where WPF's handoff put them, they are taken as
+        // stranded keys are (the red team's item 2); keys the reader moved on
+        // from there are the reader's (Codex round 10). Still in the gesture's
+        // place, they are taken;
+        // anywhere else, the row is selected silently.
+        FilesSidebarViewModel.LateRevealAnswer AnswerLateReveal(object? gesturePlace)
+        {
+            if (OpenModalSurface is not null || _modalLoops.IsModalLoopActive)
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.End;
+            }
+
+            if (!FilesPaneBorder.IsVisible)
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
+            }
+
+            IInputElement? keys = RevealKeys();
+            if (keys is Visual inTree && (ReferenceEquals(inTree, FilesTree) || FilesTree.IsAncestorOf(inTree)))
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.Land;
+            }
+
+            if (keys is Visual inPane && FilesPaneBorder.IsAncestorOf(inPane))
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.End;
+            }
+
+            if (keys is null or Window || (keys is Visual gone && PresentationSource.FromVisual(gone) is null))
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.Land;
+            }
+
+            if (gesturePlace is ((UIElement placeShown, var placeTab), System.Runtime.CompilerServices.IStrongBox { Value: (IInputElement handedKeys, var handedTab) })
+                && !placeShown.IsVisible
+                && ReferenceEquals(placeTab, _viewModel.Workspace?.ActiveGroup.ActiveTab)
+                && ReferenceEquals(handedTab, placeTab)
+                && ReferenceEquals(keys, handedKeys))
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.Land;
+            }
+
+            object? recorded = gesturePlace is (var inner, System.Runtime.CompilerServices.IStrongBox) ? inner : gesturePlace;
+            return Equals(RevealPlaceOf(keys), recorded)
+                ? FilesSidebarViewModel.LateRevealAnswer.Land
+                : FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
+        }
     }
 
     /// <summary>The F2 arm, shared by the chord and the create
@@ -677,8 +809,29 @@ public partial class MainWindow : Window
 
         RevealFilesSidebar();
         SidebarFileActionsExpander.IsExpanded = true;
+        // Plan 47 CB-39: the name field's focus waits for Input priority. A
+        // newer intent the sidebar takes before then (a Reveal that lands
+        // first) owns the keys, and this older rename takes nothing.
+        FilesSidebarViewModel? sidebar = _observedFileSidebar;
+        // Arming the rename is itself the reader's newer gesture: a Reveal
+        // still waiting ends (the red team's M3).
+        sidebar?.RenameArmed();
+        long intent = sidebar?.NewestIntent ?? 0;
         _ = Dispatcher.InvokeAsync(() =>
         {
+            if (sidebar is not null && sidebar.NewestIntent != intent)
+            {
+                return;
+            }
+
+            // A modal loop that started after the arm owns the keys (the red
+            // team's item 4). A modal surface opened after it keeps them
+            // already: the name field cannot take them from the surface.
+            if (_modalLoops.IsModalLoopActive)
+            {
+                return;
+            }
+
             if (SidebarMutationNameTextBox.Focus())
             {
                 SelectSidebarRenameText();
@@ -899,10 +1052,29 @@ public partial class MainWindow : Window
         // the request (canvas and graph included, contract A14's instruction)
         // under the window's slot. A later focus request that supersedes it in
         // the arbiter leaves no request behind to seat the tab later.
+        // Plan 47 CB-39: the sidebar's newest landing when this landing is
+        // queued. A seat that lands the keys before it runs is where the reader
+        // is now (a Reveal that landed on its row and opened its note as a
+        // selection, which queues no landing of its own), and this landing gives
+        // way to it. A silent seat, an open or a filter change moves no keys and
+        // leaves it to run (the red team's item 7). When the window observes
+        // another sidebar by then, the landing runs as before.
+        FilesSidebarViewModel? sidebar = _observedFileSidebar;
+        long landing = sidebar?.NewestLanding ?? 0;
         _ = _focusRequests.Post(
             Dispatcher,
             DispatcherPriority.Input,
-            () => LandEditorForRoute(group, onLanded: null));
+            () =>
+            {
+                if (sidebar is not null
+                    && ReferenceEquals(_observedFileSidebar, sidebar)
+                    && sidebar.NewestLanding != landing)
+                {
+                    return;
+                }
+
+                LandEditorForRoute(group, onLanded: null);
+            });
     }
 
     /// <summary>R-10 (OD-12's one entry): a canvas jump asks to land the editor

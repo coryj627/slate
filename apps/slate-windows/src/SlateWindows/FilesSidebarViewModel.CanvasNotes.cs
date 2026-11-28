@@ -51,6 +51,9 @@ internal sealed partial class FilesSidebarViewModel : ICanvasNoteCreator
     {
         ArgumentNullException.ThrowIfNull(path);
         StructuralHistoryBarrier();
+        // Plan 47 CB-39: a gesture that names no row; the number is taken at
+        // the landing, since the create ran in the canvas's gate.
+        _ = StateIntentNamingNoRow();
         Refresh();
         if (caveat is not null)
         {

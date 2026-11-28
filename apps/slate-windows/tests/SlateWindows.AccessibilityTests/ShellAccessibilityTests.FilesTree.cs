@@ -5,6 +5,7 @@ using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
+using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
@@ -295,6 +296,105 @@ public sealed partial class ShellAccessibilityTests
         finally
         {
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>Plan 47 CB-39 (#1670): a note header's folder segment reveals a
+    /// folder whose parent the tree has not listed. Lecture is opened by Quick
+    /// Open, so learning stays collapsed and unlisted; Enter on the header's
+    /// maths segment opens learning, and when it lists, the maths row is
+    /// selected and holds the keys. Main left the keys on the segment and
+    /// selected nothing until a later refresh. The segment's folder has no
+    /// folder note, so no tab switches here: the unit facts on the shown shell
+    /// hold the one focus move through a tab switch.</summary>
+    [Fact]
+    public void FilesTree_AFolderSegmentRevealsAnUnlistedFolderOnItsRow()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-files-reveal-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Vault");
+        string device = Path.Combine(root, "device");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(Path.Combine(vault, "learning", "maths"));
+        Directory.CreateDirectory(device);
+        File.WriteAllText(Path.Combine(vault, "learning", "maths", "Lecture.md"), "# Lecture\n\nA line.\n");
+        File.WriteAllText(Path.Combine(vault, "a.md"), "# A\n");
+        Process? process = null;
+        try
+        {
+            using var automation = new UIA3Automation();
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.Environment[ShellLaunch.Variable] = device;
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "files-reveal-" + Guid.NewGuid().ToString("N");
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            start.ArgumentList.Add(vault);
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, "files-reveal")) { return; }
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            // The header shows each folder as its own segment only when it is
+            // wide enough (NoteHeader_NamesKeysAndAxe_AreClean's sizing).
+            double scale = NoteHeaderDpiForWindow(window.Properties.NativeWindowHandle.Value) / 96.0;
+            window.Patterns.Transform.Pattern.Resize(1500 * scale, 820 * scale);
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            if (window.BoundingRectangle.Width < 1400 * scale)
+            {
+                tree.Focus();
+                PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
+                Retry.WhileTrue(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("RightPaneLeaves")) is { IsOffscreen: false },
+                    TimeSpan.FromSeconds(5));
+            }
+
+            AutomationElement learning = WaitForTreeItemStartingWith(tree, automation, "learning");
+            Assert.Equal(ExpandCollapseState.Collapsed, learning.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            QuickOpen(window, automation, "Lecture", VirtualKeyShort.RETURN);
+            AssertEventuallyFocused(WaitForEditor(window, automation, "Lecture.md editor", TimeSpan.FromSeconds(10)), "Quick Open didn't land in Lecture.");
+            AutomationElement[] segments = [];
+            Retry.WhileFalse(
+                () => (segments = window.FindAllDescendants(automation.ConditionFactory.ByAutomationId("NoteHeaderFolder"))).Length == 2,
+                TimeSpan.FromSeconds(10));
+            Assert.True(segments.Length == 2, $"the bar shows {segments.Length} folders in a window at {window.BoundingRectangle}.");
+            AutomationElement maths = segments.Single(segment => segment.Name == "maths");
+            maths.Focus();
+            AssertEventuallyFocused(maths, "the maths segment didn't take the keys.");
+
+            PressKey(VirtualKeyShort.RETURN);
+
+            AutomationElement? row = null;
+            bool landed = Retry.WhileFalse(
+                () =>
+                {
+                    try
+                    {
+                        AutomationElement? focused = automation.FocusedElement();
+                        if (focused?.ControlType == ControlType.TreeItem
+                            && (focused.Name ?? string.Empty).StartsWith("maths", StringComparison.Ordinal))
+                        {
+                            row = focused;
+                            return true;
+                        }
+
+                        return false;
+                    }
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(5)).Success;
+            Assert.True(landed, $"the keys did not land on the maths row; focus is {DescribeFocusedElement(automation)}.");
+            Assert.True(row!.Patterns.SelectionItem.Pattern.IsSelected.Value, "the maths row is not selected.");
+            Assert.Equal(
+                ExpandCollapseState.Expanded,
+                WaitForTreeItemStartingWith(tree, automation, "learning").Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            AssertAxeClean(process, "files-reveal");
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            process?.WaitForExit(10_000);
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
