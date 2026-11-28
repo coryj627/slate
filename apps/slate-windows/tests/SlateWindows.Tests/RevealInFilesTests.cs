@@ -783,6 +783,53 @@ public sealed class RevealInFilesTests
         shell.AssertNeverSeated("docs/n.md");
     });
 
+    /// <summary>The deferred-work table's Move To finding: a Reveal waiting on
+    /// a held folder, then Move To opened on the reader's a.md, the reader's
+    /// gesture on the selected row and a newer intent; the folder lists while
+    /// the sheet is open. The open ended the Reveal, so it never seats. A
+    /// cancel returns the keys to a.md's row with a.md still selected; a
+    /// confirm moves a.md, and its moved row seats as before.</summary>
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("confirm")]
+    public void MoveToOpenedWhileARevealWaitsEndsIt(string close) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+
+        shell.Sidebar.MoveToCommand.Execute(null);
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.MoveToCompletion);
+        shell.Host.Settle();
+        MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(shell.Sidebar.MoveToSheet);
+        Assert.True(picker.IsReady, "premise: the picker did not load its folders");
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Same(picker, shell.Sidebar.MoveToSheet);
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        if (close == "cancel")
+        {
+            picker.CancelCommand.Execute(null);
+            shell.SettleLoads();
+
+            Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+            Assert.Equal("tree row a.md", shell.KeysAt);
+        }
+        else
+        {
+            picker.ActivateCommand.Execute(picker.Rows.Single(row => row.Destination == "docs"));
+            shell.SettleLoads();
+
+            Assert.True(File.Exists(Path.Combine(shell.Host.Root, "docs", "a.md")), "premise: the move left a.md");
+            Assert.Equal("docs/a.md", shell.Sidebar.SelectedNode?.Path);
+            Assert.True(shell.Row("docs/a.md").IsSelected, "the moved row's node does not hold the selection");
+        }
+
+        shell.AssertNeverSeated("docs/n.md");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
