@@ -664,9 +664,20 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Plan 47 CB-39: the fallback waits for Input priority. A newer intent
+        // the sidebar takes before then (a Reveal that seats first) owns the
+        // keys, and this older restore takes nothing (Codex round 8).
+        FilesSidebarViewModel? restoring = _observedFileSidebar;
+        long restoringIntent = restoring?.NewestIntent ?? 0;
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                if (!ReferenceEquals(_observedFileSidebar, restoring)
+                    || (restoring is not null && restoring.NewestIntent != restoringIntent))
+                {
+                    return;
+                }
+
                 if (OpenModalSurface is not null || !KeysStrandedFromFilesTree())
                 {
                     return;
