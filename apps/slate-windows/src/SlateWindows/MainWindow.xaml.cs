@@ -642,8 +642,28 @@ public partial class MainWindow : Window
         if (vanished is { RevealAsked: true })
         {
             // Plan 47 CB-39: a Reveal's gesture records where the keys are;
-            // nothing lands here.
-            vanished.Place = RevealPlaceOf(RevealKeys());
+            // nothing lands here. When the gesture's place is hidden by the
+            // keys' next move (a narrow window steps its pane aside to show
+            // Files), that move is WPF's handoff, and where it put the keys, on
+            // which tab, is recorded too (Codex round 10). The watch ends at
+            // that next move, whatever it is.
+            object place = RevealPlaceOf(RevealKeys());
+            var handoff = new System.Runtime.CompilerServices.StrongBox<object?>();
+            if (place is (UIElement region, _))
+            {
+                KeyboardFocusChangedEventHandler next = null!;
+                next = (_, moved) =>
+                {
+                    RemoveHandler(Keyboard.GotKeyboardFocusEvent, next);
+                    if (!region.IsVisible)
+                    {
+                        handoff.Value = (moved.NewFocus, _viewModel.Workspace?.ActiveGroup.ActiveTab);
+                    }
+                };
+                AddHandler(Keyboard.GotKeyboardFocusEvent, next, handledEventsToo: true);
+            }
+
+            vanished.Place = (place, handoff);
             return;
         }
 
@@ -723,9 +743,11 @@ public partial class MainWindow : Window
         // rename, a filter), they are the reader's own work there: the wait
         // ends. Stranded (on nothing, the window, or an element gone from it),
         // they are taken. With the gesture's own place gone from view on the
-        // same tab (a narrow window stepped its pane aside to show Files, and
-        // WPF handed the keys on), they are taken as stranded keys are (the red
-        // team's item 2). Still in the gesture's place, they are taken;
+        // same tab (a narrow window stepped its pane aside to show Files) and
+        // the keys still where WPF's handoff put them, they are taken as
+        // stranded keys are (the red team's item 2); keys the reader moved on
+        // from there are the reader's (Codex round 10). Still in the gesture's
+        // place, they are taken;
         // anywhere else, the row is selected silently.
         FilesSidebarViewModel.LateRevealAnswer AnswerLateReveal(object? gesturePlace)
         {
@@ -755,14 +777,17 @@ public partial class MainWindow : Window
                 return FilesSidebarViewModel.LateRevealAnswer.Land;
             }
 
-            if (gesturePlace is (UIElement placeShown, var placeTab)
+            if (gesturePlace is ((UIElement placeShown, var placeTab), System.Runtime.CompilerServices.IStrongBox { Value: (IInputElement handedKeys, var handedTab) })
                 && !placeShown.IsVisible
-                && ReferenceEquals(placeTab, _viewModel.Workspace?.ActiveGroup.ActiveTab))
+                && ReferenceEquals(placeTab, _viewModel.Workspace?.ActiveGroup.ActiveTab)
+                && ReferenceEquals(handedTab, placeTab)
+                && ReferenceEquals(keys, handedKeys))
             {
                 return FilesSidebarViewModel.LateRevealAnswer.Land;
             }
 
-            return Equals(RevealPlaceOf(keys), gesturePlace)
+            object? recorded = gesturePlace is (var inner, System.Runtime.CompilerServices.IStrongBox) ? inner : gesturePlace;
+            return Equals(RevealPlaceOf(keys), recorded)
                 ? FilesSidebarViewModel.LateRevealAnswer.Land
                 : FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
         }
