@@ -998,6 +998,41 @@ public sealed class RevealInFilesTests
         shell.AssertSelectedOnBothHalves("docs/n.md");
     });
 
+    /// <summary>Codex round 10, the handoff's limit: as in the stepped-aside
+    /// fact, the Reveal shows Files, the right pane steps aside and WPF hands
+    /// the keys to the editor. Then the reader opens Find in note and puts the
+    /// keys in its query. They left the place the handoff gave them for one the
+    /// reader chose, so the late seat selects its row silently: the query keeps
+    /// the keys, nothing opens and nothing is said.</summary>
+    [Fact]
+    public void ALateRevealAfterTheReaderLeavesTheHandoffSelectsSilently() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.IsFilesSidebarVisible = false;
+        shell.Host.Workspace.WorkspaceRowWidth = 700;
+        shell.Host.Settle();
+        ConnectionsLeafView surface = shell.KeysOnTheConnectionsRowOf("start.md", "docs/n.md", out _);
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.Host.Settle();
+        Assert.False(surface.IsVisible, "premise: the Connections leaf is still shown");
+        Assert.True(shell.Editor.IsKeyboardFocusWithin, $"premise: the keys are on {shell.KeysAt}, not in the editor");
+        Assert.True(shell.Host.Workspace.OpenFindInNote(), "premise: Find in note did not open");
+        shell.Host.Settle();
+        TextBox query = ShownShell.Descendants(shell.Host.Shell).OfType<TextBox>()
+            .Single(box => box.IsVisible && AutomationProperties.GetAutomationId(box) == "FindInNoteQuery");
+        _ = query.Focus();
+        Assert.True(query.IsKeyboardFocused, $"premise: the keys are on {shell.KeysAt}, not in the find query");
+        shell.Mark();
+        string tabs = shell.Tabs;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.True(query.IsKeyboardFocused, $"the late seat took the keys out of the find query; they are on {shell.KeysAt}");
+        shell.AssertSilentlySelected("docs/n.md", tabs);
+    });
+
     /// <summary>The red team's item 3: a late seat under a modal surface or a
     /// thread-modal loop ends unseated. The reader's a.md selected with the keys
     /// on its row, a Reveal of docs/n.md waiting on its held folder; the palette
