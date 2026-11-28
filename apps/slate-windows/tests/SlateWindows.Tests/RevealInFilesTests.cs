@@ -8,6 +8,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using SlateWindows.FileManagement;
@@ -935,6 +936,201 @@ public sealed class RevealInFilesTests
         Assert.True(moveTo.IsKeyboardFocused, $"the keys left the button after the move's return; they are on {shell.KeysAt}");
     });
 
+    /// <summary>The red team's item 1: New note arms the rename of the note it
+    /// creates and opens it, its publication held. Before the publication, the
+    /// reader opens park/here.md as Quick Open opens a note (the workspace's
+    /// open). That open is the reader's newer gesture and drops the arm: the
+    /// publication selects no created row and opens no tab over the reader's
+    /// note, the name field does not take the keys, and the open's own landing
+    /// puts them in its editor.</summary>
+    [Fact]
+    public void AnOpenFromElsewhereDropsACreatesRenameArm() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        shell.HoldTreeWork();
+        shell.Sidebar.CreateNoteCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "Untitled.md")), "premise: New note wrote no note");
+        PumpedDispatcher.Drain();
+
+        shell.Host.Workspace.OpenPath("park/here.md");
+        PumpedDispatcher.Drain();
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Equal("park/here.md", shell.Host.Workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.NotEqual("Untitled.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.False(shell.Host.Shell.SidebarMutationNameTextBox.IsKeyboardFocused, "the create's publication put the keys in the name field");
+        Assert.True(shell.EditorOf("park/here.md").IsKeyboardFocusWithin, $"the open's own landing did not put the keys in its editor; they are on {shell.KeysAt}");
+    });
+
+    /// <summary>The red team's item 2: a window narrow enough for one side pane.
+    /// The keys on a Connections row for docs/n.md, docs not listed. The Reveal
+    /// shows Files, which steps the right pane aside, and WPF hands the keys to
+    /// the editor. The Reveal's own place is gone from view on the same tab, so
+    /// the late seat takes the keys, as it takes stranded ones, and lands them
+    /// on the revealed row.</summary>
+    [Fact]
+    public void ALateRevealWhoseConnectionsPaneSteppedAsideLandsOnItsRow() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.IsFilesSidebarVisible = false;
+        shell.Host.Workspace.WorkspaceRowWidth = 700;
+        shell.Host.Settle();
+        ConnectionsLeafView surface = shell.KeysOnTheConnectionsRowOf("start.md", "docs/n.md", out _);
+        Assert.True(shell.Host.Workspace.IsRightPaneVisible, "premise: the narrow window does not show the right pane alone");
+        shell.HoldTreeWork();
+
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.Host.Settle();
+        Assert.True(shell.Host.Workspace.IsFilesSidebarVisible, "premise: the Reveal did not show Files");
+        Assert.False(shell.Host.Workspace.IsRightPaneVisible, "premise: the narrow window kept the right pane beside Files");
+        Assert.False(surface.IsVisible, "premise: the Connections leaf is still shown");
+        Assert.True(shell.Editor.IsKeyboardFocusWithin, $"premise: the keys are on {shell.KeysAt}, not in the editor");
+        shell.Mark();
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Equal("tree row docs/n.md", shell.KeysAt);
+        shell.AssertSelectedOnBothHalves("docs/n.md");
+    });
+
+    /// <summary>The red team's item 3: a late seat under a modal surface or a
+    /// thread-modal loop ends unseated. The reader's a.md selected with the keys
+    /// on its row, a Reveal of docs/n.md waiting on its held folder; the palette
+    /// opens, or a modal loop starts, and the folder lists. The seat ends, so
+    /// the Files commands act on what they acted on before the Reveal: once the
+    /// palette or the loop is gone, Copy path copies a.md's path and Duplicate
+    /// copies a.md.</summary>
+    [Theory]
+    [InlineData("palette")]
+    [InlineData("modal loop")]
+    public void ALateRevealUnderAModalEndsUnseated(string modal) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.SelectAndFocusRow("a.md");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        if (modal == "palette")
+        {
+            shell.Host.Lifecycle.Palette.Open();
+            shell.Host.Settle();
+            Assert.True(shell.Host.Shell.CommandPaletteOverlay.IsKeyboardFocusWithin, $"premise: the palette did not take the keys; they are on {shell.KeysAt}");
+            shell.ReleaseTreeWork();
+            shell.SettleLoads();
+            Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+            shell.Host.Lifecycle.Palette.Dismiss();
+            shell.Host.Settle();
+        }
+        else
+        {
+            ComponentDispatcher.PushModal();
+            try
+            {
+                Assert.True(shell.Host.Shell.ModalLoops.IsModalLoopActive, "premise: the shell sees no modal loop");
+                shell.ReleaseTreeWork();
+                shell.SettleLoads();
+                Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+            }
+            finally
+            {
+                ComponentDispatcher.PopModal();
+            }
+
+            shell.Host.Settle();
+        }
+
+        shell.AssertNeverSeated("docs/n.md");
+        Assert.Equal("a.md", shell.Sidebar.SelectedNode?.Path);
+        shell.Sidebar.CopyPathCommand.Execute(null);
+        Assert.Equal(["a.md"], shell.Copied);
+        shell.Sidebar.DuplicateCommand.Execute(null);
+        Assert.True(File.Exists(Path.Combine(shell.Host.Root, "a copy.md")), "Duplicate did not copy a.md");
+        Assert.False(File.Exists(Path.Combine(shell.Host.Root, "docs", "n copy.md")), "Duplicate copied the revealed row");
+    });
+
+    /// <summary>The red team's item 4: F2 arms the inline rename, whose name
+    /// field takes the keys at Input priority. A thread-modal loop starts
+    /// first: the queued focus gives way, and the name field stays out of the
+    /// keys under the loop. The palette opened first keeps the keys too; the
+    /// name field cannot take them from an open surface, which held before this
+    /// fix as well.</summary>
+    [Theory]
+    [InlineData("palette")]
+    [InlineData("modal loop")]
+    public void ARenamesQueuedFocusGivesWayToALaterModal(string modal) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell();
+        shell.SelectAndFocusRow("a.md");
+        Assert.True(shell.PressWithoutPumping(Key.F2), "premise: F2 was not handled");
+        TextBox nameField = shell.Host.Shell.SidebarMutationNameTextBox;
+        Assert.False(nameField.IsKeyboardFocused, "premise: the name field took the keys at once");
+        int movesBefore = shell.FocusChanges.Count;
+        if (modal == "palette")
+        {
+            shell.Host.Lifecycle.Palette.Open();
+            shell.Host.Settle();
+
+            Assert.DoesNotContain(nameField, shell.FocusChanges.Skip(movesBefore));
+            Assert.False(nameField.IsKeyboardFocused, "the rename's queued focus took the keys from the palette");
+            Assert.True(shell.Host.Shell.CommandPaletteOverlay.IsKeyboardFocusWithin, $"the keys left the palette; they are on {shell.KeysAt}");
+            return;
+        }
+
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(shell.Host.Shell.ModalLoops.IsModalLoopActive, "premise: the shell sees no modal loop");
+            PumpedDispatcher.Drain();
+
+            Assert.False(nameField.IsKeyboardFocused, "the rename's queued focus took the keys under a modal loop");
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+    });
+
+    /// <summary>The red team's item 7: a silent seat moves no keys, so it leaves
+    /// a newer workspace landing to run. Two panes, park/here.md on the left
+    /// and b.md on the right, the keys in the left editor. A Reveal of
+    /// docs/n.md waits on its held folder, and the reader moves to the right
+    /// pane, whose editor landing is queued. The folder lists before that
+    /// landing runs: the seat, its tab no longer the active one, selects its
+    /// row silently, and the landing still puts the keys in the right
+    /// editor.</summary>
+    [Fact]
+    public void ASilentSeatLeavesANewerPaneLandingToRun() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        shell.Host.Workspace.OpenPath("park/here.md");
+        shell.Host.Settle();
+        shell.Host.Workspace.SplitRightCommand.Execute(null);
+        shell.Host.Settle();
+        shell.Host.Workspace.OpenPath("b.md");
+        shell.Host.Settle();
+        WorkspaceGroupViewModel right = shell.Host.Workspace.ActiveGroup;
+        Assert.Equal("b.md", right.ActiveTab?.Path);
+        Assert.True(shell.Host.Workspace.FocusDirectionalPane("horizontal", -1), "premise: no pane on the left");
+        shell.Host.Settle();
+        Assert.Equal("park/here.md", shell.Host.Workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.True(shell.EditorOf("park/here.md").IsKeyboardFocusWithin, $"premise: the keys are on {shell.KeysAt}, not in the left editor");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        PumpedDispatcher.Drain();
+        Assert.True(shell.EditorOf("park/here.md").IsKeyboardFocusWithin, $"premise: the Reveal moved the keys to {shell.KeysAt}");
+        shell.Mark();
+
+        Assert.True(shell.Host.Workspace.FocusDirectionalPane("horizontal", 1), "premise: no pane on the right");
+        shell.ReleaseTreeWorkUntilItsPublicationIsQueued();
+        shell.SettleLoads();
+
+        Assert.Same(right, shell.Host.Workspace.ActiveGroup);
+        Assert.Equal("docs/n.md", shell.Sidebar.SelectedNode?.Path);
+        Assert.True(shell.EditorOf("b.md").IsKeyboardFocusWithin, $"the right pane's landing did not run; the keys are on {shell.KeysAt}");
+    });
+
     /// <summary>The red team's M3, the pane's other fields: the reader puts
     /// the keys in the filter field while a Reveal waits. The Files pane's
     /// fields, lists and buttons outside the tree are the reader's own work
@@ -1255,6 +1451,7 @@ public sealed class RevealInFilesTests
                 Said.Add,
                 vaultRoot: Host.Root,
                 localAppDataRoot: Path.Combine(Host.Root, "device-state"),
+                copyText: Copied.Add,
                 treeWorker: heldTreeWork ? new Func<Action, CancellationToken, Task>(RunTreeWork) : null);
             PumpedDispatcher.PumpUntilDrained(Sidebar.TreeRefreshCompletion);
             SetFileSidebar(Sidebar);
@@ -1375,6 +1572,9 @@ public sealed class RevealInFilesTests
 
         public List<string> Opens { get; } = [];
 
+        /// <summary>What the sidebar copied (Copy path, Copy link), in order.</summary>
+        public List<string> Copied { get; } = [];
+
         public IReadOnlyList<IInputElement> FocusChanges => [.. _focus.Skip(_focusMark)];
 
         public IReadOnlyList<A11yEvent> SaidSinceMark => [.. Said.Skip(_saidMark)];
@@ -1393,6 +1593,55 @@ public sealed class RevealInFilesTests
             Volatile.Write(ref _treeGate, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
 
         public void ReleaseTreeWork() => Interlocked.Exchange(ref _treeGate, null)?.TrySetResult();
+
+        /// <summary>Releases the held tree work and waits, without pumping, until
+        /// the worker has posted its publication to the window's dispatcher at
+        /// Normal priority, so the publication runs ahead of anything queued at
+        /// Input priority.</summary>
+        public void ReleaseTreeWorkUntilItsPublicationIsQueued()
+        {
+            int posted = 0;
+            int window = Environment.CurrentManagedThreadId;
+            void OnPosted(object? sender, DispatcherHookEventArgs e)
+            {
+                if (Environment.CurrentManagedThreadId != window && e.Operation.Priority == DispatcherPriority.Normal)
+                {
+                    _ = Interlocked.Increment(ref posted);
+                }
+            }
+
+            DispatcherHooks hooks = Host.Shell.Dispatcher.Hooks;
+            hooks.OperationPosted += OnPosted;
+            try
+            {
+                ReleaseTreeWork();
+                Assert.True(
+                    SpinWait.SpinUntil(() => Volatile.Read(ref posted) > 0, TimeSpan.FromSeconds(10)),
+                    "the held tree work never posted its publication");
+            }
+            finally
+            {
+                hooks.OperationPosted -= OnPosted;
+            }
+        }
+
+        /// <summary>The visible editor of the tab showing <paramref name="path"/>.</summary>
+        public UIElement EditorOf(string path) =>
+            ShownShell.Descendants(Host.Shell).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>()
+                .Single(area => area.IsVisible && TabOf(area)?.Path == path);
+
+        private static WorkspaceTabViewModel? TabOf(DependencyObject element)
+        {
+            for (DependencyObject? up = element; up is not null; up = VisualTreeHelper.GetParent(up))
+            {
+                if (up is FrameworkElement { DataContext: WorkspaceTabViewModel tab })
+                {
+                    return tab;
+                }
+            }
+
+            return null;
+        }
 
         private Task RunTreeWork(Action work, CancellationToken token) =>
             Volatile.Read(ref _treeGate) is { } gate ? RunAfter(gate.Task, work, token) : Task.Run(work, token);
@@ -1421,6 +1670,14 @@ public sealed class RevealInFilesTests
         {
             Host.Workspace.OpenPath(note);
             Host.Settle();
+            return KeysOnTheSegment(note, segment);
+        }
+
+        /// <summary>The keys on the header's folder segment
+        /// <paramref name="segment"/> of the open <paramref name="note"/>; the
+        /// logs marked from there.</summary>
+        public Button KeysOnTheSegment(string note, string segment)
+        {
             NoteHeaderView header = ShownShell.Descendants(Host.Shell).OfType<NoteHeaderView>()
                 .Single(view => view.IsVisible && view.DataContext is WorkspaceTabViewModel tab && tab.Path == note);
             Button button = ShownShell.Descendants(header).OfType<Button>()
