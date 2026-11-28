@@ -1013,12 +1013,12 @@ The frozen R-9 row above is unchanged.
   - a mutation's named row, or a create's rename arm;
   - a mutation that names no row (New Canvas, a create or duplicate landing with a caveat, a template create, a graph's or a canvas's note landing, every focus restore that names none);
   - a trash, at its gesture;
-  - the sidebar's own explicit opens;
+  - the sidebar's own explicit opens, and a note opened from elsewhere (Quick Open, a search hit, a link: the workspace's open, the sidebar's own opens excepted);
   - the reader's own selection;
   - F2, or a create's hand-off to the name field;
   - opening Move To (it keeps the selected row, the move's subject);
   - a change to the Files filter: text typed or cleared, or a tag scope applied or cleared.
-  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. Work queued for later (the window's restore fallback and the rename field's focus) captures the newest intent when it is queued and stands down if a newer one has been taken; an older mutation's focus restore is retired by a newer intent, and a stale request arms none. A filter change drops a waiting Reveal and a create's rename arm, and keeps a rename's or move's named row, which seats silently as before. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
+  The pending intent is one slot, and a publication or a folder load seats only the slot's intent, so an older intent never seats after a newer one. Work queued for later (the window's restore fallback, the rename field's focus, an open's editor landing, and Move To's focus return) captures the newest intent when it is queued and stands down if a newer one has been taken. Move To's confirm takes its successor's number before the sheet closes, so its own return is not stood down. An open's editor landing yields only to a seat that landed, not to a silent one. The rename field's focus also yields to a modal surface or loop; an older mutation's focus restore is retired by a newer intent, and a stale request arms none. A filter change drops a waiting Reveal and a create's rename arm, and keeps a rename's or move's named row, which seats silently as before. The async creates take their number when their work lands, not at the gesture. A refresh no gesture asks for (a rescan, the watcher, sort, group, pin, the Refresh command) takes no number, and seats a waiting Reveal when it lists the row.
 - **The wait.** Each folder load runs one step over the Reveal's path:
   - it seats a listed target, at any depth and inside a date group (it expands a collapsed group that holds the target);
   - it expands the next collapsed folder, and walks on in the same call through a folder already loaded;
@@ -1026,16 +1026,18 @@ The frozen R-9 row above is unchanged.
   A whole-tree publication and Expand loaded folders are listing steps too.
 - **The ends of a wait without a seat:**
   - a newer intent;
-  - the workspace opening another note (the seat's own open excepted);
+  - the workspace opening another note (an intent; the seat's own open excepted);
+  - a late seat while a modal surface or a modal loop is open, so the Files commands keep acting on the row they acted on before;
   - a collapse of a folder on the path;
   - a load that ends without listing: a real failure, a failed whole-tree refresh, a failed Expand loaded read of the Reveal's own folder, or a cancel by code that will not list the folder itself, such as a refused close;
   - a fully listed or truncated level without the next segment, only with no refresh pending and after the tree's first publication;
   - a late seat that finds the keys in the Files pane off the tree (the name field, the filter field, the results, the tags, the buttons), or a filter or tag scope active where the seat would be silent.
   Nothing is spoken when a Reveal ends unseated. The owner's call of 2026-11-27: "Silent now, file an issue (Recommended)". The core sentence is #2084.
-- **The seat.** In the gesture's own turn, and later while the keys are still in the gesture's place (the note header, editor, table, tree or list that held them, on the same active tab), stranded, or on the Files tree: the keys land on the row first, from outside a modal surface, in one focus change. Then the row is selected on both halves, which opens it and says "Selected: …". Land first keeps a tab switch from moving the keys to the new tab's header first. With the Files filter or a tag scope active, the seat clears the filter and its scope first, through the existing clear, which says "Filter cleared." The owner's call of 2026-11-27: "Clear the filter, land (Recommended)". This is contract 35 A-8's "focuses the tree", now delivered on Windows.
+- **The seat.** In the gesture's own turn, and later while the keys are still in the gesture's place (the note header, editor, table, tree or list that held them, on the same active tab), stranded (a gesture place whose region no longer shows counts as stranded), or on the Files tree: the keys land on the row first, from outside a modal surface, in one focus change. Then the row is selected on both halves, which opens it and says "Selected: …". Land first keeps a tab switch from moving the keys to the new tab's header first. With the Files filter or a tag scope active, the seat clears the filter and its scope first, through the existing clear, which says "Filter cleared." The owner's call of 2026-11-27: "Clear the filter, land (Recommended)". This is contract 35 A-8's "focuses the tree", now delivered on Windows.
 - **A late seat after the keys moved** (another place or tab, with nothing opened, or the Files pane hidden) selects the row silently on both halves: no open, no "Selected:", no landing, the editor and its tabs untouched. The reader learns of it on returning to Files, where the keys land on that row. A later publication neither opens it nor moves the keys. When nothing in the window has the keys, the place the window would give them back to counts.
 - **Not kept** (#1955 lines):
   - a whole-tree refresh leaves "Folder loading was canceled." on each folder whose load it cancelled, until it publishes;
+  - an open that meets the unsaved-changes prompt takes its intent only after the prompt's loop, so Files work published inside the loop can leave the Files selection on a created note (#2094);
   - a surface outside the place list (note header, editor, table, tree, list) compares by its element, so an element rebuilt in place there reads as moved, and the seat is silent.
 
 The frozen rows above are unchanged.
