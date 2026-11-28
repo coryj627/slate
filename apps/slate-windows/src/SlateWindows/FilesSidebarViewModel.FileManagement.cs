@@ -710,15 +710,19 @@ internal sealed partial class FilesSidebarViewModel
     /// <param name="intentAtGesture">For a mutation that awaited between its
     /// gesture and its request (a trash, whose work runs on a worker behind its
     /// progress bar): the number it took at its gesture. If a newer intent was
-    /// taken since (a Reveal asked during its work), it installs nothing. Null
-    /// for a mutation that requests in its gesture.</param>
+    /// taken since (a Reveal asked during its work), it installs nothing and
+    /// arms no focus restore (Codex round 7). Null for a mutation that requests
+    /// in its gesture.</param>
     private void RequestSelectionAt(string? vaultPath, long? intentAtGesture = null)
     {
+        long number = intentAtGesture ?? TakeIntent();
+        if (number != _intentsTaken)
+        {
+            return;
+        }
+
+        InstallIntent(vaultPath is null ? IntentKind.NoRow : IntentKind.NamedRow, vaultPath, number);
         _pendingTreeFocusRestore = true;
-        InstallIntent(
-            vaultPath is null ? IntentKind.NoRow : IntentKind.NamedRow,
-            vaultPath,
-            intentAtGesture ?? TakeIntent());
     }
 
     /// <summary>Publication half of <see cref="RequestSelectionAt"/>:

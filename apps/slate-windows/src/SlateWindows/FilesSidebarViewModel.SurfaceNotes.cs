@@ -107,6 +107,10 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
         _pendingSelectPath = kind == IntentKind.NamedRow ? path : null;
         _pendingRenameArmPath = kind == IntentKind.RenameArm ? path : null;
         _revealGesturePlace = null;
+        // An older mutation's focus restore retires with its row: the window's
+        // fallback landing must not follow a newer intent (Codex round 7). A
+        // mutation's own request arms its restore after this.
+        _pendingTreeFocusRestore = false;
     }
 
     /// <summary>A gesture that names no row, at the gesture: it drops a
