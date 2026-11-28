@@ -135,13 +135,17 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     }
 
     /// <summary>Plan 47 CB-39: the window armed the inline rename (F2, or a
-    /// create's hand-off), the reader's newer gesture. A Reveal still waiting
-    /// ends, so its seat neither takes the keys out of the name field nor puts
-    /// its row's name there (the red team's M3).</summary>
+    /// create's hand-off), the reader's newer gesture, and it fixes the
+    /// rename's target. It takes the one slot, naming no row: a Reveal still
+    /// waiting ends, so its seat neither takes the keys out of the name field
+    /// nor puts its row's name there (the red team's M3), and an older
+    /// mutation's named row and an older create's rename arm drop, so their
+    /// publication neither moves the selection nor overwrites the name field
+    /// (Codex round 6). A filter change keeps a named row; this does
+    /// not.</summary>
     internal void RenameArmed()
     {
-        _ = TakeIntent();
-        EndWaitingReveal();
+        _ = StateIntentNamingNoRow();
     }
 
     // Explicit: the canvas seam's TryCreateNote shares the parameter list
