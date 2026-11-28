@@ -703,14 +703,20 @@ public partial class MainWindow : Window
             return (region, _viewModel.Workspace?.ActiveGroup.ActiveTab);
         }
 
-        // Where a late Reveal may put the keys. In the Files tree, they are
-        // taken. In the pane's fields, lists or buttons (a rename, a filter),
-        // they are the reader's own work there: the wait ends. Stranded (on
-        // nothing, the window, or an element gone from it), they are taken.
-        // Still in the gesture's place, with Files shown, they are taken;
-        // anywhere else, or with Files hidden, the row is selected silently.
+        // Where a late Reveal may put the keys. With Files hidden, nothing can
+        // land: the row is selected silently, whatever holds the keys. In the
+        // Files tree, they are taken. In the pane's fields, lists or buttons (a
+        // rename, a filter), they are the reader's own work there: the wait
+        // ends. Stranded (on nothing, the window, or an element gone from it),
+        // they are taken. Still in the gesture's place, they are taken;
+        // anywhere else, the row is selected silently.
         FilesSidebarViewModel.LateRevealAnswer AnswerLateReveal(object? gesturePlace)
         {
+            if (!FilesPaneBorder.IsVisible)
+            {
+                return FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
+            }
+
             IInputElement? keys = RevealKeys();
             if (keys is Visual inTree && (ReferenceEquals(inTree, FilesTree) || FilesTree.IsAncestorOf(inTree)))
             {
@@ -727,7 +733,7 @@ public partial class MainWindow : Window
                 return FilesSidebarViewModel.LateRevealAnswer.Land;
             }
 
-            return FilesPaneBorder.IsVisible && Equals(RevealPlaceOf(keys), gesturePlace)
+            return Equals(RevealPlaceOf(keys), gesturePlace)
                 ? FilesSidebarViewModel.LateRevealAnswer.Land
                 : FilesSidebarViewModel.LateRevealAnswer.SelectSilently;
         }
