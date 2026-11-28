@@ -2408,7 +2408,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void BatchMove() => BatchMove(SelectedBatchItems(), MoveDestination);
 
-    private void BatchMove(StructuralBatchItem[] items, string destination)
+    private void BatchMove(StructuralBatchItem[] items, string destination, long? moveIntent = null)
     {
         if (items.Length == 0)
         {
@@ -2475,7 +2475,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 StructuralHistoryBarrier();
             }
 
-            RequestSelectionAt(null);
+            // Plan 47 CB-39: the Move-To sheet's confirm passes the number it
+            // took before the sheet closed; the batch verb takes one here.
+            RequestSelectionAt(null, moveIntent);
             Refresh();
             ReportMutationResult(BatchMoveSummary(report, destination));
         }

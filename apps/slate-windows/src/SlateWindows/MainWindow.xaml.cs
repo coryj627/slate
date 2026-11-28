@@ -1002,10 +1002,28 @@ public partial class MainWindow : Window
         // the request (canvas and graph included, contract A14's instruction)
         // under the window's slot. A later focus request that supersedes it in
         // the arbiter leaves no request behind to seat the tab later.
+        // Plan 47 CB-39: the sidebar's newest intent when this landing is
+        // queued, after an explicit open's own. A newer intent taken before it
+        // runs is where the reader is now (a Reveal that landed on its row and
+        // opened its note as a selection, which queues no landing of its own),
+        // and the landing gives way to it. When the window observes another
+        // sidebar by then, the landing runs as before.
+        FilesSidebarViewModel? sidebar = _observedFileSidebar;
+        long intent = sidebar?.NewestIntent ?? 0;
         _ = _focusRequests.Post(
             Dispatcher,
             DispatcherPriority.Input,
-            () => LandEditorForRoute(group, onLanded: null));
+            () =>
+            {
+                if (sidebar is not null
+                    && ReferenceEquals(_observedFileSidebar, sidebar)
+                    && sidebar.NewestIntent != intent)
+                {
+                    return;
+                }
+
+                LandEditorForRoute(group, onLanded: null);
+            });
     }
 
     /// <summary>R-10 (OD-12's one entry): a canvas jump asks to land the editor

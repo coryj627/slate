@@ -1267,6 +1267,12 @@ internal sealed partial class FilesSidebarViewModel
     private void ExecuteMoveTo(StructuralBatchItem[] items, string destination)
     {
         BeginStructuralResult();
+        // Plan 47 CB-39: the confirm is the move's gesture, and it takes the
+        // move's own number before the sheet closes. The window's focus return,
+        // queued at the close, holds this number, so the move's request, which
+        // names its row with it, leaves the return running; an intent taken
+        // after the close is newer, and the return gives way to it.
+        long moveIntent = StateIntentNamingNoRow();
         MoveToSheet = null;
         if (items.Length == 1)
         {
@@ -1309,7 +1315,7 @@ internal sealed partial class FilesSidebarViewModel
                 string destLeaf = destination.Length == 0
                     ? "vault root"
                     : System.IO.Path.GetFileName(destination.TrimEnd('/'));
-                RequestSelectionAt(movedPath);
+                RequestSelectionAt(movedPath, moveIntent);
                 Refresh();
                 ReportMutationResult(WithLinksSuffix(
                     $"Moved {leaf} to {destLeaf}.", rewritten));
@@ -1323,7 +1329,7 @@ internal sealed partial class FilesSidebarViewModel
                 // failure leg reconciles focus too (verification 2).
                 // The failure reports AFTER Refresh so its reason
                 // survives the "Loading files…" write.
-                RequestSelectionAt(null);
+                RequestSelectionAt(null, moveIntent);
                 Refresh();
                 ReportFailure($"Move failed: {FailureDetail.Of(exception)}");
             }
@@ -1331,7 +1337,7 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        BatchMove(items, destination);
+        BatchMove(items, destination, moveIntent);
     }
 
     /// <summary>The "New Folder…" row (F4): create the typed folder,
