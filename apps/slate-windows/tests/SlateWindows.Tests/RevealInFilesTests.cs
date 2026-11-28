@@ -594,6 +594,69 @@ public sealed class RevealInFilesTests
         Assert.True(revealed.IsSelected, "the revealed row's node is not selected");
     });
 
+    /// <summary>Codex round 5: the Files pane hidden while the Reveal waits,
+    /// and then no element holds the keys or the window's logical focus.
+    /// Stranded keys do not outrank the hidden pane: nothing can land, so the
+    /// row is selected silently, with no open, no announcement and no focus
+    /// change. With a filter or a tag scope active the wait ends instead, the
+    /// filter kept and nothing said.</summary>
+    [Theory]
+    [InlineData("none")]
+    [InlineData("text")]
+    [InlineData("tag")]
+    public void ALateRevealWhileFilesIsHiddenAndTheKeysStrandedStaysSilent(string filter) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        if (filter == "text")
+        {
+            shell.Sidebar.FilterText = "b";
+        }
+        else if (filter == "tag")
+        {
+            shell.Sidebar.ActivateTag("alpha");
+        }
+
+        PumpedDispatcher.PumpUntilDrained(shell.Sidebar.FilterCompletion);
+        shell.Host.Settle();
+        string filterText = shell.Sidebar.FilterText;
+        string? scopeTag = shell.Sidebar.ScopeTag;
+        shell.OpenAndParkKeysInTheEditor();
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.Host.Workspace.IsFilesSidebarVisible = false;
+        shell.Host.Settle();
+        FocusManager.SetFocusedElement(shell.Host.Shell, null);
+        Keyboard.ClearFocus();
+        PumpedDispatcher.Drain();
+        Assert.Null(Keyboard.FocusedElement);
+        Assert.Null(FocusManager.GetFocusedElement(shell.Host.Shell));
+        shell.Mark();
+        string tabs = shell.Tabs;
+        FileTreeNodeViewModel? selected = shell.Sidebar.SelectedNode;
+
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+
+        Assert.Empty(shell.FocusChanges);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.Empty(shell.SaidSinceMark);
+        Assert.Equal(tabs, shell.Tabs);
+        Assert.Equal(filterText, shell.Sidebar.FilterText);
+        Assert.Equal(scopeTag, shell.Sidebar.ScopeTag);
+        if (filter == "none")
+        {
+            FileTreeNodeViewModel revealed = shell.Row("docs/n.md");
+            Assert.Same(revealed, shell.Sidebar.SelectedNode);
+            Assert.True(revealed.IsSelected, "the revealed row's node is not selected");
+        }
+        else
+        {
+            Assert.True(shell.Sidebar.IsFilterActive, "the filter was cleared");
+            Assert.Same(selected, shell.Sidebar.SelectedNode);
+            shell.AssertNeverSeated("docs/n.md");
+        }
+    });
+
     /// <summary>The red team's minor 3: a filter or a tag scope active, and
     /// the keys moved off the gesture's place. A silent seat would select a
     /// row the filter hides while the results show the reader's, so the wait
