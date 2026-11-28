@@ -1033,6 +1033,89 @@ public sealed class RevealInFilesTests
         shell.AssertSilentlySelected("docs/n.md", tabs);
     });
 
+    /// <summary>Codex round 11: a late seat selected docs/n.md silently (the
+    /// keys had moved into the editor), so its note never opened and nothing
+    /// was said. Then the reader reveals the same note again from a header
+    /// segment. The seat lands the keys on the row in one move, opens the note
+    /// once and says it once, as a seat does.</summary>
+    [Fact]
+    public void ARevealOfASilentlySeatedRowOpensItAndSaysItOnce() => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        SilentlySeat(shell, "docs/n.md");
+        _ = shell.KeysOnTheSegment("park/here.md", "park");
+
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface("docs/n.md"));
+        shell.Host.Settle();
+
+        shell.AssertLandedOnceOn("docs/n.md", opens: "docs/n.md", said: "Selected: n.md");
+    });
+
+    /// <summary>Codex round 11's guards: a Reveal of a row whose selection has
+    /// had its say makes one move and says nothing again. The reader selected
+    /// and opened docs/n.md (row 4b's case); a silent seat's docs/n.md whose
+    /// note opened since; a silent seat's deep/mid that the reader moved away
+    /// from and back to.</summary>
+    [Theory]
+    [InlineData("the reader selected it")]
+    [InlineData("its note opened since")]
+    [InlineData("the selection came back to it")]
+    public void ARevealOfARowWhoseSelectionHadItsSaySaysNothingAgain(string how) => StaThread.RunPumped(() =>
+    {
+        using var shell = new RevealShell(heldTreeWork: true);
+        string path = "docs/n.md";
+        switch (how)
+        {
+            case "the reader selected it":
+                shell.Row("docs").IsExpanded = true;
+                shell.SettleLoads();
+                shell.SelectAndFocusRow(path);
+                shell.Host.Settle();
+                _ = shell.KeysOnTheSegment(path, "docs");
+                break;
+            case "its note opened since":
+                SilentlySeat(shell, path);
+                shell.Host.Workspace.OpenPath(path);
+                shell.Host.Settle();
+                _ = shell.KeysOnTheSegment(path, "docs");
+                break;
+            default:
+                path = "deep/mid";
+                SilentlySeat(shell, path);
+                shell.SelectAndFocusRow("deep");
+                shell.SelectAndFocusRow(path);
+                _ = shell.KeysOnTheSegment("park/here.md", "park");
+                break;
+        }
+
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface(path));
+        shell.Host.Settle();
+
+        shell.AssertSelectedOnBothHalves(path);
+        shell.AssertKeysMovedOnceTo(path, since: 0);
+        Assert.Empty(shell.OpensSinceMark);
+        Assert.DoesNotContain(shell.SaidSinceMark, line => line is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
+    /// <summary>A Reveal of <paramref name="path"/> asked with the keys on park's
+    /// header segment waits on its held folder; the keys move into the editor,
+    /// and the folder lists: the late seat selects the row silently.</summary>
+    private static void SilentlySeat(RevealShell shell, string path)
+    {
+        _ = shell.OpenAndParkKeysOnASegment("park/here.md", "park");
+        shell.HoldTreeWork();
+        Assert.True(shell.Host.Workspace.RevealConnectionsRowFromSurface(path));
+        Assert.True(shell.Editor.Focus(), "premise: the editor refused the keys");
+        PumpedDispatcher.Drain();
+        shell.ReleaseTreeWork();
+        shell.SettleLoads();
+        Assert.Equal(path, shell.Sidebar.SelectedNode?.Path);
+        Assert.DoesNotContain(path, shell.OpensSinceMark);
+        Assert.DoesNotContain(
+            shell.SaidSinceMark,
+            line => line is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    }
+
     /// <summary>The red team's item 3: a late seat under a modal surface or a
     /// thread-modal loop ends unseated. The reader's a.md selected with the keys
     /// on its row, a Reveal of docs/n.md waiting on its held folder; the palette
